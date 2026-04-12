@@ -171,6 +171,11 @@ interface AgentConfig {
   model?: string;                  // Model override (e.g., "opus", "sonnet", "o3")
   flags?: string[];                // Additional CLI flags
 }
+
+// Three agent roles, each independently configurable:
+// - devAgent: writes code, runs tests (e.g., claude-code with sonnet)
+// - judgeAgent: reviews iterations (e.g., codex)
+// - architectAgent: reviews Problem Pack pre-iteration (e.g., claude-code with opus)
 ```
 
 ### 4.3 Process Manager

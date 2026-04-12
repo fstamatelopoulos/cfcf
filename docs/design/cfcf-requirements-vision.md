@@ -97,11 +97,24 @@ Optional:
 
 The deterministic orchestration layer. Responsibilities:
 
-1. **Pre-iteration**: Assemble the context payload for the next agent run (Problem Pack + iteration history + accumulated learnings from the memory layer + judge/reflection outputs from previous iterations).
-2. **Launch**: Prepare the repo (write context files, ensure correct git branch), spawn the agent process.
-3. **Post-iteration**: Collect results (code changes, test results, agent logs), run the three-tier evaluation pipeline, update the iteration log.
-4. **Decision**: Continue, adjust (e.g., switch agent, modify hints), or stop (success or iteration limit).
-5. **Human pause** (if configured): After every N iterations, pause and surface a summary to the user, accept optional corrective direction or requirement refinements, then resume.
+0. **Pre-iteration gate**: Invoke the Solution Architect agent to review the Problem Pack (optional but recommended). Gate: READY / NEEDS_REFINEMENT / BLOCKED.
+1. **Pre-iteration**: Assemble the context payload for the next agent iteration (Problem Pack + iteration history + accumulated learnings from the memory layer + judge/reflection outputs from previous iterations).
+2. **Launch**: Prepare the repo (write context files, ensure correct git branch), spawn the dev agent process.
+3. **Post-iteration**: Collect results (code changes, test results, agent logs), invoke the judge agent, parse judge signals.
+4. **Decision**: Continue, adjust (e.g., switch agent, modify hints), or stop (success or iteration limit). This is deterministic -- based on judge signals, not LLM reasoning.
+5. **Human pause** (if configured): After every N iterations, or when the dev agent or judge requests user input, pause and surface a summary to the user, accept optional corrective direction or requirement refinements, then resume.
+
+### Agent Roles
+
+cf² manages three distinct agent roles, each independently configurable (agent adapter + model):
+
+| Role | Purpose | When invoked |
+|------|---------|-------------|
+| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Pre-iteration gate. | Before iterations begin (`cfcf review`) |
+| **Dev Agent** | Reads context, writes code, runs tests, produces handoff + signals. | Each iteration |
+| **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY. | After each iteration |
+
+Cross-agent review is encouraged: e.g., Claude Code for dev, Codex for judge, Claude with Opus for architect. Different agents catch different types of issues.
 
 Mission Control's control flow decisions are deterministic. All branching is based on test pass/fail status, iteration count vs. configured maximum, explicit rules (e.g., "if 3 consecutive failures with same error, stop and report"), and the N-iteration pause configuration.
 
