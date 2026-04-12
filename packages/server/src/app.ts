@@ -18,21 +18,13 @@ import {
   updateProject,
   deleteProject,
   validateProjectRepo,
-  nextIteration,
 } from "@cfcf/core";
-import { spawnProcess } from "@cfcf/core";
-import * as gitManager from "@cfcf/core";
-import { getIterationLogPath, ensureProjectLogDir } from "@cfcf/core";
-import { readProblemPack, validateProblemPack } from "@cfcf/core";
+import { getIterationLogPath } from "@cfcf/core";
 import {
-  writeContextToRepo,
-  generateInstructionContent,
-  parseHandoffDocument,
-  parseSignalFile,
-  generateIterationSummary,
-} from "@cfcf/core";
-import { getAdapter } from "@cfcf/core";
-import type { IterationContext } from "@cfcf/core";
+  startIteration,
+  getIterationState,
+  getLatestIterationState,
+} from "./iteration-runner.js";
 
 const startedAt = Date.now();
 
@@ -135,7 +127,7 @@ export function createApp() {
     return c.json({ deleted: true });
   });
 
-  // --- Execute an iteration ---
+  // --- Iterate (async) ---
 
   app.post("/api/projects/:id/iterate", async (c) => {
     const project =
@@ -151,122 +143,59 @@ export function createApp() {
       problemPackPath?: string;
     }>().catch(() => ({} as { command?: string; args?: string[]; problemPackPath?: string }));
 
-    // Get next iteration number
-    const iterationNum = await nextIteration(project.id);
-    if (iterationNum === null) {
-      return c.json({ error: "Failed to increment iteration counter" }, 500);
+    try {
+      // Start iteration in background -- returns immediately
+      const state = await startIteration(project, body);
+
+      return c.json({
+        iteration: state.iteration,
+        branch: state.branch,
+        mode: state.mode,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  // --- Iteration status ---
+
+  app.get("/api/projects/:id/iterations/latest", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
     }
 
-    // Create feature branch
-    const branchName = `cfcf/iteration-${iterationNum}`;
-    const branchResult = await gitManager.createBranch(project.repoPath, branchName);
-    if (!branchResult.success) {
-      return c.json({ error: `Failed to create branch: ${branchResult.error}` }, 500);
+    const state = getLatestIterationState(project.id);
+    if (!state) {
+      return c.json({ error: "No iterations found" }, 404);
     }
 
-    // Prepare log path
-    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
-    await ensureProjectLogDir(project.id);
+    const { logLines, ...stateWithoutLogs } = state;
+    return c.json(stateWithoutLogs);
+  });
 
-    let command: string;
-    let args: string[];
-    let mode: "manual" | "agent";
-
-    if (body.command) {
-      // Manual mode: user-specified command
-      command = body.command;
-      args = body.args ?? [];
-      mode = "manual";
-    } else {
-      // Agent mode: use configured dev agent
-      const adapter = getAdapter(project.devAgent.adapter);
-      if (!adapter) {
-        return c.json({ error: `Unknown agent adapter: ${project.devAgent.adapter}` }, 400);
-      }
-
-      // Read problem pack and assemble context
-      const packPath = body.problemPackPath || join(project.repoPath, "problem-pack");
-      const packValidation = await validateProblemPack(packPath);
-      if (!packValidation.valid) {
-        return c.json({
-          error: `Problem Pack invalid: ${packValidation.errors.join(", ")}. Create a problem-pack/ directory with problem.md and success.md.`,
-        }, 400);
-      }
-
-      const problemPack = await readProblemPack(packPath);
-
-      // Assemble context
-      const ctx: IterationContext = {
-        iteration: iterationNum,
-        problemPack,
-        project,
-      };
-
-      // TODO: In iteration 3+, populate previousHandoff, previousJudgeAssessment,
-      // iterationHistory, userFeedback from previous iterations
-
-      // Write context files to repo
-      await writeContextToRepo(project.repoPath, ctx);
-
-      // Write agent instruction file
-      const instructionContent = generateInstructionContent(ctx);
-      const { writeFile } = await import("fs/promises");
-      await writeFile(
-        join(project.repoPath, adapter.instructionFilename),
-        instructionContent,
-        "utf-8",
-      );
-
-      // Build agent command
-      const prompt = `Read ${adapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
-      const cmd = adapter.buildCommand(project.repoPath, prompt);
-      command = cmd.command;
-      args = cmd.args;
-      mode = "agent";
+  app.get("/api/projects/:id/iterations/:n/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
     }
 
-    // Spawn the process
-    const managed = spawnProcess({
-      command,
-      args,
-      cwd: project.repoPath,
-      logFile,
-    });
-
-    // Wait for result
-    const result = await managed.result;
-
-    // Parse handoff and signal file (agent mode)
-    let handoff: string | null = null;
-    let signals: import("@cfcf/core").DevSignals | null = null;
-    if (mode === "agent") {
-      handoff = await parseHandoffDocument(project.repoPath);
-      signals = await parseSignalFile(project.repoPath);
+    const iterationNum = parseInt(c.req.param("n"), 10);
+    const state = getIterationState(project.id, iterationNum);
+    if (!state) {
+      return c.json({ error: "Iteration not found" }, 404);
     }
 
-    // Commit changes if any
-    let committed = false;
-    if (await gitManager.hasChanges(project.repoPath)) {
-      const commitResult = await gitManager.commitAll(
-        project.repoPath,
-        `cfcf iteration ${iterationNum}${mode === "agent" ? ` (${project.devAgent.adapter})` : ""}: ${command} ${args.slice(0, 3).join(" ")}`,
-      );
-      committed = commitResult.success;
-    }
-
-    return c.json({
-      iteration: iterationNum,
-      branch: branchName,
-      mode,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      logFile: result.logFile,
-      committed,
-      killed: result.killed,
-      handoffReceived: handoff !== null,
-      signalsReceived: signals !== null,
-      signals: signals ?? undefined,
-    });
+    const { logLines, ...stateWithoutLogs } = state;
+    return c.json(stateWithoutLogs);
   });
 
   // --- SSE endpoint for streaming iteration logs ---
@@ -280,18 +209,51 @@ export function createApp() {
     }
 
     const iterationNum = parseInt(c.req.param("n"), 10);
-    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
 
     return streamSSE(c, async (stream) => {
+      // Try live state first (for in-progress iterations)
+      const state = getIterationState(project.id, iterationNum);
+
+      if (state) {
+        // Stream from live state -- poll until done
+        let lastIndex = 0;
+        while (state.status === "preparing" || state.status === "executing" || state.status === "collecting") {
+          // Send any new log lines
+          while (lastIndex < state.logLines.length) {
+            await stream.writeSSE({ event: "log", data: state.logLines[lastIndex] });
+            lastIndex++;
+          }
+          // Send status update
+          await stream.writeSSE({
+            event: "status",
+            data: JSON.stringify({ status: state.status, iteration: iterationNum }),
+          });
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        // Send remaining log lines
+        while (lastIndex < state.logLines.length) {
+          await stream.writeSSE({ event: "log", data: state.logLines[lastIndex] });
+          lastIndex++;
+        }
+        await stream.writeSSE({
+          event: "done",
+          data: JSON.stringify({
+            status: state.status,
+            exitCode: state.exitCode,
+            durationMs: state.durationMs,
+          }),
+        });
+        return;
+      }
+
+      // Fall back to reading from log file (for completed iterations)
+      const logFile = getIterationLogPath(project.id, iterationNum, "dev");
       try {
         const content = await Bun.file(logFile).text();
         const lines = content.split("\n");
         for (const line of lines) {
           if (line.length > 0) {
-            await stream.writeSSE({
-              event: "log",
-              data: line,
-            });
+            await stream.writeSSE({ event: "log", data: line });
           }
         }
         await stream.writeSSE({

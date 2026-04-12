@@ -22,6 +22,8 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   serverInstance = Bun.serve({
     port,
     fetch: app.fetch,
+    // Agent runs can take minutes/hours -- disable idle timeout
+    idleTimeout: 255, // max value in Bun (seconds)
   });
 
   // Write PID file so `cfcf server stop` can find us

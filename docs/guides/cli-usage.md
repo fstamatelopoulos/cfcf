@@ -182,15 +182,17 @@ cfcf run --project my-project
 ```
 
 What happens:
-1. Reads the Problem Pack from `<repo>/problem-pack/` (problem.md, success.md, etc.)
-2. Assembles context: generates CLAUDE.md (or AGENTS.md for Codex) with tiered context
-3. Writes `cfcf-docs/` into the repo with all context files and templates
-4. Creates a git feature branch: `cfcf/iteration-N`
-5. Launches the configured dev agent (e.g., Claude Code with `--dangerously-skip-permissions`)
-6. Agent reads CLAUDE.md, works on the problem, fills in handoff doc + signal file
-7. Captures all stdout/stderr to `~/.cfcf/logs/`
-8. Commits all changes to the feature branch
-9. Parses the handoff document and signal file, reports results
+1. The server starts the iteration asynchronously and returns immediately
+2. Reads the Problem Pack from `<repo>/problem-pack/` (problem.md, success.md, etc.)
+3. Assembles context: generates CLAUDE.md (or AGENTS.md for Codex) with tiered context
+4. Writes `cfcf-docs/` into the repo with all context files and templates
+5. Creates a git feature branch: `cfcf/iteration-N`
+6. Launches the configured dev agent (e.g., Claude Code with `--dangerously-skip-permissions`)
+7. The CLI polls for status, showing real-time progress (preparing → executing → collecting → completed)
+8. Agent reads CLAUDE.md, works on the problem, fills in handoff doc + signal file
+9. Captures all stdout/stderr to `~/.cfcf/logs/`
+10. Commits all changes to the feature branch
+11. Parses the handoff document and signal file, reports results
 
 Options:
 - `--project <name>` (required) -- project name or ID

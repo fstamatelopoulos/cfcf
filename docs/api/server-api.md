@@ -208,15 +208,41 @@ Or with custom Problem Pack path:
 }
 ```
 
-**Response:** `200 OK`
+**Response:** `202 Accepted` -- Iteration starts asynchronously.
 
 ```json
 {
   "iteration": 1,
   "branch": "cfcf/iteration-1",
   "mode": "agent",
+  "status": "preparing",
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
+  "message": "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress."
+}
+```
+
+The iteration runs in the background. Use the status and logs endpoints to track progress.
+
+---
+
+### GET /api/projects/:id/iterations/:n/status
+
+Get the current status of an iteration.
+
+**Response:** `200 OK`
+
+```json
+{
+  "iteration": 1,
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "branch": "cfcf/iteration-1",
+  "mode": "agent",
+  "status": "completed",
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "completedAt": "2026-04-12T05:17:30.000Z",
   "exitCode": 0,
-  "durationMs": 45200,
+  "durationMs": 90000,
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
   "committed": true,
   "killed": false,
@@ -234,7 +260,21 @@ Or with custom Problem Pack path:
 }
 ```
 
-In manual mode, `handoffReceived`, `signalsReceived`, and `signals` are omitted.
+| Status | Description |
+|--------|-------------|
+| `preparing` | Context assembly, writing files |
+| `executing` | Agent process is running |
+| `collecting` | Agent finished, parsing results |
+| `completed` | Iteration done successfully |
+| `failed` | Iteration failed (see `error` field) |
+
+---
+
+### GET /api/projects/:id/iterations/latest
+
+Get the status of the most recent iteration for a project.
+
+Same response format as `/iterations/:n/status`.
 
 ---
 
