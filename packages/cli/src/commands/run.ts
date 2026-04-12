@@ -191,4 +191,12 @@ function printResult(r: StatusResponse): void {
       }
     }
   }
+
+  // Next steps guidance
+  console.log();
+  console.log("What to do next:");
+  console.log(`  Review results:    cat cfcf-docs/iteration-handoff.md`);
+  console.log(`  View full log:     cat ${r.logFile}`);
+  console.log(`  Check the plan:    cat cfcf-docs/plan.md`);
+  console.log(`  Run next iteration: cfcf run --project ${r.projectName}`);
 }

@@ -181,8 +181,11 @@ export function registerInitCommand(program: Command): void {
       console.log(`Configuration saved to: ${getConfigPath()}`);
       console.log();
       console.log("Next steps:");
-      console.log("  1. Start the server:  cfcf server start");
-      console.log("  2. Check status:      cfcf status");
+      console.log("  1. Start the server:    cfcf server start");
+      console.log("  2. Create a project:    cfcf project init --repo <path> --name <name>");
+      console.log("  3. Populate problem-pack/problem.md and success.md with your problem definition");
+      console.log("  4. Review with:         cfcf review --project <name>  (optional)");
+      console.log("  5. Launch development:  cfcf run --project <name>");
       console.log();
     });
 }

@@ -68,6 +68,12 @@ problem-packs/           # Example Problem Pack definitions
 docs/                    # Design docs, API reference, guides
 ```
 
+## Development Workflow
+
+- **Tests**: Only run tests when code changes are made. Doc-only changes do not need tests.
+- **Git pushes**: Collect related commits locally and push in batches when a coherent set of changes is ready. Avoid pushing every single commit -- each push triggers GitHub Actions CI which consumes minutes. Doc-only changes can be batched and pushed together.
+- **Commits**: Fine-grained commits are good (easier to review). Frequent pushes are not (wastes CI).
+
 ## Conventions
 
 - Package imports use `@cfcf/core`, `@cfcf/server` workspace aliases

@@ -43,6 +43,9 @@ export function registerServerCommands(program: Command): void {
 
       if (await isServerReachable()) {
         console.log(`cfcf server v${VERSION} started on port ${port} (pid: ${child.pid})`);
+        console.log();
+        console.log("Ready. Create a project:  cfcf project init --repo <path> --name <name>");
+        console.log("Or check status:          cfcf status");
       } else {
         console.error("Failed to start cfcf server. Try running directly: bun run dev:server");
         process.exit(1);
