@@ -138,6 +138,10 @@ POST   /api/projects/:id/pause                 # Pause iteration loop
 POST   /api/projects/:id/resume                # Resume (with optional feedback)
 POST   /api/projects/:id/stop                  # Stop iterating
 
+# Solution Architect review (user-invoked, advisory)
+POST   /api/projects/:id/review                # Spawn architect agent (202 Accepted)
+GET    /api/projects/:id/review/status          # Review status (poll)
+
 # Iterate (async -- returns immediately, runs in background)
 POST   /api/projects/:id/iterate               # Start next iteration (202 Accepted)
 GET    /api/projects/:id/iterations/latest      # Latest iteration status
@@ -159,6 +163,7 @@ interface ProjectConfig {
   repoUrl?: string;                // Remote git repo URL (for push)
   devAgent: AgentConfig;           // Dev agent configuration
   judgeAgent: AgentConfig;         // Judge agent configuration
+  architectAgent: AgentConfig;     // Solution Architect (pre-iteration review)
   maxIterations: number;           // Hard cap on iterations per project
   currentIteration: number;        // Current iteration number (monotonically increasing, starts at 0)
   pauseEvery: number;              // 0 = no pauses, N = pause every N iterations
@@ -443,9 +448,9 @@ On first execution (detected by absence of config file), cfcf runs an interactiv
 1. **Agent detection**: cfcf runs `checkAvailability()` for all supported agent adapters (Claude Code, Codex). Reports which agents are installed and authenticated.
 2. **Dependency check**: Verify git is available.
 3. **User prompts**: Ask the user to configure defaults:
-   - Dev agent (from detected available agents)
-   - Judge agent (encouraged to be different from dev agent)
-   - Model preferences (if agent supports model selection)
+   - Dev agent and model (from detected available agents)
+   - Judge agent and model (encouraged to be different from dev agent)
+   - Solution Architect agent and model (recommended: use a frontier model like opus)
    - Default max iterations
    - Default pause cadence
 4. **Permission acknowledgment**: cfcf explains that agents will run with `--dangerously-skip-permissions` (or equivalent) for unattended operation. Lists the default guardrails (working directory scoping, read-only file enforcement, git branch isolation). User must acknowledge.

@@ -14,6 +14,8 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
+- **Three agent roles**: dev agent (writes code), judge (reviews iterations), solution architect (reviews Problem Pack)
+- **Async execution**: iterate endpoint returns 202, CLI polls for status
 
 ## Key Design Principles
 
@@ -23,14 +25,15 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 4. **Signal files for machine-readable communication.** `cfcf-iteration-signals.json` and `cfcf-judge-signals.json` complement human-readable Markdown docs.
 5. **Tests are mandatory.** Every component must have unit tests. Integration and API tests for server endpoints. Bun test runner. Aim for a solid regression suite.
 6. **Fire-and-forget agent execution.** Each iteration spawns a fresh agent process. No session continuity. Context comes from files.
-7. **Human on the loop, not in it.** Runs are headless by default. `--pause-every N` for review gates.
+7. **Human on the loop, not in it.** User launches once, cfcf takes over. User involved only at pause cadence or when agents request input.
 
 ## Development Commands
 
 ```bash
 bun install              # Install all workspace dependencies
-bun test --recursive     # Run all tests
+bun run test             # Run all tests (packages sequentially)
 bun run typecheck        # TypeScript type checking
+bun run build            # Compile self-contained binary
 bun run dev:server       # Start server in dev mode (with watch)
 bun run dev:cli          # Run CLI directly
 ```
@@ -55,6 +58,7 @@ packages/
   server/src/
     app.ts               # Route definitions (testable without binding to port)
     start.ts             # Server lifecycle (start/stop, PID file)
+    iteration-runner.ts  # Async iteration execution (background agent runs)
   cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
@@ -88,7 +92,7 @@ docs/                    # Design docs, API reference, guides
 - Do not add Docker/container dependencies (agents run as local processes)
 - Do not store secrets or API keys in config files or logs
 - Do not modify files marked read-only in `cfcf-docs/` (process.md, problem.md, success.md, constraints.md)
-- Do not break the test suite. Run `bun test --recursive` before committing.
+- Do not break the test suite. Run `bun run test` before committing code changes.
 
 ## Documentation
 
@@ -105,5 +109,7 @@ docs/
   api/                             # API reference
     server-api.md                  # Server REST API endpoints
   research/                        # Ideas and explorations (not yet in the plan)
-  guides/                          # User guides (future)
+  guides/                          # User guides
+    workflow.md                    # Complete user workflow (the main user guide)
+    cli-usage.md                   # CLI command reference
 ```
