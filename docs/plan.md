@@ -323,6 +323,11 @@ Each iteration re-reads all context. Strategies to manage this:
 - Slack, WhatsApp, email integrations
 - Webhook support for arbitrary integrations
 
+### Binary Self-Hosting
+- `cfcf server start` should work from the compiled binary without requiring Bun installed
+- Options: in-process server (same binary, different thread) or self-spawn with `--server-mode` flag
+- Enables true zero-dependency distribution
+
 ### Distribution and Ecosystem
 - Homebrew formula
 - npm global package
