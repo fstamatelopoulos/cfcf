@@ -1,0 +1,18 @@
+{
+  "name": "@cfcf/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "cfcf": "src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "@cfcf/core": "workspace:*"
+  }
+}
