@@ -9,6 +9,29 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.1.0] -- 2026-04-12
+
+Iteration 1: Project management, process manager, git manager, CI pipeline.
+
+### Added
+- Project management: `cfcf project init/list/show/delete` with per-project config stored under `~/.cfcf/projects/`
+- Global config commands: `cfcf config show`, `cfcf config edit`
+- Process manager: spawn commands, stream logs, capture output to disk, kill/timeout support
+- Git manager: feature branch creation (`cfcf/iteration-N`), commit, diff, reset, push, merge
+- `cfcf run --project <name> -- <command>` executes the next iteration (creates branch, runs command, captures logs, commits)
+- Server endpoints: project CRUD, `POST /api/projects/:id/iterate`, `GET /api/projects/:id/iterations/:n/logs` (SSE), `POST /api/shutdown`
+- Reliable `cfcf server stop` using PID file and `/api/shutdown` endpoint
+- Log storage at `~/.cfcf/logs/<project>/iteration-NNN-dev.log`
+- GitHub Actions CI: test + typecheck on Ubuntu and macOS, cross-platform binary builds
+- `bun run build` compiles a self-contained 64MB binary
+- CLI usage guide: `docs/guides/cli-usage.md`
+- 90 tests (169 assertions) covering all new components
+
+### Changed
+- Simplified execution model: removed "run" concept. Iterations are monotonically numbered per project (project → iteration, not project → run → iteration)
+- `ProjectConfig` now tracks `currentIteration` counter
+- SSE events renamed: `project.paused`, `project.completed` (was `run.*`)
+
 ## [0.0.0] -- 2026-04-11
 
 Iteration 0: Project scaffolding, server skeleton, CLI, first-run configuration.
@@ -25,5 +48,6 @@ Iteration 0: Project scaffolding, server skeleton, CLI, first-run configuration.
 - CLAUDE.md with project principles for AI coding agents
 - docs/ structure: design/, api/, research/, guides/
 
-[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.0.0...v0.1.0
 [0.0.0]: https://github.com/fstamatelopoulos/cfcf/releases/tag/v0.0.0
