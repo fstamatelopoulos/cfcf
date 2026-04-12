@@ -181,7 +181,7 @@ The agent follows the process defined in CLAUDE.md and process.md:
 6. **Commit judge work**: Commit the judge's assessment and signal files.
 7. **Process judge signals**: Parse `cfcf-docs/cfcf-judge-signals.json` for deterministic decision-making.
 8. **Decide next step**:
-   - **Success**: Judge determination = SUCCESS → push to remote, stop run, report to user.
+   - **Success**: Judge determination = SUCCESS → push to remote, stop iterating, report to user.
    - **Continue**: Judge determination = PROGRESS → prepare next iteration.
    - **Stalled**: Judge determination = STALLED → apply configured policy (continue/stop/alert user).
    - **Anomaly**: Judge determination = ANOMALY (token exhaustion, circling, regression) → alert user, wait for input.
@@ -291,10 +291,10 @@ The judge output feeds into **deterministic** cfcf decisions:
 
 | Judge says | cfcf does |
 |-----------|-----------|
-| SUCCESS | Stop the run. Report success to user. |
+| SUCCESS | Stop iterating. Report success to user. |
 | PROGRESS | Continue to next iteration. |
 | STALLED (for N consecutive iterations) | Alert user. Optionally stop. |
-| ANOMALY: token exhaustion | Stop the run. Alert user. No point in another iteration. |
+| ANOMALY: token exhaustion | Stop iterating. Alert user. No point in another iteration. |
 | ANOMALY: user input needed | Pause. Alert user via all configured channels. Wait. |
 | ANOMALY: circling | Include strong guidance in next iteration. After M circles, alert user. |
 
@@ -401,16 +401,15 @@ cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very larg
 ~/.cfcf/
   logs/
     <project-id>/
-      <run-id>/
-        iteration-001-dev.log      # Full dev agent stdout/stderr
-        iteration-001-judge.log    # Full judge agent stdout/stderr
-        iteration-002-dev.log
-        ...
+      iteration-001-dev.log      # Full dev agent stdout/stderr
+      iteration-001-judge.log    # Full judge agent stdout/stderr
+      iteration-002-dev.log
+      ...
 ```
 
 ### 7.3 No External Persistent Memory (for now)
 
-A richer external memory layer (cross-run knowledge, semantic search, Cerefox integration) is a future extension. The need for it will appear organically as cfcf evolves. For now, keeping everything in the repo is simpler and more transparent.
+A richer external memory layer (cross-project knowledge, semantic search, Cerefox integration) is a future extension. The need for it will appear organically as cfcf evolves. For now, keeping everything in the repo is simpler and more transparent.
 
 ---
 
