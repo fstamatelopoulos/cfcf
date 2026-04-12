@@ -19,6 +19,10 @@
 
 ## Log
 
+### 2026-04-11 -- Server stop must use PID file or port scan
+
+The `cfcf server start` spawns a background bun process. Shell job control (`kill %1`) is unreliable across shell contexts. For `cfcf server stop` to work reliably, we need either: (a) store the PID in a file at startup and read it at stop, or (b) scan for the process on the configured port via `lsof -ti :<port>`. Approach (a) is more robust. Will implement in iteration 1.
+
 ### 2026-04-11 -- Bun v1.3.12 confirmed on macOS
 
 Bun installed via `curl -fsSL https://bun.sh/install | bash`. Version 1.3.12. Will need to verify Windows and Linux compatibility when cross-platform testing begins.
