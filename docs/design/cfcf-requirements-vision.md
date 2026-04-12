@@ -174,7 +174,7 @@ This model preserves the headless, zero-touch default while giving users a natur
     ┌──────────────┐                                  │
     │ 2. LAUNCH    │◄─────────────────────────────────┘
     │              │
-    │ Write context │
+    │ Write context│
     │ files to repo│
     │ Spawn agent  │
     │ process      │
@@ -205,7 +205,7 @@ This model preserves the headless, zero-touch default while giving users a natur
     │   LLM reviews full iteration history      │
     │   → strategic guidance, pattern analysis  │
     │                                           │
-    │ All outputs logged to memory layer         │
+    │ All outputs logged to memory layer        │
     └──────┬────────────────────────────────────┘
            │
            ▼

@@ -10,28 +10,28 @@ This guide walks through the complete cf² workflow: from setting up a project t
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     USER DOES THIS                           │
-│                                                              │
-│  1. Start server (once)                                      │
-│  2. Create repo + init project                               │
-│  3. Populate Problem Pack (problem, success criteria, etc.)  │
-│  4. (Optional) Consult Solution Architect for feedback        │
-│     └─ iterate on Problem Pack until satisfied               │
-│  5. Launch the iterative development process                 │
-│     └─ review & provide feedback at pause cadence            │
+│                     USER DOES THIS                          │
+│                                                             │
+│  1. Start server (once)                                     │
+│  2. Create repo + init project                              │
+│  3. Populate Problem Pack (problem, success criteria, etc.) │
+│  4. (Optional) Consult Solution Architect for feedback      │
+│     └─ iterate on Problem Pack until satisfied              │
+│  5. Launch the iterative development process                │
+│     └─ review & provide feedback at pause cadence           │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                     cf² HANDLES THIS                         │
-│                                                              │
-│  • Assemble context (CLAUDE.md + cfcf-docs/)                 │
-│  • Launch dev agent on feature branch                        │
-│  • Capture logs, parse handoff + signals                     │
-│  • Launch judge agent, parse assessment                      │
-│  • Decide: continue / pause / stop                           │
-│  • Alert user when input is needed                           │
-│  • Monitor + report progress via CLI / web UI                │
+│                     cf² HANDLES THIS                        │
+│                                                             │
+│  • Assemble context (CLAUDE.md + cfcf-docs/)                │
+│  • Launch dev agent on feature branch                       │
+│  • Capture logs, parse handoff + signals                    │
+│  • Launch judge agent, parse assessment                     │
+│  • Decide: continue / pause / stop                          │
+│  • Alert user when input is needed                          │
+│  • Monitor + report progress via CLI / web UI               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
