@@ -27,6 +27,9 @@ export interface AgentAdapter {
 
   /** Build the command + args to run the agent non-interactively */
   buildCommand(workspacePath: string, prompt: string): { command: string; args: string[] };
+
+  /** The filename this agent uses for its instruction file (e.g., "CLAUDE.md") */
+  instructionFilename: string;
 }
 
 // --- Configuration ---

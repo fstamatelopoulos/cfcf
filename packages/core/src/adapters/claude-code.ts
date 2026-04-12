@@ -10,6 +10,7 @@ import type { AgentAdapter, AgentAvailability } from "../types.js";
 export const claudeCodeAdapter: AgentAdapter = {
   name: "claude-code",
   displayName: "Claude Code",
+  instructionFilename: "CLAUDE.md",
 
   async checkAvailability(): Promise<AgentAvailability> {
     try {

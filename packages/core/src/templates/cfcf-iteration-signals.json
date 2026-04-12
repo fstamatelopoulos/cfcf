@@ -1,0 +1,13 @@
+{
+  "iteration": 0,
+  "agent": "",
+  "status": "completed",
+  "user_input_needed": false,
+  "questions": [],
+  "tests_run": false,
+  "tests_passed": 0,
+  "tests_failed": 0,
+  "tests_total": 0,
+  "self_assessment": "medium",
+  "blockers": []
+}

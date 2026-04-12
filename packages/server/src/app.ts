@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { join } from "path";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig } from "@cfcf/core";
 import {
@@ -22,6 +23,16 @@ import {
 import { spawnProcess } from "@cfcf/core";
 import * as gitManager from "@cfcf/core";
 import { getIterationLogPath, ensureProjectLogDir } from "@cfcf/core";
+import { readProblemPack, validateProblemPack } from "@cfcf/core";
+import {
+  writeContextToRepo,
+  generateInstructionContent,
+  parseHandoffDocument,
+  parseSignalFile,
+  generateIterationSummary,
+} from "@cfcf/core";
+import { getAdapter } from "@cfcf/core";
+import type { IterationContext } from "@cfcf/core";
 
 const startedAt = Date.now();
 
@@ -135,13 +146,10 @@ export function createApp() {
     }
 
     const body = await c.req.json<{
-      command: string;
+      command?: string;
       args?: string[];
-    }>();
-
-    if (!body.command) {
-      return c.json({ error: "command is required" }, 400);
-    }
+      problemPackPath?: string;
+    }>().catch(() => ({} as { command?: string; args?: string[]; problemPackPath?: string }));
 
     // Get next iteration number
     const iterationNum = await nextIteration(project.id);
@@ -160,10 +168,67 @@ export function createApp() {
     const logFile = getIterationLogPath(project.id, iterationNum, "dev");
     await ensureProjectLogDir(project.id);
 
+    let command: string;
+    let args: string[];
+    let mode: "manual" | "agent";
+
+    if (body.command) {
+      // Manual mode: user-specified command
+      command = body.command;
+      args = body.args ?? [];
+      mode = "manual";
+    } else {
+      // Agent mode: use configured dev agent
+      const adapter = getAdapter(project.devAgent.adapter);
+      if (!adapter) {
+        return c.json({ error: `Unknown agent adapter: ${project.devAgent.adapter}` }, 400);
+      }
+
+      // Read problem pack and assemble context
+      const packPath = body.problemPackPath || join(project.repoPath, "problem-pack");
+      const packValidation = await validateProblemPack(packPath);
+      if (!packValidation.valid) {
+        return c.json({
+          error: `Problem Pack invalid: ${packValidation.errors.join(", ")}. Create a problem-pack/ directory with problem.md and success.md.`,
+        }, 400);
+      }
+
+      const problemPack = await readProblemPack(packPath);
+
+      // Assemble context
+      const ctx: IterationContext = {
+        iteration: iterationNum,
+        problemPack,
+        project,
+      };
+
+      // TODO: In iteration 3+, populate previousHandoff, previousJudgeAssessment,
+      // iterationHistory, userFeedback from previous iterations
+
+      // Write context files to repo
+      await writeContextToRepo(project.repoPath, ctx);
+
+      // Write agent instruction file
+      const instructionContent = generateInstructionContent(ctx);
+      const { writeFile } = await import("fs/promises");
+      await writeFile(
+        join(project.repoPath, adapter.instructionFilename),
+        instructionContent,
+        "utf-8",
+      );
+
+      // Build agent command
+      const prompt = `Read ${adapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
+      const cmd = adapter.buildCommand(project.repoPath, prompt);
+      command = cmd.command;
+      args = cmd.args;
+      mode = "agent";
+    }
+
     // Spawn the process
     const managed = spawnProcess({
-      command: body.command,
-      args: body.args ?? [],
+      command,
+      args,
       cwd: project.repoPath,
       logFile,
     });
@@ -171,12 +236,20 @@ export function createApp() {
     // Wait for result
     const result = await managed.result;
 
+    // Parse handoff and signal file (agent mode)
+    let handoff: string | null = null;
+    let signals: import("@cfcf/core").DevSignals | null = null;
+    if (mode === "agent") {
+      handoff = await parseHandoffDocument(project.repoPath);
+      signals = await parseSignalFile(project.repoPath);
+    }
+
     // Commit changes if any
     let committed = false;
     if (await gitManager.hasChanges(project.repoPath)) {
       const commitResult = await gitManager.commitAll(
         project.repoPath,
-        `cfcf iteration ${iterationNum}: ${body.command} ${(body.args ?? []).join(" ")}`,
+        `cfcf iteration ${iterationNum}${mode === "agent" ? ` (${project.devAgent.adapter})` : ""}: ${command} ${args.slice(0, 3).join(" ")}`,
       );
       committed = commitResult.success;
     }
@@ -184,11 +257,15 @@ export function createApp() {
     return c.json({
       iteration: iterationNum,
       branch: branchName,
+      mode,
       exitCode: result.exitCode,
       durationMs: result.durationMs,
       logFile: result.logFile,
       committed,
       killed: result.killed,
+      handoffReceived: handoff !== null,
+      signalsReceived: signals !== null,
+      signals: signals ?? undefined,
     });
   });
 
