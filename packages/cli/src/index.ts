@@ -11,6 +11,9 @@ import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerStatusCommand } from "./commands/status.js";
+import { registerProjectCommands } from "./commands/project.js";
+import { registerConfigCommands } from "./commands/config.js";
+import { registerRunCommand } from "./commands/run.js";
 
 const program = new Command();
 
@@ -22,5 +25,8 @@ program
 registerServerCommands(program);
 registerInitCommand(program);
 registerStatusCommand(program);
+registerProjectCommands(program);
+registerConfigCommands(program);
+registerRunCommand(program);
 
 program.parse();

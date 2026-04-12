@@ -4,7 +4,8 @@
 
 import type { Command } from "commander";
 import { DEFAULT_PORT, VERSION } from "@cfcf/core";
-import { get, isServerReachable } from "../client.js";
+import { readPidFile, isProcessRunning, removePidFile, writePidFile } from "@cfcf/core";
+import { get, isServerReachable, post } from "../client.js";
 
 export function registerServerCommands(program: Command): void {
   const server = program
@@ -18,29 +19,32 @@ export function registerServerCommands(program: Command): void {
     .action(async (opts) => {
       const port = parseInt(opts.port, 10);
 
-      // Check if already running
-      if (await isServerReachable()) {
-        console.log("cfcf server is already running.");
+      // Check if already running via PID file
+      const pidInfo = await readPidFile();
+      if (pidInfo && isProcessRunning(pidInfo.pid)) {
+        console.log(`cfcf server is already running (pid: ${pidInfo.pid}, port: ${pidInfo.port})`);
         return;
       }
 
+      // Clean up stale PID file if process is dead
+      if (pidInfo) {
+        await removePidFile();
+      }
+
       // Start server as a detached background process
-      const serverEntry = require.resolve("@cfcf/server/src/index.ts");
+      const serverEntry = new URL("../../server/src/index.ts", import.meta.url).pathname;
       const child = Bun.spawn(["bun", "run", serverEntry], {
         env: { ...process.env, CFCF_PORT: String(port) },
         stdio: ["ignore", "ignore", "ignore"],
-        // Note: Bun.spawn doesn't have 'detached' like Node.
-        // For iteration 0, we run in background via & in the shell.
-        // A proper daemonization approach will be added later.
       });
 
       // Give the server a moment to start
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 800));
 
       if (await isServerReachable()) {
         console.log(`cfcf server v${VERSION} started on port ${port} (pid: ${child.pid})`);
       } else {
-        console.error("Failed to start cfcf server. Check logs for details.");
+        console.error("Failed to start cfcf server. Try running directly: bun run dev:server");
         process.exit(1);
       }
     });
@@ -49,13 +53,29 @@ export function registerServerCommands(program: Command): void {
     .command("stop")
     .description("Stop the cfcf server")
     .action(async () => {
-      if (!(await isServerReachable())) {
-        console.log("cfcf server is not running.");
+      // Try graceful shutdown via API first
+      if (await isServerReachable()) {
+        const res = await post("/api/shutdown");
+        if (res.ok) {
+          console.log("cfcf server is shutting down...");
+          // Wait briefly then verify
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          await removePidFile();
+          console.log("cfcf server stopped.");
+          return;
+        }
+      }
+
+      // Fallback: use PID file
+      const pidInfo = await readPidFile();
+      if (pidInfo && isProcessRunning(pidInfo.pid)) {
+        process.kill(pidInfo.pid, "SIGTERM");
+        await removePidFile();
+        console.log(`cfcf server stopped (pid: ${pidInfo.pid})`);
         return;
       }
-      // For iteration 0, we don't have a proper shutdown endpoint.
-      // The user can kill the process manually or we add this in iteration 1.
-      console.log("Server shutdown not yet implemented. Use 'kill' or Ctrl+C on the server process.");
+
+      console.log("cfcf server is not running.");
     });
 
   server

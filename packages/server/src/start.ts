@@ -4,13 +4,14 @@
 
 import { createApp } from "./app.js";
 import { VERSION } from "@cfcf/core";
+import { writePidFile, removePidFile } from "@cfcf/core";
 
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
 
 /**
  * Start the cfcf server on the specified port.
  */
-export function startServer(port: number): ReturnType<typeof Bun.serve> {
+export async function startServer(port: number): Promise<ReturnType<typeof Bun.serve>> {
   if (serverInstance) {
     console.error("Server is already running");
     return serverInstance;
@@ -23,6 +24,19 @@ export function startServer(port: number): ReturnType<typeof Bun.serve> {
     fetch: app.fetch,
   });
 
+  // Write PID file so `cfcf server stop` can find us
+  await writePidFile(process.pid, port);
+
+  // Clean up PID file on exit
+  process.on("SIGINT", async () => {
+    await removePidFile();
+    process.exit(0);
+  });
+  process.on("SIGTERM", async () => {
+    await removePidFile();
+    process.exit(0);
+  });
+
   console.log(`cfcf server v${VERSION} listening on http://localhost:${port}`);
   return serverInstance;
 }
@@ -30,10 +44,11 @@ export function startServer(port: number): ReturnType<typeof Bun.serve> {
 /**
  * Stop the running server.
  */
-export function stopServer(): void {
+export async function stopServer(): Promise<void> {
   if (serverInstance) {
     serverInstance.stop();
     serverInstance = null;
+    await removePidFile();
     console.log("cfcf server stopped");
   }
 }

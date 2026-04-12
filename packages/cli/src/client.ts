@@ -41,6 +41,34 @@ export async function get<T = unknown>(path: string): Promise<ClientResponse<T>>
 }
 
 /**
+ * Make a POST request to the cfcf server.
+ */
+export async function post<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
+  try {
+    const res = await fetch(`${getBaseUrl()}${path}`, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, status: res.status, error: (data as { error?: string }).error || res.statusText };
+    }
+    return { ok: true, status: res.status, data: data as T };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message.includes("ECONNREFUSED") ||
+      message.includes("fetch failed") ||
+      message.includes("Unable to connect")
+    ) {
+      return { ok: false, status: 0, error: "Server is not running. Start it with: cfcf server start" };
+    }
+    return { ok: false, status: 0, error: message };
+  }
+}
+
+/**
  * Check if the server is reachable.
  */
 export async function isServerReachable(): Promise<boolean> {

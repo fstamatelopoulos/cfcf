@@ -9,13 +9,14 @@
     "packages/cli"
   ],
   "scripts": {
-    "test": "bun test --recursive",
+    "test": "bun test packages/core && bun test packages/server && bun test packages/cli",
     "test:core": "bun test packages/core",
     "test:server": "bun test packages/server",
     "test:cli": "bun test packages/cli",
     "dev:server": "bun run --watch packages/server/src/index.ts",
     "dev:cli": "bun run packages/cli/src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "bun build packages/cli/src/index.ts --compile --outfile cfcf-binary"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

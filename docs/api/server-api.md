@@ -94,6 +94,139 @@ Returns the current global configuration.
 
 ---
 
+## Projects
+
+### POST /api/projects
+
+Create a new project.
+
+**Request body:**
+
+```json
+{
+  "name": "my-web-app",
+  "repoPath": "/Users/fotis/src/my-web-app",
+  "repoUrl": "https://github.com/user/my-web-app.git"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Project name |
+| `repoPath` | Yes | Absolute path to a local git repository |
+| `repoUrl` | No | Remote git URL (for push) |
+| `devAgent` | No | Override dev agent config (defaults from global config) |
+| `judgeAgent` | No | Override judge agent config |
+| `maxIterations` | No | Override max iterations |
+| `pauseEvery` | No | Override pause cadence |
+
+**Response:** `201 Created`
+
+```json
+{
+  "id": "my-web-app-a1b2c3",
+  "name": "my-web-app",
+  "repoPath": "/Users/fotis/src/my-web-app",
+  "devAgent": { "adapter": "claude-code" },
+  "judgeAgent": { "adapter": "codex" },
+  "maxIterations": 10,
+  "pauseEvery": 0,
+  "onStalled": "alert",
+  "mergeStrategy": "auto",
+  "processTemplate": "default"
+}
+```
+
+**Error:** `400` if name/repoPath missing or repoPath is not a git repo.
+
+---
+
+### GET /api/projects
+
+List all projects.
+
+**Response:** `200 OK` -- Array of project configs, sorted by name.
+
+---
+
+### GET /api/projects/:id
+
+Get a project by ID or name (case-insensitive name match supported).
+
+**Response:** `200 OK` -- Project config object.
+
+**Error:** `404` if not found.
+
+---
+
+### PUT /api/projects/:id
+
+Update project configuration fields (partial update).
+
+**Response:** `200 OK` -- Updated project config.
+
+---
+
+### DELETE /api/projects/:id
+
+Delete a project (removes config only, does not touch the repo).
+
+**Response:** `200 OK` -- `{ "deleted": true }`
+
+---
+
+## Run
+
+### POST /api/projects/:id/run
+
+Execute a command within a project. Creates a feature branch, runs the command, captures logs, and commits results.
+
+**Request body:**
+
+```json
+{
+  "command": "npm",
+  "args": ["test"]
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "runId": "run-2026-04-11-a1b2c3",
+  "branch": "cfcf/run-2026-04-11-a1b2c3/iteration-1",
+  "exitCode": 0,
+  "durationMs": 3452,
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/run-2026-04-11-a1b2c3/iteration-001-dev.log",
+  "committed": true,
+  "killed": false
+}
+```
+
+---
+
+### GET /api/projects/:id/run/:runId/events
+
+SSE stream of log events for a completed run.
+
+**Events:**
+- `event: log` -- Log line from agent output
+- `event: done` -- Stream complete
+- `event: error` -- Error reading logs
+
+---
+
+## Server Lifecycle
+
+### POST /api/shutdown
+
+Gracefully shut down the server.
+
+**Response:** `200 OK` -- `{ "status": "shutting down" }`
+
+---
+
 ## Future Endpoints
 
 The following endpoints are planned for upcoming iterations. They are documented here as placeholders to show the API direction.
