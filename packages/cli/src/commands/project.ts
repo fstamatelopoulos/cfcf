@@ -73,7 +73,9 @@ export function registerProjectCommands(program: Command): void {
       console.log("Next steps:");
       console.log(`  1. Edit problem-pack/problem.md with your problem definition`);
       console.log(`  2. Edit problem-pack/success.md with success criteria`);
-      console.log(`  3. Run: cfcf run --project ${p.name}`);
+      console.log(`  3. Optionally add: constraints.md, hints.md, style-guide.md, context/`);
+      console.log(`  4. Review your problem definition:  cfcf review --project ${p.name}  (recommended)`);
+      console.log(`  5. Launch development:              cfcf run --project ${p.name}`);
     });
 
   project
