@@ -67,6 +67,7 @@ export async function createProject(opts: {
     onStalled: "alert",
     mergeStrategy: "auto",
     processTemplate: "default",
+    currentIteration: 0,
   };
 
   const dir = getProjectDir(id);
@@ -147,6 +148,19 @@ export async function deleteProject(projectId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Increment the project's iteration counter and return the new iteration number.
+ * This is atomic: read current, increment, write back.
+ */
+export async function nextIteration(projectId: string): Promise<number | null> {
+  const project = await getProject(projectId);
+  if (!project) return null;
+
+  const next = (project.currentIteration || 0) + 1;
+  await updateProject(projectId, { currentIteration: next });
+  return next;
 }
 
 /**

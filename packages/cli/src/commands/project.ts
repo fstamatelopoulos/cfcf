@@ -107,6 +107,7 @@ export function registerProjectCommands(program: Command): void {
       console.log(`  On stalled:     ${p.onStalled}`);
       console.log(`  Merge strategy: ${p.mergeStrategy}`);
       console.log(`  Template:       ${p.processTemplate}`);
+      console.log(`  Iterations:     ${p.currentIteration || 0} completed`);
     });
 
   project

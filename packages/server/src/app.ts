@@ -17,14 +17,11 @@ import {
   updateProject,
   deleteProject,
   validateProjectRepo,
+  nextIteration,
 } from "@cfcf/core";
-import {
-  spawnProcess,
-  type ProcessResult,
-} from "@cfcf/core";
+import { spawnProcess } from "@cfcf/core";
 import * as gitManager from "@cfcf/core";
-import { getIterationLogPath, ensureRunLogDir } from "@cfcf/core";
-import { randomBytes } from "crypto";
+import { getIterationLogPath, ensureProjectLogDir } from "@cfcf/core";
 
 const startedAt = Date.now();
 
@@ -86,7 +83,6 @@ export function createApp() {
       return c.json({ error: "name and repoPath are required" }, 400);
     }
 
-    // Validate repo exists and is a git repo
     const validation = await validateProjectRepo(body.repoPath);
     if (!validation.valid) {
       return c.json({ error: validation.error }, 400);
@@ -128,9 +124,9 @@ export function createApp() {
     return c.json({ deleted: true });
   });
 
-  // --- Run a command in a project ---
+  // --- Execute an iteration ---
 
-  app.post("/api/projects/:id/run", async (c) => {
+  app.post("/api/projects/:id/iterate", async (c) => {
     const project =
       (await getProject(c.req.param("id"))) ??
       (await findProjectByName(c.req.param("id")));
@@ -147,18 +143,22 @@ export function createApp() {
       return c.json({ error: "command is required" }, 400);
     }
 
-    const runId = `run-${new Date().toISOString().slice(0, 10)}-${randomBytes(3).toString("hex")}`;
+    // Get next iteration number
+    const iterationNum = await nextIteration(project.id);
+    if (iterationNum === null) {
+      return c.json({ error: "Failed to increment iteration counter" }, 500);
+    }
 
     // Create feature branch
-    const branchName = `cfcf/${runId}/iteration-1`;
+    const branchName = `cfcf/iteration-${iterationNum}`;
     const branchResult = await gitManager.createBranch(project.repoPath, branchName);
     if (!branchResult.success) {
       return c.json({ error: `Failed to create branch: ${branchResult.error}` }, 500);
     }
 
     // Prepare log path
-    const logFile = getIterationLogPath(project.id, runId, 1, "dev");
-    await ensureRunLogDir(project.id, runId);
+    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
+    await ensureProjectLogDir(project.id);
 
     // Spawn the process
     const managed = spawnProcess({
@@ -176,17 +176,13 @@ export function createApp() {
     if (await gitManager.hasChanges(project.repoPath)) {
       const commitResult = await gitManager.commitAll(
         project.repoPath,
-        `cfcf ${runId} iteration 1: ${body.command} ${(body.args ?? []).join(" ")}`,
+        `cfcf iteration ${iterationNum}: ${body.command} ${(body.args ?? []).join(" ")}`,
       );
       committed = commitResult.success;
     }
 
-    // Switch back to the original branch (main or whatever)
-    // For now, stay on the feature branch -- the user can switch back manually
-    // This will be handled more gracefully in iteration 2+
-
     return c.json({
-      runId,
+      iteration: iterationNum,
       branch: branchName,
       exitCode: result.exitCode,
       durationMs: result.durationMs,
@@ -196,9 +192,9 @@ export function createApp() {
     });
   });
 
-  // --- SSE endpoint for streaming run logs ---
+  // --- SSE endpoint for streaming iteration logs ---
 
-  app.get("/api/projects/:id/run/:runId/events", async (c) => {
+  app.get("/api/projects/:id/iterations/:n/logs", async (c) => {
     const project =
       (await getProject(c.req.param("id"))) ??
       (await findProjectByName(c.req.param("id")));
@@ -206,10 +202,8 @@ export function createApp() {
       return c.json({ error: "Project not found" }, 404);
     }
 
-    // For iteration 1, we serve the log file content as SSE events
-    // In later iterations, this will be real-time streaming during execution
-    const runId = c.req.param("runId");
-    const logFile = getIterationLogPath(project.id, runId, 1, "dev");
+    const iterationNum = parseInt(c.req.param("n"), 10);
+    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
 
     return streamSSE(c, async (stream) => {
       try {
@@ -239,7 +233,6 @@ export function createApp() {
   // --- Server shutdown ---
 
   app.post("/api/shutdown", (c) => {
-    // Respond first, then exit
     setTimeout(() => process.exit(0), 100);
     return c.json({ status: "shutting down" });
   });

@@ -88,6 +88,7 @@ describe("server API", () => {
       const body = await res.json();
       expect(body.name).toBe("test-app");
       expect(body.id).toMatch(/^test-app-/);
+      expect(body.currentIteration).toBe(0);
     });
 
     it("rejects missing name", async () => {
@@ -140,17 +141,71 @@ describe("server API", () => {
     });
 
     it("finds project by name", async () => {
-      const createRes = await app.request("/api/projects", {
+      await app.request("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "findme", repoPath: repoDir }),
       });
-      const created = await createRes.json();
 
-      const res = await app.request(`/api/projects/findme`);
+      const res = await app.request("/api/projects/findme");
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe("findme");
+    });
+  });
+
+  // --- Iterate ---
+
+  describe("POST /api/projects/:id/iterate", () => {
+    it("executes a command and returns iteration result", async () => {
+      // Create project first
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "iter-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/iterate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "echo", args: ["hello cfcf"] }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.iteration).toBe(1);
+      expect(body.branch).toBe("cfcf/iteration-1");
+      expect(body.exitCode).toBe(0);
+      expect(body.durationMs).toBeGreaterThan(0);
+    });
+
+    it("increments iteration counter across calls", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "counter-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      // First iteration
+      const res1 = await app.request(`/api/projects/${project.id}/iterate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "echo", args: ["iter 1"] }),
+      });
+      const body1 = await res1.json();
+      expect(body1.iteration).toBe(1);
+      expect(body1.branch).toBe("cfcf/iteration-1");
+
+      // Second iteration
+      const res2 = await app.request(`/api/projects/${project.id}/iterate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "echo", args: ["iter 2"] }),
+      });
+      const body2 = await res2.json();
+      expect(body2.iteration).toBe(2);
+      expect(body2.branch).toBe("cfcf/iteration-2");
     });
   });
 
@@ -158,7 +213,6 @@ describe("server API", () => {
 
   describe("POST /api/shutdown", () => {
     it("returns shutting down status", async () => {
-      // Note: in test mode, the setTimeout won't actually exit
       const res = await app.request("/api/shutdown", { method: "POST" });
       expect(res.status).toBe(200);
       const body = await res.json();

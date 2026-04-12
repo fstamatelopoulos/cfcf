@@ -2,7 +2,7 @@
  * Log storage for cfcf.
  *
  * Agent stdout/stderr logs are stored outside the repo (too large) under:
- *   ~/.cfcf/logs/<project-id>/<run-id>/iteration-NNN-<role>.log
+ *   ~/.cfcf/logs/<project-id>/iteration-NNN-<role>.log
  */
 
 import { join } from "path";
@@ -10,10 +10,10 @@ import { mkdir, readFile, readdir } from "fs/promises";
 import { getLogsDir } from "./constants.js";
 
 /**
- * Get the log directory for a specific run.
+ * Get the log directory for a project.
  */
-export function getRunLogDir(projectId: string, runId: string): string {
-  return join(getLogsDir(), projectId, runId);
+export function getProjectLogDir(projectId: string): string {
+  return join(getLogsDir(), projectId);
 }
 
 /**
@@ -21,19 +21,18 @@ export function getRunLogDir(projectId: string, runId: string): string {
  */
 export function getIterationLogPath(
   projectId: string,
-  runId: string,
   iteration: number,
   role: "dev" | "judge",
 ): string {
   const iterStr = String(iteration).padStart(3, "0");
-  return join(getRunLogDir(projectId, runId), `iteration-${iterStr}-${role}.log`);
+  return join(getProjectLogDir(projectId), `iteration-${iterStr}-${role}.log`);
 }
 
 /**
- * Ensure the log directory exists for a run.
+ * Ensure the log directory exists for a project.
  */
-export async function ensureRunLogDir(projectId: string, runId: string): Promise<string> {
-  const dir = getRunLogDir(projectId, runId);
+export async function ensureProjectLogDir(projectId: string): Promise<string> {
+  const dir = getProjectLogDir(projectId);
   await mkdir(dir, { recursive: true });
   return dir;
 }
@@ -43,12 +42,11 @@ export async function ensureRunLogDir(projectId: string, runId: string): Promise
  */
 export async function readLog(
   projectId: string,
-  runId: string,
   iteration: number,
   role: "dev" | "judge",
 ): Promise<string | null> {
   try {
-    const path = getIterationLogPath(projectId, runId, iteration, role);
+    const path = getIterationLogPath(projectId, iteration, role);
     return await readFile(path, "utf-8");
   } catch {
     return null;
@@ -56,14 +54,13 @@ export async function readLog(
 }
 
 /**
- * List all log files for a run.
+ * List all log files for a project.
  */
-export async function listRunLogs(
+export async function listProjectLogs(
   projectId: string,
-  runId: string,
 ): Promise<string[]> {
   try {
-    const dir = getRunLogDir(projectId, runId);
+    const dir = getProjectLogDir(projectId);
     const entries = await readdir(dir);
     return entries.filter((e) => e.endsWith(".log")).sort();
   } catch {

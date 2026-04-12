@@ -175,11 +175,11 @@ Delete a project (removes config only, does not touch the repo).
 
 ---
 
-## Run
+## Iterate
 
-### POST /api/projects/:id/run
+### POST /api/projects/:id/iterate
 
-Execute a command within a project. Creates a feature branch, runs the command, captures logs, and commits results.
+Execute the next iteration within a project. Creates a feature branch, runs the configured agent, captures logs, and commits results.
 
 **Request body:**
 
@@ -194,11 +194,11 @@ Execute a command within a project. Creates a feature branch, runs the command, 
 
 ```json
 {
-  "runId": "run-2026-04-11-a1b2c3",
-  "branch": "cfcf/run-2026-04-11-a1b2c3/iteration-1",
+  "iteration": 1,
+  "branch": "cfcf/iteration-1",
   "exitCode": 0,
   "durationMs": 3452,
-  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/run-2026-04-11-a1b2c3/iteration-001-dev.log",
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
   "committed": true,
   "killed": false
 }
@@ -206,9 +206,9 @@ Execute a command within a project. Creates a feature branch, runs the command, 
 
 ---
 
-### GET /api/projects/:id/run/:runId/events
+### GET /api/projects/:id/iterations/:n/logs
 
-SSE stream of log events for a completed run.
+SSE stream of log events for a completed iteration.
 
 **Events:**
 - `event: log` -- Log line from agent output
@@ -240,21 +240,19 @@ GET    /api/projects/:id                       # Get project details
 PUT    /api/projects/:id/config                # Update project config
 ```
 
-### Runs (Iteration 3+)
+### Iteration Lifecycle (Iteration 3+)
 
 ```
-POST   /api/projects/:id/runs                  # Start a new run
-GET    /api/projects/:id/runs                  # List runs
-GET    /api/projects/:id/runs/:runId           # Get run status
-POST   /api/projects/:id/runs/:runId/pause     # Pause a running run
-POST   /api/projects/:id/runs/:runId/resume    # Resume (with optional feedback)
-POST   /api/projects/:id/runs/:runId/stop      # Stop a run
+POST   /api/projects/:id/iterate               # Execute the next iteration
+POST   /api/projects/:id/pause                 # Pause iteration loop
+POST   /api/projects/:id/resume                # Resume (with optional feedback)
+POST   /api/projects/:id/stop                  # Stop iterating
 ```
 
 ### Real-time Events (Iteration 3+)
 
 ```
-GET    /api/projects/:id/runs/:runId/events    # SSE stream for real-time updates
+GET    /api/projects/:id/events                # SSE stream for real-time updates
 ```
 
 **Event types:**
@@ -265,18 +263,18 @@ GET    /api/projects/:id/runs/:runId/events    # SSE stream for real-time update
 | `iteration.log` | Log line from agent (dev or judge) |
 | `iteration.dev_completed` | Dev agent finished |
 | `iteration.judge_completed` | Judge agent finished with determination |
-| `run.paused` | Run paused (cadence, anomaly, or user input needed) |
-| `run.completed` | Run finished (success, failure, or stopped) |
+| `project.paused` | Project paused (cadence, anomaly, or user input needed) |
+| `project.completed` | Project finished (success, failure, or stopped) |
 | `alert` | User notification |
 
 ### Iteration Details (Iteration 3+)
 
 ```
-GET    /api/projects/:id/runs/:runId/iterations            # List iterations
-GET    /api/projects/:id/runs/:runId/iterations/:n          # Iteration details
-GET    /api/projects/:id/runs/:runId/iterations/:n/logs     # Full agent logs
-GET    /api/projects/:id/runs/:runId/iterations/:n/diff     # Git diff
-GET    /api/projects/:id/runs/:runId/iterations/:n/judge    # Judge assessment
+GET    /api/projects/:id/iterations            # List iterations
+GET    /api/projects/:id/iterations/:n          # Iteration details
+GET    /api/projects/:id/iterations/:n/logs     # Full agent logs
+GET    /api/projects/:id/iterations/:n/diff     # Git diff
+GET    /api/projects/:id/iterations/:n/judge    # Judge assessment
 ```
 
 ---

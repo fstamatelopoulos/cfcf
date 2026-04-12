@@ -10,6 +10,7 @@ import {
   updateProject,
   deleteProject,
   validateProjectRepo,
+  nextIteration,
 } from "./projects.js";
 
 describe("projects", () => {
@@ -44,6 +45,7 @@ describe("projects", () => {
       expect(project.devAgent.adapter).toBeDefined();
       expect(project.judgeAgent.adapter).toBeDefined();
       expect(project.maxIterations).toBeGreaterThan(0);
+      expect(project.currentIteration).toBe(0);
     });
 
     it("creates a project with custom config", async () => {
@@ -130,6 +132,28 @@ describe("projects", () => {
 
     it("returns false for non-existent project", async () => {
       expect(await deleteProject("nonexistent")).toBe(true); // rm -rf is idempotent
+    });
+  });
+
+  describe("nextIteration", () => {
+    it("increments from 0 to 1", async () => {
+      const project = await createProject({ name: "iter-test", repoPath: repoDir });
+      const next = await nextIteration(project.id);
+      expect(next).toBe(1);
+
+      const updated = await getProject(project.id);
+      expect(updated!.currentIteration).toBe(1);
+    });
+
+    it("increments monotonically", async () => {
+      const project = await createProject({ name: "mono-test", repoPath: repoDir });
+      expect(await nextIteration(project.id)).toBe(1);
+      expect(await nextIteration(project.id)).toBe(2);
+      expect(await nextIteration(project.id)).toBe(3);
+    });
+
+    it("returns null for non-existent project", async () => {
+      expect(await nextIteration("nonexistent")).toBeNull();
     });
   });
 

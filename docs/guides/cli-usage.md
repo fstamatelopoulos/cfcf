@@ -38,7 +38,7 @@ cfcf init --force
 
 ## Server Management
 
-cfcf runs a background server that manages projects, executes runs, and streams logs. The CLI communicates with the server via HTTP.
+cfcf runs a background server that manages projects, executes iterations, and streams logs. The CLI communicates with the server via HTTP.
 
 ### `cfcf server start`
 
@@ -184,11 +184,11 @@ cfcf run --project my-project -- make build
 ```
 
 What happens:
-1. Creates a git feature branch: `cfcf/<run-id>/iteration-1`
+1. Creates a git feature branch: `cfcf/iteration-1`
 2. Runs the command in the project's repo directory
 3. Captures all stdout/stderr to `~/.cfcf/logs/`
 4. If the command changed any files, commits them to the feature branch
-5. Reports: run ID, branch, exit code, duration, log location
+5. Reports: iteration number, branch, exit code, duration, log location
 
 In future iterations, this will be `cfcf run --project my-project` (no `--` command) and cfcf will automatically launch the configured AI agent.
 
@@ -225,9 +225,8 @@ Agent output logs are stored separately (they can be large):
 ~/.cfcf/
   logs/
     my-project-a1b2c3/
-      run-2026-04-11-abc123/
-        iteration-001-dev.log
-        iteration-001-judge.log
+      iteration-001-dev.log
+      iteration-001-judge.log
 ```
 
 Override with `CFCF_LOGS_DIR` environment variable.
@@ -274,10 +273,10 @@ cfcf project init --repo /path/to/repo --name my-app
 # Provide problem definition
 # (populate cfcf-docs/ with problem.md, success.md, etc.)
 
-# Launch the dark factory
-cfcf run --project my-app --max-iterations 10 --pause-every 3
+# Start iterating
+cfcf iterate --project my-app --max-iterations 10 --pause-every 3
 
-# cfcf runs the loop: dev agent → judge → iterate → pause for review → repeat
+# cfcf runs the loop: dev agent → judge → next iteration → pause for review → repeat
 # You review when prompted, or check status anytime:
 cfcf status
 ```

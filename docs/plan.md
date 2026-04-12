@@ -80,7 +80,7 @@ Each iteration re-reads all context. Strategies to manage this:
 - Clear "must read" vs "reference only" context tiers
 - Keeping handoff documents concise
 
-**Decision:** Ongoing -- will validate with real agent runs in Iteration 2.
+**Decision:** Ongoing -- will validate with real agent iterations in Iteration 2.
 
 ---
 
@@ -131,20 +131,20 @@ Each iteration re-reads all context. Strategies to manage this:
 **Process manager:**
 - [ ] `packages/core`: Process manager (spawn, stream logs, wait for exit, kill)
 - [ ] `packages/core`: Log capture system -- tee stdout/stderr to terminal + disk file
-- [ ] `packages/core`: Log storage directory structure (`~/.cfcf/logs/<project-id>/<run-id>/`)
+- [ ] `packages/core`: Log storage directory structure (`~/.cfcf/logs/<project-id>/`)
 
 **Git manager:**
 - [ ] `packages/core`: Git manager (create feature branch, commit, diff, reset, push)
-- [ ] Branch naming: `cfcf/<run-id>/iteration-<N>`
+- [ ] Branch naming: `cfcf/iteration-<N>`
 
 **Server: process execution + SSE:**
-- [ ] Server endpoint: `POST /api/projects/:id/run` triggers a process run
-- [ ] Server endpoint: `GET /api/projects/:id/run/:runId/events` streams logs via SSE
+- [ ] Server endpoint: `POST /api/projects/:id/iterate` triggers the next iteration
+- [ ] Server endpoint: `GET /api/projects/:id/iterations/:n/logs` streams logs via SSE
 - [ ] Server: proper `cfcf server stop` using PID file (fix the placeholder from iteration 0)
 
 **CLI: `cfcf run`:**
 - [ ] `cfcf run --project <name> -- <command>` triggers server to:
-  - Create a cfcf feature branch in the project's repo
+  - Create a cfcf feature branch (`cfcf/iteration-N`) in the project's repo
   - Spawn the user-specified command (e.g., `npm test`)
   - Stream stdout/stderr to CLI via SSE
   - Capture exit code and full logs to `~/.cfcf/logs/`
@@ -242,10 +242,10 @@ Each iteration re-reads all context. Strategies to manage this:
   - Notification: terminal notification when user input needed or pause reached
   - Accept user input: resume, provide direction, update hints, stop
   - Signal file detection: cfcf reads `cfcf-iteration-signals.json` for `user_input_needed`, presents questions to user
-- [ ] `cfcf status <run-id>`: shows current iteration state
-- [ ] `cfcf log <run-id>`: shows iteration history
-- [ ] `cfcf push <run-id>`: push cfcf branch to remote on demand
-- [ ] `cfcf apply <run-id>`: show diff / merge instructions
+- [ ] `cfcf status <project-name>`: shows current iteration state
+- [ ] `cfcf log <project-name>`: shows iteration history
+- [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
+- [ ] `cfcf apply <project-name>`: show diff / merge instructions
 
 **This is the MVP.** After this iteration, cfcf can take a problem, run a dev agent at it iteratively with a separate judge providing feedback, and converge toward a solution with human oversight.
 
@@ -263,13 +263,13 @@ Each iteration re-reads all context. Strategies to manage this:
   - Diff viewer per iteration
   - Judge assessment display
   - User feedback input (for pause/review cycles)
-- [ ] `packages/core`: Cross-run knowledge
-  - Agent assessments accumulated across runs
-  - Lessons learned accumulated across runs
+- [ ] `packages/core`: Cross-project knowledge
+  - Agent assessments accumulated across projects
+  - Lessons learned accumulated across projects
   - Query interface for context assembly to pull relevant prior knowledge
 - [ ] `packages/core`: Tier 3 Strategic Reflection
   - Configurable frequency (`--reflect-frequency N`)
-  - Spawns a reflection agent that reviews full iteration history across the run
+  - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
 - [ ] Token/cost tracking: best-effort measurement per iteration, per role
@@ -291,10 +291,10 @@ Each iteration re-reads all context. Strategies to manage this:
   - Concurrent execution (multiple projects, each running iterations via worker threads)
   - Web GUI: project list, per-project views
 - [ ] Optional Cerefox memory backend integration
-  - Sync memory documents to Cerefox for semantic search across runs
+  - Sync memory documents to Cerefox for semantic search across projects
   - Not required -- file-based memory is fully functional standalone
 - [ ] Process definition template versioning
-  - Track which process template version a run used
+  - Track which process template version was used
   - Ship default template, support user customization
 
 ---
@@ -344,7 +344,7 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-11 | Deterministic outer loop, agent-driven inner coordination (future) | Outer loop must be predictable. Chief-subagent pattern deferred to v0.4+ |
 | 2026-04-11 | Claude Code + Codex as the two initial agent adapters | Both needed from v0.1: one for dev, one for judge. Having two validates the plugin interface |
 | 2026-04-11 | Fire-and-forget agent execution for v0.1 | Simplest model. Full log capture for judge/user review |
-| 2026-04-11 | Fresh agent session per iteration, repo persists on branch | Context comes from files, not session continuity. Git branch provides state continuity |
+| 2026-04-11 | Fresh agent session per iteration, repo persists on branch | Context comes from files, not session continuity. Git branch provides state continuity. Iterations are monotonically numbered per project |
 | 2026-04-11 | Commit failed iterations, let next agent decide on backtracking | Preserves all history. Agent can git revert if needed. cfcf keeps external copies |
 | 2026-04-11 | File-based context delivery (CLAUDE.md + cfcf-docs/) | Simple, debuggable, works with any agent |
 | 2026-04-11 | Server from iteration 0, not deferred | Server is the backbone for CLI API and process management |
@@ -356,7 +356,7 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-11 | Web GUI deferred to Iteration 4 | CLI-only sufficient for MVP. GUI adds value once there's something to visualize |
 | 2026-04-11 | Push to remote on success/demand only | Avoids per-iteration push overhead and container auth complexity. Local commits sufficient during run |
 | 2026-04-11 | User provides existing repo for v0.1 | cfcf does not create repos. User points cfcf at an existing local repo |
-| 2026-04-11 | Feature branch per iteration, merge to main | Each iteration gets its own branch. Normal completion = merge to main (PR or direct). GitHub as only supported remote for v0.1 |
+| 2026-04-11 | Feature branch per iteration, merge to main | Each iteration gets its own branch (`cfcf/iteration-N`). Normal completion = merge to main (PR or direct). GitHub as only supported remote for v0.1 |
 | 2026-04-11 | Signal files: non-hidden, cfcf- prefixed, tracked in git | `cfcf-iteration-signals.json`, `cfcf-judge-signals.json`. Visible files, part of the repo history |
 | 2026-04-11 | All cfcf files in repo, no external persistent memory (for now) | Simpler, more transparent. External memory deferred until need appears organically |
 | 2026-04-11 | Malformed signal file = anomaly, alert user | cfcf does not infer from Markdown. Reports error, user reviews docs manually |
@@ -364,7 +364,7 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-11 | Process template copied into repo on init, versioned in git | User/agents can modify. Multiple template flavors planned. Community templates in future |
 | 2026-04-11 | Judge assessments archived in repo by cfcf | Previous iterations' assessments moved to `cfcf-docs/iteration-reviews/iteration-N.md`. Latest always at `judge-assessment.md` |
 | 2026-04-11 | Name: cfcf (code/packages), cf² (docs, pronounced "cf square") | cf² for human-readable contexts, cfcf for all code and package names |
-| 2026-04-11 | Merge strategy: configurable, auto-merge by default | Auto-merge to main = dark factory mode (default). PR-based = for teams with review gates. User's review gate is `--pause-every N`, not git merge |
+| 2026-04-11 | Merge strategy: configurable, auto-merge by default | Auto-merge to main = dark factory mode (default). PR-based = for teams with review gates. User's review gate is `--pause-every N`, not git merge. Two-level hierarchy: project -> iteration |
 
 ---
 
