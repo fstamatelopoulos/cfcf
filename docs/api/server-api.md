@@ -179,9 +179,27 @@ Delete a project (removes config only, does not touch the repo).
 
 ### POST /api/projects/:id/iterate
 
-Execute the next iteration within a project. Creates a feature branch, runs the configured agent, captures logs, and commits results.
+Execute the next iteration within a project. Two modes:
 
-**Request body:**
+**Agent mode** (no `command` field): reads Problem Pack, assembles context (CLAUDE.md + cfcf-docs/), launches configured dev agent, parses handoff + signal file.
+
+**Manual mode** (`command` field provided): runs the specified command directly (for testing/debugging).
+
+**Request body (agent mode):**
+
+```json
+{}
+```
+
+Or with custom Problem Pack path:
+
+```json
+{
+  "problemPackPath": "/path/to/custom/problem-pack"
+}
+```
+
+**Request body (manual mode):**
 
 ```json
 {
@@ -190,19 +208,73 @@ Execute the next iteration within a project. Creates a feature branch, runs the 
 }
 ```
 
-**Response:** `200 OK`
+**Response:** `202 Accepted` -- Iteration starts asynchronously.
 
 ```json
 {
   "iteration": 1,
   "branch": "cfcf/iteration-1",
-  "exitCode": 0,
-  "durationMs": 3452,
+  "mode": "agent",
+  "status": "preparing",
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
-  "committed": true,
-  "killed": false
+  "message": "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress."
 }
 ```
+
+The iteration runs in the background. Use the status and logs endpoints to track progress.
+
+---
+
+### GET /api/projects/:id/iterations/:n/status
+
+Get the current status of an iteration.
+
+**Response:** `200 OK`
+
+```json
+{
+  "iteration": 1,
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "branch": "cfcf/iteration-1",
+  "mode": "agent",
+  "status": "completed",
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "completedAt": "2026-04-12T05:17:30.000Z",
+  "exitCode": 0,
+  "durationMs": 90000,
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
+  "committed": true,
+  "killed": false,
+  "handoffReceived": true,
+  "signalsReceived": true,
+  "signals": {
+    "iteration": 1,
+    "agent": "claude-code",
+    "status": "completed",
+    "self_assessment": "high",
+    "tests_passed": 7,
+    "tests_failed": 0,
+    "tests_total": 7
+  }
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `preparing` | Context assembly, writing files |
+| `executing` | Agent process is running |
+| `collecting` | Agent finished, parsing results |
+| `completed` | Iteration done successfully |
+| `failed` | Iteration failed (see `error` field) |
+
+---
+
+### GET /api/projects/:id/iterations/latest
+
+Get the status of the most recent iteration for a project.
+
+Same response format as `/iterations/:n/status`.
 
 ---
 

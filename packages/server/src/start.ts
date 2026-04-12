@@ -22,6 +22,8 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   serverInstance = Bun.serve({
     port,
     fetch: app.fetch,
+    // Generous timeout for SSE streaming connections
+    idleTimeout: 120,
   });
 
   // Write PID file so `cfcf server stop` can find us

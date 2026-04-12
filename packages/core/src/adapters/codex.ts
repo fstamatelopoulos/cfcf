@@ -10,6 +10,7 @@ import type { AgentAdapter, AgentAvailability } from "../types.js";
 export const codexAdapter: AgentAdapter = {
   name: "codex",
   displayName: "Codex CLI",
+  instructionFilename: "AGENTS.md",
 
   async checkAvailability(): Promise<AgentAvailability> {
     try {

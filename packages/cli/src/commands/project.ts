@@ -3,7 +3,8 @@
  */
 
 import type { Command } from "commander";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { mkdir, writeFile, access } from "fs/promises";
 import { post, get } from "../client.js";
 import { isServerReachable } from "../client.js";
 import { createInterface } from "readline";
@@ -40,6 +41,28 @@ export function registerProjectCommands(program: Command): void {
       }
 
       const p = res.data!;
+
+      // Scaffold problem-pack/ directory in the repo if it doesn't exist
+      const packDir = join(repoPath, "problem-pack");
+      try {
+        await access(packDir);
+        console.log("problem-pack/ directory already exists, skipping scaffold.");
+      } catch {
+        await mkdir(packDir, { recursive: true });
+        await writeFile(
+          join(packDir, "problem.md"),
+          "# Problem Definition\n\n<!-- Describe what needs to be built or fixed. -->\n",
+          "utf-8",
+        );
+        await writeFile(
+          join(packDir, "success.md"),
+          "# Success Criteria\n\n<!-- Define how success is measured. Which tests must pass? -->\n",
+          "utf-8",
+        );
+        console.log("Created problem-pack/ directory with templates.");
+      }
+
+      console.log();
       console.log(`Project created: ${p.name}`);
       console.log(`  ID:         ${p.id}`);
       console.log(`  Repo:       ${p.repoPath}`);
@@ -47,7 +70,10 @@ export function registerProjectCommands(program: Command): void {
       console.log(`  Judge:      ${p.judgeAgent.adapter}`);
       console.log(`  Max iters:  ${p.maxIterations}`);
       console.log();
-      console.log(`Run a command: cfcf run --project ${p.name} -- <command>`);
+      console.log("Next steps:");
+      console.log(`  1. Edit problem-pack/problem.md with your problem definition`);
+      console.log(`  2. Edit problem-pack/success.md with success criteria`);
+      console.log(`  3. Run: cfcf run --project ${p.name}`);
     });
 
   project

@@ -136,15 +136,11 @@ POST   /api/projects/:id/pause                 # Pause iteration loop
 POST   /api/projects/:id/resume                # Resume (with optional feedback)
 POST   /api/projects/:id/stop                  # Stop iterating
 
-# Real-time
-GET    /api/projects/:id/events                # SSE stream
-
-# Iteration details
-GET    /api/projects/:id/iterations            # List iterations
-GET    /api/projects/:id/iterations/:n          # Iteration details
-GET    /api/projects/:id/iterations/:n/logs     # Full logs
-GET    /api/projects/:id/iterations/:n/diff     # Git diff
-GET    /api/projects/:id/iterations/:n/judge    # Judge assessment
+# Iterate (async -- returns immediately, runs in background)
+POST   /api/projects/:id/iterate               # Start next iteration (202 Accepted)
+GET    /api/projects/:id/iterations/latest      # Latest iteration status
+GET    /api/projects/:id/iterations/:n/status   # Iteration status (poll for progress)
+GET    /api/projects/:id/iterations/:n/logs     # SSE log stream (live or historical)
 ```
 
 ### 4.2 Project Manager
