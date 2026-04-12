@@ -1,4 +1,6 @@
-# cfcf Development Plan
+# cf² Development Plan
+
+*cfcf and cf² are used interchangeably. Both are pronounced "cf square." `cfcf` in code; cf² in docs.*
 
 **Status:** Living Document
 **Date:** April 2026
@@ -227,6 +229,11 @@ Each iteration re-reads all context. Strategies to manage this:
   - cfcf generates `cfcf-judge-instructions.md` with judge-specific guidance
   - Parses judge assessment (Markdown) and signal file (JSON)
   - Assessment determines: continue, stop (success), stop (failure/anomaly), request user input
+- [ ] Signal file schemas solidified:
+  - Finalize `cfcf-iteration-signals.json` schema (dev agent → cf²): status, tests, questions, blockers
+  - Finalize `cfcf-judge-signals.json` schema (judge → cf²): determination, quality, anomalies, guidance
+  - cfcf validates signal files against schema, reports malformed as anomaly
+  - Judge assessment archiving: cf² copies `judge-assessment.md` → `iteration-reviews/iteration-N.md` before next iteration
 - [ ] `packages/core`: Iteration state manager
   - Updates decision & lessons log after each iteration
   - Generates compressed iteration summary for next iteration's context

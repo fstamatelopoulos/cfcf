@@ -1,4 +1,6 @@
-# cfcf Server API Reference
+# cf² Server API Reference
+
+*cfcf and cf² are used interchangeably. Both are pronounced "cf square." `cfcf` in code; cf² in docs.*
 
 **Base URL:** `http://localhost:7233` (configurable via `CFCF_PORT` env var)
 

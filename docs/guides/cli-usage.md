@@ -1,6 +1,8 @@
-# cfcf CLI Usage Guide
+# cf² CLI Usage Guide
 
-This guide covers all cfcf commands and typical workflows.
+*cfcf and cf² are used interchangeably. Both are pronounced "cf square." `cfcf` in code and commands; cf² in docs.*
+
+This guide covers all cf² commands and typical workflows.
 
 ## Prerequisites
 
