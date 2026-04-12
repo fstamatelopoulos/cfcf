@@ -7,7 +7,7 @@ import { spawnProcess } from "./process-manager.js";
 describe("process manager", () => {
   describe("spawnProcess", () => {
     it("runs a simple command and captures output", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "echo",
         args: ["hello world"],
         cwd: process.cwd(),
@@ -20,7 +20,7 @@ describe("process manager", () => {
     });
 
     it("captures exit code for failing commands", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "bash",
         args: ["-c", "exit 42"],
         cwd: process.cwd(),
@@ -35,7 +35,7 @@ describe("process manager", () => {
       const logFile = join(tempDir, "test.log");
 
       try {
-        const managed = spawnProcess({
+        const managed = await spawnProcess({
           command: "echo",
           args: ["log this"],
           cwd: process.cwd(),
@@ -54,7 +54,7 @@ describe("process manager", () => {
     });
 
     it("can kill a running process", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "sleep",
         args: ["30"],
         cwd: process.cwd(),
@@ -69,7 +69,7 @@ describe("process manager", () => {
     });
 
     it("respects timeout", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "sleep",
         args: ["30"],
         cwd: process.cwd(),
@@ -82,7 +82,7 @@ describe("process manager", () => {
     });
 
     it("passes environment variables", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "bash",
         args: ["-c", "echo $CFCF_TEST_VAR"],
         cwd: process.cwd(),
@@ -94,7 +94,7 @@ describe("process manager", () => {
     });
 
     it("runs in the specified working directory", async () => {
-      const managed = spawnProcess({
+      const managed = await spawnProcess({
         command: "pwd",
         args: [],
         cwd: "/tmp",

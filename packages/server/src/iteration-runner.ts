@@ -195,16 +195,12 @@ async function runIterationAsync(
   state.status = "executing";
   const startTime = Date.now();
 
-  const managed = spawnProcess({
+  const managed = await spawnProcess({
     command,
     args,
     cwd: project.repoPath,
     logFile: state.logFile,
   });
-
-  // Collect log lines as they come (for SSE streaming)
-  // The process manager's logs are consumed by the result promise,
-  // so we track them via the log file after completion.
 
   const result = await managed.result;
   state.exitCode = result.exitCode;
