@@ -141,12 +141,58 @@ cfcf-docs/
 | iteration-history.md | cf² | Dev agent | Every iteration | Compressed summaries |
 | user-feedback.md | cf² (from user) | Dev agent | At pause cadence | cf² writes when user provides input |
 | iteration-reviews/*.md | cf² (archived) | Dev agent, User | After each iteration | History of all judge assessments |
+| architect-review.md | Solution Architect | Dev agent, Judge, User | Pre-iteration (`cfcf review`) | Persists across iterations |
+| cfcf-architect-signals.json | Solution Architect | cf² | Pre-iteration | Readiness gate |
 
 ---
 
-## 4. The Iteration Process
+## 4. Pre-Iteration: Solution Architect Review
 
-### 4.1 Pre-Iteration (cfcf does this)
+Before the iterative development loop begins, cf² supports an optional (but recommended) **Solution Architect review** step. This is a separate agent invocation that validates the Problem Pack before committing development resources.
+
+### 4.0.1 Purpose
+
+The Solution Architect reviews the problem definition, success criteria, constraints, and context files to assess whether the project is ready for automated development. It catches issues that would waste iteration cycles: vague requirements, missing success criteria, conflicting constraints, gaps in context.
+
+### 4.0.2 Process
+
+1. **User triggers**: `cfcf review --project <name>`
+2. **cf² writes** architect-specific instructions to the repo
+3. **cf² spawns** the Solution Architect agent (configurable, can be a different agent/model than the dev agent)
+4. **The architect reads**: all Problem Pack files, process.md, any existing context
+5. **The architect produces**:
+   - `cfcf-docs/architect-review.md` -- human-readable assessment (readiness, gaps, suggestions, risks)
+   - `cfcf-docs/cfcf-architect-signals.json` -- machine-readable signals for cf²
+
+### 4.0.3 Architect Signal File
+
+```json
+{
+  "readiness": "READY",
+  "gaps": [],
+  "suggestions": ["Consider adding API rate limiting to constraints"],
+  "risks": ["No database migration strategy specified"],
+  "recommended_approach": "Start with Express + Zod for validation, add auth middleware"
+}
+```
+
+Readiness values: `READY` | `NEEDS_REFINEMENT` | `BLOCKED`
+
+### 4.0.4 What Happens Next
+
+- **READY**: User proceeds with `cfcf run`. The architect review persists in the repo and is available to dev agents as additional context.
+- **NEEDS_REFINEMENT**: User updates the Problem Pack based on the architect's feedback, then re-runs `cfcf review`.
+- **BLOCKED**: Fundamental issues (e.g., no success criteria, contradictory requirements) must be resolved first.
+
+The `architect-review.md` file persists across iterations -- it's available to every dev agent and judge as reference context.
+
+> **Note:** This feature is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring Problem Pack quality.
+
+---
+
+## 5. The Iteration Process
+
+### 5.1 Pre-Iteration (cfcf does this)
 
 1. **Ensure git state**: Verify we're on the cfcf branch. If iteration 1, create the branch off current HEAD.
 2. **Generate CLAUDE.md** (or agent equivalent): Assemble the agent instruction file from current context using the tiered context strategy (see section 9).
@@ -159,7 +205,7 @@ cfcf-docs/
 4. **Spawn dev agent**: Launch the agent CLI in non-interactive mode (e.g., `claude --dangerously-skip-permissions -p "..."`).
 5. **Begin log capture**: Stream and store all stdout/stderr to `~/.cfcf/.../agent-logs.txt`.
 
-### 4.2 During Iteration (agent does this)
+### 5.2 During Iteration (agent does this)
 
 The agent follows the process defined in CLAUDE.md and process.md:
 
@@ -205,7 +251,7 @@ The agent follows the process defined in CLAUDE.md and process.md:
 
 8. **Exit**: The agent process exits. The iteration is complete.
 
-### 4.3 Post-Iteration (cfcf does this)
+### 5.3 Post-Iteration (cfcf does this)
 
 1. **Detect completion**: Agent process exited.
 2. **Read artifacts**: Parse the handoff document, signal file, decision log updates, and plan updates from the repo.
@@ -226,7 +272,7 @@ The agent follows the process defined in CLAUDE.md and process.md:
 
 ---
 
-## 5. The Agent Judge
+## 6. The Agent Judge
 
 The judge is a **separate agent** (not an API call) that runs in the same repo directory after each iteration. It is encouraged to be a **different agent** than the dev agent (e.g., Codex judges Claude Code's work, or vice versa). This provides cross-agent review and avoids API costs -- it uses the user's existing agent subscriptions.
 
@@ -238,7 +284,7 @@ The judge is a **separate agent** (not an API call) that runs in the same repo d
 
 **Configuration:** The user configures which agent and model to use for the judge role independently from the dev agent. Defaults TBD.
 
-### 5.1 Judge Inputs
+### 6.1 Judge Inputs
 
 The judge runs in the same repo directory. It has access to everything the dev agent produced. cfcf writes judge-specific instructions to `cfcf-docs/cfcf-judge-instructions.md` which tells the judge:
 
@@ -250,7 +296,7 @@ The judge runs in the same repo directory. It has access to everything the dev a
 - Previous judge assessments (`cfcf-docs/iteration-reviews/`)
 - Where to write its output
 
-### 5.2 Judge Output
+### 6.2 Judge Output
 
 The judge produces TWO outputs:
 
@@ -319,7 +365,7 @@ The judge also writes `cfcf-docs/cfcf-judge-signals.json`:
 
 The signal file is the primary input for cfcf's decision logic. The Markdown assessment is for humans and for context in future iterations.
 
-### 5.3 What cfcf Does With the Judge Output
+### 6.3 What cfcf Does With the Judge Output
 
 The judge output feeds into **deterministic** cfcf decisions:
 
@@ -334,7 +380,7 @@ The judge output feeds into **deterministic** cfcf decisions:
 
 The judge informs but does not decide. cfcf maps judge output categories to deterministic actions.
 
-### 5.4 Signal File Error Handling
+### 6.4 Signal File Error Handling
 
 If a signal file is missing or contains malformed JSON:
 - cfcf treats this as an **anomaly** and alerts the user.
@@ -344,7 +390,7 @@ If a signal file is missing or contains malformed JSON:
 
 ---
 
-## 6. Iteration Handoff Document Template
+## 7. Iteration Handoff Document Template
 
 This is the template that cfcf places at `cfcf-docs/iteration-handoff.md` for the agent to fill in.
 
@@ -383,9 +429,9 @@ This is the template that cfcf places at `cfcf-docs/iteration-handoff.md` for th
 
 ---
 
-## 7. Where Files Live
+## 8. Where Files Live
 
-### 7.1 In the Repo (primary -- tracked in git)
+### 8.1 In the Repo (primary -- tracked in git)
 
 All structured cfcf files live in the repo under `cfcf-docs/`. This is the source of truth. Everything is version-controlled.
 
@@ -416,6 +462,10 @@ All structured cfcf files live in the repo under `cfcf-docs/`. This is the sourc
       iteration-2.md
       ...
 
+    # Solution Architect output (pre-iteration review)
+    architect-review.md            # Solution Architect's assessment (persists across iterations)
+    cfcf-architect-signals.json    # Machine-readable readiness signals
+
     # cfcf-managed context (regenerated by cfcf each iteration)
     iteration-history.md           # Compressed summaries of all previous iterations
     user-feedback.md               # User's latest feedback/direction
@@ -427,7 +477,7 @@ All structured cfcf files live in the repo under `cfcf-docs/`. This is the sourc
   CLAUDE.md                        # Agent instruction file (regenerated each iteration by cfcf)
 ```
 
-### 7.2 Outside the Repo (backup only)
+### 8.2 Outside the Repo (backup only)
 
 cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very large and would bloat the repo. This is a backup, not the source of truth.
 
@@ -441,19 +491,19 @@ cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very larg
       ...
 ```
 
-### 7.3 No External Persistent Memory (for now)
+### 8.3 No External Persistent Memory (for now)
 
 A richer external memory layer (cross-project knowledge, semantic search, Cerefox integration) is a future extension. The need for it will appear organically as cfcf evolves. For now, keeping everything in the repo is simpler and more transparent.
 
 ---
 
-## 8. Process Definition: What Goes Into process.md
+## 9. Process Definition: What Goes Into process.md
 
 The `cfcf-docs/process.md` file is a concise, agent-readable description of the iteration process. cfcf ships with a default process template (under `process-templates/default/` in the cfcf source). On `cfcf init`, the template is **copied into the repo** so it becomes part of the project's version history. The user or agents can modify it over time -- changes are tracked in git like any other file.
 
 The process.md file's purpose is to ensure the agent understands its role and the expected workflow regardless of which agent is used.
 
-### 8.1 Template Vision
+### 9.1 Template Vision
 
 The long-term vision for process templates:
 
@@ -480,7 +530,7 @@ Key contents:
 
 ---
 
-## 9. What Is Code-Based vs. Judge-Based in the Loop
+## 10. What Is Code-Based vs. Judge-Based in the Loop
 
 A key design question: which parts of the post-iteration analysis are done by cfcf (deterministic code) and which require the agent judge?
 
@@ -511,7 +561,7 @@ cfcf can detect simple signals mechanically (e.g., "tests passed", "handoff docu
 
 ---
 
-## 10. Tiered Context Strategy
+## 11. Tiered Context Strategy
 
 Each iteration requires the agent to re-read context from scratch (fresh process, no session continuity). To avoid spending a large fraction of the token window on bootstrapping, context is organized into tiers.
 
