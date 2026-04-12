@@ -110,33 +110,65 @@ Each iteration re-reads all context. Strategies to manage this:
 
 ---
 
-### Iteration 1: Process Manager + Log Capture + Git Branch Management
+### Iteration 1: Project Management + Process Manager + Log Capture + Git Branch Management
 
-**Goal:** cfcf server can spawn a local process (any CLI command), stream and capture logs, manage a git branch. No AI agent yet -- just prove the plumbing works.
+**Goal:** cfcf can manage projects, spawn local processes, stream & capture logs, and manage git branches. No AI agent yet -- just prove the plumbing works end-to-end.
 
 **Deliverables:**
+
+**Project management:**
+- [ ] `packages/core`: Project types (ProjectConfig, project CRUD operations)
+- [ ] `packages/core`: Project storage (`~/.cfcf/projects/<project-id>/config.json`)
+- [ ] Server endpoints: project CRUD (`POST/GET /api/projects`, `GET/PUT /api/projects/:id`)
+- [ ] CLI commands:
+  - `cfcf project init --repo <path> --name <name>` (create project, link repo, inherit/override global config)
+  - `cfcf project list` (list all projects)
+  - `cfcf project show <name>` (show project config)
+- [ ] CLI commands for global config:
+  - `cfcf config show` (display current global config)
+  - `cfcf config edit` (re-run interactive setup, same as `cfcf init --force`)
+
+**Process manager:**
 - [ ] `packages/core`: Process manager (spawn, stream logs, wait for exit, kill)
 - [ ] `packages/core`: Log capture system -- tee stdout/stderr to terminal + disk file
-- [ ] `packages/core`: Git manager (create branch, commit, diff, reset)
-- [ ] `packages/core`: External memory directory structure (`~/.cfcf/projects/...`)
-- [ ] Server endpoint: trigger a process run, stream logs via SSE
-- [ ] CLI command: `cfcf run` that triggers the server to:
-  - Create a cfcf git branch in an existing repo
-  - Spawn a user-specified command (e.g., `npm test`)
-  - Stream stdout/stderr to CLI
-  - Capture exit code and full logs to `~/.cfcf/`
-  - Commit results to the cfcf branch
-- [ ] Integration tests for process lifecycle and git operations
-- [ ] Error handling: process crash, git conflicts
+- [ ] `packages/core`: Log storage directory structure (`~/.cfcf/logs/<project-id>/<run-id>/`)
+
+**Git manager:**
+- [ ] `packages/core`: Git manager (create feature branch, commit, diff, reset, push)
+- [ ] Branch naming: `cfcf/<run-id>/iteration-<N>`
+
+**Server: process execution + SSE:**
+- [ ] Server endpoint: `POST /api/projects/:id/run` triggers a process run
+- [ ] Server endpoint: `GET /api/projects/:id/run/:runId/events` streams logs via SSE
+- [ ] Server: proper `cfcf server stop` using PID file (fix the placeholder from iteration 0)
+
+**CLI: `cfcf run`:**
+- [ ] `cfcf run --project <name> -- <command>` triggers server to:
+  - Create a cfcf feature branch in the project's repo
+  - Spawn the user-specified command (e.g., `npm test`)
+  - Stream stdout/stderr to CLI via SSE
+  - Capture exit code and full logs to `~/.cfcf/logs/`
+  - Commit results to the feature branch
+
+**Build + CI:**
 - [ ] Build script: `bun build --compile` to produce self-contained binary for current platform
 - [ ] CI pipeline (GitHub Actions): build, test, and lint on push
 - [ ] Cross-platform binary targets: darwin-arm64, darwin-x64, linux-x64 (Windows deferred)
+
+**Tests:**
+- [ ] Unit tests for process manager (spawn, log, exit, kill)
+- [ ] Unit tests for git manager (branch, commit, diff, reset)
+- [ ] Unit tests for project CRUD
+- [ ] Integration tests: full `cfcf run` cycle (project init → run command → logs captured → committed)
+- [ ] Server API tests for new endpoints
+- [ ] Error handling tests: process crash, git conflicts, missing project
 
 **Key decisions to validate:**
 - Log storage format and location
 - Git branch naming strategy
 - Process spawning: Bun.spawn() vs child_process
 - Binary size and startup time benchmarks
+- PID file location for server stop
 
 ---
 
