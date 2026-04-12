@@ -68,12 +68,12 @@ On each tagged release, CI (GitHub Actions) runs `bun build --compile --target=<
 
 - **Framework**: Commander.js for command and subcommand routing.
 - **Terminal UI**: Ink (React-based terminal rendering). Used for interactive iteration display, agent status, open question prompts, and progress indicators.
-- **Entry point**: A single compiled binary (`cf-cf`) that routes to subcommands (`cf-cf run`, `cf-cf init`, `cf-cf status`, `cf-cf logs`, etc.).
+- **Entry point**: A single compiled binary (`cf-cf`) that routes to subcommands (`cf-cf iterate`, `cf-cf init`, `cf-cf status`, `cf-cf logs`, etc.).
 
 ### Server Layer
 
 - **Framework**: Hono -- lightweight, fast, runs on Bun natively.
-- **Role**: Manages the lifecycle of orchestration sessions, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
+- **Role**: Manages project and iteration lifecycles, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
 - **Transport**: HTTP/SSE for streaming event output to the web GUI. WebSocket as an option for bidirectional agent communication.
 
 ### Web GUI (Optional, Deferred)
@@ -107,9 +107,9 @@ Vendor SDKs (e.g. Anthropic SDK, OpenAI SDK) may be used internally within speci
 Agents run as **local processes** in the user's normal development environment -- not inside Docker containers. cfcf spawns agent CLI processes, captures their output, and manages their lifecycle.
 
 - **Process spawning**: Bun's native `Bun.spawn()` (or `child_process.spawn()` for compatibility). Non-blocking, async.
-- **Isolation**: Git branches provide state isolation between iterations. Each run operates on a dedicated `cfcf/<run-id>` branch. The user's working branch is never modified.
+- **Isolation**: Git branches provide state isolation between iterations. Each iteration operates on a dedicated `cfcf/iteration-N` branch. The user's working branch is never modified.
 - **Output capture**: Agent stdout/stderr is streamed to the cfcf server (for SSE to clients) and simultaneously written to disk in cfcf's external memory directory.
-- **Authentication**: Agents use the user's existing local credentials. cfcf does not manage API keys or agent authentication. The user must have their agents installed and authenticated before starting a run.
+- **Authentication**: Agents use the user's existing local credentials. cfcf does not manage API keys or agent authentication. The user must have their agents installed and authenticated before starting iteration.
 - **Unattended execution**: Agents run with permission-skip flags (e.g., `--dangerously-skip-permissions` for Claude Code) to enable fully unattended operation.
 
 ### Per-Iteration Setup
@@ -142,13 +142,13 @@ Container-based execution is a future option for users who want stronger isolati
 
 ## Service Mode
 
-cfcf runs as a background service on the user's machine. The server process manages run lifecycles, agent process orchestration, and event streaming. The CLI (and future web GUI) are thin clients that communicate with the server via a local HTTP API.
+cfcf runs as a background service on the user's machine. The server process manages iteration lifecycles, agent process orchestration, and event streaming. The CLI (and future web GUI) are thin clients that communicate with the server via a local HTTP API.
 
 - **Start**: `cfcf server start` launches the server as a background process. Auto-start on boot is an optional setup step (via launchd on macOS, systemd on Linux, or a Windows service).
 - **Communication**: CLI talks to the server via HTTP on a configurable local port (default: `localhost:7233`).
 - **Event streaming**: The server exposes an SSE endpoint for real-time updates (iteration progress, test results, alerts). The CLI and web GUI subscribe to this stream.
 - **Notifications**: The server can alert the user via multiple channels when iterations complete, pause for review, or encounter errors. Initially: terminal notifications. Planned: Slack, email, webhook integrations.
-- **Graceful degradation**: If the server is not running, `cfcf run` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. This is useful for quick one-off runs and development/debugging of cfcf itself.
+- **Graceful degradation**: If the server is not running, `cfcf iterate` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. This is useful for quick one-off iterations and development/debugging of cfcf itself.
 
 ---
 
@@ -211,7 +211,7 @@ cfcf has a self-contained, file-based memory layer stored under `~/.cfcf/`. All 
 
 The memory layer is designed to be human-readable, version-controllable, and easy to back up. The user can copy the entire `~/.cfcf/` directory to preserve all project history.
 
-> **Note:** Cerefox (the OSS knowledge base) is supported as an optional external memory backend. When configured, cfcf syncs memory documents to Cerefox for semantic search across runs. This is not required -- the built-in file-based memory is fully functional on its own.
+> **Note:** Cerefox (the OSS knowledge base) is supported as an optional external memory backend. When configured, cfcf syncs memory documents to Cerefox for semantic search across projects. This is not required -- the built-in file-based memory is fully functional on its own.
 
 See `agent-process-and-context.md` for the full directory structure and file specifications.
 

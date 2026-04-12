@@ -27,5 +27,11 @@ Thumbs.db
 coverage/
 *.lcov
 
+# Compiled binaries
+cfcf-binary
+cfcf-linux-*
+cfcf-darwin-*
+cfcf-windows-*
+
 # cfcf runtime (agent logs, not part of repo)
 .cfcf/

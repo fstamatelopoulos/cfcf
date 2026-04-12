@@ -47,7 +47,7 @@ export interface CfcfGlobalConfig {
   devAgent: AgentConfig;
   /** Default judge agent configuration */
   judgeAgent: AgentConfig;
-  /** Default max iterations per run */
+  /** Default max iterations */
   maxIterations: number;
   /** Default pause cadence (0 = no pauses) */
   pauseEvery: number;
@@ -69,6 +69,8 @@ export interface ProjectConfig {
   onStalled: "continue" | "stop" | "alert";
   mergeStrategy: "auto" | "pr";
   processTemplate: string;
+  /** Monotonically increasing iteration counter for this project */
+  currentIteration: number;
 }
 
 // --- Server Communication ---
@@ -128,17 +130,6 @@ export interface IterationRecord {
   summary?: string;
 }
 
-export interface Run {
-  id: string;
-  projectId: string;
-  status: "running" | "paused" | "completed" | "failed" | "stopped";
-  currentIteration: number;
-  maxIterations: number;
-  iterations: IterationRecord[];
-  startedAt: string;
-  completedAt?: string;
-}
-
 // --- SSE Events ---
 
 export type CfcfEvent =
@@ -151,9 +142,9 @@ export type CfcfEvent =
       determination: string;
     }
   | {
-      type: "run.paused";
+      type: "project.paused";
       reason: "cadence" | "anomaly" | "user_input_needed";
       questions?: string[];
     }
-  | { type: "run.completed"; status: "success" | "failure" | "stopped" }
+  | { type: "project.completed"; status: "success" | "failure" | "stopped" }
   | { type: "alert"; message: string };

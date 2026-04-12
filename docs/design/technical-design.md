@@ -40,7 +40,7 @@ Without container isolation, cfcf relies on:
 2. **Git-based isolation**: cfcf works on a dedicated branch. If an iteration goes wrong, git reset/revert restores the previous state.
 3. **Working directory scoping**: The agent is instructed (via CLAUDE.md / equivalent) to only modify files within the project directory.
 4. **cfcf-managed files**: Files in `cfcf-docs/` that are marked read-only are protected by convention (agent instructions say "do not modify"). cfcf can verify post-iteration that read-only files weren't changed and warn/revert if they were.
-5. **User acknowledgment**: When starting a run, cfcf explicitly tells the user that the agent will run with elevated permissions and asks for confirmation.
+5. **User acknowledgment**: When starting to iterate, cfcf explicitly tells the user that the agent will run with elevated permissions and asks for confirmation.
 
 ### 2.4 Future: Optional Container Mode
 
@@ -93,7 +93,7 @@ The execution interface is designed so that swapping in a container backend does
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │  ~/.cfcf/                   (cfcf home - external memory)    │  │
-│  │    projects/<id>/runs/<id>/iterations/001/agent-logs.txt     │  │
+│  │    projects/<id>/iterations/001/agent-logs.txt               │  │
 │  │    projects/<id>/knowledge/lessons-learned.md                │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
@@ -112,9 +112,9 @@ The execution interface is designed so that swapping in a container backend does
 The central process. Always running on localhost. Manages everything.
 
 **Responsibilities:**
-- Exposes REST API for CLI (project CRUD, run lifecycle, configuration)
+- Exposes REST API for CLI (project CRUD, iteration lifecycle, configuration)
 - Exposes SSE endpoints for real-time event streaming (logs, status updates, alerts)
-- Manages project state and run state
+- Manages project state and iteration state
 - Orchestrates the iteration loop
 - Dispatches notifications
 - Serves the web GUI (future, not in Iteration 0)
@@ -130,23 +130,21 @@ GET    /api/projects                    # List projects
 GET    /api/projects/:id                # Get project details
 PUT    /api/projects/:id/config         # Update project config
 
-# Run lifecycle
-POST   /api/projects/:id/runs           # Start a new run
-GET    /api/projects/:id/runs           # List runs
-GET    /api/projects/:id/runs/:runId    # Get run status
-POST   /api/projects/:id/runs/:runId/pause    # Pause
-POST   /api/projects/:id/runs/:runId/resume   # Resume (with optional feedback)
-POST   /api/projects/:id/runs/:runId/stop     # Stop
+# Iteration lifecycle
+POST   /api/projects/:id/iterate               # Execute the next iteration
+POST   /api/projects/:id/pause                 # Pause iteration loop
+POST   /api/projects/:id/resume                # Resume (with optional feedback)
+POST   /api/projects/:id/stop                  # Stop iterating
 
 # Real-time
-GET    /api/projects/:id/runs/:runId/events   # SSE stream
+GET    /api/projects/:id/events                # SSE stream
 
 # Iteration details
-GET    /api/projects/:id/runs/:runId/iterations            # List iterations
-GET    /api/projects/:id/runs/:runId/iterations/:n          # Iteration details
-GET    /api/projects/:id/runs/:runId/iterations/:n/logs     # Full logs
-GET    /api/projects/:id/runs/:runId/iterations/:n/diff     # Git diff
-GET    /api/projects/:id/runs/:runId/iterations/:n/judge    # Judge assessment
+GET    /api/projects/:id/iterations            # List iterations
+GET    /api/projects/:id/iterations/:n          # Iteration details
+GET    /api/projects/:id/iterations/:n/logs     # Full logs
+GET    /api/projects/:id/iterations/:n/diff     # Git diff
+GET    /api/projects/:id/iterations/:n/judge    # Judge assessment
 ```
 
 ### 4.2 Project Manager
@@ -163,7 +161,8 @@ interface ProjectConfig {
   repoUrl?: string;                // Remote git repo URL (for push)
   devAgent: AgentConfig;           // Dev agent configuration
   judgeAgent: AgentConfig;         // Judge agent configuration
-  maxIterations: number;           // Hard cap on iterations per run
+  maxIterations: number;           // Hard cap on iterations per project
+  currentIteration: number;        // Current iteration number (monotonically increasing, starts at 0)
   pauseEvery: number;              // 0 = no pauses, N = pause every N iterations
   onStalled: 'continue' | 'stop' | 'alert'; // Behavior when judge says STALLED
   problemPackPath: string;         // Path to the Problem Pack directory
@@ -224,9 +223,9 @@ IDLE → PREPARING → EXECUTING_DEV → EXECUTING_JUDGE → DECIDING → PREPAR
 **Per-iteration flow:**
 
 ```typescript
-async function runIteration(project: Project, run: Run, iterationNum: number): Promise<IterationResult> {
+async function runIteration(project: Project, iterationNum: number): Promise<IterationResult> {
   // 1. PREPARE
-  const context = await contextAssembler.assemble(project, run, iterationNum);
+  const context = await contextAssembler.assemble(project, iterationNum);
   await contextAssembler.writeToRepo(project.repoPath, context);
   // Writes: CLAUDE.md, cfcf-docs/iteration-history.md, cfcf-docs/judge-assessment.md, etc.
 
@@ -235,10 +234,10 @@ async function runIteration(project: Project, run: Run, iterationNum: number): P
     command: devAdapter.command,           // e.g., "claude"
     args: devAdapter.buildArgs(context),   // e.g., ["--dangerously-skip-permissions", "-p", "..."]
     cwd: project.repoPath,
-    logFile: memoryLayer.logPath(run.id, iterationNum, 'dev'),
+    logFile: memoryLayer.logPath(project.id, iterationNum, 'dev'),
   });
   const logStream = processManager.streamLogs(devProc);
-  await logCollector.capture(logStream, run.id, iterationNum);
+  await logCollector.capture(logStream, project.id, iterationNum);
   const devExit = await processManager.waitForExit(devProc);
 
   // 3. COLLECT RESULTS
@@ -255,7 +254,7 @@ async function runIteration(project: Project, run: Run, iterationNum: number): P
     command: judgeAdapter.command,          // e.g., "codex" (different agent)
     args: judgeAdapter.buildArgs({ handoff, diff, project, iterationNum }),
     cwd: project.repoPath,
-    logFile: memoryLayer.logPath(run.id, iterationNum, 'judge'),
+    logFile: memoryLayer.logPath(project.id, iterationNum, 'judge'),
   });
   await processManager.waitForExit(judgeProc);
   const judgeResult = await parseJudgeAssessment(
@@ -263,7 +262,7 @@ async function runIteration(project: Project, run: Run, iterationNum: number): P
   );
 
   // 6. STORE
-  await memoryLayer.storeIteration(run.id, iterationNum, {
+  await memoryLayer.storeIteration(project.id, iterationNum, {
     handoff, judgeResult, diff, signals,
   });
 
@@ -387,8 +386,8 @@ An external persistent memory layer (like `~/.cfcf/projects/...` or Cerefox) is 
 // Simplified for v0.1 -- repo is the source of truth
 interface MemoryLayer {
   // Log storage (outside repo, under ~/.cfcf/)
-  storeAgentLogs(runId: string, iterationNum: number, role: 'dev' | 'judge', logs: string): Promise<string>;
-  getAgentLogs(runId: string, iterationNum: number, role: 'dev' | 'judge'): Promise<string>;
+  storeAgentLogs(projectId: string, iterationNum: number, role: 'dev' | 'judge', logs: string): Promise<string>;
+  getAgentLogs(projectId: string, iterationNum: number, role: 'dev' | 'judge'): Promise<string>;
 
   // Context assembly reads from repo files directly
   // No separate storage interface needed for v0.1
@@ -401,7 +400,7 @@ Alerts the user when attention is needed.
 
 **Trigger events:**
 - Iteration completed (configurable)
-- Run completed (success or failure)
+- Project completed (success or failure)
 - User input needed (detected via signal files)
 - Pause cadence reached
 
@@ -502,7 +501,7 @@ cfcf Server (Iteration Controller)
   ├─► Memory Layer: store iteration data (logs, handoff, judge, diff, signals)
   │
   ├─► Iteration Controller: map signals to decision
-  │     ├─ determination=SUCCESS → stop run, push to remote, notify user
+  │     ├─ determination=SUCCESS → stop iterating, push to remote, notify user
   │     ├─ determination=PROGRESS → loop to next iteration
   │     ├─ determination=STALLED → apply onStalled policy (continue/stop/alert)
   │     ├─ determination=ANOMALY → alert user, wait
@@ -527,7 +526,7 @@ The cfcf server is a single Bun/Hono process. Agent processes are spawned as chi
 - SSE streaming is natively supported
 - Single project execution for v0.1 -- no concurrency concerns
 
-**Graceful degradation:** If the server is not running, `cfcf run` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. Useful for development and debugging.
+**Graceful degradation:** If the server is not running, `cfcf iterate` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. Useful for development and debugging.
 
 ### 6.2 Future: Worker Threads for Multi-Project
 
@@ -542,12 +541,12 @@ Each project's iteration loop could run in a Bun Worker thread. The main thread 
 ```
 main (or user's default branch)
   │
-  ├── cfcf/<run-id>/iteration-1     (feature branch for iteration 1)
+  ├── cfcf/iteration-1     (feature branch for iteration 1)
   │     ├── dev work commits
   │     ├── judge assessment commit
   │     └── merged to main via PR or direct merge after iteration completes
   │
-  ├── cfcf/<run-id>/iteration-2     (feature branch for iteration 2, branched from updated main)
+  ├── cfcf/iteration-2     (feature branch for iteration 2, branched from updated main)
   │     ├── dev work commits
   │     ├── judge assessment commit
   │     └── merged to main after iteration completes
@@ -561,7 +560,7 @@ main (or user's default branch)
 - When an iteration completes normally: the branch is merged to main. **Merge strategy is configurable:**
   - **Auto-merge** (default, "dark factory" mode): cfcf merges directly to main after the judge says PROGRESS or SUCCESS. Fully unattended. The user's review gate is `--pause-every N`, not the git merge step.
   - **PR-based**: cfcf creates a pull request instead of merging. The user (or team) reviews and merges manually. Useful for teams with code review requirements.
-- On success (run complete): the final merge to main represents the completed work.
+- On success (all iterations complete): the final merge to main represents the completed work.
 - On failure/anomaly: the feature branch remains unmerged. The user can inspect, continue, or discard.
 
 ### 7.2 Between Iterations
@@ -581,7 +580,7 @@ cfcf mission control manages judge assessment files in the repo:
 
 - **During run**: Commits are local only. No push overhead per iteration.
 - **On success**: cfcf pushes the cfcf branch to remote.
-- **On demand**: `cfcf push <run-id>` pushes at any time.
+- **On demand**: `cfcf push` pushes at any time.
 - **On failure**: User decides. The branch exists locally and can be pushed, inspected, or deleted.
 
 ---
@@ -594,17 +593,11 @@ cfcf mission control manages judge assessment files in the repo:
 interface Project {
   id: string;
   config: ProjectConfig;
-  runs: Run[];
-}
-
-interface Run {
-  id: string;
-  projectId: string;
-  status: 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   currentIteration: number;
   maxIterations: number;
   iterations: IterationRecord[];
-  startedAt: Date;
+  startedAt?: Date;
   completedAt?: Date;
 }
 
@@ -647,8 +640,8 @@ type CfcfEvent =
   | { type: 'iteration.log'; line: string; source: 'dev' | 'judge' }
   | { type: 'iteration.dev_completed'; iteration: number; exitCode: number }
   | { type: 'iteration.judge_completed'; iteration: number; determination: string }
-  | { type: 'run.paused'; reason: 'cadence' | 'anomaly' | 'user_input_needed'; questions?: string[] }
-  | { type: 'run.completed'; status: 'success' | 'failure' | 'stopped' }
+  | { type: 'project.paused'; reason: 'cadence' | 'anomaly' | 'user_input_needed'; questions?: string[] }
+  | { type: 'project.completed'; status: 'success' | 'failure' | 'stopped' }
   | { type: 'alert'; message: string };
 ```
 
@@ -736,7 +729,7 @@ Both run in the same repo directory. The judge runs after the dev agent, so ther
 
 ### 11.5 Agent availability detection
 
-cfcf needs to verify that configured agents are installed and authenticated before starting a run. Each adapter implements `checkAvailability()`. What does this look like for each agent? (e.g., `claude --version`, `codex --version`, checking for API keys in env)
+cfcf needs to verify that configured agents are installed and authenticated before starting iteration. Each adapter implements `checkAvailability()`. What does this look like for each agent? (e.g., `claude --version`, `codex --version`, checking for API keys in env)
 
 ---
 
