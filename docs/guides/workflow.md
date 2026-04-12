@@ -10,17 +10,20 @@ This guide walks through the complete cf² workflow: from setting up a project t
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     USER RESPONSIBILITIES                    │
+│                     USER DOES THIS                           │
 │                                                              │
-│  1. Create repo          3. Populate Problem Pack            │
-│  2. Init cf² project     4. Trigger iterations               │
-│                          5. Review & provide feedback        │
-│                              at pause cadence                │
+│  1. Start server (once)                                      │
+│  2. Create repo + init project                               │
+│  3. Populate Problem Pack (problem, success criteria, etc.)  │
+│  4. (Optional) Consult Solution Architect for feedback        │
+│     └─ iterate on Problem Pack until satisfied               │
+│  5. Launch the iterative development process                 │
+│     └─ review & provide feedback at pause cadence            │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                     cf² AUTOMATION                            │
+│                     cf² HANDLES THIS                         │
 │                                                              │
 │  • Assemble context (CLAUDE.md + cfcf-docs/)                 │
 │  • Launch dev agent on feature branch                        │
@@ -28,12 +31,29 @@ This guide walks through the complete cf² workflow: from setting up a project t
 │  • Launch judge agent, parse assessment                      │
 │  • Decide: continue / pause / stop                           │
 │  • Alert user when input is needed                           │
+│  • Monitor + report progress via CLI / web UI                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Step 1: One-Time Setup
+## Step 1: Start the Server
+
+The cf² server must be running for all CLI commands to work. Start it once and leave it running:
+
+```bash
+# Check if already running
+cfcf server status
+
+# Start if needed
+cfcf server start
+```
+
+The server runs in the background. You can stop it anytime with `cfcf server stop`.
+
+---
+
+## Step 2: One-Time Setup (First Use Only)
 
 Run once after installing cf²:
 
@@ -41,11 +61,21 @@ Run once after installing cf²:
 cfcf init
 ```
 
-This detects installed AI agents (Claude Code, Codex), asks for configuration defaults (dev agent, judge agent, iteration limits), explains the permission flags, and saves the config.
+This detects installed AI agents (Claude Code, Codex), asks for configuration defaults (dev agent, judge agent, iteration limits), explains the permission flags, and saves the config. The configuration can be changed later with:
+
+```bash
+cfcf config edit
+```
+or
+```bash
+cfcf init --force
+```
 
 ---
 
-## Step 2: Create or Prepare the Git Repo
+## Step 3: Create the Project
+
+### 3a. Prepare a Git Repo
 
 cf² works with any git repository. You either:
 
@@ -63,18 +93,14 @@ cd /path/to/existing/project
 # Ensure there's at least one commit
 ```
 
----
-
-## Step 3: Initialize the cf² Project
-
-Register the repo with cf²:
+### 3b. Register with cf²
 
 ```bash
 cfcf project init --repo /path/to/my-project --name my-project
 ```
 
 This creates:
-- A project config in cf²'s config directory (`~/.config/cfcf/projects/`)
+- A project config in cf²'s config directory
 - A `problem-pack/` directory in your repo with template files
 
 ---
@@ -141,52 +167,43 @@ Empty project. No existing code.
 
 ---
 
-## Step 5: Start the Server
+## Step 5: Consult the Solution Architect (Optional, Recommended)
 
-```bash
-# Start the cf² server (required for all operations)
-bun run dev:server &
-```
-
----
-
-## Step 6: Solution Architect Review (Pre-Iteration Gate)
-
-Before development iterations begin, cf² invokes a **Solution Architect** agent to review the Problem Pack and all provided context. This is a pre-iteration validation step.
+Before launching the development process, you can ask cf²'s **Solution Architect** agent to review your Problem Pack. This is an advisory tool for the user -- it is not a gate or a requirement. You can skip this step entirely, or iterate on it as many times as you want.
 
 ```bash
 cfcf review --project my-project
 ```
 
-The Solution Architect agent:
-1. Reads the full Problem Pack (problem.md, success.md, constraints, hints, context)
-2. Assesses: Is the problem definition clear and actionable? Are success criteria measurable? Are there gaps or ambiguities?
-3. Produces a **review report** (`cfcf-docs/architect-review.md`) with:
-   - Readiness assessment: READY / NEEDS_REFINEMENT / BLOCKED
-   - Identified gaps or ambiguities in the problem definition
-   - Suggested clarifications or missing context
-   - Recommended approach or architectural considerations
-   - Risk factors and potential blockers
-4. Writes a signal file (`cfcf-docs/cfcf-architect-signals.json`) for cf² to parse
+The Solution Architect reads your Problem Pack and produces:
+- `cfcf-docs/architect-review.md` -- a human-readable assessment: is the problem definition clear? Are success criteria measurable? Are there gaps or ambiguities? Suggested improvements and risk factors.
+- `cfcf-docs/cfcf-architect-signals.json` -- structured readiness signal (READY / NEEDS_REFINEMENT / BLOCKED)
 
-If the review says **READY**: the user can proceed to launch iterations.
-If **NEEDS_REFINEMENT**: the user refines the Problem Pack based on the feedback and re-runs the review.
-If **BLOCKED**: fundamental issues must be resolved before development can begin.
+### The user's iterative refinement loop:
 
-The review report persists in the repo and is available to dev agents in subsequent iterations as additional context.
+```
+  ┌──────────────────────────────────────────────────┐
+  │  1. Run: cfcf review --project my-project        │
+  │  2. Read: cfcf-docs/architect-review.md          │
+  │  3. The architect points out gaps/suggestions     │
+  │  4. User updates problem-pack/ files              │
+  │  5. Run cfcf review again if desired              │
+  │  └─ Repeat until satisfied                        │
+  └──────────────────────────────────────────────────┘
+```
 
-**Configuration:** The user selects which agent (and model) to use for the Solution Architect role, independently from the dev and judge agents.
+**Important:** The user decides when the Problem Pack is ready. The architect provides advice, not permission. You can launch development at any time, even if the architect suggests refinements. The architect's review persists in the repo as additional context for dev agents.
 
-> **Note:** This feature is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring the Problem Pack is adequate before launching iterations.
+> **Note:** The Solution Architect role is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring Problem Pack quality.
 
 ---
 
-## Step 7: Launch the Iterative Development Process
+## Step 6: Launch the Iterative Development Process
 
-When the Problem Pack is ready (and the Solution Architect has given the green light), the user launches the automated development process:
+When you feel the Problem Pack adequately describes the problem, launch the dark factory:
 
 ```bash
-# Launch the dark factory -- cf² takes over from here
+# Launch cf² -- it takes over from here
 cfcf run --project my-project --max-iterations 10 --pause-every 3
 ```
 
@@ -291,7 +308,7 @@ cf² pauses and alerts the user in these situations:
 
 ---
 
-## Step 8: Inspect Results
+## Step 7: Inspect Results
 
 After the process completes (success, max iterations, or user stop):
 
@@ -322,16 +339,18 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 
 | Task | When | Required? |
 |------|------|-----------|
+| Start the server | Before any cf² commands | Yes (once) |
+| Run `cfcf init` | First use only | Yes (once) |
 | Create/provide the git repo | Before project init | Yes |
 | Run `cfcf project init` | Once per project | Yes |
-| Write `problem.md` | Before first iteration | **Yes -- critical** |
-| Write `success.md` | Before first iteration | **Yes -- critical** |
-| Write `constraints.md` | Before first iteration | Optional |
-| Write `hints.md` | Before first iteration or between iterations | Optional |
-| Write `style-guide.md` | Before first iteration | Optional |
-| Add `context/*.md` files | Before first iteration | Optional (recommended for existing repos) |
-| Run `cfcf review` (Solution Architect) | Before first iteration | Recommended |
-| Launch `cfcf run` | Once, when ready | Yes |
+| Write `problem.md` | Before launching iterations | **Yes -- critical** |
+| Write `success.md` | Before launching iterations | **Yes -- critical** |
+| Write `constraints.md` | Before launching iterations | Optional |
+| Write `hints.md` | Before launching or between iterations | Optional |
+| Write `style-guide.md` | Before launching iterations | Optional |
+| Add `context/*.md` files | Before launching iterations | Optional (recommended for existing repos) |
+| Run `cfcf review` (Solution Architect) | Before launching iterations | Optional (recommended) |
+| Launch `cfcf run` | When Problem Pack is ready | Yes (once per development cycle) |
 | Review results at pause points | When cf² pauses and asks | Recommended |
 | Provide feedback at pause points | When cf² pauses and asks | Optional but valuable |
 
@@ -342,7 +361,7 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 | Task | When |
 |------|------|
 | Scaffold `problem-pack/` templates | On `cfcf project init` |
-| Solution Architect review | On `cfcf review` (pre-iteration gate) |
+| Solution Architect review | On `cfcf review` (user-triggered, advisory) |
 | Assemble context (CLAUDE.md + cfcf-docs/) | Before each iteration |
 | Create git feature branches | Before each iteration |
 | Launch dev agent with proper flags | Each iteration |
@@ -350,8 +369,8 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 | Parse handoff document + signal file | After each iteration |
 | Launch judge agent | After each iteration |
 | Determine next action (continue/stop/alert) | After each iteration |
-| Archive judge assessments | After each iteration |
 | Merge to main on iteration completion | After each iteration |
+| Archive judge assessments | After each iteration |
 | Alert user when input is needed | When detected |
 | Compress iteration history | Before each iteration |
 | Monitor and report progress via CLI/web UI | Continuously during execution |
@@ -362,17 +381,19 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 
 ```bash
 # One-time setup
+cfcf server start                                  # Start server (check with: cfcf server status)
 cfcf init                                          # First-run config
-cfcf server start                                  # Start server
 
 # Per-project setup
 cfcf project init --repo <path> --name <name>      # Register project
 # Edit problem-pack/problem.md and success.md      # USER WRITES THESE
 
-# Pre-iteration review (future)
-cfcf review --project <name>                       # Solution Architect review
+# Optional: consult the Solution Architect
+cfcf review --project <name>                       # Get feedback on Problem Pack
+# Read cfcf-docs/architect-review.md               # Review suggestions
+# Refine problem-pack/ files, repeat if desired    # Iterate until satisfied
 
-# Launch the dark factory
+# Launch the dark factory (user decides when ready -- no permission needed)
 cfcf run --project <name>                          # cf² takes over
 cfcf run --project <name> --max-iterations 10      # With iteration limit
 cfcf run --project <name> --pause-every 3          # With review cadence
@@ -388,8 +409,9 @@ cfcf stop --project <name>                         # Stop the process
 # Manual mode (testing)
 cfcf run --project <name> -- <cmd>                 # Run a specific command
 
-# Inspect
+# Management
 cfcf project show <name>                           # Project config
 cfcf project list                                  # All projects
 cfcf config show                                   # Global config
+cfcf server stop                                   # Stop server
 ```

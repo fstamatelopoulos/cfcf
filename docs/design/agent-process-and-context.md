@@ -148,28 +148,38 @@ cfcf-docs/
 
 ## 4. Pre-Iteration: Solution Architect Review
 
-Before the iterative development loop begins, cf² supports an optional (but recommended) **Solution Architect review** step. This is a separate agent invocation that validates the Problem Pack before committing development resources.
+The **Solution Architect** is an advisory tool for the user -- not a gate that cf² enforces. The user invokes it when they want feedback on their Problem Pack, iterates on the feedback, and decides when to move on to development. The user can launch development at any time, with or without the architect's blessing.
 
 ### 4.0.1 Purpose
 
-The Solution Architect reviews the problem definition, success criteria, constraints, and context files to assess whether the project is ready for automated development. It catches issues that would waste iteration cycles: vague requirements, missing success criteria, conflicting constraints, gaps in context.
+The Solution Architect reviews the problem definition, success criteria, constraints, and context files. It catches issues that would waste iteration cycles: vague requirements, missing success criteria, conflicting constraints, gaps in context. Think of it as a senior colleague reviewing your spec before you hand it to the team.
 
-### 4.0.2 Process
+### 4.0.2 Process (User-Driven)
 
-1. **User triggers**: `cfcf review --project <name>`
-2. **cf² writes** architect-specific instructions to the repo
-3. **cf² spawns** the Solution Architect agent (configurable, can be a different agent/model than the dev agent)
-4. **The architect reads**: all Problem Pack files, process.md, any existing context
-5. **The architect produces**:
-   - `cfcf-docs/architect-review.md` -- human-readable assessment (readiness, gaps, suggestions, risks)
-   - `cfcf-docs/cfcf-architect-signals.json` -- machine-readable signals for cf²
+The user drives this process. It is iterative and optional:
 
-### 4.0.3 Architect Signal File
+1. **User invokes**: `cfcf review --project <name>`
+2. cf² spawns the Solution Architect agent (configurable agent + model)
+3. The architect reads all Problem Pack files and produces its assessment
+4. **User reads**: `cfcf-docs/architect-review.md` -- human-readable feedback
+5. **User decides**: refine the Problem Pack based on feedback, or move on
+6. **User may repeat**: run `cfcf review` again after making changes, as many times as desired
+7. **User launches development** whenever ready: `cfcf run --project <name>` -- no permission needed from the architect
 
+### 4.0.3 Architect Outputs
+
+**Human-readable assessment** (`cfcf-docs/architect-review.md`):
+- Readiness assessment: is the problem definition clear and actionable?
+- Identified gaps or ambiguities
+- Suggested clarifications or missing context
+- Recommended approach or architectural considerations
+- Risk factors and potential blockers
+
+**Machine-readable signals** (`cfcf-docs/cfcf-architect-signals.json`):
 ```json
 {
-  "readiness": "READY",
-  "gaps": [],
+  "readiness": "NEEDS_REFINEMENT",
+  "gaps": ["Success criteria don't cover error cases"],
   "suggestions": ["Consider adding API rate limiting to constraints"],
   "risks": ["No database migration strategy specified"],
   "recommended_approach": "Start with Express + Zod for validation, add auth middleware"
@@ -178,13 +188,14 @@ The Solution Architect reviews the problem definition, success criteria, constra
 
 Readiness values: `READY` | `NEEDS_REFINEMENT` | `BLOCKED`
 
-### 4.0.4 What Happens Next
+The signal file is primarily useful for future web UI integration (showing readiness status in the dashboard). The user reads the Markdown review for actionable feedback.
 
-- **READY**: User proceeds with `cfcf run`. The architect review persists in the repo and is available to dev agents as additional context.
-- **NEEDS_REFINEMENT**: User updates the Problem Pack based on the architect's feedback, then re-runs `cfcf review`.
-- **BLOCKED**: Fundamental issues (e.g., no success criteria, contradictory requirements) must be resolved first.
+### 4.0.4 Key Design Principles
 
-The `architect-review.md` file persists across iterations -- it's available to every dev agent and judge as reference context.
+- **Advisory, not blocking.** The architect provides advice. The user decides when to proceed. `cfcf run` works regardless of the architect's readiness assessment.
+- **User-invoked, not cf²-invoked.** cf² never invokes the architect automatically. The user runs `cfcf review` when they want feedback.
+- **Iterative.** The user can run the review multiple times as they refine the Problem Pack. Each run overwrites the previous assessment.
+- **Persistent.** The `architect-review.md` persists in the repo and is available to dev agents and the judge as additional context in subsequent iterations.
 
 > **Note:** This feature is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring Problem Pack quality.
 

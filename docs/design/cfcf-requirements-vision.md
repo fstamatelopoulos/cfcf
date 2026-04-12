@@ -97,8 +97,7 @@ Optional:
 
 The deterministic orchestration layer. Responsibilities:
 
-0. **Pre-iteration gate**: Invoke the Solution Architect agent to review the Problem Pack (optional but recommended). Gate: READY / NEEDS_REFINEMENT / BLOCKED.
-1. **Pre-iteration**: Assemble the context payload for the next agent iteration (Problem Pack + iteration history + accumulated learnings from the memory layer + judge/reflection outputs from previous iterations).
+1. **Pre-iteration**: Assemble the context payload for the next agent iteration (Problem Pack + iteration history + accumulated learnings from the memory layer + judge/reflection outputs from previous iterations). If the user previously ran a Solution Architect review, include the architect's assessment as additional context.
 2. **Launch**: Prepare the repo (write context files, ensure correct git branch), spawn the dev agent process.
 3. **Post-iteration**: Collect results (code changes, test results, agent logs), invoke the judge agent, parse judge signals.
 4. **Decision**: Continue, adjust (e.g., switch agent, modify hints), or stop (success or iteration limit). This is deterministic -- based on judge signals, not LLM reasoning.
@@ -110,7 +109,7 @@ cf² manages three distinct agent roles, each independently configurable (agent 
 
 | Role | Purpose | When invoked |
 |------|---------|-------------|
-| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Pre-iteration gate. | Before iterations begin (`cfcf review`) |
+| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. | User-invoked (`cfcf review`), optional, can run multiple times |
 | **Dev Agent** | Reads context, writes code, runs tests, produces handoff + signals. | Each iteration |
 | **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY. | After each iteration |
 

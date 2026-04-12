@@ -249,13 +249,14 @@ Each iteration re-reads all context. Strategies to manage this:
   - Notification: terminal notification when user input needed or pause reached
   - Accept user input: resume, provide direction, update hints, stop
   - Signal file detection: cfcf reads `cfcf-iteration-signals.json` for `user_input_needed`, presents questions to user
-- [ ] Solution Architect (pre-iteration review):
+- [ ] Solution Architect (user-invoked advisory review):
   - New agent role: Solution Architect (configurable agent + model)
-  - `cfcf review --project <name>` CLI command
+  - `cfcf review --project <name>` CLI command (user-invoked, optional, repeatable)
   - Server endpoint: `POST /api/projects/:id/review`
   - Produces `architect-review.md` (readiness assessment, gaps, suggestions, risks)
   - Produces `cfcf-architect-signals.json` (READY / NEEDS_REFINEMENT / BLOCKED)
   - Review persists in repo as context for dev agents
+  - Advisory only -- does not block `cfcf run`. User decides when to proceed
 - [ ] Model selection per role:
   - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect)
   - Agent adapters accept model parameter and pass to CLI (e.g., `claude --model opus`)
@@ -386,7 +387,7 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-11 | Judge assessments archived in repo by cfcf | Previous iterations' assessments moved to `cfcf-docs/iteration-reviews/iteration-N.md`. Latest always at `judge-assessment.md` |
 | 2026-04-11 | Name: cfcf (code/packages), cf² (docs, pronounced "cf square") | cf² for human-readable contexts, cfcf for all code and package names |
 | 2026-04-11 | Merge strategy: configurable, auto-merge by default | Auto-merge to main = dark factory mode (default). PR-based = for teams with review gates. User's review gate is `--pause-every N`, not git merge. Two-level hierarchy: project -> iteration |
-| 2026-04-12 | Solution Architect pre-iteration role | Reviews Problem Pack before dev iterations begin. Catches vague requirements, missing criteria, gaps. Three readiness levels: READY, NEEDS_REFINEMENT, BLOCKED |
+| 2026-04-12 | Solution Architect: advisory, not a gate | User-invoked tool (`cfcf review`), not cf²-invoked. Does not block development. User iterates on feedback and decides when to proceed. Three readiness levels: READY, NEEDS_REFINEMENT, BLOCKED |
 | 2026-04-12 | Three agent roles: dev, judge, solution architect | Each independently configurable (agent + model). Encouraged to use different agents for cross-review |
 | 2026-04-12 | Model selection per role (planned for iteration 3) | AgentConfig already has `model` field. Init/config/adapters need to use it. Critical for role differentiation (e.g., opus for architect, sonnet for dev) |
 | 2026-04-12 | Automated iteration loop with user-on-the-loop | User launches once, cf² takes over. User only involved at configured pause cadence or when agents/judge request input. Dark factory model |
