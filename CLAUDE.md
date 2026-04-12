@@ -39,18 +39,33 @@ bun run dev:cli          # Run CLI directly
 
 ```
 packages/
-  core/src/              # Shared types, config, constants, agent adapters
+  core/src/
     types.ts             # All type definitions (AgentAdapter, signals, config, etc.)
     constants.ts         # Ports, paths, defaults
     config.ts            # Config read/write/validation
-    adapters/            # Agent adapter implementations
-  server/src/            # Hono server
+    projects.ts          # Project CRUD, iteration counter
+    process-manager.ts   # Spawn agents, stream logs, kill/timeout
+    git-manager.ts       # Branch, commit, diff, reset, merge
+    log-storage.ts       # Log file path helpers
+    pid-file.ts          # Server PID file management
+    problem-pack.ts      # Read/validate Problem Pack directories
+    context-assembler.ts # Generate CLAUDE.md + cfcf-docs/, parse handoff/signals
+    adapters/            # Agent adapter implementations (claude-code, codex)
+    templates/           # cfcf-docs/ file templates (process.md, handoff, signals, etc.)
+  server/src/
     app.ts               # Route definitions (testable without binding to port)
-    start.ts             # Server lifecycle (start/stop)
-  cli/src/               # Commander.js CLI
+    start.ts             # Server lifecycle (start/stop, PID file)
+  cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
-docs/                    # Design docs (vision, stack, technical design, plan, process)
+      init.ts            # First-run interactive setup
+      server.ts          # Server start/stop/status
+      project.ts         # Project init/list/show/delete
+      config.ts          # Global config show/edit
+      run.ts             # Execute iterations (agent mode + manual mode)
+      status.ts          # Quick status overview
+problem-packs/           # Example Problem Pack definitions
+docs/                    # Design docs, API reference, guides
 ```
 
 ## Conventions

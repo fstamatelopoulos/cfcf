@@ -179,9 +179,27 @@ Delete a project (removes config only, does not touch the repo).
 
 ### POST /api/projects/:id/iterate
 
-Execute the next iteration within a project. Creates a feature branch, runs the configured agent, captures logs, and commits results.
+Execute the next iteration within a project. Two modes:
 
-**Request body:**
+**Agent mode** (no `command` field): reads Problem Pack, assembles context (CLAUDE.md + cfcf-docs/), launches configured dev agent, parses handoff + signal file.
+
+**Manual mode** (`command` field provided): runs the specified command directly (for testing/debugging).
+
+**Request body (agent mode):**
+
+```json
+{}
+```
+
+Or with custom Problem Pack path:
+
+```json
+{
+  "problemPackPath": "/path/to/custom/problem-pack"
+}
+```
+
+**Request body (manual mode):**
 
 ```json
 {
@@ -196,13 +214,27 @@ Execute the next iteration within a project. Creates a feature branch, runs the 
 {
   "iteration": 1,
   "branch": "cfcf/iteration-1",
+  "mode": "agent",
   "exitCode": 0,
-  "durationMs": 3452,
+  "durationMs": 45200,
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
   "committed": true,
-  "killed": false
+  "killed": false,
+  "handoffReceived": true,
+  "signalsReceived": true,
+  "signals": {
+    "iteration": 1,
+    "agent": "claude-code",
+    "status": "completed",
+    "self_assessment": "high",
+    "tests_passed": 7,
+    "tests_failed": 0,
+    "tests_total": 7
+  }
 }
 ```
+
+In manual mode, `handoffReceived`, `signalsReceived`, and `signals` are omitted.
 
 ---
 
