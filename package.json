@@ -1,0 +1,24 @@
+{
+  "name": "cfcf",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Cerefox Code Factory (cf²) -- deterministic orchestration harness for AI coding agents",
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "packages/cli"
+  ],
+  "scripts": {
+    "test": "bun test --recursive",
+    "test:core": "bun test packages/core",
+    "test:server": "bun test packages/server",
+    "test:cli": "bun test packages/cli",
+    "dev:server": "bun run --watch packages/server/src/index.ts",
+    "dev:cli": "bun run packages/cli/src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/bun": "^1.3.0"
+  }
+}
