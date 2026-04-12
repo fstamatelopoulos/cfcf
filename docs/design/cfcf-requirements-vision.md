@@ -149,8 +149,8 @@ This model preserves the headless, zero-touch default while giving users a natur
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    cfcf Mission Control                           │
-│                    (deterministic control loop)                   │
+│                    cfcf Mission Control                          │
+│                    (deterministic control loop)                  │
 └──────────┬──────────────────────────────────────────┬────────────┘
            │                                          │
            ▼                                          ▼
