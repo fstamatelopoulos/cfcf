@@ -6,7 +6,7 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-Early development. Iteration 0 complete (project scaffolding, server, CLI, config flow). See `docs/plan.md` for the full roadmap.
+Early development. Iteration 2 complete -- cfcf can launch AI agents against problem definitions, assemble context, and capture results. See `docs/plan.md` for the full roadmap.
 
 ## Prerequisites
 
@@ -67,18 +67,30 @@ bun run dev:cli -- init
 # Start the server
 bun run dev:cli -- server start
 
-# Check status
-bun run dev:cli -- status
+# Create a project linked to a git repo
+bun run dev:cli -- project init --repo /path/to/your/project --name my-app
+
+# Edit the problem definition
+# (cfcf scaffolds problem-pack/problem.md and problem-pack/success.md for you)
+
+# Launch the AI agent against your problem
+bun run dev:cli -- run --project my-app
+
+# Or run a manual command (for testing)
+bun run dev:cli -- run --project my-app -- npm test
 ```
 
 ## Development
 
 ```bash
 # Run all tests
-bun test --recursive
+bun run test
 
 # TypeScript type checking
 bun run typecheck
+
+# Build a self-contained binary
+bun run build
 
 # Start server in watch mode (auto-restart on changes)
 bun run dev:server
@@ -92,9 +104,11 @@ bun run dev:cli -- <command>
 ```
 cfcf/
   packages/
-    core/               # Shared types, config, constants, agent adapters
+    core/               # Shared types, config, adapters, context assembly
     server/             # Hono HTTP server (backbone)
     cli/                # Commander.js CLI (user interface)
+  problem-packs/        # Example problem definitions
+    example/            # Calculator module example
   docs/
     plan.md                       # Development roadmap and decision log
     decisions-log.md              # Lessons learned
@@ -105,7 +119,8 @@ cfcf/
       agent-process-and-context.md
     api/                          # API reference
       server-api.md
-    guides/                       # User guides (future)
+    guides/                       # User guides
+      cli-usage.md
   CLAUDE.md             # AI agent context (for Claude Code, Codex, etc.)
   CHANGELOG.md          # Release notes (follows Keep a Changelog)
 ```

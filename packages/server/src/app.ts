@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { join } from "path";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig } from "@cfcf/core";
 import {
@@ -17,11 +18,13 @@ import {
   updateProject,
   deleteProject,
   validateProjectRepo,
-  nextIteration,
 } from "@cfcf/core";
-import { spawnProcess } from "@cfcf/core";
-import * as gitManager from "@cfcf/core";
-import { getIterationLogPath, ensureProjectLogDir } from "@cfcf/core";
+import { getIterationLogPath } from "@cfcf/core";
+import {
+  startIteration,
+  getIterationState,
+  getLatestIterationState,
+} from "./iteration-runner.js";
 
 const startedAt = Date.now();
 
@@ -124,7 +127,7 @@ export function createApp() {
     return c.json({ deleted: true });
   });
 
-  // --- Execute an iteration ---
+  // --- Iterate (async) ---
 
   app.post("/api/projects/:id/iterate", async (c) => {
     const project =
@@ -135,61 +138,64 @@ export function createApp() {
     }
 
     const body = await c.req.json<{
-      command: string;
+      command?: string;
       args?: string[];
-    }>();
+      problemPackPath?: string;
+    }>().catch(() => ({} as { command?: string; args?: string[]; problemPackPath?: string }));
 
-    if (!body.command) {
-      return c.json({ error: "command is required" }, 400);
+    try {
+      // Start iteration in background -- returns immediately
+      const state = await startIteration(project, body);
+
+      return c.json({
+        iteration: state.iteration,
+        branch: state.branch,
+        mode: state.mode,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  // --- Iteration status ---
+
+  app.get("/api/projects/:id/iterations/latest", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
     }
 
-    // Get next iteration number
-    const iterationNum = await nextIteration(project.id);
-    if (iterationNum === null) {
-      return c.json({ error: "Failed to increment iteration counter" }, 500);
+    const state = getLatestIterationState(project.id);
+    if (!state) {
+      return c.json({ error: "No iterations found" }, 404);
     }
 
-    // Create feature branch
-    const branchName = `cfcf/iteration-${iterationNum}`;
-    const branchResult = await gitManager.createBranch(project.repoPath, branchName);
-    if (!branchResult.success) {
-      return c.json({ error: `Failed to create branch: ${branchResult.error}` }, 500);
+    const { logLines, ...stateWithoutLogs } = state;
+    return c.json(stateWithoutLogs);
+  });
+
+  app.get("/api/projects/:id/iterations/:n/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
     }
 
-    // Prepare log path
-    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
-    await ensureProjectLogDir(project.id);
-
-    // Spawn the process
-    const managed = spawnProcess({
-      command: body.command,
-      args: body.args ?? [],
-      cwd: project.repoPath,
-      logFile,
-    });
-
-    // Wait for result
-    const result = await managed.result;
-
-    // Commit changes if any
-    let committed = false;
-    if (await gitManager.hasChanges(project.repoPath)) {
-      const commitResult = await gitManager.commitAll(
-        project.repoPath,
-        `cfcf iteration ${iterationNum}: ${body.command} ${(body.args ?? []).join(" ")}`,
-      );
-      committed = commitResult.success;
+    const iterationNum = parseInt(c.req.param("n"), 10);
+    const state = getIterationState(project.id, iterationNum);
+    if (!state) {
+      return c.json({ error: "Iteration not found" }, 404);
     }
 
-    return c.json({
-      iteration: iterationNum,
-      branch: branchName,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      logFile: result.logFile,
-      committed,
-      killed: result.killed,
-    });
+    const { logLines, ...stateWithoutLogs } = state;
+    return c.json(stateWithoutLogs);
   });
 
   // --- SSE endpoint for streaming iteration logs ---
@@ -203,18 +209,51 @@ export function createApp() {
     }
 
     const iterationNum = parseInt(c.req.param("n"), 10);
-    const logFile = getIterationLogPath(project.id, iterationNum, "dev");
 
     return streamSSE(c, async (stream) => {
+      // Try live state first (for in-progress iterations)
+      const state = getIterationState(project.id, iterationNum);
+
+      if (state) {
+        // Stream from live state -- poll until done
+        let lastIndex = 0;
+        while (state.status === "preparing" || state.status === "executing" || state.status === "collecting") {
+          // Send any new log lines
+          while (lastIndex < state.logLines.length) {
+            await stream.writeSSE({ event: "log", data: state.logLines[lastIndex] });
+            lastIndex++;
+          }
+          // Send status update
+          await stream.writeSSE({
+            event: "status",
+            data: JSON.stringify({ status: state.status, iteration: iterationNum }),
+          });
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        // Send remaining log lines
+        while (lastIndex < state.logLines.length) {
+          await stream.writeSSE({ event: "log", data: state.logLines[lastIndex] });
+          lastIndex++;
+        }
+        await stream.writeSSE({
+          event: "done",
+          data: JSON.stringify({
+            status: state.status,
+            exitCode: state.exitCode,
+            durationMs: state.durationMs,
+          }),
+        });
+        return;
+      }
+
+      // Fall back to reading from log file (for completed iterations)
+      const logFile = getIterationLogPath(project.id, iterationNum, "dev");
       try {
         const content = await Bun.file(logFile).text();
         const lines = content.split("\n");
         for (const line of lines) {
           if (line.length > 0) {
-            await stream.writeSSE({
-              event: "log",
-              data: line,
-            });
+            await stream.writeSSE({ event: "log", data: line });
           }
         }
         await stream.writeSSE({

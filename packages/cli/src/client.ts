@@ -64,6 +64,9 @@ export async function post<T = unknown>(path: string, body?: unknown): Promise<C
     ) {
       return { ok: false, status: 0, error: "Server is not running. Start it with: cfcf server start" };
     }
+    if (message.includes("abort") || message.includes("timed out")) {
+      return { ok: false, status: 0, error: "Request timed out. The agent may still be running -- check the server logs." };
+    }
     return { ok: false, status: 0, error: message };
   }
 }

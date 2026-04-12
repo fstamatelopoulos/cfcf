@@ -154,11 +154,10 @@ describe("server API", () => {
     });
   });
 
-  // --- Iterate ---
+  // --- Iterate (async) ---
 
   describe("POST /api/projects/:id/iterate", () => {
-    it("executes a command and returns iteration result", async () => {
-      // Create project first
+    it("starts an iteration and returns 202", async () => {
       const createRes = await app.request("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -171,12 +170,13 @@ describe("server API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "echo", args: ["hello cfcf"] }),
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(202);
       const body = await res.json();
       expect(body.iteration).toBe(1);
       expect(body.branch).toBe("cfcf/iteration-1");
-      expect(body.exitCode).toBe(0);
-      expect(body.durationMs).toBeGreaterThan(0);
+      expect(body.mode).toBe("manual");
+      expect(["preparing", "executing"]).toContain(body.status);
+      expect(body.message).toContain("Poll");
     });
 
     it("increments iteration counter across calls", async () => {
@@ -187,7 +187,6 @@ describe("server API", () => {
       });
       const project = await createRes.json();
 
-      // First iteration
       const res1 = await app.request(`/api/projects/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -195,9 +194,10 @@ describe("server API", () => {
       });
       const body1 = await res1.json();
       expect(body1.iteration).toBe(1);
-      expect(body1.branch).toBe("cfcf/iteration-1");
 
-      // Second iteration
+      // Wait for first iteration to complete so branch is free
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
       const res2 = await app.request(`/api/projects/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -205,7 +205,34 @@ describe("server API", () => {
       });
       const body2 = await res2.json();
       expect(body2.iteration).toBe(2);
-      expect(body2.branch).toBe("cfcf/iteration-2");
+    });
+
+    it("returns status after iteration completes", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "status-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const startRes = await app.request(`/api/projects/${project.id}/iterate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "echo", args: ["done"] }),
+      });
+      const start = await startRes.json();
+
+      // Wait for completion
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const statusRes = await app.request(
+        `/api/projects/${project.id}/iterations/${start.iteration}/status`,
+      );
+      expect(statusRes.status).toBe(200);
+      const status = await statusRes.json();
+      expect(status.status).toBe("completed");
+      expect(status.exitCode).toBe(0);
+      expect(status.durationMs).toBeGreaterThan(0);
     });
   });
 

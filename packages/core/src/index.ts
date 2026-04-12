@@ -11,3 +11,5 @@ export * from "./process-manager.js";
 export * from "./git-manager.js";
 export * from "./log-storage.js";
 export * from "./pid-file.js";
+export * from "./problem-pack.js";
+export * from "./context-assembler.js";
