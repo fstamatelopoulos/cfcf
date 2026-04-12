@@ -298,6 +298,9 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] Notification hooks: extensible system (terminal, webhook placeholder)
 - [ ] `cfcf prepare` dry-run command: show assembled context without launching
 - [ ] Robust error handling, graceful shutdown, process cleanup on crash
+- [ ] Binary self-hosting: `cfcf server start` works from compiled binary without Bun
+  - Binary spawns itself with `--serve` flag (in-process server)
+  - Enables true zero-dependency distribution
 
 ---
 
@@ -344,11 +347,6 @@ Each iteration re-reads all context. Strategies to manage this:
 ### Notifications and Integrations
 - Slack, WhatsApp, email integrations
 - Webhook support for arbitrary integrations
-
-### Binary Self-Hosting
-- `cfcf server start` should work from the compiled binary without requiring Bun installed
-- Options: in-process server (same binary, different thread) or self-spawn with `--server-mode` flag
-- Enables true zero-dependency distribution
 
 ### Distribution and Ecosystem
 - Homebrew formula
