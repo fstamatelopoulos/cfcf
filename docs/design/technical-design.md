@@ -1,5 +1,7 @@
 # cfcf: Technical Design
 
+*cfcf and cf² are used interchangeably. Both are pronounced "cf square." `cfcf` in code; cf² in docs.*
+
 **Status:** Draft
 **Date:** April 2026
 **Authors:** Fotis Stamatelopoulos, Claude

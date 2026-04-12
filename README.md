@@ -1,5 +1,7 @@
 # cfcf -- Cerefox Code Factory (cf²)
 
+*cfcf and cf² are used interchangeably throughout this project. Both are pronounced "cf square." `cfcf` is used in code, package names, and CLI commands; cf² is used in documentation and conversation.*
+
 A deterministic orchestration harness that runs AI coding agents in iterative loops until your problem is solved.
 
 **cfcf is not another AI agent.** It is the orchestration layer that manages agent lifecycles, assembles context, evaluates results via a separate judge agent, and decides whether to continue, adjust, or stop. The agents do the creative coding work; cfcf does the plumbing.

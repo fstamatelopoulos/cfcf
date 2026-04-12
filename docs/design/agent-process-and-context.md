@@ -1,5 +1,7 @@
 # cfcf: Agent Process & Context Definition
 
+*cfcf and cf² are used interchangeably. Both are pronounced "cf square." `cfcf` in code; cf² in docs.*
+
 **Status:** Living Document
 **Date:** April 2026
 **Authors:** Fotis Stamatelopoulos, Claude
@@ -15,20 +17,26 @@ This document defines the concrete process that governs each iteration: what fil
 
 ## 2. Two Scenarios
 
+In both scenarios, cf² handles the scaffolding and automation, but **the user is responsible for providing the problem definition** -- cf² cannot know what to build without the user populating the Problem Pack files. See `../guides/workflow.md` for the complete step-by-step workflow.
+
 ### 2.1 Blank Slate Project
 
-The user starts a new project from scratch. The user provides a local repo (or cfcf initializes one). cfcf populates it with:
+The user starts a new project from scratch:
 
-- CLAUDE.md (or agent equivalent)
-- `cfcf-docs/` folder with all context documents
-- No existing source code (the agent builds from scratch)
+1. **User** creates or provides a local git repo.
+2. **User** runs `cfcf project init` -- cf² scaffolds `problem-pack/` with template files.
+3. **User** populates the Problem Pack: writes `problem.md` (what to build), `success.md` (how to measure success), and optionally `constraints.md`, `hints.md`, `style-guide.md`, and `context/` files.
+4. **User** triggers `cfcf run` -- cf² assembles context, injects `cfcf-docs/` and `CLAUDE.md`, and launches the agent.
+5. No existing source code -- the agent builds from scratch based on the user's problem definition.
 
 ### 2.2 Existing Project
 
-The user has an existing repo with source code, tests, CI, etc. cfcf adds:
+The user has an existing repo with source code, tests, CI, etc.:
 
-- CLAUDE.md (or agent equivalent)
-- `cfcf-docs/` folder with context documents that describe the existing codebase, architectural decisions, and the new features/changes required
+1. **User** runs `cfcf project init` pointing at the existing repo -- cf² scaffolds `problem-pack/`.
+2. **User** populates the Problem Pack, including context files that describe the existing codebase, architectural decisions, and the new features or changes required.
+3. **User** triggers `cfcf run` -- cf² assembles context and launches the agent.
+4. The agent works within the existing codebase, guided by the user's problem definition and context.
 
 The iteration process is identical in both cases. The difference is only in the initial context: the existing project has more context files describing what already exists. See `technical-design.md` section 2 for the rationale behind the local-process execution model.
 
@@ -51,62 +59,88 @@ For non-Claude agents, cfcf generates the equivalent instruction file for that a
 
 ### 3.2 cfcf-docs/ Folder
 
-This folder lives in the repo root and contains all cfcf-managed context. The agent reads from it but only writes to specific files within it (handoff doc, decision log, plan).
+This folder lives in the repo root and contains all cf²-managed context. All files are tracked in git. The folder is structured by who writes each file and when.
 
 ```
 cfcf-docs/
-  # --- Read-only context (agent must not modify) ---
-  process.md              # The process definition (this section's content, adapted)
-  problem.md              # Problem/goal definition (from Problem Pack)
-  success.md              # Success criteria and test scenarios
-  constraints.md          # Guardrails, limitations, boundaries (optional)
-  hints.md                # Technical hints, preferred approaches (optional)
-  style-guide.md          # Code style guidelines (optional)
-  context/                # Additional context files (architecture docs, API specs, etc.)
-    *.md
+  # --- User-provided context (user must edit before first iteration) ---
+  # These are copied from the Problem Pack on project init.
+  # The user MUST populate problem.md and success.md with real content.
+  # cf² copies templates; the user replaces the template content.
+  problem.md              # Problem/goal definition - USER MUST EDIT
+  success.md              # Success criteria and test scenarios - USER MUST EDIT
+  constraints.md          # Guardrails, limitations, boundaries (optional) - user edits if needed
+  hints.md                # Technical hints, preferred approaches (optional) - user edits if needed
+  style-guide.md          # Code style guidelines (optional) - user edits if needed
+  context/                # Additional context files (optional) - user adds as needed
+    *.md                  # Architecture docs, API specs, data models, etc.
 
-  # --- Agent-writable files (agent updates these each iteration) ---
+  # --- Process definition (cf² provides, user may customize) ---
+  process.md              # How the agent should operate (copied from cf² template)
+
+  # --- Agent-writable files (dev agent updates these each iteration) ---
   plan.md                 # Evolving implementation plan (agent creates/updates)
   decision-log.md         # Decisions made, approaches tried, lessons learned
-  iteration-handoff.md    # Current iteration's handoff document (agent fills in)
-  cfcf-iteration-signals.json      # Machine-readable signals for cfcf (agent fills in)
+  iteration-handoff.md    # Current iteration's completion report (agent fills in, cf² resets template each iteration)
+  cfcf-iteration-signals.json  # Machine-readable signals from dev agent to cf²
+                               # cf² reads this after each iteration to detect:
+                               # questions for user, test results, blockers, self-assessment.
+                               # cf² resets the template before each iteration.
 
-  # --- Judge-writable files ---
-  iteration-reviews/      # Judge assessment per iteration
-    iteration-1.md
-    iteration-2.md
-    ...
-  cfcf-judge-signals.json     # Machine-readable judge signals for cfcf
+  # --- Judge output (judge agent writes, cf² manages lifecycle) ---
+  judge-assessment.md     # The CURRENT/LATEST judge review (cf² overwrites before each judge run)
+  cfcf-judge-signals.json # Machine-readable judge signals to cf²
+                          # cf² reads this to make deterministic decisions:
+                          # SUCCESS/PROGRESS/STALLED/ANOMALY determination,
+                          # whether to continue, stop, or alert the user.
+  cfcf-judge-instructions.md  # Instructions for the judge agent (cf² generates each iteration)
+  iteration-reviews/      # ARCHIVED judge assessments (cf² copies here after each iteration)
+    iteration-1.md        # cf² moves judge-assessment.md → iteration-1.md after iteration 1
+    iteration-2.md        # cf² moves judge-assessment.md → iteration-2.md after iteration 2
+    ...                   # This preserves the full history of judge feedback
 
-  # --- cfcf-managed files (cfcf updates, agent reads) ---
-  iteration-history.md    # Aggressively compressed summaries (Tier 2 context)
-  judge-assessment.md     # Latest judge assessment (from previous iteration)
-  user-feedback.md        # User's latest feedback/direction (if any)
-  cfcf-judge-instructions.md  # Instructions for the judge agent (cfcf generates)
+  # --- cf²-managed context (cf² regenerates each iteration, agents read) ---
+  iteration-history.md    # Aggressively compressed summaries of ALL previous iterations (Tier 2 context)
+  user-feedback.md        # User's latest feedback/direction from a pause review (cf² writes when user provides input)
 
   # --- Detailed logs (Tier 3 reference, agent reads on demand) ---
-  iteration-logs/         # Detailed per-iteration logs and summaries
+  iteration-logs/         # Detailed per-iteration summaries
     iteration-1-summary.md
     iteration-2-summary.md
     ...
 ```
 
+**Signal file lifecycle:**
+
+1. **Before each iteration**: cf² resets `cfcf-iteration-signals.json` to the template (empty/default values).
+2. **During iteration**: The dev agent populates the signal file with structured data (test results, questions, blockers, self-assessment).
+3. **After dev agent exits**: cf² reads and parses the signal file. If `user_input_needed: true`, cf² alerts the user with the questions. If malformed or missing, cf² treats it as an anomaly.
+4. **Judge phase**: cf² spawns the judge agent. The judge writes `cfcf-judge-signals.json` with its determination.
+5. **After judge exits**: cf² reads the judge signal file to decide: continue, stop, alert user, etc.
+6. **Archiving**: cf² copies `judge-assessment.md` → `iteration-reviews/iteration-N.md` before the next iteration begins, preserving the full review history.
+
 ### 3.3 File Categories and Permissions
 
-| File | Written by | Read by | Updated when |
-|------|-----------|---------|-------------|
-| CLAUDE.md | cfcf | Agent | Every iteration (regenerated) |
-| process.md | cfcf (initial) | Agent | Rarely (only if process evolves) |
-| problem.md | User (initial) | Agent, Judge | Rarely (user may refine) |
-| success.md | User (initial) | Agent, Judge | Rarely (user may refine) |
-| constraints.md | User (initial) | Agent | Rarely |
-| hints.md | User / cfcf | Agent | May be updated by user or by cfcf based on reflection |
-| plan.md | Agent | Agent, Judge, User | Every iteration (agent evolves it) |
-| decision-log.md | Agent | Agent, Judge | Every iteration (agent appends) |
-| iteration-handoff.md | Agent | cfcf, Judge | Every iteration (agent fills in fresh) |
-| iteration-history.md | cfcf | Agent | Every iteration (cfcf regenerates from stored logs) |
-| judge-assessment.md | cfcf (from judge) | Agent | Every iteration (after judge runs) |
-| user-feedback.md | cfcf (from user) | Agent | When user provides feedback at a pause |
+| File | Written by | Read by | Updated when | Notes |
+|------|-----------|---------|-------------|-------|
+| CLAUDE.md | cf² | Dev agent | Every iteration (regenerated) | Agent instruction file |
+| process.md | cf² (initial) | Dev agent | Rarely | User may customize |
+| **problem.md** | **User** | Dev agent, Judge | **Before first iteration** | **User MUST populate** |
+| **success.md** | **User** | Dev agent, Judge | **Before first iteration** | **User MUST populate** |
+| constraints.md | User | Dev agent | Before first iteration (optional) | User creates if needed |
+| hints.md | User | Dev agent | User updates between iterations | User creates if needed |
+| style-guide.md | User | Dev agent | Before first iteration (optional) | User creates if needed |
+| context/*.md | User | Dev agent | User adds as needed | Architecture, API specs, etc. |
+| plan.md | Dev agent | Dev agent, Judge, User | Every iteration | Agent evolves it |
+| decision-log.md | Dev agent | Dev agent, Judge | Every iteration | Agent appends |
+| iteration-handoff.md | Dev agent | cf², Judge | Every iteration | cf² resets template each iteration |
+| cfcf-iteration-signals.json | Dev agent | cf² | Every iteration | cf² resets template, agent fills in |
+| judge-assessment.md | Judge agent | Dev agent, User | Every iteration | cf² archives to iteration-reviews/ |
+| cfcf-judge-signals.json | Judge agent | cf² | Every iteration | cf² reads for flow control |
+| cfcf-judge-instructions.md | cf² | Judge agent | Every iteration | cf² generates |
+| iteration-history.md | cf² | Dev agent | Every iteration | Compressed summaries |
+| user-feedback.md | cf² (from user) | Dev agent | At pause cadence | cf² writes when user provides input |
+| iteration-reviews/*.md | cf² (archived) | Dev agent, User | After each iteration | History of all judge assessments |
 
 ---
 

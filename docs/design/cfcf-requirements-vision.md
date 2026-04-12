@@ -465,7 +465,72 @@ SWE-bench is a benchmark; cfcf is a development tool. The evaluation harness pat
 
 ---
 
-## 12. Open Questions & Resolved Decisions
+## 12. Cerefox Enterprise Knowledge Integration (Vision)
+
+cf² is part of the broader Cerefox ecosystem. A critical component of the long-term vision is enterprise knowledge integration: connecting the AI dev agents that cf² manages to the organization's institutional knowledge.
+
+### The Problem
+
+AI coding agents today work with limited context: the code in the repo and whatever the user explicitly provides. They lack access to the organization's broader knowledge: business processes, product requirements, architectural decisions, API conventions, security guidelines, past incident learnings, and domain-specific context that experienced developers carry in their heads.
+
+### The Vision: Cerefox Knowledge Crawler
+
+An enterprise Cerefox deployment would include a knowledge crawler that integrates with the organization's existing systems:
+
+- **Document storage**: Google Drive, SharePoint, Dropbox, local file servers
+- **Communication**: Slack, Microsoft Teams, email archives
+- **Knowledge bases**: Confluence, Notion, internal wikis
+- **Project management**: Linear, Jira, Asana -- tickets, epics, roadmaps
+- **Code repositories**: GitHub, GitLab -- existing codebases, PRs, code review history
+- **Other sources**: CRM data, support tickets, onboarding docs, training materials
+
+One or more AI agents process this ingested knowledge to produce:
+
+- **Summaries** of business processes and domain concepts
+- **Extracted guidelines**: coding standards, architectural patterns, security requirements
+- **Institutional knowledge**: why certain decisions were made, what was tried and failed
+- **Product context**: what the company builds, who the users are, what the priorities are
+- **Cross-team insights**: patterns across projects, common pitfalls, shared components
+
+### How cf² Leverages This Knowledge
+
+When cf² assembles context for a dev agent iteration, it can query the Cerefox knowledge layer for relevant information:
+
+- **Problem-specific context**: "This project involves payment processing" → Cerefox surfaces the company's payment API conventions, PCI compliance requirements, and relevant past projects.
+- **Architectural guidance**: "This is a new microservice" → Cerefox surfaces the organization's microservice template, naming conventions, deployment patterns.
+- **Code patterns**: "The agent is writing a REST API" → Cerefox surfaces the team's preferred error handling patterns, auth middleware, logging conventions.
+- **Domain knowledge**: "The feature involves insurance claims" → Cerefox surfaces business rules, regulatory requirements, and domain terminology.
+
+This context is injected into the agent's instructions (as additional Tier 2 or Tier 3 context files), significantly improving the accuracy and alignment of the agent's work with the organization's standards and knowledge.
+
+### Integration Architecture
+
+```
+Cerefox Knowledge Layer (cloud or on-prem)
+    │
+    ├── Crawlers: Google Drive, Slack, Confluence, Jira, GitHub, ...
+    ├── Processing: AI agents summarize, extract, classify
+    ├── Storage: Hybrid search (semantic + keyword, as in current Cerefox OSS)
+    │
+    ▼
+cf² Context Assembler
+    │
+    ├── Queries Cerefox for relevant knowledge based on problem.md keywords
+    ├── Injects relevant context into cfcf-docs/context/ or CLAUDE.md
+    │
+    ▼
+Dev Agent (enriched with organizational knowledge)
+```
+
+### Current State
+
+This integration does not exist yet. cf² currently operates with only the context the user explicitly provides in the Problem Pack. The Cerefox OSS memory layer provides the foundation (hybrid search, document management), but the enterprise crawler and knowledge processing pipeline are future work.
+
+The architecture is designed to be additive: when Cerefox enterprise knowledge becomes available, cf² can query it during context assembly without changes to the iteration loop, agent adapters, or user workflow.
+
+---
+
+## 13. Open Questions & Resolved Decisions
 
 ### Resolved
 
@@ -497,7 +562,7 @@ SWE-bench is a benchmark; cfcf is a development tool. The evaluation harness pat
 
 ---
 
-## 13. Repo Structure
+## 14. Repo Structure
 
 The repo is a Bun monorepo with `packages/core`, `packages/server`, and `packages/cli`. See `README.md` at the repo root for the full structure. Documentation lives under `docs/` -- see `docs/README.md` for what goes where.
 
