@@ -15,3 +15,4 @@ export * from "./problem-pack.js";
 export * from "./context-assembler.js";
 export * from "./judge-runner.js";
 export * from "./iteration-loop.js";
+export * from "./architect-runner.js";

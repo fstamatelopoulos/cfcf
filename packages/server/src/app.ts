@@ -30,6 +30,8 @@ import {
   resumeLoop,
   stopLoop,
   getLoopState,
+  startReview,
+  getReviewState,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -274,6 +276,50 @@ export function createApp() {
         });
       }
     });
+  });
+
+  // --- Solution Architect Review ---
+
+  app.post("/api/projects/:id/review", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const body = await c.req.json<{
+      problemPackPath?: string;
+    }>().catch(() => ({} as { problemPackPath?: string }));
+
+    try {
+      const state = await startReview(project, body);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Architect review started. Poll GET /api/projects/:id/review/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/review/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = getReviewState(project.id);
+    if (!state) {
+      return c.json({ error: "No review found for this project" }, 404);
+    }
+
+    return c.json(state);
   });
 
   // --- Iteration Loop (dark factory) ---
