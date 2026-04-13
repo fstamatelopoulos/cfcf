@@ -295,6 +295,12 @@ Each iteration re-reads all context. Strategies to manage this:
   - Output injected into next iteration's context
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
+- [ ] Research: Sandbox / guardrails for unattended agent execution
+  - Review Anthropic's sandbox concept (https://code.claude.com/docs/en/security)
+  - Evaluate applicability to cfcf's dark factory loop (agents run with `--dangerously-skip-permissions`)
+  - Original plan was container isolation but dropped due to auth complexity
+  - Goal: find guardrails that add security without extreme complexity or loss of flexibility
+  - Consider: filesystem scoping, network restrictions, process sandboxing, permission allow-lists
 - [ ] Token/cost tracking: best-effort measurement per iteration, per role
 - [ ] Notification hooks: extensible system (terminal, webhook placeholder)
 - [ ] `cfcf prepare` dry-run command: show assembled context without launching
