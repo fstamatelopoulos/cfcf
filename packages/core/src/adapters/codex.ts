@@ -38,7 +38,7 @@ export const codexAdapter: AgentAdapter = {
   },
 
   unattendedFlags(): string[] {
-    return ["exec", "--full-auto"];
+    return ["exec", "--full-auto", "-a", "never"];
   },
 
   buildCommand(
@@ -46,8 +46,9 @@ export const codexAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // codex exec --full-auto [--model <model>] "prompt"
-    const args = ["exec", "--full-auto"];
+    // codex exec --full-auto -a never [--model <model>] "prompt"
+    // --full-auto sets workspace-write sandbox, -a never disables all approval prompts
+    const args = ["exec", "--full-auto", "-a", "never"];
     if (model) {
       args.push("--model", model);
     }
