@@ -153,6 +153,13 @@ export async function branchExists(repoPath: string, branchName: string): Promis
 }
 
 /**
+ * Delete a local branch.
+ */
+export async function deleteBranch(repoPath: string, branchName: string): Promise<GitResult> {
+  return git(repoPath, ["branch", "-D", branchName]);
+}
+
+/**
  * Get the log of commits on the current branch (short format).
  */
 export async function getLog(

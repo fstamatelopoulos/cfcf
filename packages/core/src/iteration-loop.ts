@@ -376,21 +376,33 @@ async function runLoop(
 
     // --- PREPARE ---
     state.phase = "preparing";
+
+    // Validate problem pack BEFORE switching branches
+    const packValidation = await validateProblemPack(packPath);
+    if (!packValidation.valid) {
+      throw new Error(
+        `Problem Pack invalid: ${packValidation.errors.join(", ")}. Create a problem-pack/ directory with problem.md and success.md.`,
+      );
+    }
+
     const iterationNum = await nextIteration(project.id);
     if (iterationNum === null) {
       throw new Error("Failed to increment iteration counter");
     }
     state.currentIteration = iterationNum;
 
-    // Create feature branch
+    // Create feature branch off current HEAD.
+    // If the branch already exists (e.g., from a failed previous attempt),
+    // delete it first so we get a fresh branch off the current HEAD --
+    // not a stale branch that was created off a different base.
     const branchName = `cfcf/iteration-${iterationNum}`;
+    if (await gitManager.branchExists(project.repoPath, branchName)) {
+      // Delete the stale branch (we're not on it, since we haven't checked it out)
+      await gitManager.deleteBranch(project.repoPath, branchName);
+    }
     const branchResult = await gitManager.createBranch(project.repoPath, branchName);
     if (!branchResult.success) {
-      // Branch might already exist from a previous attempt
-      const checkoutResult = await gitManager.checkoutBranch(project.repoPath, branchName);
-      if (!checkoutResult.success) {
-        throw new Error(`Failed to create/checkout branch: ${branchResult.error}`);
-      }
+      throw new Error(`Failed to create branch ${branchName}: ${branchResult.error}`);
     }
 
     // Prepare log paths
@@ -408,13 +420,6 @@ async function runLoop(
     };
     state.iterations.push(iterRecord);
 
-    // Validate problem pack
-    const packValidation = await validateProblemPack(packPath);
-    if (!packValidation.valid) {
-      throw new Error(
-        `Problem Pack invalid: ${packValidation.errors.join(", ")}. Create a problem-pack/ directory with problem.md and success.md.`,
-      );
-    }
     const problemPack = await readProblemPack(packPath);
 
     // Build iteration context
