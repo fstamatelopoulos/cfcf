@@ -2,7 +2,9 @@
  * Codex CLI agent adapter.
  *
  * Supports running OpenAI Codex CLI in non-interactive mode using `codex exec`.
- * Uses --full-auto for unattended execution (workspace-write sandbox + on-request approvals).
+ * Uses -a never (no approval prompts) and -s danger-full-access (full filesystem
+ * and network access) for unattended execution. This is the Codex equivalent of
+ * Claude Code's --dangerously-skip-permissions.
  *
  * Codex exec is the headless/non-interactive mode designed for CI and automation.
  * See: https://developers.openai.com/codex/noninteractive
@@ -38,7 +40,7 @@ export const codexAdapter: AgentAdapter = {
   },
 
   unattendedFlags(): string[] {
-    return ["-a", "never", "exec", "--full-auto"];
+    return ["-a", "never", "exec", "-s", "danger-full-access"];
   },
 
   buildCommand(
@@ -46,10 +48,10 @@ export const codexAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // codex -a never exec --full-auto [--model <model>] "prompt"
-    // -a never is a GLOBAL flag (must precede the subcommand)
-    // --full-auto sets workspace-write sandbox
-    const args = ["-a", "never", "exec", "--full-auto"];
+    // codex -a never exec -s danger-full-access [--model <model>] "prompt"
+    // -a never: global flag, no approval prompts (must precede subcommand)
+    // -s danger-full-access: full filesystem + network access (like Claude's --dangerously-skip-permissions)
+    const args = ["-a", "never", "exec", "-s", "danger-full-access"];
     if (model) {
       args.push("--model", model);
     }

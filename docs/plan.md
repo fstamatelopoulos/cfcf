@@ -192,8 +192,8 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] `packages/adapters/codex`: Codex CLI adapter
   - `checkAvailability()`: verify Codex is installed and authenticated
   - `generateInstructionFile()`: generates equivalent instruction file for Codex
-  - `buildCommand()`: builds the `codex --approval-mode full-auto -q "..."` command
-  - `unattendedFlags()`: returns `["--approval-mode", "full-auto"]`
+  - `buildCommand()`: builds the `codex -a never exec -s danger-full-access "..."` command
+  - `unattendedFlags()`: returns `["-a", "never", "exec", "-s", "danger-full-access"]`
 - [ ] cfcf-docs/ file templates (see `design/agent-process-and-context.md` for full spec):
   - process.md (process definition)
   - Handoff document template
