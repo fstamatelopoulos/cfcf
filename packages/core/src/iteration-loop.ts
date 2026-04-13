@@ -80,6 +80,7 @@ export interface LoopIterationRecord {
   devSignals?: DevSignals;
   judgeExitCode?: number;
   judgeSignals?: JudgeSignals;
+  judgeError?: string;
   devLogFile: string;
   judgeLogFile: string;
   startedAt: string;
@@ -132,8 +133,9 @@ export function makeDecision(
   if (!judgeSignals) {
     return {
       action: "pause",
-      reason: "Judge signal file missing or malformed -- review manually",
+      reason: "Judge signal file missing or malformed. The judge agent may have failed to run or did not produce output. Check the judge log file for details.",
       pauseReason: "anomaly",
+      questions: ["Judge did not produce signals -- check judge log for errors"],
     };
   }
 
@@ -491,6 +493,11 @@ async function runLoop(
     const judgeSignals = await parseJudgeSignals(project.repoPath);
     const judgeAssessment = await parseJudgeAssessment(project.repoPath);
     iterRecord.judgeSignals = judgeSignals ?? undefined;
+
+    // If judge exited with non-zero and produced no signals, log it
+    if (judgeResult.exitCode !== 0 && !judgeSignals) {
+      iterRecord.judgeError = `Judge agent exited with code ${judgeResult.exitCode}. Check log: ${judgeLogFile}`;
+    }
 
     // Commit judge work
     if (await gitManager.hasChanges(project.repoPath)) {

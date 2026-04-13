@@ -38,6 +38,7 @@ interface LoopStatusResponse {
     judgeExitCode?: number;
     devSignals?: { status: string; self_assessment: string; tests_passed?: number; tests_total?: number };
     judgeSignals?: { determination: string; quality_score: number; key_concern?: string };
+    judgeError?: string;
     merged: boolean;
   }>;
 }
@@ -226,9 +227,12 @@ function printPausedState(s: LoopStatusResponse): void {
     }
   }
 
-  // Show latest judge assessment if available
+  // Show latest judge assessment or error
   const lastIter = s.iterations[s.iterations.length - 1];
-  if (lastIter?.judgeSignals) {
+  if (lastIter?.judgeError) {
+    console.log();
+    console.log(`Judge error: ${lastIter.judgeError}`);
+  } else if (lastIter?.judgeSignals) {
     console.log();
     console.log(`Last judge: ${lastIter.judgeSignals.determination} (quality: ${lastIter.judgeSignals.quality_score}/10)`);
     if (lastIter.judgeSignals.key_concern) {
