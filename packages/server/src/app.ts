@@ -78,6 +78,7 @@ export function createApp() {
       repoUrl?: string;
       devAgent?: { adapter: string; model?: string };
       judgeAgent?: { adapter: string; model?: string };
+      architectAgent?: { adapter: string; model?: string };
       maxIterations?: number;
       pauseEvery?: number;
     }>();

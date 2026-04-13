@@ -41,10 +41,13 @@ export const claudeCodeAdapter: AgentAdapter = {
   buildCommand(
     workspacePath: string,
     prompt: string,
+    model?: string,
   ): { command: string; args: string[] } {
-    return {
-      command: "claude",
-      args: ["--dangerously-skip-permissions", "-p", prompt],
-    };
+    const args = ["--dangerously-skip-permissions"];
+    if (model) {
+      args.push("--model", model);
+    }
+    args.push("-p", prompt);
+    return { command: "claude", args };
   },
 };

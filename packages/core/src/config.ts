@@ -83,10 +83,17 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
         ? "claude-code"
         : devAdapter;
 
+  // Architect agent: prefer claude-code (typically needs strong reasoning)
+  const architectAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : devAdapter;
+
   return {
     version: CONFIG_VERSION,
     devAgent: { adapter: devAdapter },
     judgeAgent: { adapter: judgeAdapter },
+    architectAgent: { adapter: architectAdapter },
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
