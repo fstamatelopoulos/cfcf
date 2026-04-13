@@ -41,10 +41,13 @@ export const codexAdapter: AgentAdapter = {
   buildCommand(
     workspacePath: string,
     prompt: string,
+    model?: string,
   ): { command: string; args: string[] } {
-    return {
-      command: "codex",
-      args: ["--approval-mode", "full-auto", "-q", prompt],
-    };
+    const args = ["--approval-mode", "full-auto"];
+    if (model) {
+      args.push("--model", model);
+    }
+    args.push("-q", prompt);
+    return { command: "codex", args };
   },
 };

@@ -30,6 +30,7 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
     repoPath: "/tmp/test-repo",
     devAgent: { adapter: "claude-code" },
     judgeAgent: { adapter: "codex" },
+    architectAgent: { adapter: "claude-code" },
     maxIterations: 10,
     pauseEvery: 0,
     onStalled: "alert",
