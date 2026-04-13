@@ -9,6 +9,39 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.3.0] -- 2026-04-12
+
+Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop. **This is the MVP.**
+
+### Added
+- **Iteration loop controller**: full dark factory loop (dev → judge → decide → repeat)
+- **Decision engine**: maps judge signals to deterministic actions (continue/pause/stop)
+- **Judge runner**: spawns judge agent, parses assessment + signal file, archives reviews
+- **Solution Architect**: `cfcf review --project <name>` for pre-iteration Problem Pack review
+  - Readiness assessment (READY / NEEDS_REFINEMENT / BLOCKED)
+  - Gap analysis, security review, solution options
+  - **Initial plan outline** written to `cfcf-docs/plan.md` for dev agents to build on
+- **Human-on-the-loop controls**:
+  - `cfcf resume --project <name> [--feedback "..."]` to resume paused loops
+  - `cfcf stop --project <name>` to halt running loops
+  - Pause-every-N cadence with user review
+  - Signal-driven pause when agents need user input
+- **Model selection per role**: `cfcf init` asks for model per agent role (dev, judge, architect)
+- **Architect agent config**: `architectAgent` in global and project config
+- **Enhanced `cfcf status --project <name>`**: shows loop phase, iteration history, judge determinations
+- Server endpoints: `POST .../loop/start`, `GET .../loop/status`, `POST .../loop/resume`, `POST .../loop/stop`, `POST .../review`, `GET .../review/status`
+- Templates: judge instructions, judge signal file, architect instructions, architect signal file
+- Auto-merge to main on PROGRESS/SUCCESS (configurable: auto vs PR-based)
+- Push to remote on success
+- 164 tests (308 assertions) -- 44 new tests covering decision engine, judge runner, architect runner, API endpoints
+
+### Changed
+- `cfcf run --project <name>` now starts the full iteration loop (dark factory mode) by default
+- Manual mode preserved with `cfcf run --project <name> -- <cmd>`
+- `ProjectConfig` now includes `architectAgent`, `status` fields
+- `AgentAdapter.buildCommand()` accepts optional `model` parameter
+- Log storage supports architect role alongside dev and judge
+
 ## [0.2.0] -- 2026-04-12
 
 Iteration 2: Problem Pack, context assembly, agent-mode run. First successful end-to-end agent iteration.
@@ -75,7 +108,8 @@ Iteration 0: Project scaffolding, server skeleton, CLI, first-run configuration.
 - CLAUDE.md with project principles for AI coding agents
 - docs/ structure: design/, api/, research/, guides/
 
-[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.0.0...v0.1.0
 [0.0.0]: https://github.com/fstamatelopoulos/cfcf/releases/tag/v0.0.0
