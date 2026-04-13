@@ -66,7 +66,8 @@ describe("codex adapter", () => {
       "-a",
       "never",
       "exec",
-      "--full-auto",
+      "-s",
+      "danger-full-access",
     ]);
   });
 
@@ -80,7 +81,8 @@ describe("codex adapter", () => {
     expect(args[0]).toBe("-a");
     expect(args[1]).toBe("never");
     expect(args[2]).toBe("exec");
-    expect(args).toContain("--full-auto");
+    expect(args).toContain("-s");
+    expect(args).toContain("danger-full-access");
     expect(args[args.length - 1]).toBe("implement feature X");
   });
 

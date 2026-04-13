@@ -497,7 +497,7 @@ cfcf Server (Iteration Controller)
   │     (push to remote deferred -- only on success or `cfcf push`)
   │
   ├─► Process Manager: spawn judge agent
-  │     Command: codex --approval-mode full-auto "read cfcf-judge-instructions.md and assess"
+  │     Command: codex -a never exec -s danger-full-access "read cfcf-judge-instructions.md and assess"
   │     CWD: /path/to/project (same repo, can inspect everything)
   │     ├─► Log Collector: stream logs → ~/.cfcf/.../judge-logs.txt
   │     └─► Wait for exit
@@ -713,7 +713,7 @@ cfcf → spawn judge → done
 
 How exactly does each agent run non-interactively? Critical validations needed:
 - Claude Code: `claude --dangerously-skip-permissions -p "your prompt"` -- does it work? What are exit codes?
-- Codex: `codex --approval-mode full-auto -q "your prompt"` -- equivalent?
+- Codex: `codex -a never exec -s danger-full-access "your prompt"` -- headless exec mode with full access
 - What happens when agents hit token limits? Do they exit cleanly? What's in the logs?
 
 ### 11.2 Log streaming and capture

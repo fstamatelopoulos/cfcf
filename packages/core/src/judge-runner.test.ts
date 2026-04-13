@@ -223,7 +223,8 @@ describe("buildJudgeCommand", () => {
     expect(cmd!.args[0]).toBe("-a");
     expect(cmd!.args[1]).toBe("never");
     expect(cmd!.args[2]).toBe("exec");
-    expect(cmd!.args).toContain("--full-auto");
+    expect(cmd!.args).toContain("-s");
+    expect(cmd!.args).toContain("danger-full-access");
   });
 
   test("builds command with model parameter", () => {
