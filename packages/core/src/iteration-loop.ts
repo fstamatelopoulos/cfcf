@@ -71,6 +71,9 @@ export interface LoopState {
   outcome?: "success" | "failure" | "stopped" | "max_iterations";
   /** Consecutive stalled count for onStalled policy */
   consecutiveStalled: number;
+  /** When true, the last iteration's dev phase completed but the judge failed.
+   *  On resume, retry the judge instead of running a new full iteration. */
+  retryJudge?: boolean;
 }
 
 export interface LoopIterationRecord {
@@ -321,6 +324,14 @@ function isStopped(state: LoopState): boolean {
 }
 
 /**
+ * Check if the loop has reached a terminal or paused state.
+ * Used after calling runJudgeAndDecide() which mutates state.phase.
+ */
+function isLoopDone(state: LoopState): boolean {
+  return state.phase === "paused" || state.phase === "completed" || state.phase === "stopped";
+}
+
+/**
  * The main iteration loop.
  * Runs iterations until a stop condition is met or the loop is paused.
  */
@@ -334,6 +345,34 @@ async function runLoop(
   while (true) {
     // Check if stopped externally
     if (isStopped(state)) break;
+
+    // --- RETRY JUDGE (if resuming after judge failure) ---
+    // When the dev phase succeeded but the judge failed, we skip straight
+    // to the judge phase on the same branch rather than re-running dev.
+    if (state.retryJudge && state.iterations.length > 0) {
+      state.retryJudge = false;
+      const lastIter = state.iterations[state.iterations.length - 1];
+      const iterationNum = lastIter.number;
+      const branchName = lastIter.branch;
+
+      // Ensure we're on the right branch
+      await gitManager.checkoutBranch(project.repoPath, branchName);
+
+      // Re-read the dev signals (they're still in the repo from the last run)
+      const devSignals = await parseSignalFile(project.repoPath);
+
+      // Jump straight to judge -- see the JUDGE section below
+      await runJudgeAndDecide(
+        project, state, lastIter, iterationNum, branchName, devSignals, packPath,
+      );
+
+      // If we returned (paused or stopped), exit the while loop
+      if (isLoopDone(state)) {
+        return;
+      }
+      // Otherwise continue to the next iteration
+      continue;
+    }
 
     // --- PREPARE ---
     state.phase = "preparing";
@@ -467,113 +506,151 @@ async function runLoop(
       );
     }
 
-    // --- JUDGE ---
-    if (isStopped(state)) break;
-    state.phase = "judging";
-
-    const judgeCmd = buildJudgeCommand(project);
-    if (!judgeCmd) {
-      throw new Error(`Unknown judge agent adapter: ${project.judgeAgent.adapter}`);
-    }
-
-    const judgeProcess = await spawnProcess({
-      command: judgeCmd.command,
-      args: judgeCmd.args,
-      cwd: project.repoPath,
-      logFile: judgeLogFile,
-    });
-
-    const judgeResult = await judgeProcess.result;
-    iterRecord.judgeExitCode = judgeResult.exitCode;
-
-    // Check if stopped during judge execution
+    // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;
 
-    // Collect judge results
-    const judgeSignals = await parseJudgeSignals(project.repoPath);
-    const judgeAssessment = await parseJudgeAssessment(project.repoPath);
-    iterRecord.judgeSignals = judgeSignals ?? undefined;
+    await runJudgeAndDecide(
+      project, state, iterRecord, iterationNum, branchName, devSignals, packPath,
+    );
 
-    // If judge exited with non-zero and produced no signals, log it
-    if (judgeResult.exitCode !== 0 && !judgeSignals) {
-      iterRecord.judgeError = `Judge agent exited with code ${judgeResult.exitCode}. Check log: ${judgeLogFile}`;
+    // If the judge+decide phase ended the loop (pause/complete/stop), exit
+    if (isLoopDone(state)) {
+      return;
     }
+    // Otherwise continue to the next iteration
+  }
+}
 
-    // Commit judge work
-    if (await gitManager.hasChanges(project.repoPath)) {
-      await gitManager.commitAll(
-        project.repoPath,
-        `cfcf iteration ${iterationNum} judge (${project.judgeAgent.adapter})`,
-      );
+/**
+ * Run the judge agent and make a decision. Shared between normal flow and judge retry.
+ * Modifies state and iterRecord in place.
+ */
+async function runJudgeAndDecide(
+  project: ProjectConfig,
+  state: LoopState,
+  iterRecord: LoopIterationRecord,
+  iterationNum: number,
+  branchName: string,
+  devSignals: DevSignals | null,
+  _packPath: string,
+): Promise<void> {
+  state.phase = "judging";
+  state.currentIteration = iterationNum;
+
+  // Prepare judge files
+  await writeJudgeInstructions(project.repoPath, project, iterationNum);
+  await resetJudgeSignals(project.repoPath);
+
+  const judgeLogFile = iterRecord.judgeLogFile;
+
+  const judgeCmd = buildJudgeCommand(project);
+  if (!judgeCmd) {
+    throw new Error(`Unknown judge agent adapter: ${project.judgeAgent.adapter}`);
+  }
+
+  const judgeProcess = await spawnProcess({
+    command: judgeCmd.command,
+    args: judgeCmd.args,
+    cwd: project.repoPath,
+    logFile: judgeLogFile,
+  });
+
+  const judgeResult = await judgeProcess.result;
+  iterRecord.judgeExitCode = judgeResult.exitCode;
+
+  // Check if stopped during judge execution
+  if (isStopped(state)) return;
+
+  // Collect judge results
+  const judgeSignals = await parseJudgeSignals(project.repoPath);
+  const judgeAssessment = await parseJudgeAssessment(project.repoPath);
+  iterRecord.judgeSignals = judgeSignals ?? undefined;
+
+  // If judge exited with non-zero and produced no signals, log it
+  if (judgeResult.exitCode !== 0 && !judgeSignals) {
+    iterRecord.judgeError = `Judge agent exited with code ${judgeResult.exitCode}. Check log: ${judgeLogFile}`;
+  }
+
+  // Commit judge work
+  if (await gitManager.hasChanges(project.repoPath)) {
+    await gitManager.commitAll(
+      project.repoPath,
+      `cfcf iteration ${iterationNum} judge (${project.judgeAgent.adapter})`,
+    );
+  }
+
+  // Archive judge assessment
+  await archiveJudgeAssessment(project.repoPath, iterationNum);
+
+  iterRecord.completedAt = new Date().toISOString();
+
+  // --- DECIDE ---
+  state.phase = "deciding";
+
+  // Update consecutive stalled count
+  if (judgeSignals?.determination === "STALLED") {
+    state.consecutiveStalled++;
+  } else {
+    state.consecutiveStalled = 0;
+  }
+
+  const decision = makeDecision(judgeSignals, devSignals, state, project);
+
+  // Merge branch to main if auto-merge and progress/success
+  if (
+    project.mergeStrategy === "auto" &&
+    judgeSignals &&
+    (judgeSignals.determination === "PROGRESS" || judgeSignals.determination === "SUCCESS")
+  ) {
+    const mainBranch = "main"; // TODO: detect default branch
+    await gitManager.checkoutBranch(project.repoPath, mainBranch);
+    const mergeResult = await gitManager.merge(
+      project.repoPath,
+      branchName,
+      `Merge cfcf iteration ${iterationNum}`,
+    );
+    iterRecord.merged = mergeResult.success;
+    if (!mergeResult.success) {
+      // If merge fails, stay on the feature branch
+      await gitManager.checkoutBranch(project.repoPath, branchName);
     }
+  }
 
-    // Archive judge assessment
-    await archiveJudgeAssessment(project.repoPath, iterationNum);
+  // Clear user feedback after it's been consumed
+  state.userFeedback = undefined;
 
-    iterRecord.completedAt = new Date().toISOString();
+  switch (decision.action) {
+    case "stop":
+      state.phase = "completed";
+      state.outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
+                      decision.pauseReason === "max_iterations" ? "max_iterations" :
+                      "failure";
+      state.completedAt = new Date().toISOString();
+      await updateProject(project.id, { status: "completed" });
 
-    // --- DECIDE ---
-    state.phase = "deciding";
-
-    // Update consecutive stalled count
-    if (judgeSignals?.determination === "STALLED") {
-      state.consecutiveStalled++;
-    } else {
-      state.consecutiveStalled = 0;
-    }
-
-    const decision = makeDecision(judgeSignals, devSignals, state, project);
-
-    // Merge branch to main if auto-merge and progress/success
-    if (
-      project.mergeStrategy === "auto" &&
-      judgeSignals &&
-      (judgeSignals.determination === "PROGRESS" || judgeSignals.determination === "SUCCESS")
-    ) {
-      const mainBranch = "main"; // TODO: detect default branch
-      await gitManager.checkoutBranch(project.repoPath, mainBranch);
-      const mergeResult = await gitManager.merge(
-        project.repoPath,
-        branchName,
-        `Merge cfcf iteration ${iterationNum}`,
-      );
-      iterRecord.merged = mergeResult.success;
-      if (!mergeResult.success) {
-        // If merge fails, stay on the feature branch
-        await gitManager.checkoutBranch(project.repoPath, branchName);
+      // Push to remote on success
+      if (state.outcome === "success") {
+        await gitManager.push(project.repoPath).catch(() => {
+          // Push failure is not fatal
+        });
       }
-    }
+      return;
 
-    // Clear user feedback after it's been consumed
-    state.userFeedback = undefined;
+    case "pause":
+      state.phase = "paused";
+      state.pauseReason = decision.pauseReason;
+      state.pendingQuestions = decision.questions;
+      // If the dev phase succeeded but the judge failed, mark for retry
+      // so resumeLoop() retries the judge on the same branch instead of
+      // starting a new iteration from scratch.
+      if (!judgeSignals && iterRecord.devExitCode === 0) {
+        state.retryJudge = true;
+      }
+      await updateProject(project.id, { status: "paused" });
+      return; // Loop exits -- will be restarted by resumeLoop()
 
-    switch (decision.action) {
-      case "stop":
-        state.phase = "completed";
-        state.outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
-                        decision.pauseReason === "max_iterations" ? "max_iterations" :
-                        "failure";
-        state.completedAt = new Date().toISOString();
-        await updateProject(project.id, { status: "completed" });
-
-        // Push to remote on success
-        if (state.outcome === "success") {
-          await gitManager.push(project.repoPath).catch(() => {
-            // Push failure is not fatal
-          });
-        }
-        return;
-
-      case "pause":
-        state.phase = "paused";
-        state.pauseReason = decision.pauseReason;
-        state.pendingQuestions = decision.questions;
-        await updateProject(project.id, { status: "paused" });
-        return; // Loop exits -- will be restarted by resumeLoop()
-
-      case "continue":
-        // Loop continues to next iteration
-        break;
-    }
+    case "continue":
+      // Caller continues to next iteration
+      return;
   }
 }
