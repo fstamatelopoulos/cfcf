@@ -63,21 +63,30 @@ describe("claude-code adapter", () => {
 describe("codex adapter", () => {
   it("has correct unattended flags", () => {
     expect(codexAdapter.unattendedFlags()).toEqual([
-      "--approval-mode",
-      "full-auto",
+      "exec",
+      "--full-auto",
     ]);
   });
 
-  it("builds a valid command", () => {
+  it("builds a valid command using exec mode", () => {
     const { command, args } = codexAdapter.buildCommand(
       "/path/to/project",
       "implement feature X",
     );
     expect(command).toBe("codex");
-    expect(args).toContain("--approval-mode");
-    expect(args).toContain("full-auto");
-    expect(args).toContain("-q");
-    expect(args).toContain("implement feature X");
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("--full-auto");
+    expect(args[args.length - 1]).toBe("implement feature X");
+  });
+
+  it("passes model parameter", () => {
+    const { args } = codexAdapter.buildCommand(
+      "/path/to/project",
+      "implement feature X",
+      "o3",
+    );
+    expect(args).toContain("--model");
+    expect(args).toContain("o3");
   });
 });
 

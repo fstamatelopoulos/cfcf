@@ -1,8 +1,11 @@
 /**
  * Codex CLI agent adapter.
  *
- * Supports running OpenAI Codex CLI in non-interactive mode
- * with --approval-mode full-auto for unattended execution.
+ * Supports running OpenAI Codex CLI in non-interactive mode using `codex exec`.
+ * Uses --full-auto for unattended execution (workspace-write sandbox + on-request approvals).
+ *
+ * Codex exec is the headless/non-interactive mode designed for CI and automation.
+ * See: https://developers.openai.com/codex/noninteractive
  */
 
 import type { AgentAdapter, AgentAvailability } from "../types.js";
@@ -35,7 +38,7 @@ export const codexAdapter: AgentAdapter = {
   },
 
   unattendedFlags(): string[] {
-    return ["--approval-mode", "full-auto"];
+    return ["exec", "--full-auto"];
   },
 
   buildCommand(
@@ -43,11 +46,12 @@ export const codexAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    const args = ["--approval-mode", "full-auto"];
+    // codex exec --full-auto [--model <model>] "prompt"
+    const args = ["exec", "--full-auto"];
     if (model) {
       args.push("--model", model);
     }
-    args.push("-q", prompt);
+    args.push(prompt);
     return { command: "codex", args };
   },
 };
