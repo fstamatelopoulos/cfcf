@@ -4,6 +4,7 @@
 
 import type { Command } from "commander";
 import { configExists, readConfig, getConfigPath } from "@cfcf/core";
+import { formatAgent } from "../format.js";
 
 export function registerConfigCommands(program: Command): void {
   const config = program
@@ -27,8 +28,9 @@ export function registerConfigCommands(program: Command): void {
 
       console.log(`Config file: ${getConfigPath()}`);
       console.log();
-      console.log(`Dev agent:       ${cfg.devAgent.adapter}${cfg.devAgent.model ? ` (${cfg.devAgent.model})` : ""}`);
-      console.log(`Judge agent:     ${cfg.judgeAgent.adapter}${cfg.judgeAgent.model ? ` (${cfg.judgeAgent.model})` : ""}`);
+      console.log(`Dev agent:       ${formatAgent(cfg.devAgent)}`);
+      console.log(`Judge agent:     ${formatAgent(cfg.judgeAgent)}`);
+      console.log(`Architect agent: ${formatAgent(cfg.architectAgent)}`);
       console.log(`Max iterations:  ${cfg.maxIterations}`);
       console.log(`Pause every:     ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
       console.log(`Permissions:     ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);
