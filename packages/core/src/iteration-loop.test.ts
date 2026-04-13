@@ -204,7 +204,7 @@ describe("Decision Engine - makeDecision", () => {
 
   // --- Missing signals ---
 
-  test("null judge signals → pause with anomaly", () => {
+  test("null judge signals → pause with anomaly and helpful message", () => {
     const decision = makeDecision(
       null,
       makeDevSignals(),
@@ -214,6 +214,9 @@ describe("Decision Engine - makeDecision", () => {
     expect(decision.action).toBe("pause");
     expect(decision.pauseReason).toBe("anomaly");
     expect(decision.reason).toContain("missing or malformed");
+    expect(decision.reason).toContain("judge log");
+    expect(decision.questions).toBeDefined();
+    expect(decision.questions!.length).toBeGreaterThan(0);
   });
 
   // --- Priority: dev user_input_needed before judge determination ---
