@@ -221,6 +221,8 @@ describe("buildJudgeCommand", () => {
     expect(cmd!.command).toBe("codex");
     expect(cmd!.args).toContain("exec");
     expect(cmd!.args).toContain("--full-auto");
+    expect(cmd!.args).toContain("-a");
+    expect(cmd!.args).toContain("never");
   });
 
   test("builds command with model parameter", () => {

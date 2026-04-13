@@ -65,6 +65,8 @@ describe("codex adapter", () => {
     expect(codexAdapter.unattendedFlags()).toEqual([
       "exec",
       "--full-auto",
+      "-a",
+      "never",
     ]);
   });
 
