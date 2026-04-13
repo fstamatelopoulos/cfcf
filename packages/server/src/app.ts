@@ -359,7 +359,7 @@ export function createApp() {
       return c.json({ error: "Project not found" }, 404);
     }
 
-    const state = getLoopState(project.id);
+    const state = await getLoopState(project.id);
     if (!state) {
       return c.json({ error: "No active loop for this project" }, 404);
     }
