@@ -293,6 +293,11 @@ Each iteration re-reads all context. Strategies to manage this:
   - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
+- [ ] Persist loop state to disk (recover after server restart)
+  - Write loop state (phase, currentIteration, retryJudge, iterations, etc.) to project config dir
+  - On server start, reload active/paused loops from disk
+  - `cfcf resume` works after server restart, watch-mode reload, or crash
+  - Without this, any server restart loses loop state and breaks resume
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Research: Sandbox / guardrails for unattended agent execution
