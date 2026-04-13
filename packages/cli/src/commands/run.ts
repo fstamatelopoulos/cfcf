@@ -126,6 +126,7 @@ async function pollLoopStatus(project: string): Promise<void> {
   const projectParam = encodeURIComponent(project);
   let lastPhase = "";
   let lastIteration = 0;
+  let phaseStartTime = Date.now();
 
   while (true) {
     const statusRes = await get<LoopStatusResponse>(
@@ -146,8 +147,11 @@ async function pollLoopStatus(project: string): Promise<void> {
       process.stdout.write(`${s.phase}${iterInfo}`);
       lastPhase = s.phase;
       lastIteration = s.currentIteration;
+      phaseStartTime = Date.now();
     } else {
-      process.stdout.write(".");
+      // Show elapsed time in this phase
+      const elapsed = Math.floor((Date.now() - phaseStartTime) / 1000);
+      process.stdout.write(`\r${s.phase} [iteration ${s.currentIteration}] ${formatElapsed(elapsed)}`);
     }
 
     // Terminal states
@@ -240,6 +244,13 @@ function printPausedState(s: LoopStatusResponse): void {
   console.log(`  Stop:   cfcf stop --project ${s.projectName}`);
 }
 
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
 function formatDuration(startedAt: string, completedAt?: string): string {
   const start = new Date(startedAt).getTime();
   const end = completedAt ? new Date(completedAt).getTime() : Date.now();
@@ -286,6 +297,7 @@ async function runManualMode(commandParts: string[], opts: { project: string; pr
   // Poll for status
   const projectParam = encodeURIComponent(opts.project);
   let lastStatus = "";
+  let statusStartTime = Date.now();
 
   while (true) {
     const statusRes = await get<SingleIterationStatusResponse>(
@@ -303,8 +315,10 @@ async function runManualMode(commandParts: string[], opts: { project: string; pr
       if (lastStatus) process.stdout.write("\n");
       process.stdout.write(`Status: ${s.status}`);
       lastStatus = s.status;
+      statusStartTime = Date.now();
     } else {
-      process.stdout.write(".");
+      const elapsed = Math.floor((Date.now() - statusStartTime) / 1000);
+      process.stdout.write(`\rStatus: ${s.status} ${formatElapsed(elapsed)}`);
     }
 
     if (s.status === "completed" || s.status === "failed") {
