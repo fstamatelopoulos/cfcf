@@ -115,11 +115,14 @@ cfcf config edit
 
 ### `cfcf status`
 
-One-command overview of cfcf state: configuration and server status.
+One-command overview of cfcf state: configuration, server status, and active project loops.
 
 ```bash
-cfcf status
+cfcf status                          # Overview of everything
+cfcf status --project my-project     # Detailed loop status for a project
 ```
+
+With `--project`, shows the current loop phase, iteration progress, judge determinations, and pending questions.
 
 ---
 
@@ -173,28 +176,65 @@ cfcf project delete my-project
 
 ---
 
+## Solution Architect Review
+
+### `cfcf review`
+
+Run the Solution Architect agent to review your Problem Pack before starting unattended development. Advisory, repeatable -- run as many times as you like.
+
+```bash
+cfcf review --project my-project
+```
+
+What the architect does:
+1. Reviews problem.md, success.md, constraints, hints, and context files
+2. Checks context completeness -- is there enough for a dev agent to work unattended?
+3. Identifies gaps and ambiguities that would cause an engineer to ask questions
+4. Runs an initial security assessment
+5. Outlines solution options and trade-offs
+6. **Produces an initial implementation plan** (`cfcf-docs/plan.md`) for the dev agent to build on
+7. Writes a readiness assessment: READY / NEEDS_REFINEMENT / BLOCKED
+
+Typical flow:
+```bash
+cfcf review --project my-project     # Architect identifies gaps
+# → User reads architect-review.md, refines problem-pack/
+cfcf review --project my-project     # Re-review after changes
+# → Architect says READY
+cfcf run --project my-project        # Start unattended development
+```
+
+---
+
 ## Running Iterations
 
-### `cfcf run` -- Agent Mode
+### `cfcf run` -- Dark Factory Loop
 
-Launch the configured dev agent against your problem definition. This is the primary workflow.
+Start the full iteration loop: dev → judge → decide → repeat. This is the primary workflow.
 
 ```bash
 cfcf run --project my-project
 ```
 
 What happens:
-1. The server starts the iteration asynchronously and returns immediately
-2. Reads the Problem Pack from `<repo>/problem-pack/` (problem.md, success.md, etc.)
-3. Assembles context: generates CLAUDE.md (or AGENTS.md for Codex) with tiered context
-4. Writes `cfcf-docs/` into the repo with all context files and templates
-5. Creates a git feature branch: `cfcf/iteration-N`
-6. Launches the configured dev agent (e.g., Claude Code with `--dangerously-skip-permissions`)
-7. The CLI polls for status, showing real-time progress (preparing → executing → collecting → completed)
-8. Agent reads CLAUDE.md, works on the problem, fills in handoff doc + signal file
-9. Captures all stdout/stderr to `~/.cfcf/logs/`
-10. Commits all changes to the feature branch
-11. Parses the handoff document and signal file, reports results
+1. Starts the iteration loop asynchronously
+2. For each iteration:
+   a. Reads the Problem Pack and assembles context (CLAUDE.md + cfcf-docs/)
+   b. Creates a git feature branch: `cfcf/iteration-N`
+   c. Launches the dev agent with assembled context
+   d. Commits dev work to the feature branch
+   e. Launches the judge agent to evaluate the iteration
+   f. Commits judge assessment, archives to iteration-reviews/
+   g. Decision engine evaluates judge signals:
+      - SUCCESS → stop, push to remote
+      - PROGRESS → continue to next iteration
+      - STALLED → apply onStalled policy (continue/stop/alert)
+      - ANOMALY → pause and alert user
+   h. If pause cadence reached → pause and wait for user review
+   i. If auto-merge enabled → merge branch to main
+3. The CLI polls for status, showing phase transitions in real-time
+4. On pause: shows questions and hints for `cfcf resume`
+5. On completion: shows iteration history and outcome
 
 Options:
 - `--project <name>` (required) -- project name or ID
@@ -234,6 +274,34 @@ When running in agent mode, cfcf writes a `cfcf-docs/` directory into the repo. 
 - The agent's evolving plan and decision log
 
 These files are tracked in git. See `docs/design/agent-process-and-context.md` for the full specification.
+
+---
+
+## Loop Control
+
+### `cfcf resume`
+
+Resume a paused iteration loop. The loop pauses when:
+- Pause cadence is reached (every N iterations)
+- The dev agent or judge signals `user_input_needed`
+- The judge detects an anomaly (token exhaustion, circling, etc.)
+
+```bash
+cfcf resume --project my-project
+cfcf resume --project my-project --feedback "Focus on error handling in the API layer"
+```
+
+The optional `--feedback` text is injected into the next iteration's context as user direction.
+
+### `cfcf stop`
+
+Stop a running or paused iteration loop.
+
+```bash
+cfcf stop --project my-project
+```
+
+The iteration branch is preserved. You can review the code, then restart with `cfcf run`.
 
 ---
 
@@ -286,40 +354,33 @@ Override with `CFCF_LOGS_DIR` environment variable.
 
 ---
 
-## Typical Workflow (Current)
+## Typical Workflow
 
 ```bash
 # One-time setup
-cfcf init
-cfcf server start
+cfcf init                                          # Configure agents and defaults
+cfcf server start                                  # Start the server
 
 # Per-project setup
 cfcf project init --repo /path/to/repo --name my-app
 
-# Run commands (iteration 1: manual commands)
-cfcf run --project my-app -- npm test
+# Define the problem
+# Edit problem-pack/problem.md and success.md with your problem definition
 
-# Check what happened
-cd /path/to/repo && git log --oneline --all | grep cfcf
-```
+# Architect review (recommended before unattended development)
+cfcf review --project my-app                       # Architect identifies gaps
+# Read cfcf-docs/architect-review.md, refine problem-pack/
+cfcf review --project my-app                       # Re-review after refinements
 
-## Typical Workflow (Future -- after iteration 2+)
+# Start the dark factory loop
+cfcf run --project my-app
+# cfcf runs: dev agent → judge → decide → repeat
+# On pause: review and provide feedback
+cfcf resume --project my-app --feedback "Focus on X"
 
-```bash
-# One-time setup
-cfcf init
-cfcf server start
+# Monitor progress anytime
+cfcf status --project my-app
 
-# Per-project setup
-cfcf project init --repo /path/to/repo --name my-app
-
-# Provide problem definition
-# (populate cfcf-docs/ with problem.md, success.md, etc.)
-
-# Start iterating
-cfcf iterate --project my-app --max-iterations 10 --pause-every 3
-
-# cfcf runs the loop: dev agent → judge → next iteration → pause for review → repeat
-# You review when prompted, or check status anytime:
-cfcf status
+# Stop if needed
+cfcf stop --project my-app
 ```

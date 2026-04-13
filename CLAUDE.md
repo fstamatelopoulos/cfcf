@@ -53,12 +53,15 @@ packages/
     pid-file.ts          # Server PID file management
     problem-pack.ts      # Read/validate Problem Pack directories
     context-assembler.ts # Generate CLAUDE.md + cfcf-docs/, parse handoff/signals
+    judge-runner.ts      # Judge agent: spawn, parse signals/assessment, archive
+    architect-runner.ts  # Solution Architect: spawn, parse signals/review
+    iteration-loop.ts    # Main iteration loop controller + decision engine
     adapters/            # Agent adapter implementations (claude-code, codex)
     templates/           # cfcf-docs/ file templates (process.md, handoff, signals, etc.)
   server/src/
     app.ts               # Route definitions (testable without binding to port)
     start.ts             # Server lifecycle (start/stop, PID file)
-    iteration-runner.ts  # Async iteration execution (background agent runs)
+    iteration-runner.ts  # Single iteration execution (manual mode, backwards compat)
   cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
@@ -66,8 +69,11 @@ packages/
       server.ts          # Server start/stop/status
       project.ts         # Project init/list/show/delete
       config.ts          # Global config show/edit
-      run.ts             # Execute iterations (agent mode + manual mode)
-      status.ts          # Quick status overview
+      run.ts             # Start iteration loop (agent) or single iteration (manual)
+      review.ts          # Solution Architect review (cfcf review)
+      resume.ts          # Resume a paused loop (cfcf resume)
+      stop.ts            # Stop a running loop (cfcf stop)
+      status.ts          # Status overview with loop state
 problem-packs/           # Example Problem Pack definitions
 docs/                    # Design docs, API reference, guides
 ```
@@ -85,6 +91,8 @@ docs/                    # Design docs, API reference, guides
 - Config env overrides: `CFCF_PORT`, `CFCF_CONFIG_DIR`, `CFCF_LOGS_DIR`
 - Adapter names are kebab-case: `claude-code`, `codex`
 - All decisions logged in `docs/plan.md` decision log and `docs/decisions-log.md`
+- Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-3/loop-judge-architect`)
+- Three agent roles: dev, judge, architect -- each independently configurable (agent + model)
 
 ## What NOT to Do
 
