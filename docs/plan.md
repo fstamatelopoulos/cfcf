@@ -255,6 +255,7 @@ Each iteration re-reads all context. Strategies to manage this:
   - Server endpoint: `POST /api/projects/:id/review`
   - Produces `architect-review.md` (readiness assessment, gaps, suggestions, risks)
   - Produces `cfcf-architect-signals.json` (READY / NEEDS_REFINEMENT / BLOCKED)
+  - **Produces initial `plan.md` outline** for dev agents to build on -- forces the architect to identify gaps and ambiguities that the user should address before the unattended loop starts
   - Review persists in repo as context for dev agents
   - Advisory only -- does not block `cfcf run`. User decides when to proceed
 - [ ] Model selection per role:
@@ -263,11 +264,9 @@ Each iteration re-reads all context. Strategies to manage this:
   - Project config stores model per role
   - Three roles: dev agent, judge agent, solution architect
 - [ ] Monitoring and control:
-  - `cfcf status --project <name>`: current iteration state + progress
-  - `cfcf log <project-name>`: iteration history
-  - `cfcf resume --project <name>`: continue after pause
+  - `cfcf status --project <name>`: current iteration state + loop progress
+  - `cfcf resume --project <name>`: continue after pause (with optional feedback)
   - `cfcf stop --project <name>`: stop the iteration loop
-  - `cfcf push <project-name>`: push cfcf branch to remote on demand
 
 **This is the MVP.** After this iteration, cfcf can validate a problem definition via the Solution Architect, run a dev agent at it iteratively with a separate judge providing feedback, and converge toward a solution with human oversight.
 
@@ -294,6 +293,8 @@ Each iteration re-reads all context. Strategies to manage this:
   - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
+- [ ] `cfcf log <project-name>`: iteration history viewer
+- [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Token/cost tracking: best-effort measurement per iteration, per role
 - [ ] Notification hooks: extensible system (terminal, webhook placeholder)
 - [ ] `cfcf prepare` dry-run command: show assembled context without launching
@@ -389,6 +390,9 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-12 | Three agent roles: dev, judge, solution architect | Each independently configurable (agent + model). Encouraged to use different agents for cross-review |
 | 2026-04-12 | Model selection per role (planned for iteration 3) | AgentConfig already has `model` field. Init/config/adapters need to use it. Critical for role differentiation (e.g., opus for architect, sonnet for dev) |
 | 2026-04-12 | Automated iteration loop with user-on-the-loop | User launches once, cf² takes over. User only involved at configured pause cadence or when agents/judge request input. Dark factory model |
+| 2026-04-12 | Solution Architect produces initial plan outline | Forces architect to identify gaps/ambiguities. Dev agents read and expand the plan rather than starting from scratch. Better unattended loop quality |
+| 2026-04-12 | `cfcf log` and `cfcf push` deferred to iteration 4 | CLI convenience commands. Not critical for MVP. `git push` works manually. Log viewer more useful with web UI |
+| 2026-04-12 | Feature branch naming: `iteration-N/<description>` | Matches existing convention from iterations 1-2. Recorded in CLAUDE.md |
 
 ---
 
