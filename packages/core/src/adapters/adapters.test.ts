@@ -63,20 +63,23 @@ describe("claude-code adapter", () => {
 describe("codex adapter", () => {
   it("has correct unattended flags", () => {
     expect(codexAdapter.unattendedFlags()).toEqual([
-      "exec",
-      "--full-auto",
       "-a",
       "never",
+      "exec",
+      "--full-auto",
     ]);
   });
 
-  it("builds a valid command using exec mode", () => {
+  it("builds a valid command with global flags before subcommand", () => {
     const { command, args } = codexAdapter.buildCommand(
       "/path/to/project",
       "implement feature X",
     );
     expect(command).toBe("codex");
-    expect(args[0]).toBe("exec");
+    // -a never must come BEFORE exec (global flag)
+    expect(args[0]).toBe("-a");
+    expect(args[1]).toBe("never");
+    expect(args[2]).toBe("exec");
     expect(args).toContain("--full-auto");
     expect(args[args.length - 1]).toBe("implement feature X");
   });
