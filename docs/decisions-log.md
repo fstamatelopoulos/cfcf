@@ -19,6 +19,22 @@
 
 ## Log
 
+### 2026-04-12 -- Loop state must be persisted to disk
+
+In-memory loop state is lost on server restart. This includes `bun --watch` restarts (triggered by file changes during development), crashes, and manual restarts. Without persistence, `cfcf resume` fails after any restart with "No active loop for this project". Fix: persist `LoopState` to `~/.cfcf/projects/<id>/loop-state.json` on every phase transition, load from disk as fallback in `getLoopState()`.
+
+### 2026-04-12 -- Codex CLI flag ordering matters: global flags before subcommand
+
+Codex CLI requires global flags (like `-a never`) BEFORE the subcommand (`exec`). The command must be `codex -a never exec --full-auto "prompt"`, NOT `codex exec --full-auto -a never "prompt"`. The old `--approval-mode full-auto` flag was also removed in recent Codex versions. Discovered during first real judge run -- the judge silently failed with exit code 2.
+
+### 2026-04-12 -- Branch creation must handle stale branches from failed runs
+
+When an iteration fails and the user retries, the iteration branch may already exist from the failed attempt but point to a different base (e.g., off `main` instead of the current feature branch). Checking out the stale branch loses the working directory contents. Fix: delete existing branch and recreate off current HEAD. Also: validate problem-pack BEFORE switching branches.
+
+### 2026-04-12 -- Judge failure should not silently lose dev work
+
+When the judge agent fails (wrong CLI flags, crash, etc.), the loop correctly pauses with "anomaly", but the original implementation gave no clue about the cause. The user saw bare "anomaly" with no log path, no exit code, no hint. Fix: capture `judgeError` with exit code and log path, show in CLI pause output. Also: set `retryJudge` flag so resume retries only the judge on the same branch rather than starting a new full iteration.
+
 ### 2026-04-12 -- HTTP request/response model doesn't work for long agent runs
 
 First real agent run (Claude Code) failed because: (1) Bun.serve has a max idleTimeout of 255 seconds, (2) the CLI's fetch() timed out after 10s default. Agent runs can take minutes or hours. The synchronous request/response model (CLI sends POST, server runs agent, returns result when done) fundamentally doesn't work for long-running operations.

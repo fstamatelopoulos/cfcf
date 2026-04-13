@@ -33,7 +33,9 @@ Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop.
 - Templates: judge instructions, judge signal file, architect instructions, architect signal file
 - Auto-merge to main on PROGRESS/SUCCESS (configurable: auto vs PR-based)
 - Push to remote on success
-- 164 tests (308 assertions) -- 44 new tests covering decision engine, judge runner, architect runner, API endpoints
+- **Loop state persistence**: loop state saved to disk on every phase transition, survives server restarts
+- Elapsed time counter in CLI polling (replaces dots)
+- 168 tests (323 assertions) -- 48 new tests covering decision engine, judge runner, architect runner, API endpoints, persistence
 
 ### Changed
 - `cfcf run --project <name>` now starts the full iteration loop (dark factory mode) by default
@@ -41,6 +43,15 @@ Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop.
 - `ProjectConfig` now includes `architectAgent`, `status` fields
 - `AgentAdapter.buildCommand()` accepts optional `model` parameter
 - Log storage supports architect role alongside dev and judge
+- Codex adapter updated to use `codex -a never exec --full-auto` (headless exec mode)
+
+### Fixed
+- Codex adapter: updated CLI flags for current Codex CLI (was using removed `--approval-mode` flag)
+- Codex adapter: global flag `-a` must precede `exec` subcommand
+- Judge failure now shows helpful error message with log file path (was showing bare "anomaly")
+- Judge retry on resume: when dev succeeds but judge fails, resume retries only the judge on the same branch
+- Problem Pack validated before branch switch (was switching to empty branch first, losing access to files)
+- Stale iteration branches from failed runs are deleted and recreated off current HEAD
 
 ## [0.2.0] -- 2026-04-12
 

@@ -2,8 +2,11 @@
  * Tests for the iteration loop controller and decision engine.
  */
 
-import { describe, test, expect } from "bun:test";
-import { makeDecision, type LoopState } from "./iteration-loop.js";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { join } from "path";
+import { mkdtemp, rm, mkdir, readFile } from "fs/promises";
+import { tmpdir } from "os";
+import { makeDecision, getLoopState, startLoop, stopLoop, type LoopState } from "./iteration-loop.js";
 import type { ProjectConfig, DevSignals, JudgeSignals } from "./types.js";
 
 function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
@@ -242,5 +245,93 @@ describe("Decision Engine - makeDecision", () => {
       makeProject(),
     );
     expect(decision.action).toBe("stop");
+  });
+});
+
+describe("Loop State Persistence", () => {
+  let tempDir: string;
+  const originalEnv = process.env.CFCF_CONFIG_DIR;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "cfcf-loop-persist-test-"));
+    process.env.CFCF_CONFIG_DIR = tempDir;
+  });
+
+  afterEach(async () => {
+    process.env.CFCF_CONFIG_DIR = originalEnv;
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test("getLoopState returns undefined when no state exists", async () => {
+    const state = await getLoopState("nonexistent-project");
+    expect(state).toBeUndefined();
+  });
+
+  test("startLoop persists state to disk", async () => {
+    // Create a minimal project config dir + git repo
+    const repoDir = join(tempDir, "test-repo");
+    await mkdir(repoDir, { recursive: true });
+    await Bun.spawn(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" }).exited;
+    await Bun.spawn(["git", "config", "user.email", "test@cfcf.dev"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" }).exited;
+    await Bun.spawn(["git", "config", "user.name", "cfcf test"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" }).exited;
+    const { writeFile: wf } = await import("fs/promises");
+    await wf(join(repoDir, "README.md"), "# test\n");
+    await Bun.spawn(["git", "add", "-A"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" }).exited;
+    await Bun.spawn(["git", "commit", "-m", "initial"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" }).exited;
+
+    // Create a problem-pack
+    const packDir = join(repoDir, "problem-pack");
+    await mkdir(packDir, { recursive: true });
+    await wf(join(packDir, "problem.md"), "# Problem\nBuild a thing\n");
+    await wf(join(packDir, "success.md"), "# Success\nAll tests pass\n");
+
+    // Create a project config on disk
+    const { createProject } = await import("./projects.js");
+    const project = await createProject({ name: "persist-test", repoPath: repoDir });
+
+    // Start loop -- it will fail quickly (no agent installed) but state should persist
+    const state = await startLoop(project);
+    expect(state.projectId).toBe(project.id);
+
+    // Wait a moment for the background task to write state
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Verify file exists on disk
+    const statePath = join(tempDir, "projects", project.id, "loop-state.json");
+    const raw = await readFile(statePath, "utf-8");
+    const persisted = JSON.parse(raw);
+    expect(persisted.projectId).toBe(project.id);
+    expect(persisted.projectName).toBe("persist-test");
+  });
+
+  test("getLoopState loads from disk when not in memory", async () => {
+    // Write a state file directly to disk
+    const projectId = "fake-project-123";
+    const projectDir = join(tempDir, "projects", projectId);
+    await mkdir(projectDir, { recursive: true });
+
+    const fakeState: LoopState = {
+      projectId,
+      projectName: "fake-project",
+      phase: "paused",
+      currentIteration: 3,
+      maxIterations: 10,
+      pauseEvery: 3,
+      startedAt: "2026-04-12T00:00:00Z",
+      iterations: [],
+      consecutiveStalled: 0,
+      pauseReason: "cadence",
+      retryJudge: true,
+    };
+    const { writeFile: wf } = await import("fs/promises");
+    await wf(join(projectDir, "loop-state.json"), JSON.stringify(fakeState), "utf-8");
+
+    // getLoopState should find it on disk
+    const loaded = await getLoopState(projectId);
+    expect(loaded).not.toBeUndefined();
+    expect(loaded!.phase).toBe("paused");
+    expect(loaded!.currentIteration).toBe(3);
+    expect(loaded!.pauseReason).toBe("cadence");
+    expect(loaded!.retryJudge).toBe(true);
   });
 });

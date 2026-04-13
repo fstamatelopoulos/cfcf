@@ -9,8 +9,9 @@
  */
 
 import { join } from "path";
-import { writeFile, readFile } from "fs/promises";
+import { writeFile, readFile, access, mkdir } from "fs/promises";
 import type { ProjectConfig, DevSignals, JudgeSignals } from "./types.js";
+import { getProjectDir } from "./projects.js";
 import {
   writeContextToRepo,
   generateInstructionContent,
@@ -91,12 +92,68 @@ export interface LoopIterationRecord {
   merged: boolean;
 }
 
-// --- In-memory store ---
+// --- State Store (in-memory + disk persistence) ---
 
 const loopStore = new Map<string, LoopState>();
 
-export function getLoopState(projectId: string): LoopState | undefined {
-  return loopStore.get(projectId);
+const LOOP_STATE_FILENAME = "loop-state.json";
+
+/**
+ * Get the path to the loop state file for a project.
+ */
+function getLoopStatePath(projectId: string): string {
+  return join(getProjectDir(projectId), LOOP_STATE_FILENAME);
+}
+
+/**
+ * Persist loop state to disk. Called on every phase transition.
+ */
+async function persistLoopState(state: LoopState): Promise<void> {
+  const dir = getProjectDir(state.projectId);
+  await mkdir(dir, { recursive: true });
+  const path = getLoopStatePath(state.projectId);
+  await writeFile(path, JSON.stringify(state, null, 2) + "\n", "utf-8");
+}
+
+/**
+ * Load loop state from disk. Returns null if no persisted state exists.
+ */
+async function loadLoopState(projectId: string): Promise<LoopState | null> {
+  try {
+    const path = getLoopStatePath(projectId);
+    const raw = await readFile(path, "utf-8");
+    return JSON.parse(raw) as LoopState;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update loop state in memory and persist to disk.
+ * Use this for all state mutations to keep memory and disk in sync.
+ */
+async function saveLoopState(state: LoopState): Promise<void> {
+  loopStore.set(state.projectId, state);
+  await persistLoopState(state);
+}
+
+/**
+ * Get the loop state for a project.
+ * Checks in-memory cache first, then falls back to disk.
+ */
+export async function getLoopState(projectId: string): Promise<LoopState | undefined> {
+  // Check in-memory first
+  const cached = loopStore.get(projectId);
+  if (cached) return cached;
+
+  // Fall back to disk
+  const persisted = await loadLoopState(projectId);
+  if (persisted) {
+    loopStore.set(projectId, persisted);
+    return persisted;
+  }
+
+  return undefined;
 }
 
 // --- Decision Engine ---
@@ -220,11 +277,9 @@ export async function startLoop(
   project: ProjectConfig,
   opts?: { problemPackPath?: string },
 ): Promise<LoopState> {
-  if (loopStore.has(project.id)) {
-    const existing = loopStore.get(project.id)!;
-    if (existing.phase !== "completed" && existing.phase !== "failed" && existing.phase !== "stopped") {
-      throw new Error(`Loop already active for project ${project.name} (phase: ${existing.phase})`);
-    }
+  const existing = await getLoopState(project.id);
+  if (existing && existing.phase !== "completed" && existing.phase !== "failed" && existing.phase !== "stopped") {
+    throw new Error(`Loop already active for project ${project.name} (phase: ${existing.phase})`);
   }
 
   const state: LoopState = {
@@ -239,16 +294,17 @@ export async function startLoop(
     consecutiveStalled: 0,
   };
 
-  loopStore.set(project.id, state);
+  await saveLoopState(state);
 
   // Update project status
   await updateProject(project.id, { status: "running" });
 
   // Run loop in background
-  runLoop(project, state, opts).catch((err) => {
+  runLoop(project, state, opts).catch(async (err) => {
     state.phase = "failed";
     state.error = err instanceof Error ? err.message : String(err);
     state.completedAt = new Date().toISOString();
+    await saveLoopState(state);
     updateProject(project.id, { status: "failed" }).catch(() => {});
   });
 
@@ -262,7 +318,7 @@ export async function resumeLoop(
   projectId: string,
   feedback?: string,
 ): Promise<LoopState> {
-  const state = loopStore.get(projectId);
+  const state = await getLoopState(projectId);
   if (!state) {
     throw new Error("No active loop for this project");
   }
@@ -281,13 +337,15 @@ export async function resumeLoop(
     throw new Error("Project not found");
   }
 
+  await saveLoopState(state);
   await updateProject(projectId, { status: "running" });
 
   // Resume loop in background
-  runLoop(project, state).catch((err) => {
+  runLoop(project, state).catch(async (err) => {
     state.phase = "failed";
     state.error = err instanceof Error ? err.message : String(err);
     state.completedAt = new Date().toISOString();
+    await saveLoopState(state);
     updateProject(projectId, { status: "failed" }).catch(() => {});
   });
 
@@ -298,7 +356,7 @@ export async function resumeLoop(
  * Stop a running or paused loop.
  */
 export async function stopLoop(projectId: string): Promise<LoopState> {
-  const state = loopStore.get(projectId);
+  const state = await getLoopState(projectId);
   if (!state) {
     throw new Error("No active loop for this project");
   }
@@ -309,6 +367,7 @@ export async function stopLoop(projectId: string): Promise<LoopState> {
   state.phase = "stopped";
   state.outcome = "stopped";
   state.completedAt = new Date().toISOString();
+  await saveLoopState(state);
   await updateProject(projectId, { status: "stopped" });
 
   return state;
@@ -376,6 +435,7 @@ async function runLoop(
 
     // --- PREPARE ---
     state.phase = "preparing";
+    await saveLoopState(state);
 
     // Validate problem pack BEFORE switching branches
     const packValidation = await validateProblemPack(packPath);
@@ -481,6 +541,7 @@ async function runLoop(
     // --- DEV EXECUTE ---
     if (isStopped(state)) break;
     state.phase = "dev_executing";
+    await saveLoopState(state);
 
     const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
     const devCmd = devAdapter.buildCommand(project.repoPath, devPrompt, project.devAgent.model);
@@ -541,6 +602,7 @@ async function runJudgeAndDecide(
 ): Promise<void> {
   state.phase = "judging";
   state.currentIteration = iterationNum;
+  await saveLoopState(state);
 
   // Prepare judge files
   await writeJudgeInstructions(project.repoPath, project, iterationNum);
@@ -591,6 +653,7 @@ async function runJudgeAndDecide(
 
   // --- DECIDE ---
   state.phase = "deciding";
+  await saveLoopState(state);
 
   // Update consecutive stalled count
   if (judgeSignals?.determination === "STALLED") {
@@ -631,6 +694,7 @@ async function runJudgeAndDecide(
                       decision.pauseReason === "max_iterations" ? "max_iterations" :
                       "failure";
       state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
       await updateProject(project.id, { status: "completed" });
 
       // Push to remote on success
@@ -651,10 +715,12 @@ async function runJudgeAndDecide(
       if (!judgeSignals && iterRecord.devExitCode === 0) {
         state.retryJudge = true;
       }
+      await saveLoopState(state);
       await updateProject(project.id, { status: "paused" });
       return; // Loop exits -- will be restarted by resumeLoop()
 
     case "continue":
+      await saveLoopState(state);
       // Caller continues to next iteration
       return;
   }
