@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { get } from "../client.js";
 import { configExists, readConfig } from "@cfcf/core";
+import { formatAgent } from "../format.js";
 
 interface LoopStatusResponse {
   projectId: string;
@@ -47,9 +48,9 @@ export function registerStatusCommand(program: Command): void {
       const config = await readConfig();
       if (config) {
         console.log("Configuration:");
-        console.log(`  Dev agent:       ${config.devAgent.adapter}${config.devAgent.model ? ` (${config.devAgent.model})` : ""}`);
-        console.log(`  Judge agent:     ${config.judgeAgent.adapter}${config.judgeAgent.model ? ` (${config.judgeAgent.model})` : ""}`);
-        console.log(`  Architect agent: ${config.architectAgent.adapter}${config.architectAgent.model ? ` (${config.architectAgent.model})` : ""}`);
+        console.log(`  Dev agent:       ${formatAgent(config.devAgent)}`);
+        console.log(`  Judge agent:     ${formatAgent(config.judgeAgent)}`);
+        console.log(`  Architect agent: ${formatAgent(config.architectAgent)}`);
         console.log(`  Max iterations:  ${config.maxIterations}`);
         console.log(`  Pause every:     ${config.pauseEvery === 0 ? "never" : `${config.pauseEvery} iterations`}`);
         console.log();
