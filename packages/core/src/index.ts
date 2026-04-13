@@ -13,3 +13,4 @@ export * from "./log-storage.js";
 export * from "./pid-file.js";
 export * from "./problem-pack.js";
 export * from "./context-assembler.js";
+export * from "./judge-runner.js";
