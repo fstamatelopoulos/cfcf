@@ -219,10 +219,11 @@ describe("buildJudgeCommand", () => {
     const cmd = buildJudgeCommand(makeProject({ judgeAgent: { adapter: "codex" } }));
     expect(cmd).not.toBeNull();
     expect(cmd!.command).toBe("codex");
-    expect(cmd!.args).toContain("exec");
+    // Global flags before subcommand
+    expect(cmd!.args[0]).toBe("-a");
+    expect(cmd!.args[1]).toBe("never");
+    expect(cmd!.args[2]).toBe("exec");
     expect(cmd!.args).toContain("--full-auto");
-    expect(cmd!.args).toContain("-a");
-    expect(cmd!.args).toContain("never");
   });
 
   test("builds command with model parameter", () => {
