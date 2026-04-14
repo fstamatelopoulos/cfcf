@@ -7,6 +7,7 @@
 
 import type { Command } from "commander";
 import { isServerReachable, post, get } from "../client.js";
+import { formatElapsed } from "../format.js";
 
 interface ReviewStartResponse {
   projectId: string;
@@ -70,9 +71,10 @@ export function registerReviewCommand(program: Command): void {
       console.log(`Log file: ${start.logFile}`);
       console.log();
 
-      // Poll for status
+      // Poll for status with elapsed time
       const projectParam = encodeURIComponent(opts.project);
       let lastStatus = "";
+      let statusStartTime = Date.now();
 
       while (true) {
         const statusRes = await get<ReviewStatusResponse>(
@@ -88,10 +90,12 @@ export function registerReviewCommand(program: Command): void {
 
         if (s.status !== lastStatus) {
           if (lastStatus) process.stdout.write("\n");
-          process.stdout.write(`Status: ${s.status}`);
+          process.stdout.write(`${s.status}`);
           lastStatus = s.status;
+          statusStartTime = Date.now();
         } else {
-          process.stdout.write(".");
+          const elapsed = Math.floor((Date.now() - statusStartTime) / 1000);
+          process.stdout.write(`\r${s.status} ${formatElapsed(elapsed)}`);
         }
 
         if (s.status === "completed" || s.status === "failed") {
