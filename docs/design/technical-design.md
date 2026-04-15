@@ -164,6 +164,7 @@ interface ProjectConfig {
   devAgent: AgentConfig;           // Dev agent configuration
   judgeAgent: AgentConfig;         // Judge agent configuration
   architectAgent: AgentConfig;     // Solution Architect (pre-iteration review)
+  documenterAgent: AgentConfig;    // Documenter (post-SUCCESS documentation)
   maxIterations: number;           // Hard cap on iterations per project
   currentIteration: number;        // Current iteration number (monotonically increasing, starts at 0)
   pauseEvery: number;              // 0 = no pauses, N = pause every N iterations
@@ -177,10 +178,11 @@ interface AgentConfig {
   flags?: string[];                // Additional CLI flags
 }
 
-// Three agent roles, each independently configurable:
-// - devAgent: writes code, runs tests (e.g., claude-code with sonnet)
-// - judgeAgent: reviews iterations (e.g., codex)
+// Four agent roles, each independently configurable:
+// - devAgent: writes code, runs tests (e.g., codex)
+// - judgeAgent: reviews iterations (e.g., claude-code)
 // - architectAgent: reviews Problem Pack pre-iteration (e.g., claude-code with opus)
+// - documenterAgent: produces final polished docs post-SUCCESS (e.g., claude-code)
 ```
 
 ### 4.3 Process Manager
@@ -451,6 +453,7 @@ On first execution (detected by absence of config file), cfcf runs an interactiv
    - Dev agent and model (from detected available agents)
    - Judge agent and model (encouraged to be different from dev agent)
    - Solution Architect agent and model (recommended: use a frontier model like opus)
+   - Documenter agent and model (recommended: strong writing model)
    - Default max iterations
    - Default pause cadence
 4. **Permission acknowledgment**: cfcf explains that agents will run with `--dangerously-skip-permissions` (or equivalent) for unattended operation. Lists the default guardrails (working directory scoping, read-only file enforcement, git branch isolation). User must acknowledge.

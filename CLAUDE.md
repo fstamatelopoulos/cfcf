@@ -14,7 +14,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
-- **Three agent roles**: dev agent (writes code), judge (reviews iterations), solution architect (reviews Problem Pack)
+- **Four agent roles**: dev agent (writes code), judge (reviews iterations), architect (reviews Problem Pack), documenter (produces final docs)
 - **Async execution**: iterate endpoint returns 202, CLI polls for status
 
 ## Key Design Principles

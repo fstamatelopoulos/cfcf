@@ -202,8 +202,6 @@ The signal file is primarily useful for future web UI integration (showing readi
 - **Iterative.** The user can run the review multiple times as they refine the Problem Pack. Each run overwrites the previous assessment.
 - **Persistent.** The `architect-review.md` persists in the repo and is available to dev agents and the judge as additional context in subsequent iterations.
 
-> **Note:** This feature is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring Problem Pack quality.
-
 ---
 
 ## 5. The Iteration Process

@@ -25,8 +25,9 @@ cfcf init
 What it does:
 1. Scans for installed agents (Claude Code, Codex CLI) and reports what it finds
 2. Verifies git is available
-3. Asks you to choose a default dev agent and judge agent
-4. Asks for default iteration limits (max iterations, pause cadence)
+3. Asks you to choose agents for all four roles (dev, judge, architect, documenter)
+4. Asks for model selection per role (optional)
+5. Asks for default iteration limits (max iterations, pause cadence)
 5. Explains the permission flags agents will run with (`--dangerously-skip-permissions` for Claude Code, `-a never -s danger-full-access` for Codex)
 6. Saves everything to the config file
 

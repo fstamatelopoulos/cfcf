@@ -48,7 +48,7 @@ Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop.
 - `ProjectConfig` now includes `architectAgent`, `documenterAgent`, `status` fields
 - `AgentAdapter.buildCommand()` accepts optional `model` parameter
 - Log storage supports architect role alongside dev and judge
-- Codex adapter updated to use `codex -a never exec --full-auto` (headless exec mode)
+- Codex adapter updated to use `codex -a never exec -s danger-full-access` (headless exec mode, full access)
 
 ### Fixed
 - Codex adapter: updated CLI flags for current Codex CLI (was using removed `--approval-mode` flag)

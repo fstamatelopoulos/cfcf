@@ -259,10 +259,10 @@ Each iteration re-reads all context. Strategies to manage this:
   - Review persists in repo as context for dev agents
   - Advisory only -- does not block `cfcf run`. User decides when to proceed
 - [ ] Model selection per role:
-  - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect)
+  - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect, documenter)
   - Agent adapters accept model parameter and pass to CLI (e.g., `claude --model opus`)
   - Project config stores model per role
-  - Three roles: dev agent, judge agent, solution architect
+  - Four roles: dev agent, judge agent, solution architect, documenter
 - [ ] Monitoring and control:
   - `cfcf status --project <name>`: current iteration state + loop progress
   - `cfcf resume --project <name>`: continue after pause (with optional feedback)
