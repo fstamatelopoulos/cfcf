@@ -25,7 +25,7 @@ In-memory loop state is lost on server restart. This includes `bun --watch` rest
 
 ### 2026-04-12 -- Codex CLI flag ordering matters: global flags before subcommand
 
-Codex CLI requires global flags (like `-a never`) BEFORE the subcommand (`exec`). The command must be `codex -a never exec --full-auto "prompt"`, NOT `codex exec --full-auto -a never "prompt"`. The old `--approval-mode full-auto` flag was also removed in recent Codex versions. Discovered during first real judge run -- the judge silently failed with exit code 2.
+Codex CLI requires global flags (like `-a never`) BEFORE the subcommand (`exec`). The command must be `codex -a never exec -s danger-full-access "prompt"`, NOT `codex exec -s danger-full-access -a never "prompt"`. The old `--approval-mode full-auto` flag was also removed in recent Codex versions. We use `-s danger-full-access` (not `--full-auto`) to give the agent full filesystem and network access, equivalent to Claude Code's `--dangerously-skip-permissions`. Discovered during first real judge run -- the judge silently failed with exit code 2.
 
 ### 2026-04-12 -- Branch creation must handle stale branches from failed runs
 
