@@ -121,5 +121,11 @@ function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (!config.judgeAgent?.adapter) {
     throw new Error("Invalid config: missing 'judgeAgent.adapter'");
   }
+  if (!config.architectAgent?.adapter) {
+    throw new Error("Invalid config: missing 'architectAgent.adapter'");
+  }
+  if (!config.documenterAgent?.adapter) {
+    throw new Error("Invalid config: missing 'documenterAgent.adapter'");
+  }
   return config;
 }
