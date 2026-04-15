@@ -33,14 +33,19 @@ Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop.
 - Templates: judge instructions, judge signal file, architect instructions, architect signal file
 - Auto-merge to main on PROGRESS/SUCCESS (configurable: auto vs PR-based)
 - Push to remote on success
+- **Documenter role**: runs automatically post-SUCCESS to produce polished final documentation
+  - `cfcf document --project <name>` for on-demand documentation generation
+  - Produces: `docs/architecture.md`, `docs/api-reference.md`, `docs/setup-guide.md`, `docs/README.md`
+  - Server endpoints: `POST .../document`, `GET .../document/status`
+- **Three-layer documentation strategy**: Architect creates doc stubs → Dev agent maintains them each iteration → Documenter polishes post-SUCCESS
 - **Loop state persistence**: loop state saved to disk on every phase transition, survives server restarts
 - Elapsed time counter in CLI polling (replaces dots)
-- 168 tests (323 assertions) -- 48 new tests covering decision engine, judge runner, architect runner, API endpoints, persistence
+- 172 tests (335 assertions) -- 52 new tests covering all new components
 
 ### Changed
 - `cfcf run --project <name>` now starts the full iteration loop (dark factory mode) by default
 - Manual mode preserved with `cfcf run --project <name> -- <cmd>`
-- `ProjectConfig` now includes `architectAgent`, `status` fields
+- `ProjectConfig` now includes `architectAgent`, `documenterAgent`, `status` fields
 - `AgentAdapter.buildCommand()` accepts optional `model` parameter
 - Log storage supports architect role alongside dev and judge
 - Codex adapter updated to use `codex -a never exec --full-auto` (headless exec mode)

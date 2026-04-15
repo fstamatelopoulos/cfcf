@@ -70,6 +70,7 @@ export function registerProjectCommands(program: Command): void {
       console.log(`  Dev:        ${formatAgent(p.devAgent)}`);
       console.log(`  Judge:      ${formatAgent(p.judgeAgent)}`);
       console.log(`  Architect:  ${formatAgent(p.architectAgent)}`);
+      console.log(`  Documenter: ${formatAgent(p.documenterAgent)}`);
       console.log(`  Max iters:  ${p.maxIterations}`);
       console.log();
       console.log("Next steps:");
@@ -105,7 +106,7 @@ export function registerProjectCommands(program: Command): void {
       for (const p of projects) {
         console.log(`  ${p.name} (${p.id})`);
         console.log(`    Repo:  ${p.repoPath}`);
-        console.log(`    Dev: ${formatAgent(p.devAgent)}  Judge: ${formatAgent(p.judgeAgent)}  Architect: ${formatAgent(p.architectAgent)}`);
+        console.log(`    Dev: ${formatAgent(p.devAgent)}  Judge: ${formatAgent(p.judgeAgent)}  Architect: ${formatAgent(p.architectAgent)}  Documenter: ${formatAgent(p.documenterAgent)}`);
         console.log();
       }
     });
@@ -133,6 +134,7 @@ export function registerProjectCommands(program: Command): void {
       console.log(`  Dev agent:      ${formatAgent(p.devAgent)}`);
       console.log(`  Judge agent:    ${formatAgent(p.judgeAgent)}`);
       console.log(`  Architect:      ${formatAgent(p.architectAgent)}`);
+      console.log(`  Documenter:     ${formatAgent(p.documenterAgent)}`);
       console.log(`  Max iterations: ${p.maxIterations}`);
       console.log(`  Pause every:    ${p.pauseEvery === 0 ? "never" : `${p.pauseEvery} iterations`}`);
       console.log(`  On stalled:     ${p.onStalled}`);

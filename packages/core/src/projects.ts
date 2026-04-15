@@ -49,6 +49,7 @@ export async function createProject(opts: {
   devAgent?: { adapter: string; model?: string };
   judgeAgent?: { adapter: string; model?: string };
   architectAgent?: { adapter: string; model?: string };
+  documenterAgent?: { adapter: string; model?: string };
   maxIterations?: number;
   pauseEvery?: number;
 }): Promise<ProjectConfig> {
@@ -64,6 +65,7 @@ export async function createProject(opts: {
     devAgent: opts.devAgent ?? globalConfig?.devAgent ?? { adapter: "claude-code" },
     judgeAgent: opts.judgeAgent ?? globalConfig?.judgeAgent ?? { adapter: "codex" },
     architectAgent: opts.architectAgent ?? globalConfig?.architectAgent ?? { adapter: "claude-code" },
+    documenterAgent: opts.documenterAgent ?? globalConfig?.documenterAgent ?? { adapter: "claude-code" },
     maxIterations: opts.maxIterations ?? globalConfig?.maxIterations ?? DEFAULT_MAX_ITERATIONS,
     pauseEvery: opts.pauseEvery ?? globalConfig?.pauseEvery ?? DEFAULT_PAUSE_EVERY,
     onStalled: "alert",

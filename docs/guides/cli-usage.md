@@ -293,6 +293,22 @@ cfcf resume --project my-project --feedback "Focus on error handling in the API 
 
 The optional `--feedback` text is injected into the next iteration's context as user direction.
 
+### `cfcf document`
+
+Run the Documenter agent to produce polished final project documentation. This runs automatically when the loop completes with SUCCESS, but you can also invoke it manually at any time.
+
+```bash
+cfcf document --project my-project
+```
+
+The documenter reads the entire codebase and produces:
+- `docs/architecture.md` — system architecture overview
+- `docs/api-reference.md` — API documentation (if applicable)
+- `docs/setup-guide.md` — setup and usage guide
+- `docs/README.md` — project overview and quick start
+
+Re-run anytime to regenerate documentation after changes.
+
 ### `cfcf stop`
 
 Stop a running or paused iteration loop.
@@ -375,6 +391,7 @@ cfcf review --project my-app                       # Re-review after refinements
 # Start the dark factory loop
 cfcf run --project my-app
 # cfcf runs: dev agent → judge → decide → repeat
+# On SUCCESS: documenter runs automatically to produce final docs
 # On pause: review and provide feedback
 cfcf resume --project my-app --feedback "Focus on X"
 

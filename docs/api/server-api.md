@@ -345,6 +345,45 @@ Get the status of an architect review.
 
 ---
 
+## Documenter
+
+### POST /api/projects/:id/document
+
+Run the Documenter agent to produce polished final project documentation. User-invoked, repeatable. Also runs automatically post-SUCCESS in the iteration loop.
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "status": "preparing",
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-000-documenter.log",
+  "message": "Documenter started. Poll GET /api/projects/:id/document/status for progress."
+}
+```
+
+---
+
+### GET /api/projects/:id/document/status
+
+Get the status of a documenter run.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "status": "completed",
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "completedAt": "2026-04-12T05:17:30.000Z",
+  "exitCode": 0,
+  "logFile": "..."
+}
+```
+
+---
+
 ## Iteration Loop (Dark Factory)
 
 ### POST /api/projects/:id/loop/start

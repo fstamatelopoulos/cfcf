@@ -52,6 +52,8 @@ export interface CfcfGlobalConfig {
   judgeAgent: AgentConfig;
   /** Default solution architect agent configuration */
   architectAgent: AgentConfig;
+  /** Default documenter agent configuration */
+  documenterAgent: AgentConfig;
   /** Default max iterations */
   maxIterations: number;
   /** Default pause cadence (0 = no pauses) */
@@ -72,6 +74,7 @@ export interface ProjectConfig {
   devAgent: AgentConfig;
   judgeAgent: AgentConfig;
   architectAgent: AgentConfig;
+  documenterAgent: AgentConfig;
   maxIterations: number;
   pauseEvery: number;
   onStalled: "continue" | "stop" | "alert";

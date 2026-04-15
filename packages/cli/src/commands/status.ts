@@ -51,6 +51,7 @@ export function registerStatusCommand(program: Command): void {
         console.log(`  Dev agent:       ${formatAgent(config.devAgent)}`);
         console.log(`  Judge agent:     ${formatAgent(config.judgeAgent)}`);
         console.log(`  Architect agent: ${formatAgent(config.architectAgent)}`);
+        console.log(`  Documenter:      ${formatAgent(config.documenterAgent)}`);
         console.log(`  Max iterations:  ${config.maxIterations}`);
         console.log(`  Pause every:     ${config.pauseEvery === 0 ? "never" : `${config.pauseEvery} iterations`}`);
         console.log();

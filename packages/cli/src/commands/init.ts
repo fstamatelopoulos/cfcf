@@ -104,10 +104,11 @@ export function registerInitCommand(program: Command): void {
 
       console.log(`Available agents: ${available.join(", ")}`);
       console.log();
-      console.log("Three agent roles (each independently configurable):");
+      console.log("Four agent roles (each independently configurable):");
       console.log("  - Dev agent: writes code, runs tests");
       console.log("  - Judge agent: reviews iterations (encouraged to differ from dev)");
       console.log("  - Architect agent: reviews Problem Pack, creates plan outline");
+      console.log("  - Documenter agent: produces final polished documentation");
       console.log();
 
       if (available.length > 1) {
@@ -134,11 +135,20 @@ export function registerInitCommand(program: Command): void {
         if (available.includes(architectChoice)) {
           config.architectAgent.adapter = architectChoice;
         }
+
+        const documenterChoice = await prompt(
+          "Documenter agent",
+          config.documenterAgent.adapter,
+        );
+        if (available.includes(documenterChoice)) {
+          config.documenterAgent.adapter = documenterChoice;
+        }
       } else {
         console.log(`Using ${available[0]} for all roles.`);
         config.devAgent.adapter = available[0];
         config.judgeAgent.adapter = available[0];
         config.architectAgent.adapter = available[0];
+        config.documenterAgent.adapter = available[0];
       }
 
       // Model selection per role
@@ -155,6 +165,9 @@ export function registerInitCommand(program: Command): void {
 
       const architectModel = await prompt("Architect agent model", "");
       if (architectModel) config.architectAgent.model = architectModel;
+
+      const documenterModel = await prompt("Documenter agent model", "");
+      if (documenterModel) config.documenterAgent.model = documenterModel;
 
       console.log();
 
@@ -177,7 +190,7 @@ export function registerInitCommand(program: Command): void {
       console.log("cfcf runs AI agents in unattended mode. This requires:");
       console.log();
 
-      for (const agentName of new Set([config.devAgent.adapter, config.judgeAgent.adapter, config.architectAgent.adapter])) {
+      for (const agentName of new Set([config.devAgent.adapter, config.judgeAgent.adapter, config.architectAgent.adapter, config.documenterAgent.adapter])) {
         const adapter = detectionResults.find((r) => r.name === agentName);
         if (adapter) {
           // Get flags from the adapter registry
