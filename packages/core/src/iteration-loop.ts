@@ -35,6 +35,7 @@ import { spawnProcess } from "./process-manager.js";
 import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
+import { runDocumentSync } from "./documenter-runner.js";
 
 // --- Loop State Types ---
 
@@ -697,8 +698,21 @@ async function runJudgeAndDecide(
       await saveLoopState(state);
       await updateProject(project.id, { status: "completed" });
 
-      // Push to remote on success
+      // On success: run documenter, commit docs, then push
       if (state.outcome === "success") {
+        // Run the documenter agent to produce final polished documentation
+        try {
+          const docResult = await runDocumentSync(project);
+          if (await gitManager.hasChanges(project.repoPath)) {
+            await gitManager.commitAll(
+              project.repoPath,
+              `cfcf documentation (${project.documenterAgent.adapter})`,
+            );
+          }
+        } catch {
+          // Documenter failure is not fatal -- the code is done
+        }
+
         await gitManager.push(project.repoPath).catch(() => {
           // Push failure is not fatal
         });

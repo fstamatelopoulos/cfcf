@@ -271,6 +271,13 @@ Each iteration re-reads all context. Strategies to manage this:
   - Write loop state to project config dir on every phase transition
   - On server start / resume, reload active/paused loops from disk
   - `cfcf resume` works after server restart, watch-mode reload, or crash
+- [ ] Documenter role (post-SUCCESS documentation polish):
+  - New agent role: Documenter (configurable agent + model)
+  - Runs automatically after judge says SUCCESS (before loop exits), or on demand via `cfcf document --project <name>`
+  - Reads the final codebase, iteration history, and existing doc stubs
+  - Produces polished final versions of: `docs/architecture.md`, `docs/api-reference.md`, `docs/setup-guide.md`
+  - Configurable: `documenterAgent` in project config
+  - Server endpoint: `POST /api/projects/:id/document`, `GET .../document/status`
 
 **This is the MVP.** After this iteration, cfcf can validate a problem definition via the Solution Architect, run a dev agent at it iteratively with a separate judge providing feedback, and converge toward a solution with human oversight.
 
@@ -297,14 +304,6 @@ Each iteration re-reads all context. Strategies to manage this:
   - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
-- [ ] Documenter role (post-SUCCESS documentation polish):
-  - New agent role: Documenter (configurable agent + model)
-  - Runs automatically after judge says SUCCESS (before loop exits), or on demand via `cfcf document --project <name>`
-  - Reads the final codebase, iteration history, plan, and existing doc stubs
-  - Produces polished final versions of: `docs/architecture.md`, `docs/api-reference.md`, `docs/setup-guide.md`
-  - Optional: generate `docs/README.md` as a comprehensive project overview
-  - Configurable: `documenterAgent` in project config, or `generateDocs: true` flag
-  - Can be re-run after manual refinements
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Research: Sandbox / guardrails for unattended agent execution
@@ -411,7 +410,8 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-12 | Solution Architect produces initial plan outline | Forces architect to identify gaps/ambiguities. Dev agents read and expand the plan rather than starting from scratch. Better unattended loop quality |
 | 2026-04-12 | `cfcf log` and `cfcf push` deferred to iteration 4 | CLI convenience commands. Not critical for MVP. `git push` works manually. Log viewer more useful with web UI |
 | 2026-04-12 | Feature branch naming: `iteration-N/<description>` | Matches existing convention from iterations 1-2. Recorded in CLAUDE.md |
-| 2026-04-12 | Three-layer documentation strategy: Architect → Dev → Documenter | Architect creates doc stubs (architecture.md, api-reference.md, setup-guide.md). Dev agent maintains them every iteration. Documenter (iteration 4) polishes post-SUCCESS. Docs live in project `docs/`, not `cfcf-docs/` |
+| 2026-04-12 | Three-layer documentation strategy: Architect → Dev → Documenter | Architect creates doc stubs (architecture.md, api-reference.md, setup-guide.md). Dev agent maintains them every iteration. Documenter polishes post-SUCCESS. Docs live in project `docs/`, not `cfcf-docs/` |
+| 2026-04-12 | Four agent roles: dev, judge, architect, documenter | Each independently configurable (agent + model). Documenter moved from iteration 4 to iteration 3 |
 
 ---
 

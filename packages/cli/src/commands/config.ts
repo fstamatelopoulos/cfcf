@@ -31,6 +31,7 @@ export function registerConfigCommands(program: Command): void {
       console.log(`Dev agent:       ${formatAgent(cfg.devAgent)}`);
       console.log(`Judge agent:     ${formatAgent(cfg.judgeAgent)}`);
       console.log(`Architect agent: ${formatAgent(cfg.architectAgent)}`);
+      console.log(`Documenter:      ${formatAgent(cfg.documenterAgent)}`);
       console.log(`Max iterations:  ${cfg.maxIterations}`);
       console.log(`Pause every:     ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
       console.log(`Permissions:     ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);

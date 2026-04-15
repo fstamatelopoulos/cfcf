@@ -22,7 +22,7 @@ export function getProjectLogDir(projectId: string): string {
 export function getIterationLogPath(
   projectId: string,
   iteration: number,
-  role: "dev" | "judge" | "architect",
+  role: "dev" | "judge" | "architect" | "documenter",
 ): string {
   const iterStr = String(iteration).padStart(3, "0");
   return join(getProjectLogDir(projectId), `iteration-${iterStr}-${role}.log`);
@@ -43,7 +43,7 @@ export async function ensureProjectLogDir(projectId: string): Promise<string> {
 export async function readLog(
   projectId: string,
   iteration: number,
-  role: "dev" | "judge" | "architect",
+  role: "dev" | "judge" | "architect" | "documenter",
 ): Promise<string | null> {
   try {
     const path = getIterationLogPath(projectId, iteration, role);

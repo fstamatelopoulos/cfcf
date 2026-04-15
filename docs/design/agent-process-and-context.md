@@ -146,6 +146,8 @@ cfcf-docs/
 | docs/architecture.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | System architecture, components, data flow |
 | docs/api-reference.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration (if API exists) | Endpoints, models, errors |
 | docs/setup-guide.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | Prerequisites, install, run, config |
+| docs/README.md | Documenter | User | Post-SUCCESS | Project overview, quick start |
+| cfcf-documenter-instructions.md | cf² | Documenter | Post-SUCCESS | cf² generates |
 
 ---
 

@@ -32,6 +32,8 @@ import {
   getLoopState,
   startReview,
   getReviewState,
+  startDocument,
+  getDocumentState,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -87,6 +89,7 @@ export function createApp() {
       devAgent?: { adapter: string; model?: string };
       judgeAgent?: { adapter: string; model?: string };
       architectAgent?: { adapter: string; model?: string };
+      documenterAgent?: { adapter: string; model?: string };
       maxIterations?: number;
       pauseEvery?: number;
     }>();
@@ -317,6 +320,46 @@ export function createApp() {
     const state = getReviewState(project.id);
     if (!state) {
       return c.json({ error: "No review found for this project" }, 404);
+    }
+
+    return c.json(state);
+  });
+
+  // --- Documenter ---
+
+  app.post("/api/projects/:id/document", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const state = await startDocument(project);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Documenter started. Poll GET /api/projects/:id/document/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/document/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = getDocumentState(project.id);
+    if (!state) {
+      return c.json({ error: "No documenter run found for this project" }, 404);
     }
 
     return c.json(state);

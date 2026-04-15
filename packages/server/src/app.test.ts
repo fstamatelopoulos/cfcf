@@ -236,6 +236,31 @@ describe("server API", () => {
     });
   });
 
+  // --- Document API ---
+
+  describe("POST /api/projects/:id/document", () => {
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/api/projects/nonexistent/document", {
+        method: "POST",
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/projects/:id/document/status", () => {
+    it("returns 404 when no documenter run active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "doc-status-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/document/status`);
+      expect(res.status).toBe(404);
+    });
+  });
+
   // --- Loop API ---
 
   describe("POST /api/projects/:id/loop/start", () => {

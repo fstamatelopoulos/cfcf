@@ -55,6 +55,7 @@ packages/
     context-assembler.ts # Generate CLAUDE.md + cfcf-docs/, parse handoff/signals
     judge-runner.ts      # Judge agent: spawn, parse signals/assessment, archive
     architect-runner.ts  # Solution Architect: spawn, parse signals/review
+    documenter-runner.ts # Documenter: spawn post-SUCCESS, produce final docs
     iteration-loop.ts    # Main iteration loop controller + decision engine
     adapters/            # Agent adapter implementations (claude-code, codex)
     templates/           # cfcf-docs/ file templates (process.md, handoff, signals, etc.)
@@ -73,6 +74,7 @@ packages/
       review.ts          # Solution Architect review (cfcf review)
       resume.ts          # Resume a paused loop (cfcf resume)
       stop.ts            # Stop a running loop (cfcf stop)
+      document.ts        # Generate final docs (cfcf document)
       status.ts          # Status overview with loop state
 problem-packs/           # Example Problem Pack definitions
 docs/                    # Design docs, API reference, guides
@@ -92,7 +94,7 @@ docs/                    # Design docs, API reference, guides
 - Adapter names are kebab-case: `claude-code`, `codex`
 - All decisions logged in `docs/plan.md` decision log and `docs/decisions-log.md`
 - Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-3/loop-judge-architect`)
-- Three agent roles: dev, judge, architect -- each independently configurable (agent + model)
+- Four agent roles: dev, judge, architect, documenter -- each independently configurable (agent + model)
 
 ## What NOT to Do
 

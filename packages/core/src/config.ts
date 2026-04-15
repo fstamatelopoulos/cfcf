@@ -89,11 +89,18 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
       ? "claude-code"
       : devAdapter;
 
+  // Documenter agent: prefer claude-code (strong writing ability)
+  const documenterAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : devAdapter;
+
   return {
     version: CONFIG_VERSION,
     devAgent: { adapter: devAdapter },
     judgeAgent: { adapter: judgeAdapter },
     architectAgent: { adapter: architectAdapter },
+    documenterAgent: { adapter: documenterAdapter },
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
