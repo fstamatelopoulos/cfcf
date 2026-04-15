@@ -182,7 +182,8 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("2. Append to cfcf-docs/decision-log.md");
   lines.push("3. Fill in cfcf-docs/iteration-handoff.md");
   lines.push("4. Fill in cfcf-docs/cfcf-iteration-signals.json with structured data");
-  lines.push("5. Commit your work frequently with meaningful messages");
+  lines.push("5. Update project docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
+  lines.push("6. Commit your work frequently with meaningful messages");
   lines.push("");
   lines.push("See cfcf-docs/process.md for the full process definition.");
 
