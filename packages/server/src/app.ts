@@ -263,20 +263,84 @@ export function createApp() {
         return;
       }
 
-      // Fall back to reading from log file (for completed iterations)
+      // Fall back to reading from log file (works for both completed and in-progress iterations)
       const logFile = getIterationLogPath(project.id, iterationNum, "dev");
+
+      // Check if this iteration is part of an active loop
+      const loopState = await getLoopState(project.id);
+      const isLiveIteration = loopState &&
+        loopState.currentIteration === iterationNum &&
+        ["preparing", "dev_executing", "judging", "deciding"].includes(loopState.phase);
+
+      let lastSize = 0;
+      let retries = 0;
+
       try {
-        const content = await Bun.file(logFile).text();
-        const lines = content.split("\n");
-        for (const line of lines) {
-          if (line.length > 0) {
-            await stream.writeSSE({ event: "log", data: line });
+        while (true) {
+          const file = Bun.file(logFile);
+          const exists = await file.exists();
+
+          if (exists) {
+            const content = await file.text();
+            if (content.length > lastSize) {
+              const newContent = content.slice(lastSize);
+              const lines = newContent.split("\n");
+              for (const line of lines) {
+                if (line.length > 0) {
+                  await stream.writeSSE({ event: "log", data: line });
+                }
+              }
+              lastSize = content.length;
+              retries = 0;
+            }
+          }
+
+          // If not a live iteration, we're done after reading once
+          if (!isLiveIteration) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // For live iterations, check if the loop moved past this iteration
+          const currentLoop = await getLoopState(project.id);
+          const stillLive = currentLoop &&
+            currentLoop.currentIteration === iterationNum &&
+            ["preparing", "dev_executing", "judging", "deciding"].includes(currentLoop.phase);
+
+          if (!stillLive) {
+            // Read any final content
+            if (exists) {
+              const finalContent = await Bun.file(logFile).text();
+              if (finalContent.length > lastSize) {
+                const remaining = finalContent.slice(lastSize).split("\n");
+                for (const line of remaining) {
+                  if (line.length > 0) {
+                    await stream.writeSSE({ event: "log", data: line });
+                  }
+                }
+              }
+            }
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // Wait and poll again
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          retries++;
+          if (retries > 600) { // 10 minute timeout
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Stream timeout" }),
+            });
+            return;
           }
         }
-        await stream.writeSSE({
-          event: "done",
-          data: JSON.stringify({ message: "Log stream complete" }),
-        });
       } catch {
         await stream.writeSSE({
           event: "error",
