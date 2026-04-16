@@ -34,6 +34,7 @@ export type LoopPhase =
   | "dev_executing"
   | "judging"
   | "deciding"
+  | "documenting"
   | "paused"
   | "completed"
   | "failed"

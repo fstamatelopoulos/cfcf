@@ -5,6 +5,7 @@ const phases: { key: LoopPhase; label: string }[] = [
   { key: "dev_executing", label: "Dev" },
   { key: "judging", label: "Judge" },
   { key: "deciding", label: "Decide" },
+  { key: "documenting", label: "Document" },
 ];
 
 export function PhaseIndicator({
