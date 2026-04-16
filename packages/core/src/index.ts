@@ -17,3 +17,4 @@ export * from "./judge-runner.js";
 export * from "./iteration-loop.js";
 export * from "./architect-runner.js";
 export * from "./documenter-runner.js";
+export * from "./project-history.js";

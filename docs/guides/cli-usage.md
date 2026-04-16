@@ -343,6 +343,8 @@ cfcf config dir/
   projects/
     my-project-a1b2c3/
       config.json           # Project-specific config
+      loop-state.json       # Current loop run state (phase, iterations, etc.)
+      history.json          # Persistent history of all agent runs (reviews, iterations, documents)
 ```
 
 ### Log storage:
@@ -353,9 +355,14 @@ Agent output logs are stored separately (they can be large):
 ~/.cfcf/
   logs/
     my-project-a1b2c3/
-      iteration-001-dev.log
-      iteration-001-judge.log
+      iteration-001-dev.log       # Dev agent log per iteration
+      iteration-001-judge.log     # Judge agent log per iteration
+      architect-001.log           # Nth architect review
+      documenter-001.log          # Nth documenter run
 ```
+
+Each architect/documenter invocation gets its own sequence-numbered log
+so re-running preserves history.
 
 Override with `CFCF_LOGS_DIR` environment variable.
 

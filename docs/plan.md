@@ -308,6 +308,14 @@ Each iteration re-reads all context. Strategies to manage this:
   - Preserves iteration boundaries in git history
   - Makes `git log --graph` show the iteration structure visually
   - One-line change in `git-manager.ts` merge()
+- [x] Project history + unified log streaming:
+  - Persistent `history.json` per project tracking every agent invocation (review, iteration, document)
+  - Sequence-numbered log files for architect/documenter (architect-001.log, architect-002.log, etc.) so re-runs preserve history
+  - Server: `GET /api/projects/:id/history` returns all events; new `GET /api/projects/:id/logs/:filename` streams any log file
+  - Web: History tab shows unified timeline (reviews + iterations + documents) with log link per entry
+  - Web: clicking Review/Start Loop/Document auto-switches to Logs tab and streams that agent's log
+  - LogViewer state lifted to ProjectDetail so streaming persists across tab switches
+  - Simplify LoopControls: removed separate status polling; log stream IS the feedback
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Research: Sandbox / guardrails for unattended agent execution

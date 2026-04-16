@@ -503,6 +503,10 @@ cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very larg
       iteration-001-judge.log    # Full judge agent stdout/stderr
       iteration-002-dev.log
       ...
+      architect-001.log          # Nth architect review run
+      architect-002.log
+      documenter-001.log         # Nth documenter run
+      documenter-002.log
 ```
 
 ### 8.3 No External Persistent Memory (for now)

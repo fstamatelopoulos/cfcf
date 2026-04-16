@@ -545,6 +545,67 @@
   text-align: center;
 }
 
+.project-history__table {
+  font-size: 0.875rem;
+}
+
+.project-history__table th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.project-history__table td {
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.project-history__row:hover {
+  background: var(--color-surface-alt);
+}
+
+.project-history__time {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.project-history__agent {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.project-history__merged {
+  color: var(--color-success);
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+}
+
+.project-history__actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.project-history__empty {
+  color: var(--color-text-muted);
+  padding: 2rem;
+  text-align: center;
+}
+
+.project-history__error-row td {
+  padding-top: 0 !important;
+}
+
+.project-history__error {
+  color: var(--color-error);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
 .iteration-history__note {
   margin-top: 1rem;
   padding: 0.75rem 1rem;
