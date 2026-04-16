@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# Cleanup ALL cfcf test state.
+# Cleanup cfcf TEST projects only.
 #
-# This removes:
-#   - Test repos at /tmp/cfcf-calc, /tmp/cfcf-tracker (and legacy /tmp/cfcf-test-repo, /tmp/cfcf-task-tracker, /tmp/cfcf-web-test)
-#   - All cfcf projects (via the server API if it's running, or direct file removal as fallback)
-#   - cfcf project configs and loop state (~/Library/Application Support/cfcf/projects/)
-#   - cfcf agent logs (~/.cfcf/logs/)
+# Deletes:
+#   - Test repos under /tmp/cfcf-* (only paths matching this pattern)
+#   - Projects whose repoPath is under /tmp/cfcf-* (from cfcf config)
+#   - Logs for those specific projects
 #
-# This does NOT touch:
+# PRESERVES:
 #   - Your cfcf dev repo (~/src/cfcf)
-#   - The global cfcf config file (agents, models, etc.) at ~/Library/Application Support/cfcf/config.json
+#   - All OTHER cfcf projects (including ones with repoPath elsewhere)
+#   - Global cfcf config (agents, models)
+#   - Logs for projects that aren't being deleted
 #
 # If the cfcf server is running, projects are deleted via DELETE /api/projects/:id
-# so the server can clean up in-memory state. Falls back to direct file removal if
-# the server is not reachable.
+# so the server can clean up in-memory state. Falls back to direct file removal.
 #
 # Prompts for confirmation before deleting anything.
 #
@@ -38,35 +38,77 @@ fi
 
 PROJECTS_DIR="${CONFIG_DIR}/projects"
 LOGS_DIR="${HOME}/.cfcf/logs"
+PORT="${CFCF_PORT:-7233}"
 
-# Test repo locations (current + legacy)
-REPOS=(
-  "/tmp/cfcf-calc"
-  "/tmp/cfcf-tracker"
-  "/tmp/cfcf-test-repo"
-  "/tmp/cfcf-task-tracker"
-  "/tmp/cfcf-web-test"
-)
+# Test repo prefix -- only repos/projects matching this pattern are touched
+TEST_REPO_PREFIX="/tmp/cfcf-"
+
+# --- Discovery ---
 
 echo "cfcf test cleanup"
 echo "================="
 echo ""
-echo "This will delete the following (if they exist):"
+echo "Scope: only projects whose repoPath starts with '${TEST_REPO_PREFIX}'"
 echo ""
-for r in "${REPOS[@]}"; do
+
+# Find test repos on disk
+TEST_REPOS=()
+for r in "${TEST_REPO_PREFIX}"*; do
   if [[ -d "${r}" ]]; then
-    echo "  [repo]    ${r}"
+    TEST_REPOS+=("${r}")
   fi
 done
-if [[ -d "${PROJECTS_DIR}" ]] && [[ -n "$(ls -A "${PROJECTS_DIR}" 2>/dev/null)" ]]; then
-  echo "  [configs] ${PROJECTS_DIR}/*"
+
+# Find test projects in cfcf config (those with repoPath under /tmp/cfcf-*)
+TEST_PROJECT_IDS=()
+TEST_PROJECT_NAMES=()
+if [[ -d "${PROJECTS_DIR}" ]]; then
+  for pdir in "${PROJECTS_DIR}"/*/; do
+    [[ -d "${pdir}" ]] || continue
+    config_file="${pdir}config.json"
+    [[ -f "${config_file}" ]] || continue
+    # Extract repoPath (naive but adequate for our JSON shape)
+    repo_path=$(grep -oE '"repoPath":[[:space:]]*"[^"]*"' "${config_file}" | sed 's/.*"repoPath":[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    proj_id=$(basename "${pdir%/}")
+    proj_name=$(grep -oE '"name":[[:space:]]*"[^"]*"' "${config_file}" | head -1 | sed 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    if [[ "${repo_path}" == ${TEST_REPO_PREFIX}* ]]; then
+      TEST_PROJECT_IDS+=("${proj_id}")
+      TEST_PROJECT_NAMES+=("${proj_name}")
+    fi
+  done
 fi
-if [[ -d "${LOGS_DIR}" ]] && [[ -n "$(ls -A "${LOGS_DIR}" 2>/dev/null)" ]]; then
-  echo "  [logs]    ${LOGS_DIR}/*"
+
+# --- Report ---
+
+if [[ ${#TEST_REPOS[@]} -eq 0 && ${#TEST_PROJECT_IDS[@]} -eq 0 ]]; then
+  echo "Nothing to clean up -- no test repos or projects found."
+  exit 0
 fi
+
+echo "Will delete the following:"
 echo ""
+if [[ ${#TEST_REPOS[@]} -gt 0 ]]; then
+  echo "Test repos:"
+  for r in "${TEST_REPOS[@]}"; do
+    echo "  [repo] ${r}"
+  done
+  echo ""
+fi
+if [[ ${#TEST_PROJECT_IDS[@]} -gt 0 ]]; then
+  echo "cfcf projects:"
+  for i in "${!TEST_PROJECT_IDS[@]}"; do
+    echo "  [project] ${TEST_PROJECT_NAMES[$i]} (${TEST_PROJECT_IDS[$i]})"
+    if [[ -d "${LOGS_DIR}/${TEST_PROJECT_IDS[$i]}" ]]; then
+      echo "  [logs]    ${LOGS_DIR}/${TEST_PROJECT_IDS[$i]}"
+    fi
+  done
+  echo ""
+fi
+
 echo "Will PRESERVE:"
-echo "  ${CONFIG_DIR}/config.json (global cfcf config)"
+echo "  - Global cfcf config (${CONFIG_DIR}/config.json)"
+echo "  - Any projects whose repoPath is NOT under ${TEST_REPO_PREFIX}"
+echo "  - Logs for preserved projects"
 echo ""
 
 if [[ "${FORCE}" == "false" ]]; then
@@ -77,60 +119,42 @@ if [[ "${FORCE}" == "false" ]]; then
   fi
 fi
 
+# --- Cleanup ---
+
 echo ""
 echo "Cleaning up..."
 
-# Try to delete projects via the CLI first (lets the server clean up
-# in-memory state, run any future teardown logic, etc.). Falls back to
-# direct file removal if the server is not reachable.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
+# Check if server is up
 server_up=false
-if curl -s -f -o /dev/null --max-time 2 "http://localhost:${CFCF_PORT:-7233}/api/health" 2>/dev/null; then
+if curl -s -f -o /dev/null --max-time 2 "http://localhost:${PORT}/api/health" 2>/dev/null; then
   server_up=true
 fi
 
-if [[ "${server_up}" == "true" ]] && command -v bun >/dev/null 2>&1; then
-  echo "  Server is running -- deleting projects via CLI..."
-  # List project names and delete each (the CLI's project delete prompts,
-  # so we use the API directly via curl for non-interactive cleanup)
-  projects_json=$(curl -s "http://localhost:${CFCF_PORT:-7233}/api/projects" 2>/dev/null || echo "[]")
-  project_ids=$(echo "${projects_json}" | grep -oE '"id":"[^"]+"' | sed 's/"id":"\([^"]*\)"/\1/g' || true)
+# Delete projects (via API if available, then file fallback)
+for i in "${!TEST_PROJECT_IDS[@]}"; do
+  pid="${TEST_PROJECT_IDS[$i]}"
+  pname="${TEST_PROJECT_NAMES[$i]}"
+  if [[ "${server_up}" == "true" ]]; then
+    curl -s -X DELETE "http://localhost:${PORT}/api/projects/${pid}" >/dev/null 2>&1 || true
+  fi
+  # Safety net: direct removal of the project config dir
+  rm -rf "${PROJECTS_DIR}/${pid}"
+  echo "  Deleted project: ${pname} (${pid})"
 
-  for id in ${project_ids}; do
-    curl -s -X DELETE "http://localhost:${CFCF_PORT:-7233}/api/projects/${id}" >/dev/null 2>&1 || true
-    echo "    Deleted project ${id}"
-  done
-else
-  echo "  Server not running -- falling back to direct file removal"
-fi
-
-# Delete test repos
-for r in "${REPOS[@]}"; do
-  if [[ -d "${r}" ]]; then
-    rm -rf "${r}"
-    echo "  Removed ${r}"
+  # Delete this project's logs
+  if [[ -d "${LOGS_DIR}/${pid}" ]]; then
+    rm -rf "${LOGS_DIR}/${pid}"
+    echo "    Removed logs for ${pid}"
   fi
 done
 
-# Delete any remaining project configs/state (safety net in case the CLI/API
-# didn't get them, or server wasn't running)
-if [[ -d "${PROJECTS_DIR}" ]]; then
-  rm -rf "${PROJECTS_DIR}"
-  mkdir -p "${PROJECTS_DIR}"
-  echo "  Cleared ${PROJECTS_DIR}"
-fi
-
-# Delete logs
-if [[ -d "${LOGS_DIR}" ]]; then
-  rm -rf "${LOGS_DIR}"
-  mkdir -p "${LOGS_DIR}"
-  echo "  Cleared ${LOGS_DIR}"
-fi
+# Delete test repos
+for r in "${TEST_REPOS[@]}"; do
+  rm -rf "${r}"
+  echo "  Removed repo: ${r}"
+done
 
 echo ""
 echo "Done."
 echo ""
-echo "The global cfcf config (agents, models) at ${CONFIG_DIR}/config.json"
-echo "was preserved. If you want to reset that too, run 'cfcf init --force'."
+echo "Preserved global config at ${CONFIG_DIR}/config.json"
