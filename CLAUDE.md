@@ -14,7 +14,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
-- **Three agent roles**: dev agent (writes code), judge (reviews iterations), solution architect (reviews Problem Pack)
+- **Four agent roles**: dev agent (writes code), judge (reviews iterations), architect (reviews Problem Pack), documenter (produces final docs)
 - **Async execution**: iterate endpoint returns 202, CLI polls for status
 
 ## Key Design Principles
@@ -53,12 +53,16 @@ packages/
     pid-file.ts          # Server PID file management
     problem-pack.ts      # Read/validate Problem Pack directories
     context-assembler.ts # Generate CLAUDE.md + cfcf-docs/, parse handoff/signals
+    judge-runner.ts      # Judge agent: spawn, parse signals/assessment, archive
+    architect-runner.ts  # Solution Architect: spawn, parse signals/review
+    documenter-runner.ts # Documenter: spawn post-SUCCESS, produce final docs
+    iteration-loop.ts    # Main iteration loop controller + decision engine
     adapters/            # Agent adapter implementations (claude-code, codex)
     templates/           # cfcf-docs/ file templates (process.md, handoff, signals, etc.)
   server/src/
     app.ts               # Route definitions (testable without binding to port)
     start.ts             # Server lifecycle (start/stop, PID file)
-    iteration-runner.ts  # Async iteration execution (background agent runs)
+    iteration-runner.ts  # Single iteration execution (manual mode, backwards compat)
   cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
@@ -66,8 +70,12 @@ packages/
       server.ts          # Server start/stop/status
       project.ts         # Project init/list/show/delete
       config.ts          # Global config show/edit
-      run.ts             # Execute iterations (agent mode + manual mode)
-      status.ts          # Quick status overview
+      run.ts             # Start iteration loop (agent) or single iteration (manual)
+      review.ts          # Solution Architect review (cfcf review)
+      resume.ts          # Resume a paused loop (cfcf resume)
+      stop.ts            # Stop a running loop (cfcf stop)
+      document.ts        # Generate final docs (cfcf document)
+      status.ts          # Status overview with loop state
 problem-packs/           # Example Problem Pack definitions
 docs/                    # Design docs, API reference, guides
 ```
@@ -85,6 +93,8 @@ docs/                    # Design docs, API reference, guides
 - Config env overrides: `CFCF_PORT`, `CFCF_CONFIG_DIR`, `CFCF_LOGS_DIR`
 - Adapter names are kebab-case: `claude-code`, `codex`
 - All decisions logged in `docs/plan.md` decision log and `docs/decisions-log.md`
+- Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-3/loop-judge-architect`)
+- Four agent roles: dev, judge, architect, documenter -- each independently configurable (agent + model)
 
 ## What NOT to Do
 

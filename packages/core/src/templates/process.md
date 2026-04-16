@@ -28,6 +28,14 @@ Each iteration is a single, uninterrupted execution. You read context, formulate
 - **cfcf-docs/iteration-handoff.md** -- Fill in the handoff template (see below)
 - **cfcf-docs/cfcf-iteration-signals.json** -- Fill in the structured signal file
 
+### Project documentation you MUST maintain:
+
+The following docs live in the project's `docs/` directory. If they exist (created by the Solution Architect or a previous iteration), update them to reflect your changes. If they don't exist, create them.
+
+- **docs/architecture.md** -- System architecture: components, data flow, tech stack, directory structure. Update when you add new components, change the architecture, or make significant structural decisions.
+- **docs/api-reference.md** -- API endpoints, request/response formats, data models, error handling. Update when you add or modify API endpoints. Skip if the project has no API.
+- **docs/setup-guide.md** -- Prerequisites, installation steps, how to run/test/build. Update when you add dependencies, change build steps, or modify configuration.
+
 ### Files you must NOT modify:
 
 - cfcf-docs/process.md (this file)

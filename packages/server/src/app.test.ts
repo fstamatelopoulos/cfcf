@@ -236,6 +236,113 @@ describe("server API", () => {
     });
   });
 
+  // --- Document API ---
+
+  describe("POST /api/projects/:id/document", () => {
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/api/projects/nonexistent/document", {
+        method: "POST",
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/projects/:id/document/status", () => {
+    it("returns 404 when no documenter run active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "doc-status-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/document/status`);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // --- Loop API ---
+
+  describe("POST /api/projects/:id/loop/start", () => {
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/api/projects/nonexistent/loop/start", {
+        method: "POST",
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/projects/:id/loop/status", () => {
+    it("returns 404 when no loop active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "loop-status-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/loop/status`);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /api/projects/:id/loop/stop", () => {
+    it("returns 400 when no loop active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "loop-stop-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/loop/stop`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /api/projects/:id/loop/resume", () => {
+    it("returns 400 when no loop active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "loop-resume-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/loop/resume`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // --- Review API ---
+
+  describe("POST /api/projects/:id/review", () => {
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/api/projects/nonexistent/review", {
+        method: "POST",
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/projects/:id/review/status", () => {
+    it("returns 404 when no review active", async () => {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "review-status-test", repoPath: repoDir }),
+      });
+      const project = await createRes.json();
+
+      const res = await app.request(`/api/projects/${project.id}/review/status`);
+      expect(res.status).toBe(404);
+    });
+  });
+
   // --- Shutdown ---
 
   describe("POST /api/shutdown", () => {

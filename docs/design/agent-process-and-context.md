@@ -143,6 +143,11 @@ cfcf-docs/
 | iteration-reviews/*.md | cf² (archived) | Dev agent, User | After each iteration | History of all judge assessments |
 | architect-review.md | Solution Architect | Dev agent, Judge, User | Pre-iteration (`cfcf review`) | Persists across iterations |
 | cfcf-architect-signals.json | Solution Architect | cf² | Pre-iteration | Readiness gate |
+| docs/architecture.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | System architecture, components, data flow |
+| docs/api-reference.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration (if API exists) | Endpoints, models, errors |
+| docs/setup-guide.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | Prerequisites, install, run, config |
+| docs/README.md | Documenter | User | Post-SUCCESS | Project overview, quick start |
+| cfcf-documenter-instructions.md | cf² | Documenter | Post-SUCCESS | cf² generates |
 
 ---
 
@@ -196,8 +201,6 @@ The signal file is primarily useful for future web UI integration (showing readi
 - **User-invoked, not cf²-invoked.** cf² never invokes the architect automatically. The user runs `cfcf review` when they want feedback.
 - **Iterative.** The user can run the review multiple times as they refine the Problem Pack. Each run overwrites the previous assessment.
 - **Persistent.** The `architect-review.md` persists in the repo and is available to dev agents and the judge as additional context in subsequent iterations.
-
-> **Note:** This feature is planned for iteration 3 of cf² development. Currently, the user is responsible for ensuring Problem Pack quality.
 
 ---
 

@@ -26,7 +26,7 @@ export interface AgentAdapter {
   unattendedFlags(): string[];
 
   /** Build the command + args to run the agent non-interactively */
-  buildCommand(workspacePath: string, prompt: string): { command: string; args: string[] };
+  buildCommand(workspacePath: string, prompt: string, model?: string): { command: string; args: string[] };
 
   /** The filename this agent uses for its instruction file (e.g., "CLAUDE.md") */
   instructionFilename: string;
@@ -50,6 +50,10 @@ export interface CfcfGlobalConfig {
   devAgent: AgentConfig;
   /** Default judge agent configuration */
   judgeAgent: AgentConfig;
+  /** Default solution architect agent configuration */
+  architectAgent: AgentConfig;
+  /** Default documenter agent configuration */
+  documenterAgent: AgentConfig;
   /** Default max iterations */
   maxIterations: number;
   /** Default pause cadence (0 = no pauses) */
@@ -60,6 +64,8 @@ export interface CfcfGlobalConfig {
   permissionsAcknowledged: boolean;
 }
 
+export type ProjectStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
+
 export interface ProjectConfig {
   id: string;
   name: string;
@@ -67,6 +73,8 @@ export interface ProjectConfig {
   repoUrl?: string;
   devAgent: AgentConfig;
   judgeAgent: AgentConfig;
+  architectAgent: AgentConfig;
+  documenterAgent: AgentConfig;
   maxIterations: number;
   pauseEvery: number;
   onStalled: "continue" | "stop" | "alert";
@@ -74,6 +82,8 @@ export interface ProjectConfig {
   processTemplate: string;
   /** Monotonically increasing iteration counter for this project */
   currentIteration: number;
+  /** Current project status in the iteration loop */
+  status?: ProjectStatus;
 }
 
 // --- Server Communication ---
@@ -119,6 +129,14 @@ export interface JudgeSignals {
   should_continue: boolean;
   user_input_needed: boolean;
   key_concern?: string;
+}
+
+export interface ArchitectSignals {
+  readiness: "READY" | "NEEDS_REFINEMENT" | "BLOCKED";
+  gaps: string[];
+  suggestions: string[];
+  risks: string[];
+  recommended_approach?: string;
 }
 
 export interface IterationRecord {

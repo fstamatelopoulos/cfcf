@@ -192,8 +192,8 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] `packages/adapters/codex`: Codex CLI adapter
   - `checkAvailability()`: verify Codex is installed and authenticated
   - `generateInstructionFile()`: generates equivalent instruction file for Codex
-  - `buildCommand()`: builds the `codex --approval-mode full-auto -q "..."` command
-  - `unattendedFlags()`: returns `["--approval-mode", "full-auto"]`
+  - `buildCommand()`: builds the `codex -a never exec -s danger-full-access "..."` command
+  - `unattendedFlags()`: returns `["-a", "never", "exec", "-s", "danger-full-access"]`
 - [ ] cfcf-docs/ file templates (see `design/agent-process-and-context.md` for full spec):
   - process.md (process definition)
   - Handoff document template
@@ -255,19 +255,29 @@ Each iteration re-reads all context. Strategies to manage this:
   - Server endpoint: `POST /api/projects/:id/review`
   - Produces `architect-review.md` (readiness assessment, gaps, suggestions, risks)
   - Produces `cfcf-architect-signals.json` (READY / NEEDS_REFINEMENT / BLOCKED)
+  - **Produces initial `plan.md` outline** for dev agents to build on -- forces the architect to identify gaps and ambiguities that the user should address before the unattended loop starts
   - Review persists in repo as context for dev agents
   - Advisory only -- does not block `cfcf run`. User decides when to proceed
 - [ ] Model selection per role:
-  - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect)
+  - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect, documenter)
   - Agent adapters accept model parameter and pass to CLI (e.g., `claude --model opus`)
   - Project config stores model per role
-  - Three roles: dev agent, judge agent, solution architect
+  - Four roles: dev agent, judge agent, solution architect, documenter
 - [ ] Monitoring and control:
-  - `cfcf status --project <name>`: current iteration state + progress
-  - `cfcf log <project-name>`: iteration history
-  - `cfcf resume --project <name>`: continue after pause
+  - `cfcf status --project <name>`: current iteration state + loop progress
+  - `cfcf resume --project <name>`: continue after pause (with optional feedback)
   - `cfcf stop --project <name>`: stop the iteration loop
-  - `cfcf push <project-name>`: push cfcf branch to remote on demand
+- [ ] Persist loop state to disk (recover after server restart)
+  - Write loop state to project config dir on every phase transition
+  - On server start / resume, reload active/paused loops from disk
+  - `cfcf resume` works after server restart, watch-mode reload, or crash
+- [ ] Documenter role (post-SUCCESS documentation polish):
+  - New agent role: Documenter (configurable agent + model)
+  - Runs automatically after judge says SUCCESS (before loop exits), or on demand via `cfcf document --project <name>`
+  - Reads the final codebase, iteration history, and existing doc stubs
+  - Produces polished final versions of: `docs/architecture.md`, `docs/api-reference.md`, `docs/setup-guide.md`
+  - Configurable: `documenterAgent` in project config
+  - Server endpoint: `POST /api/projects/:id/document`, `GET .../document/status`
 
 **This is the MVP.** After this iteration, cfcf can validate a problem definition via the Solution Architect, run a dev agent at it iteratively with a separate judge providing feedback, and converge toward a solution with human oversight.
 
@@ -294,6 +304,14 @@ Each iteration re-reads all context. Strategies to manage this:
   - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
+- [ ] `cfcf log <project-name>`: iteration history viewer
+- [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
+- [ ] Research: Sandbox / guardrails for unattended agent execution
+  - Review Anthropic's sandbox concept (https://code.claude.com/docs/en/security)
+  - Evaluate applicability to cfcf's dark factory loop (agents run with `--dangerously-skip-permissions`)
+  - Original plan was container isolation but dropped due to auth complexity
+  - Goal: find guardrails that add security without extreme complexity or loss of flexibility
+  - Consider: filesystem scoping, network restrictions, process sandboxing, permission allow-lists
 - [ ] Token/cost tracking: best-effort measurement per iteration, per role
 - [ ] Notification hooks: extensible system (terminal, webhook placeholder)
 - [ ] `cfcf prepare` dry-run command: show assembled context without launching
@@ -321,6 +339,16 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] Process definition template versioning
   - Track which process template version was used
   - Ship default template, support user customization
+- [ ] Embed templates into binary (true single-file distribution)
+  - Import .md and .json templates as string constants at build time
+  - Binary works without external template files on disk
+  - Prerequisite for the installer
+- [ ] Installer script: `curl -fsSL https://cerefox.org/install | bash`
+  - Detects platform (darwin-arm64, darwin-x64, linux-x64)
+  - Downloads binary from GitHub Releases
+  - Installs to /usr/local/bin/ or ~/.local/bin/
+  - Verifies checksum
+  - Single binary = single download, no template files to manage
 
 ---
 
@@ -389,6 +417,11 @@ Each iteration re-reads all context. Strategies to manage this:
 | 2026-04-12 | Three agent roles: dev, judge, solution architect | Each independently configurable (agent + model). Encouraged to use different agents for cross-review |
 | 2026-04-12 | Model selection per role (planned for iteration 3) | AgentConfig already has `model` field. Init/config/adapters need to use it. Critical for role differentiation (e.g., opus for architect, sonnet for dev) |
 | 2026-04-12 | Automated iteration loop with user-on-the-loop | User launches once, cf² takes over. User only involved at configured pause cadence or when agents/judge request input. Dark factory model |
+| 2026-04-12 | Solution Architect produces initial plan outline | Forces architect to identify gaps/ambiguities. Dev agents read and expand the plan rather than starting from scratch. Better unattended loop quality |
+| 2026-04-12 | `cfcf log` and `cfcf push` deferred to iteration 4 | CLI convenience commands. Not critical for MVP. `git push` works manually. Log viewer more useful with web UI |
+| 2026-04-12 | Feature branch naming: `iteration-N/<description>` | Matches existing convention from iterations 1-2. Recorded in CLAUDE.md |
+| 2026-04-12 | Three-layer documentation strategy: Architect → Dev → Documenter | Architect creates doc stubs (architecture.md, api-reference.md, setup-guide.md). Dev agent maintains them every iteration. Documenter polishes post-SUCCESS. Docs live in project `docs/`, not `cfcf-docs/` |
+| 2026-04-12 | Four agent roles: dev, judge, architect, documenter | Each independently configurable (agent + model). Documenter moved from iteration 4 to iteration 3 |
 
 ---
 

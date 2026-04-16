@@ -291,6 +291,203 @@ SSE stream of log events for a completed iteration.
 
 ---
 
+## Solution Architect Review
+
+### POST /api/projects/:id/review
+
+Start a Solution Architect review of the Problem Pack. User-invoked, advisory, repeatable. The architect reviews the problem definition, identifies gaps, and produces an initial plan outline.
+
+**Request body (optional):**
+
+```json
+{
+  "problemPackPath": "/path/to/custom/problem-pack"
+}
+```
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "status": "preparing",
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-000-architect.log",
+  "message": "Architect review started. Poll GET /api/projects/:id/review/status for progress."
+}
+```
+
+---
+
+### GET /api/projects/:id/review/status
+
+Get the status of an architect review.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "status": "completed",
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "completedAt": "2026-04-12T05:17:30.000Z",
+  "exitCode": 0,
+  "logFile": "...",
+  "signals": {
+    "readiness": "READY",
+    "gaps": ["Missing error handling spec"],
+    "suggestions": ["Add rate limiting"],
+    "risks": ["External API dependency"],
+    "recommended_approach": "Use Express with Zod validation"
+  }
+}
+```
+
+---
+
+## Documenter
+
+### POST /api/projects/:id/document
+
+Run the Documenter agent to produce polished final project documentation. User-invoked, repeatable. Also runs automatically post-SUCCESS in the iteration loop.
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "status": "preparing",
+  "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-000-documenter.log",
+  "message": "Documenter started. Poll GET /api/projects/:id/document/status for progress."
+}
+```
+
+---
+
+### GET /api/projects/:id/document/status
+
+Get the status of a documenter run.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "status": "completed",
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "completedAt": "2026-04-12T05:17:30.000Z",
+  "exitCode": 0,
+  "logFile": "..."
+}
+```
+
+---
+
+## Iteration Loop (Dark Factory)
+
+### POST /api/projects/:id/loop/start
+
+Start the full iteration loop: dev → judge → decide → repeat.
+
+**Request body (optional):**
+
+```json
+{
+  "problemPackPath": "/path/to/custom/problem-pack"
+}
+```
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "phase": "idle",
+  "maxIterations": 10,
+  "pauseEvery": 3,
+  "message": "Iteration loop started. Poll GET /api/projects/:id/loop/status for progress."
+}
+```
+
+---
+
+### GET /api/projects/:id/loop/status
+
+Get the full loop state including iteration history.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "projectName": "my-web-app",
+  "phase": "dev_executing",
+  "currentIteration": 3,
+  "maxIterations": 10,
+  "pauseEvery": 3,
+  "startedAt": "2026-04-12T05:16:00.000Z",
+  "consecutiveStalled": 0,
+  "iterations": [
+    {
+      "number": 1,
+      "branch": "cfcf/iteration-1",
+      "devExitCode": 0,
+      "judgeSignals": { "determination": "PROGRESS", "quality_score": 7 },
+      "merged": true
+    }
+  ]
+}
+```
+
+| Phase | Description |
+|-------|-------------|
+| `idle` | Loop initialized, not yet running |
+| `preparing` | Assembling context for next iteration |
+| `dev_executing` | Dev agent is running |
+| `judging` | Judge agent is running |
+| `deciding` | Evaluating judge signals |
+| `paused` | Waiting for user input or review |
+| `completed` | Loop finished (success, failure, or max iterations) |
+| `failed` | Loop encountered an error |
+| `stopped` | Loop halted by user |
+
+---
+
+### POST /api/projects/:id/loop/resume
+
+Resume a paused loop with optional user feedback.
+
+**Request body (optional):**
+
+```json
+{
+  "feedback": "Focus on error handling in the API layer"
+}
+```
+
+**Response:** `202 Accepted`
+
+---
+
+### POST /api/projects/:id/loop/stop
+
+Stop a running or paused loop.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "my-web-app-a1b2c3",
+  "phase": "stopped",
+  "currentIteration": 3,
+  "outcome": "stopped",
+  "message": "Loop stopped."
+}
+```
+
+---
+
 ## Server Lifecycle
 
 ### POST /api/shutdown
@@ -298,58 +495,6 @@ SSE stream of log events for a completed iteration.
 Gracefully shut down the server.
 
 **Response:** `200 OK` -- `{ "status": "shutting down" }`
-
----
-
-## Future Endpoints
-
-The following endpoints are planned for upcoming iterations. They are documented here as placeholders to show the API direction.
-
-### Projects (Iteration 2+)
-
-```
-POST   /api/projects                           # Create/register a project
-GET    /api/projects                           # List all projects
-GET    /api/projects/:id                       # Get project details
-PUT    /api/projects/:id/config                # Update project config
-```
-
-### Iteration Lifecycle (Iteration 3+)
-
-```
-POST   /api/projects/:id/iterate               # Execute the next iteration
-POST   /api/projects/:id/pause                 # Pause iteration loop
-POST   /api/projects/:id/resume                # Resume (with optional feedback)
-POST   /api/projects/:id/stop                  # Stop iterating
-```
-
-### Real-time Events (Iteration 3+)
-
-```
-GET    /api/projects/:id/events                # SSE stream for real-time updates
-```
-
-**Event types:**
-
-| Event | Description |
-|-------|-------------|
-| `iteration.started` | New iteration began |
-| `iteration.log` | Log line from agent (dev or judge) |
-| `iteration.dev_completed` | Dev agent finished |
-| `iteration.judge_completed` | Judge agent finished with determination |
-| `project.paused` | Project paused (cadence, anomaly, or user input needed) |
-| `project.completed` | Project finished (success, failure, or stopped) |
-| `alert` | User notification |
-
-### Iteration Details (Iteration 3+)
-
-```
-GET    /api/projects/:id/iterations            # List iterations
-GET    /api/projects/:id/iterations/:n          # Iteration details
-GET    /api/projects/:id/iterations/:n/logs     # Full agent logs
-GET    /api/projects/:id/iterations/:n/diff     # Git diff
-GET    /api/projects/:id/iterations/:n/judge    # Judge assessment
-```
 
 ---
 
