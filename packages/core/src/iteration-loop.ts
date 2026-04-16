@@ -45,6 +45,7 @@ export type LoopPhase =
   | "dev_executing"
   | "judging"
   | "deciding"
+  | "documenting"
   | "paused"
   | "completed"
   | "failed"
@@ -690,19 +691,19 @@ async function runJudgeAndDecide(
 
   switch (decision.action) {
     case "stop":
-      state.phase = "completed";
-      state.outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
+      // Determine the final outcome
+      const outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
                       decision.pauseReason === "max_iterations" ? "max_iterations" :
                       "failure";
-      state.completedAt = new Date().toISOString();
-      await saveLoopState(state);
-      await updateProject(project.id, { status: "completed" });
 
-      // On success: run documenter, commit docs, then push
-      if (state.outcome === "success") {
-        // Run the documenter agent to produce final polished documentation
+      // On success: run documenter BEFORE marking loop as completed
+      // so the UI knows the documenter is still producing output.
+      if (outcome === "success") {
+        state.phase = "documenting";
+        await saveLoopState(state);
+
         try {
-          const docResult = await runDocumentSync(project);
+          await runDocumentSync(project);
           if (await gitManager.hasChanges(project.repoPath)) {
             await gitManager.commitAll(
               project.repoPath,
@@ -712,7 +713,16 @@ async function runJudgeAndDecide(
         } catch {
           // Documenter failure is not fatal -- the code is done
         }
+      }
 
+      state.phase = "completed";
+      state.outcome = outcome;
+      state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
+      await updateProject(project.id, { status: "completed" });
+
+      // Push to remote on success
+      if (outcome === "success") {
         await gitManager.push(project.repoPath).catch(() => {
           // Push failure is not fatal
         });

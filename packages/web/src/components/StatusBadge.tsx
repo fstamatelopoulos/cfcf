@@ -9,6 +9,7 @@ const statusColors: Record<string, string> = {
   dev_executing: "var(--color-info)",
   judging: "var(--color-info)",
   deciding: "var(--color-info)",
+  documenting: "var(--color-info)",
   paused: "var(--color-warning)",
   completed: "var(--color-success)",
   failed: "var(--color-error)",
@@ -17,6 +18,7 @@ const statusColors: Record<string, string> = {
 
 const statusLabels: Record<string, string> = {
   dev_executing: "dev running",
+  documenting: "documenting",
   user_input_needed: "needs input",
 };
 

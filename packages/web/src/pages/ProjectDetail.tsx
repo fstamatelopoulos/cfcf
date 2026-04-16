@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { usePolling } from "../hooks/usePolling";
 import { fetchProject, fetchLoopStatus } from "../api";
 import { navigateTo } from "../hooks/useRoute";
@@ -34,25 +34,37 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     [projectId],
   );
 
-  // Determine if the loop is active (needs polling) or idle (fetch once)
-  const isLoopActive = project?.status === "running" || project?.status === "paused";
+  // We use a two-stage approach:
+  // - First, always do an initial fetch to learn the current phase
+  // - Then, poll only while the loop is in an active phase
+  // This avoids unnecessary polling when nothing is happening.
+  const [loopState, setLoopState] = useState<Awaited<ReturnType<typeof fetchLoopStatus>> | null>(null);
+  const [loopError, setLoopError] = useState<string | null>(null);
 
-  const {
-    data: loopState,
-    error: loopError,
-    refresh: refreshLoop,
-  } = usePolling(
-    useCallback(async () => {
-      try {
-        return await fetchLoopStatus(projectId);
-      } catch {
-        return null;
-      }
-    }, [projectId]),
-    3000,
-    [projectId],
-    isLoopActive,
-  );
+  const refreshLoop = useCallback(async () => {
+    try {
+      const state = await fetchLoopStatus(projectId);
+      setLoopState(state);
+      setLoopError(null);
+    } catch {
+      setLoopState(null);
+    }
+  }, [projectId]);
+
+  // Active phases: loop needs continued polling (including documenting so logs keep streaming)
+  const ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "deciding", "documenting"];
+  const isLoopActive = !!loopState && ACTIVE_PHASES.includes(loopState.phase);
+
+  // Initial fetch + poll when active
+  useEffect(() => {
+    refreshLoop();
+  }, [refreshLoop]);
+
+  useEffect(() => {
+    if (!isLoopActive) return;
+    const id = setInterval(refreshLoop, 3000);
+    return () => clearInterval(id);
+  }, [isLoopActive, refreshLoop]);
 
   const handleAction = () => {
     refreshProject();
@@ -155,13 +167,24 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         )}
 
         {activeTab === "history" && (
-          <IterationHistory
-            iterations={loopState?.iterations || []}
-            onSelectIteration={(num) => {
-              setSelectedIteration(num);
-              setActiveTab("logs");
-            }}
-          />
+          <div>
+            <IterationHistory
+              iterations={loopState?.iterations || []}
+              onSelectIteration={(num) => {
+                setSelectedIteration(num);
+                setActiveTab("logs");
+              }}
+            />
+            {(!loopState?.iterations || loopState.iterations.length === 0) &&
+              (project.currentIteration || 0) > 0 && (
+                <div className="iteration-history__note">
+                  <strong>Note:</strong> This project has {project.currentIteration} iteration(s)
+                  in its git history, but only iterations from the current loop run are
+                  shown here. Each time "Start Loop" is clicked, a fresh loop state is
+                  created. Use git log in the repo to see all historical iterations.
+                </div>
+              )}
+          </div>
         )}
 
         {activeTab === "logs" && (

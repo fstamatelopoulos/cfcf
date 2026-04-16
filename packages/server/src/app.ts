@@ -270,7 +270,7 @@ export function createApp() {
       const loopState = await getLoopState(project.id);
       const isLiveIteration = loopState &&
         loopState.currentIteration === iterationNum &&
-        ["preparing", "dev_executing", "judging", "deciding"].includes(loopState.phase);
+        ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
 
       let lastSize = 0;
       let retries = 0;
@@ -308,7 +308,7 @@ export function createApp() {
           const currentLoop = await getLoopState(project.id);
           const stillLive = currentLoop &&
             currentLoop.currentIteration === iterationNum &&
-            ["preparing", "dev_executing", "judging", "deciding"].includes(currentLoop.phase);
+            ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
 
           if (!stillLive) {
             // Read any final content
