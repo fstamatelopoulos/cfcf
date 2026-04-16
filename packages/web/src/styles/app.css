@@ -567,14 +567,6 @@
   line-height: 1.4;
 }
 
-.log-viewer__truncated {
-  color: var(--color-text-muted);
-  font-style: italic;
-  margin-bottom: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px dashed var(--color-border);
-}
-
 .log-viewer__empty {
   color: var(--color-text-muted);
   font-style: italic;

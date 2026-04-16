@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSSE } from "../hooks/useSSE";
 
-const MAX_RENDERED_LINES = 500;
-
 export function LogViewer({
   projectId,
   iteration,
@@ -32,17 +30,16 @@ export function LogViewer({
     setAutoScroll(atBottom);
   }
 
-  // Only render the last MAX_RENDERED_LINES to keep the DOM manageable
-  const truncated = lines.length > MAX_RENDERED_LINES;
-  const visibleLines = truncated
-    ? lines.slice(lines.length - MAX_RENDERED_LINES)
-    : lines;
+  // Join all lines into a single string for the <pre> element.
+  // Browsers handle large text in a single <pre> far better than
+  // thousands of individual DOM elements.
+  const text = lines.join("\n");
 
   return (
     <div className="log-viewer">
       <div className="log-viewer__header">
         <span>
-          Iteration {iteration} ({role}) — {lines.length} lines
+          Iteration {iteration} ({role}) — {lines.length.toLocaleString()} lines
         </span>
         <span className="log-viewer__status">
           {connected ? (
@@ -75,14 +72,7 @@ export function LogViewer({
         {lines.length === 0 && !done && (
           <div className="log-viewer__empty">Waiting for log output...</div>
         )}
-        {truncated && (
-          <div className="log-viewer__truncated">
-            ... {lines.length - MAX_RENDERED_LINES} earlier lines hidden ...
-          </div>
-        )}
-        <pre className="log-viewer__pre">
-          {visibleLines.join("\n")}
-        </pre>
+        <pre className="log-viewer__pre">{text}</pre>
       </div>
     </div>
   );
