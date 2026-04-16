@@ -131,12 +131,14 @@
 
 .btn--secondary {
   background: transparent;
-  color: var(--color-primary);
-  border-color: var(--color-primary);
+  color: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
 }
 
 .btn--secondary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+  color: white;
+  border-color: white;
 }
 
 .btn--danger {

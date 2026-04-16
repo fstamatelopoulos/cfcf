@@ -34,6 +34,13 @@ export function LoopControls({
   return (
     <div className="loop-controls">
       <div className="loop-controls__buttons">
+        <button
+          className="btn btn--secondary"
+          disabled={loading !== null || !!isRunning}
+          onClick={() => doAction("review", () => api.startReview(projectId))}
+        >
+          {loading === "review" ? "Reviewing..." : "Review"}
+        </button>
         {canStart && (
           <button
             className="btn btn--primary"
@@ -70,13 +77,6 @@ export function LoopControls({
             Stop
           </button>
         )}
-        <button
-          className="btn btn--secondary"
-          disabled={loading !== null || !!isRunning}
-          onClick={() => doAction("review", () => api.startReview(projectId))}
-        >
-          {loading === "review" ? "Reviewing..." : "Review"}
-        </button>
         <button
           className="btn btn--secondary"
           disabled={loading !== null || !!isRunning}
