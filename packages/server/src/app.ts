@@ -25,6 +25,16 @@ import {
   getIterationState,
   getLatestIterationState,
 } from "./iteration-runner.js";
+import {
+  startLoop,
+  resumeLoop,
+  stopLoop,
+  getLoopState,
+  startReview,
+  getReviewState,
+  startDocument,
+  getDocumentState,
+} from "@cfcf/core";
 
 const startedAt = Date.now();
 
@@ -78,6 +88,8 @@ export function createApp() {
       repoUrl?: string;
       devAgent?: { adapter: string; model?: string };
       judgeAgent?: { adapter: string; model?: string };
+      architectAgent?: { adapter: string; model?: string };
+      documenterAgent?: { adapter: string; model?: string };
       maxIterations?: number;
       pauseEvery?: number;
     }>();
@@ -267,6 +279,184 @@ export function createApp() {
         });
       }
     });
+  });
+
+  // --- Solution Architect Review ---
+
+  app.post("/api/projects/:id/review", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const body = await c.req.json<{
+      problemPackPath?: string;
+    }>().catch(() => ({} as { problemPackPath?: string }));
+
+    try {
+      const state = await startReview(project, body);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Architect review started. Poll GET /api/projects/:id/review/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/review/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = getReviewState(project.id);
+    if (!state) {
+      return c.json({ error: "No review found for this project" }, 404);
+    }
+
+    return c.json(state);
+  });
+
+  // --- Documenter ---
+
+  app.post("/api/projects/:id/document", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const state = await startDocument(project);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Documenter started. Poll GET /api/projects/:id/document/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/document/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = getDocumentState(project.id);
+    if (!state) {
+      return c.json({ error: "No documenter run found for this project" }, 404);
+    }
+
+    return c.json(state);
+  });
+
+  // --- Iteration Loop (dark factory) ---
+
+  app.post("/api/projects/:id/loop/start", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const body = await c.req.json<{
+      problemPackPath?: string;
+    }>().catch(() => ({} as { problemPackPath?: string }));
+
+    try {
+      const state = await startLoop(project, body);
+      return c.json({
+        projectId: state.projectId,
+        phase: state.phase,
+        maxIterations: state.maxIterations,
+        pauseEvery: state.pauseEvery,
+        message: "Iteration loop started. Poll GET /api/projects/:id/loop/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  app.get("/api/projects/:id/loop/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = await getLoopState(project.id);
+    if (!state) {
+      return c.json({ error: "No active loop for this project" }, 404);
+    }
+
+    return c.json(state);
+  });
+
+  app.post("/api/projects/:id/loop/resume", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const body = await c.req.json<{
+      feedback?: string;
+    }>().catch(() => ({} as { feedback?: string }));
+
+    try {
+      const state = await resumeLoop(project.id, body.feedback);
+      return c.json({
+        projectId: state.projectId,
+        phase: state.phase,
+        currentIteration: state.currentIteration,
+        message: "Loop resumed.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  app.post("/api/projects/:id/loop/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const state = await stopLoop(project.id);
+      return c.json({
+        projectId: state.projectId,
+        phase: state.phase,
+        currentIteration: state.currentIteration,
+        outcome: state.outcome,
+        message: "Loop stopped.",
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
   });
 
   // --- Server shutdown ---

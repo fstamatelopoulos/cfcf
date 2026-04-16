@@ -164,6 +164,7 @@ interface ProjectConfig {
   devAgent: AgentConfig;           // Dev agent configuration
   judgeAgent: AgentConfig;         // Judge agent configuration
   architectAgent: AgentConfig;     // Solution Architect (pre-iteration review)
+  documenterAgent: AgentConfig;    // Documenter (post-SUCCESS documentation)
   maxIterations: number;           // Hard cap on iterations per project
   currentIteration: number;        // Current iteration number (monotonically increasing, starts at 0)
   pauseEvery: number;              // 0 = no pauses, N = pause every N iterations
@@ -177,10 +178,11 @@ interface AgentConfig {
   flags?: string[];                // Additional CLI flags
 }
 
-// Three agent roles, each independently configurable:
-// - devAgent: writes code, runs tests (e.g., claude-code with sonnet)
-// - judgeAgent: reviews iterations (e.g., codex)
+// Four agent roles, each independently configurable:
+// - devAgent: writes code, runs tests (e.g., codex)
+// - judgeAgent: reviews iterations (e.g., claude-code)
 // - architectAgent: reviews Problem Pack pre-iteration (e.g., claude-code with opus)
+// - documenterAgent: produces final polished docs post-SUCCESS (e.g., claude-code)
 ```
 
 ### 4.3 Process Manager
@@ -451,6 +453,7 @@ On first execution (detected by absence of config file), cfcf runs an interactiv
    - Dev agent and model (from detected available agents)
    - Judge agent and model (encouraged to be different from dev agent)
    - Solution Architect agent and model (recommended: use a frontier model like opus)
+   - Documenter agent and model (recommended: strong writing model)
    - Default max iterations
    - Default pause cadence
 4. **Permission acknowledgment**: cfcf explains that agents will run with `--dangerously-skip-permissions` (or equivalent) for unattended operation. Lists the default guardrails (working directory scoping, read-only file enforcement, git branch isolation). User must acknowledge.
@@ -497,7 +500,7 @@ cfcf Server (Iteration Controller)
   │     (push to remote deferred -- only on success or `cfcf push`)
   │
   ├─► Process Manager: spawn judge agent
-  │     Command: codex --approval-mode full-auto "read cfcf-judge-instructions.md and assess"
+  │     Command: codex -a never exec -s danger-full-access "read cfcf-judge-instructions.md and assess"
   │     CWD: /path/to/project (same repo, can inspect everything)
   │     ├─► Log Collector: stream logs → ~/.cfcf/.../judge-logs.txt
   │     └─► Wait for exit
@@ -713,7 +716,7 @@ cfcf → spawn judge → done
 
 How exactly does each agent run non-interactively? Critical validations needed:
 - Claude Code: `claude --dangerously-skip-permissions -p "your prompt"` -- does it work? What are exit codes?
-- Codex: `codex --approval-mode full-auto -q "your prompt"` -- equivalent?
+- Codex: `codex -a never exec -s danger-full-access "your prompt"` -- headless exec mode with full access
 - What happens when agents hit token limits? Do they exit cleanly? What's in the logs?
 
 ### 11.2 Log streaming and capture

@@ -102,12 +102,18 @@ export function registerInitCommand(program: Command): void {
       console.log("Configuration");
       console.log("-------------");
 
-      if (available.length > 1) {
-        console.log(`Available agents: ${available.join(", ")}`);
-        console.log();
+      console.log(`Available agents: ${available.join(", ")}`);
+      console.log();
+      console.log("Four agent roles (each independently configurable):");
+      console.log("  - Dev agent: writes code, runs tests");
+      console.log("  - Judge agent: reviews iterations (encouraged to differ from dev)");
+      console.log("  - Architect agent: reviews Problem Pack, creates plan outline");
+      console.log("  - Documenter agent: produces final polished documentation");
+      console.log();
 
+      if (available.length > 1) {
         const devChoice = await prompt(
-          "Dev agent (writes code)",
+          "Dev agent",
           config.devAgent.adapter,
         );
         if (available.includes(devChoice)) {
@@ -115,17 +121,53 @@ export function registerInitCommand(program: Command): void {
         }
 
         const judgeChoice = await prompt(
-          "Judge agent (reviews iterations)",
+          "Judge agent",
           config.judgeAgent.adapter,
         );
         if (available.includes(judgeChoice)) {
           config.judgeAgent.adapter = judgeChoice;
         }
+
+        const architectChoice = await prompt(
+          "Architect agent",
+          config.architectAgent.adapter,
+        );
+        if (available.includes(architectChoice)) {
+          config.architectAgent.adapter = architectChoice;
+        }
+
+        const documenterChoice = await prompt(
+          "Documenter agent",
+          config.documenterAgent.adapter,
+        );
+        if (available.includes(documenterChoice)) {
+          config.documenterAgent.adapter = documenterChoice;
+        }
       } else {
-        console.log(`Using ${available[0]} for both dev and judge roles.`);
+        console.log(`Using ${available[0]} for all roles.`);
         config.devAgent.adapter = available[0];
         config.judgeAgent.adapter = available[0];
+        config.architectAgent.adapter = available[0];
+        config.documenterAgent.adapter = available[0];
       }
+
+      // Model selection per role
+      console.log();
+      console.log("Model selection (optional -- leave empty for agent default):");
+      console.log("  Examples: opus, sonnet, o3, gpt-4o");
+      console.log();
+
+      const devModel = await prompt("Dev agent model", "");
+      if (devModel) config.devAgent.model = devModel;
+
+      const judgeModel = await prompt("Judge agent model", "");
+      if (judgeModel) config.judgeAgent.model = judgeModel;
+
+      const architectModel = await prompt("Architect agent model", "");
+      if (architectModel) config.architectAgent.model = architectModel;
+
+      const documenterModel = await prompt("Documenter agent model", "");
+      if (documenterModel) config.documenterAgent.model = documenterModel;
 
       console.log();
 
@@ -148,7 +190,7 @@ export function registerInitCommand(program: Command): void {
       console.log("cfcf runs AI agents in unattended mode. This requires:");
       console.log();
 
-      for (const agentName of new Set([config.devAgent.adapter, config.judgeAgent.adapter])) {
+      for (const agentName of new Set([config.devAgent.adapter, config.judgeAgent.adapter, config.architectAgent.adapter, config.documenterAgent.adapter])) {
         const adapter = detectionResults.find((r) => r.name === agentName);
         if (adapter) {
           // Get flags from the adapter registry

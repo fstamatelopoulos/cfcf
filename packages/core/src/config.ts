@@ -83,10 +83,24 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
         ? "claude-code"
         : devAdapter;
 
+  // Architect agent: prefer claude-code (typically needs strong reasoning)
+  const architectAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : devAdapter;
+
+  // Documenter agent: prefer claude-code (strong writing ability)
+  const documenterAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : devAdapter;
+
   return {
     version: CONFIG_VERSION,
     devAgent: { adapter: devAdapter },
     judgeAgent: { adapter: judgeAdapter },
+    architectAgent: { adapter: architectAdapter },
+    documenterAgent: { adapter: documenterAdapter },
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
@@ -106,6 +120,12 @@ function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   }
   if (!config.judgeAgent?.adapter) {
     throw new Error("Invalid config: missing 'judgeAgent.adapter'");
+  }
+  if (!config.architectAgent?.adapter) {
+    throw new Error("Invalid config: missing 'architectAgent.adapter'");
+  }
+  if (!config.documenterAgent?.adapter) {
+    throw new Error("Invalid config: missing 'documenterAgent.adapter'");
   }
   return config;
 }

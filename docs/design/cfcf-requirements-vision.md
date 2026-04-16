@@ -105,15 +105,16 @@ The deterministic orchestration layer. Responsibilities:
 
 ### Agent Roles
 
-cf² manages three distinct agent roles, each independently configurable (agent adapter + model):
+cf² manages four distinct agent roles, each independently configurable (agent adapter + model):
 
 | Role | Purpose | When invoked |
 |------|---------|-------------|
 | **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. | User-invoked (`cfcf review`), optional, can run multiple times |
 | **Dev Agent** | Reads context, writes code, runs tests, produces handoff + signals. | Each iteration |
 | **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY. | After each iteration |
+| **Documenter** | Produces polished final project documentation (architecture, API reference, setup guide). | Auto post-SUCCESS, or user-invoked (`cfcf document`) |
 
-Cross-agent review is encouraged: e.g., Claude Code for dev, Codex for judge, Claude with Opus for architect. Different agents catch different types of issues.
+Cross-agent review is encouraged: e.g., Codex for dev, Claude Code for judge and architect, Claude with Opus for documenter. Different agents catch different types of issues.
 
 Mission Control's control flow decisions are deterministic. All branching is based on test pass/fail status, iteration count vs. configured maximum, explicit rules (e.g., "if 3 consecutive failures with same error, stop and report"), and the N-iteration pause configuration.
 

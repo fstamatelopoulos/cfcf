@@ -14,6 +14,10 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerProjectCommands } from "./commands/project.js";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerRunCommand } from "./commands/run.js";
+import { registerResumeCommand } from "./commands/resume.js";
+import { registerStopCommand } from "./commands/stop.js";
+import { registerReviewCommand } from "./commands/review.js";
+import { registerDocumentCommand } from "./commands/document.js";
 
 const program = new Command();
 
@@ -28,5 +32,9 @@ registerStatusCommand(program);
 registerProjectCommands(program);
 registerConfigCommands(program);
 registerRunCommand(program);
+registerResumeCommand(program);
+registerStopCommand(program);
+registerReviewCommand(program);
+registerDocumentCommand(program);
 
 program.parse();

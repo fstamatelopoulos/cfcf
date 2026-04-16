@@ -186,7 +186,7 @@ async function runIterationAsync(
     );
 
     const prompt = `Read ${adapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
-    const cmd = adapter.buildCommand(project.repoPath, prompt);
+    const cmd = adapter.buildCommand(project.repoPath, prompt, project.devAgent.model);
     command = cmd.command;
     args = cmd.args;
   }
