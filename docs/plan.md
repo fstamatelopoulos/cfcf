@@ -339,6 +339,17 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] Process definition template versioning
   - Track which process template version was used
   - Ship default template, support user customization
+- [ ] Configurable loop behavior flags:
+  - `autoDocumenter` (default true): run documenter post-SUCCESS automatically. When false, user must invoke `cfcf document` manually
+  - `autoReviewSpecs` (default false): run architect review automatically before starting the loop. When true, `cfcf run` first invokes the architect and fails/pauses if readiness is BLOCKED
+  - Both flags in ProjectConfig and global config with per-project overrides
+- [ ] Git merge strategy: use `--no-ff` for iteration merges
+  - Preserves iteration boundaries in git history
+  - Makes `git log --graph` show the iteration structure visually
+  - Change: `git-manager.ts` merge() adds `--no-ff` flag
+- [ ] Auto-delete (or archive) merged iteration branches
+  - Optional cleanup after successful merge to main
+  - Configurable: `cleanupMergedBranches` (default false — preserve for audit)
 - [ ] Embed templates into binary (true single-file distribution)
   - Import .md and .json templates as string constants at build time
   - Binary works without external template files on disk
