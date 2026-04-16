@@ -14,6 +14,8 @@ export function LogViewer({
   const { lines, connected, done } = useSSE(url);
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [atTop, setAtTop] = useState(true);
+  const [atBottom, setAtBottom] = useState(true);
 
   // Auto-scroll to bottom when new lines arrive (if user hasn't scrolled up)
   useEffect(() => {
@@ -22,12 +24,23 @@ export function LogViewer({
     }
   }, [lines.length, autoScroll]);
 
-  // Detect if user scrolled up (disable auto-scroll)
+  // Update scroll position state after content loads
+  useEffect(() => {
+    if (containerRef.current) {
+      const el = containerRef.current;
+      setAtTop(el.scrollTop < 50);
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 50);
+    }
+  }, [lines.length]);
+
   function handleScroll() {
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const atBottom = scrollHeight - scrollTop - clientHeight < 50;
-    setAutoScroll(atBottom);
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    const isAtTop = scrollTop < 50;
+    setAtBottom(isAtBottom);
+    setAtTop(isAtTop);
+    setAutoScroll(isAtBottom);
   }
 
   // Join all lines into a single string for the <pre> element.
@@ -47,28 +60,32 @@ export function LogViewer({
         </span>
         <span className="log-viewer__actions">
           {isLoading && <span className="log-viewer__spinner" />}
-          <button
-            className="btn btn--small btn--secondary"
-            onClick={() => {
-              if (containerRef.current) {
-                containerRef.current.scrollTop = 0;
-                setAutoScroll(false);
-              }
-            }}
-          >
-            top
-          </button>
-          <button
-            className="btn btn--small btn--secondary"
-            onClick={() => {
-              setAutoScroll(true);
-              if (containerRef.current) {
-                containerRef.current.scrollTop = containerRef.current.scrollHeight;
-              }
-            }}
-          >
-            bottom
-          </button>
+          {!atTop && (
+            <button
+              className="btn btn--small btn--secondary"
+              onClick={() => {
+                if (containerRef.current) {
+                  containerRef.current.scrollTop = 0;
+                  setAutoScroll(false);
+                }
+              }}
+            >
+              top
+            </button>
+          )}
+          {!atBottom && (
+            <button
+              className="btn btn--small btn--secondary"
+              onClick={() => {
+                setAutoScroll(true);
+                if (containerRef.current) {
+                  containerRef.current.scrollTop = containerRef.current.scrollHeight;
+                }
+              }}
+            >
+              bottom
+            </button>
+          )}
         </span>
       </div>
       <div
