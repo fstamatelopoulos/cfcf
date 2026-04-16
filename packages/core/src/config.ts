@@ -121,11 +121,12 @@ function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (!config.judgeAgent?.adapter) {
     throw new Error("Invalid config: missing 'judgeAgent.adapter'");
   }
+  // Backfill newer fields for configs created before these roles existed
   if (!config.architectAgent?.adapter) {
-    throw new Error("Invalid config: missing 'architectAgent.adapter'");
+    config.architectAgent = { adapter: config.devAgent.adapter };
   }
   if (!config.documenterAgent?.adapter) {
-    throw new Error("Invalid config: missing 'documenterAgent.adapter'");
+    config.documenterAgent = { adapter: config.devAgent.adapter };
   }
   return config;
 }
