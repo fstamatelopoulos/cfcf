@@ -2,12 +2,14 @@ import { useState, useEffect, useCallback } from "react";
 
 /**
  * Generic polling hook. Calls fetcher on mount and every intervalMs.
+ * Set enabled=false to fetch once then stop polling (for idle/completed states).
  * Returns { data, error, loading, refresh }.
  */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number,
   deps: unknown[] = [],
+  enabled: boolean = true,
 ): { data: T | null; error: string | null; loading: boolean; refresh: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,9 +30,10 @@ export function usePolling<T>(
 
   useEffect(() => {
     doFetch();
+    if (!enabled) return;
     const id = setInterval(doFetch, intervalMs);
     return () => clearInterval(id);
-  }, [doFetch, intervalMs]);
+  }, [doFetch, intervalMs, enabled]);
 
   return { data, error, loading, refresh: doFetch };
 }

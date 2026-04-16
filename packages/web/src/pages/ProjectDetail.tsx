@@ -34,6 +34,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     [projectId],
   );
 
+  // Determine if the loop is active (needs polling) or idle (fetch once)
+  const isLoopActive = project?.status === "running" || project?.status === "paused";
+
   const {
     data: loopState,
     error: loopError,
@@ -48,6 +51,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     }, [projectId]),
     3000,
     [projectId],
+    isLoopActive,
   );
 
   const handleAction = () => {
