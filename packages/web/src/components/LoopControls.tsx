@@ -75,7 +75,7 @@ export function LoopControls({
     <div className="loop-controls">
       <div className="loop-controls__buttons">
         <button
-          className="btn btn--secondary"
+          className="btn btn--primary"
           disabled={loading !== null || isBusy}
           onClick={() => doAction("review", () => api.startReview(projectId))}
         >
@@ -118,7 +118,7 @@ export function LoopControls({
           </button>
         )}
         <button
-          className="btn btn--secondary"
+          className="btn btn--primary"
           disabled={loading !== null || isBusy}
           onClick={() => doAction("document", () => api.startDocument(projectId))}
         >
