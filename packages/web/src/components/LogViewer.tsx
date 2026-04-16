@@ -45,29 +45,30 @@ export function LogViewer({
           {lines.length > 0 && ` — ${lines.length.toLocaleString()} lines`}
           {isStreaming && " (loading...)"}
         </span>
-        <span className="log-viewer__status">
-          {isLoading ? (
-            <span className="log-viewer__spinner" />
-          ) : connected ? (
-            <span className="status-dot status-dot--ok" title="streaming" />
-          ) : done ? (
-            "complete"
-          ) : (
-            <span className="status-dot status-dot--error" title="disconnected" />
-          )}
-          {!autoScroll && (
-            <button
-              className="btn btn--small btn--secondary"
-              onClick={() => {
-                setAutoScroll(true);
-                if (containerRef.current) {
-                  containerRef.current.scrollTop = containerRef.current.scrollHeight;
-                }
-              }}
-            >
-              scroll to bottom
-            </button>
-          )}
+        <span className="log-viewer__actions">
+          {isLoading && <span className="log-viewer__spinner" />}
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() => {
+              if (containerRef.current) {
+                containerRef.current.scrollTop = 0;
+                setAutoScroll(false);
+              }
+            }}
+          >
+            top
+          </button>
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() => {
+              setAutoScroll(true);
+              if (containerRef.current) {
+                containerRef.current.scrollTop = containerRef.current.scrollHeight;
+              }
+            }}
+          >
+            bottom
+          </button>
         </span>
       </div>
       <div
