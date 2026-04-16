@@ -115,8 +115,9 @@
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
   cursor: not-allowed;
+  pointer-events: none;
 }
 
 .btn--primary {
@@ -557,9 +558,21 @@
   line-height: 1.4;
 }
 
-.log-viewer__line {
+.log-viewer__pre {
+  margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.log-viewer__truncated {
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--color-border);
 }
 
 .log-viewer__empty {
