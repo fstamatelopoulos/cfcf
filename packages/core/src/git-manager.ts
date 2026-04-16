@@ -177,13 +177,16 @@ export async function getLog(
 
 /**
  * Merge a branch into the current branch.
+ * Uses --no-ff to always create a merge commit, preserving iteration
+ * boundaries in the git history (so `git log --graph` shows each
+ * iteration as a distinct branch that got merged in).
  */
 export async function merge(
   repoPath: string,
   branchName: string,
   message?: string,
 ): Promise<GitResult> {
-  const args = ["merge", branchName];
+  const args = ["merge", "--no-ff", branchName];
   if (message) args.push("-m", message);
   return git(repoPath, args);
 }

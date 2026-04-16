@@ -304,6 +304,10 @@ Each iteration re-reads all context. Strategies to manage this:
   - Spawns a reflection agent that reviews full iteration history across the project
   - Produces: pattern analysis, strategy recommendation, convergence assessment
   - Output injected into next iteration's context
+- [x] Git merge strategy: use `--no-ff` for iteration merges
+  - Preserves iteration boundaries in git history
+  - Makes `git log --graph` show the iteration structure visually
+  - One-line change in `git-manager.ts` merge()
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Research: Sandbox / guardrails for unattended agent execution
@@ -343,10 +347,6 @@ Each iteration re-reads all context. Strategies to manage this:
   - `autoDocumenter` (default true): run documenter post-SUCCESS automatically. When false, user must invoke `cfcf document` manually
   - `autoReviewSpecs` (default false): run architect review automatically before starting the loop. When true, `cfcf run` first invokes the architect and fails/pauses if readiness is BLOCKED
   - Both flags in ProjectConfig and global config with per-project overrides
-- [ ] Git merge strategy: use `--no-ff` for iteration merges
-  - Preserves iteration boundaries in git history
-  - Makes `git log --graph` show the iteration structure visually
-  - Change: `git-manager.ts` merge() adds `--no-ff` flag
 - [ ] Auto-delete (or archive) merged iteration branches
   - Optional cleanup after successful merge to main
   - Configurable: `cleanupMergedBranches` (default false — preserve for audit)
