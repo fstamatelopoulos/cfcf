@@ -130,13 +130,13 @@
 }
 
 .btn--secondary {
-  background: var(--color-surface-alt);
-  color: var(--color-text);
-  border-color: var(--color-border);
+  background: transparent;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .btn--secondary:hover:not(:disabled) {
-  background: var(--color-border);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
 }
 
 .btn--danger {
