@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { LoopPhase } from "../types";
 import * as api from "../api";
+
+export type AgentAction = "review" | "start" | "resume" | "stop" | "document";
 
 export function LoopControls({
   projectId,
@@ -9,56 +11,19 @@ export function LoopControls({
 }: {
   projectId: string;
   phase?: LoopPhase | null;
-  onAction: () => void;
+  /** Called after an action is dispatched. For review/start/document, the
+   *  caller should switch to the Logs tab and show the log for the new run. */
+  onAction: (action: AgentAction) => void;
 }) {
-  const [loading, setLoading] = useState<string | null>(null);
+  const [loading, setLoading] = useState<AgentAction | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reviewRunning, setReviewRunning] = useState(false);
-  const [documentRunning, setDocumentRunning] = useState(false);
 
-  // Poll review status when running
-  useEffect(() => {
-    if (!reviewRunning) return;
-    const id = setInterval(async () => {
-      try {
-        const status = await api.fetchReviewStatus(projectId);
-        if (status.status === "completed" || status.status === "failed") {
-          setReviewRunning(false);
-          onAction();
-        }
-      } catch {
-        // Review status not found — it finished or was never started
-        setReviewRunning(false);
-      }
-    }, 3000);
-    return () => clearInterval(id);
-  }, [reviewRunning, projectId, onAction]);
-
-  // Poll document status when running
-  useEffect(() => {
-    if (!documentRunning) return;
-    const id = setInterval(async () => {
-      try {
-        const status = await api.fetchDocumentStatus(projectId);
-        if (status.status === "completed" || status.status === "failed") {
-          setDocumentRunning(false);
-          onAction();
-        }
-      } catch {
-        setDocumentRunning(false);
-      }
-    }, 3000);
-    return () => clearInterval(id);
-  }, [documentRunning, projectId, onAction]);
-
-  async function doAction(name: string, action: () => Promise<unknown>) {
+  async function doAction(name: AgentAction, fn: () => Promise<unknown>) {
     setLoading(name);
     setError(null);
     try {
-      await action();
-      if (name === "review") setReviewRunning(true);
-      if (name === "document") setDocumentRunning(true);
-      onAction();
+      await fn();
+      onAction(name);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -66,25 +31,24 @@ export function LoopControls({
     }
   }
 
-  const isRunning = phase && ["preparing", "dev_executing", "judging", "deciding"].includes(phase);
+  const isRunning = phase && ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(phase);
   const isPaused = phase === "paused";
   const canStart = !phase || ["idle", "completed", "failed", "stopped"].includes(phase);
-  const isBusy = !!isRunning || reviewRunning || documentRunning;
 
   return (
     <div className="loop-controls">
       <div className="loop-controls__buttons">
         <button
           className="btn btn--primary"
-          disabled={loading !== null || isBusy}
+          disabled={loading !== null || !!isRunning}
           onClick={() => doAction("review", () => api.startReview(projectId))}
         >
-          {loading === "review" || reviewRunning ? "Reviewing..." : "Review"}
+          {loading === "review" ? "Starting review..." : "Review"}
         </button>
         {canStart && (
           <button
             className="btn btn--primary"
-            disabled={loading !== null || isBusy}
+            disabled={loading !== null}
             onClick={() => doAction("start", () => api.startLoop(projectId))}
           >
             {loading === "start" ? "Starting..." : "Start Loop"}
@@ -119,18 +83,12 @@ export function LoopControls({
         )}
         <button
           className="btn btn--primary"
-          disabled={loading !== null || isBusy}
+          disabled={loading !== null || !!isRunning}
           onClick={() => doAction("document", () => api.startDocument(projectId))}
         >
-          {loading === "document" || documentRunning ? "Documenting..." : "Document"}
+          {loading === "document" ? "Starting document..." : "Document"}
         </button>
       </div>
-      {(reviewRunning || documentRunning) && (
-        <div className="loop-controls__status">
-          {reviewRunning && "Architect review in progress..."}
-          {documentRunning && "Generating documentation..."}
-        </div>
-      )}
       {error && <div className="loop-controls__error">{error}</div>}
     </div>
   );

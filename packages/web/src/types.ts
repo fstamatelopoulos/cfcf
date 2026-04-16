@@ -136,3 +136,46 @@ export interface HealthResponse {
   version: string;
   uptime: number;
 }
+
+// --- Project history ---
+
+export type HistoryEventType = "review" | "iteration" | "document";
+export type HistoryEventStatus = "running" | "completed" | "failed";
+
+export interface BaseHistoryEvent {
+  id: string;
+  type: HistoryEventType;
+  status: HistoryEventStatus;
+  startedAt: string;
+  completedAt?: string;
+  logFile: string;
+  agent: string;
+  model?: string;
+  error?: string;
+}
+
+export interface ReviewHistoryEvent extends BaseHistoryEvent {
+  type: "review";
+  readiness?: string;
+}
+
+export interface IterationHistoryEvent extends BaseHistoryEvent {
+  type: "iteration";
+  iteration: number;
+  branch: string;
+  devLogFile: string;
+  judgeLogFile: string;
+  devAgent: string;
+  judgeAgent: string;
+  devExitCode?: number;
+  judgeExitCode?: number;
+  judgeDetermination?: string;
+  judgeQuality?: number;
+  merged?: boolean;
+}
+
+export interface DocumentHistoryEvent extends BaseHistoryEvent {
+  type: "document";
+}
+
+export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;

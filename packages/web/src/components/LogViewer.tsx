@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useSSE } from "../hooks/useSSE";
 
-export function LogViewer({
-  projectId,
-  iteration,
-  role,
-}: {
+export interface LogTarget {
   projectId: string;
-  iteration: number;
-  role: "dev" | "judge";
-}) {
-  const url = `/api/projects/${encodeURIComponent(projectId)}/iterations/${iteration}/logs`;
+  logFile: string;
+  /** Human-readable label: "Iteration 2 (dev)", "Architect run 1", "Documenter run 1", etc. */
+  label: string;
+}
+
+export function LogViewer({ target }: { target: LogTarget | null }) {
+  const url = target
+    ? `/api/projects/${encodeURIComponent(target.projectId)}/logs/${encodeURIComponent(target.logFile)}`
+    : null;
   const { lines, connected, done } = useSSE(url);
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -43,9 +44,14 @@ export function LogViewer({
     setAutoScroll(isAtBottom);
   }
 
-  // Join all lines into a single string for the <pre> element.
-  // Browsers handle large text in a single <pre> far better than
-  // thousands of individual DOM elements.
+  if (!target) {
+    return (
+      <div className="log-viewer__empty">
+        No log selected. Pick an event from History, or start a Review / Start Loop / Document.
+      </div>
+    );
+  }
+
   const text = lines.join("\n");
   const isLoading = !done && lines.length === 0;
   const isStreaming = connected && !done;
@@ -54,7 +60,7 @@ export function LogViewer({
     <div className={`log-viewer ${isStreaming ? "log-viewer--loading" : ""}`}>
       <div className="log-viewer__header">
         <span>
-          Iteration {iteration} ({role})
+          {target.label}
           {lines.length > 0 && ` — ${lines.length.toLocaleString()} lines`}
           {isStreaming && " (loading...)"}
         </span>

@@ -8,6 +8,7 @@ import type {
   ReviewState,
   DocumentState,
   HealthResponse,
+  HistoryEvent,
 } from "./types";
 
 class ApiError extends Error {
@@ -89,4 +90,10 @@ export function startDocument(projectId: string): Promise<DocumentState> {
 
 export function fetchDocumentStatus(projectId: string): Promise<DocumentState> {
   return request<DocumentState>(`/api/projects/${encodeURIComponent(projectId)}/document/status`);
+}
+
+// --- History ---
+
+export function fetchHistory(projectId: string): Promise<HistoryEvent[]> {
+  return request<HistoryEvent[]>(`/api/projects/${encodeURIComponent(projectId)}/history`);
 }

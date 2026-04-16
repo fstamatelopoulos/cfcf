@@ -1,16 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
-import { usePolling } from "../hooks/usePolling";
-import { fetchProject, fetchLoopStatus } from "../api";
+import { fetchProject, fetchLoopStatus, fetchHistory } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import { StatusBadge } from "../components/StatusBadge";
 import { PhaseIndicator } from "../components/PhaseIndicator";
-import { LoopControls } from "../components/LoopControls";
+import { LoopControls, type AgentAction } from "../components/LoopControls";
 import { FeedbackForm } from "../components/FeedbackForm";
-import { IterationHistory } from "../components/IterationHistory";
-import { LogViewer } from "../components/LogViewer";
+import { LogViewer, type LogTarget } from "../components/LogViewer";
 import { ConfigDisplay } from "../components/ConfigDisplay";
 import { JudgeAssessment } from "../components/JudgeAssessment";
+import { ProjectHistory } from "../components/ProjectHistory";
 import { TabBar } from "../components/TabBar";
+import type { ProjectConfig, LoopState, HistoryEvent, IterationHistoryEvent } from "../types";
 
 const tabs = [
   { key: "status", label: "Status" },
@@ -21,62 +21,109 @@ const tabs = [
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const [activeTab, setActiveTab] = useState("status");
-  const [selectedIteration, setSelectedIteration] = useState<number | null>(null);
+  const [project, setProject] = useState<ProjectConfig | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [loopState, setLoopState] = useState<LoopState | null>(null);
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
 
-  const {
-    data: project,
-    error: projectError,
-    loading: projectLoading,
-    refresh: refreshProject,
-  } = usePolling(
-    useCallback(() => fetchProject(projectId), [projectId]),
-    10000,
-    [projectId],
-  );
+  // Log target is lifted here so it persists across tab switches
+  const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
 
-  // We use a two-stage approach:
-  // - First, always do an initial fetch to learn the current phase
-  // - Then, poll only while the loop is in an active phase
-  // This avoids unnecessary polling when nothing is happening.
-  const [loopState, setLoopState] = useState<Awaited<ReturnType<typeof fetchLoopStatus>> | null>(null);
-  const [loopError, setLoopError] = useState<string | null>(null);
+  // --- Fetchers ---
+
+  const refreshProject = useCallback(async () => {
+    try {
+      const p = await fetchProject(projectId);
+      setProject(p);
+      setProjectError(null);
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : String(err));
+    }
+  }, [projectId]);
 
   const refreshLoop = useCallback(async () => {
     try {
       const state = await fetchLoopStatus(projectId);
       setLoopState(state);
-      setLoopError(null);
     } catch {
       setLoopState(null);
     }
   }, [projectId]);
 
-  // Active phases: loop needs continued polling (including documenting so logs keep streaming)
+  const refreshHistory = useCallback(async () => {
+    try {
+      const events = await fetchHistory(projectId);
+      setHistory(events);
+    } catch {
+      setHistory([]);
+    }
+  }, [projectId]);
+
+  // --- Polling ---
+
   const ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "deciding", "documenting"];
   const isLoopActive = !!loopState && ACTIVE_PHASES.includes(loopState.phase);
 
-  // Initial fetch + poll when active
+  // Initial fetch of everything
   useEffect(() => {
-    refreshLoop();
-  }, [refreshLoop]);
-
-  useEffect(() => {
-    if (!isLoopActive) return;
-    const id = setInterval(refreshLoop, 3000);
-    return () => clearInterval(id);
-  }, [isLoopActive, refreshLoop]);
-
-  const handleAction = () => {
     refreshProject();
     refreshLoop();
+    refreshHistory();
+  }, [refreshProject, refreshLoop, refreshHistory]);
+
+  // Poll loop state + history while active
+  useEffect(() => {
+    if (!isLoopActive) return;
+    const id = setInterval(() => {
+      refreshLoop();
+      refreshHistory();
+    }, 3000);
+    return () => clearInterval(id);
+  }, [isLoopActive, refreshLoop, refreshHistory]);
+
+  // --- Agent action handler ---
+
+  const handleAgentAction = async (action: AgentAction) => {
+    // Refresh history after every action so new events show up
+    await refreshHistory();
+    refreshProject();
+    refreshLoop();
+
+    // Auto-switch to logs tab and focus on the new run's log
+    if (action === "review" || action === "start" || action === "resume" || action === "document") {
+      // Need to refetch history right after starting so we get the new event's log filename
+      setTimeout(async () => {
+        const events = await fetchHistory(projectId);
+        setHistory(events);
+
+        // Find the most recently started event matching the action
+        const targetType =
+          action === "review" ? "review" : action === "document" ? "document" : "iteration";
+        const sorted = [...events].sort(
+          (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+        );
+        const newest = sorted.find((e) => e.type === targetType);
+        if (newest) {
+          const label =
+            newest.type === "iteration"
+              ? `Iteration ${(newest as IterationHistoryEvent).iteration} (dev)`
+              : newest.type === "review"
+                ? `Review (${newest.agent})`
+                : `Document (${newest.agent})`;
+          const logFile =
+            newest.type === "iteration" ? (newest as IterationHistoryEvent).devLogFile : newest.logFile;
+          setLogTarget({ projectId, logFile, label });
+          setActiveTab("logs");
+        }
+      }, 500); // Small delay so the server has time to register the new event
+    }
   };
 
-  if (projectLoading && !project) {
-    return <div className="project-detail__loading">Loading...</div>;
-  }
-
-  if (projectError || !project) {
+  if (projectError && !project) {
     return <div className="project-detail__error">Project not found: {projectError}</div>;
+  }
+  if (!project) {
+    return <div className="project-detail__loading">Loading...</div>;
   }
 
   const lastIteration = loopState?.iterations?.[loopState.iterations.length - 1];
@@ -96,7 +143,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <LoopControls
         projectId={project.id}
         phase={currentPhase}
-        onAction={handleAction}
+        onAction={handleAgentAction}
       />
 
       {loopState && currentPhase && !["idle", "completed", "failed", "stopped"].includes(currentPhase) && (
@@ -110,7 +157,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <FeedbackForm
           projectId={project.id}
           questions={loopState?.pendingQuestions}
-          onResume={handleAction}
+          onResume={() => handleAgentAction("resume")}
         />
       )}
 
@@ -134,7 +181,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <TabBar tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
       <div className="project-detail__panel">
-        {activeTab === "status" && (
+        {/* Keep all tabs mounted so LogViewer preserves SSE state across tab switches */}
+        <div style={{ display: activeTab === "status" ? "block" : "none" }}>
           <div className="status-panel">
             {lastIteration?.judgeSignals && (
               <div className="status-panel__section">
@@ -164,52 +212,26 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               </div>
             )}
           </div>
-        )}
+        </div>
 
-        {activeTab === "history" && (
-          <div>
-            <IterationHistory
-              iterations={loopState?.iterations || []}
-              onSelectIteration={(num) => {
-                setSelectedIteration(num);
-                setActiveTab("logs");
-              }}
-            />
-            {(!loopState?.iterations || loopState.iterations.length === 0) &&
-              (project.currentIteration || 0) > 0 && (
-                <div className="iteration-history__note">
-                  <strong>Note:</strong> This project has {project.currentIteration} iteration(s)
-                  in its git history, but only iterations from the current loop run are
-                  shown here. Each time "Start Loop" is clicked, a fresh loop state is
-                  created. Use git log in the repo to see all historical iterations.
-                </div>
-              )}
-          </div>
-        )}
+        <div style={{ display: activeTab === "history" ? "block" : "none" }}>
+          <ProjectHistory
+            events={history}
+            projectId={project.id}
+            onSelectLog={(target) => {
+              setLogTarget(target);
+              setActiveTab("logs");
+            }}
+          />
+        </div>
 
-        {activeTab === "logs" && (
-          <div className="log-panel">
-            {selectedIteration ? (
-              <LogViewer
-                projectId={project.id}
-                iteration={selectedIteration}
-                role="dev"
-              />
-            ) : loopState?.currentIteration ? (
-              <LogViewer
-                projectId={project.id}
-                iteration={loopState.currentIteration}
-                role="dev"
-              />
-            ) : (
-              <div className="log-panel__empty">
-                No iteration selected. Start a loop or select an iteration from History.
-              </div>
-            )}
-          </div>
-        )}
+        <div style={{ display: activeTab === "logs" ? "block" : "none" }}>
+          <LogViewer target={logTarget} />
+        </div>
 
-        {activeTab === "config" && <ConfigDisplay project={project} />}
+        <div style={{ display: activeTab === "config" ? "block" : "none" }}>
+          <ConfigDisplay project={project} />
+        </div>
       </div>
     </div>
   );

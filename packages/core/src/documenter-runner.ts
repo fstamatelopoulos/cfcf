@@ -7,10 +7,12 @@
 
 import { join, dirname } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
+import { randomBytes } from "crypto";
 import type { ProjectConfig } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
-import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
+import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 
 const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
 
@@ -23,7 +25,14 @@ export interface DocumentState {
   startedAt: string;
   completedAt?: string;
   exitCode?: number;
+  /** Absolute path to the log file */
   logFile: string;
+  /** Log file name only */
+  logFileName: string;
+  /** Sequence number */
+  sequence: number;
+  /** History event ID */
+  historyEventId: string;
   error?: string;
 }
 
@@ -64,24 +73,48 @@ export async function writeDocumenterInstructions(
 export async function startDocument(
   project: ProjectConfig,
 ): Promise<DocumentState> {
-  const logFile = getIterationLogPath(project.id, 0, "documenter");
   await ensureProjectLogDir(project.id);
+  const sequence = await nextAgentRunSequence(project.id, "documenter");
+  const logFile = getAgentRunLogPath(project.id, "documenter", sequence);
+  const logFileName = `documenter-${String(sequence).padStart(3, "0")}.log`;
+
+  const historyEventId = randomBytes(8).toString("hex");
+  const startedAt = new Date().toISOString();
+
+  // Record the history event immediately
+  await appendHistoryEvent(project.id, {
+    id: historyEventId,
+    type: "document",
+    status: "running",
+    startedAt,
+    logFile: logFileName,
+    agent: project.documenterAgent.adapter,
+    model: project.documenterAgent.model,
+  });
 
   const state: DocumentState = {
     projectId: project.id,
     projectName: project.name,
     status: "preparing",
-    startedAt: new Date().toISOString(),
+    startedAt,
     logFile,
+    logFileName,
+    sequence,
+    historyEventId,
   };
 
   documentStore.set(project.id, state);
 
   // Run in background
-  runDocument(project, state).catch((err) => {
+  runDocument(project, state).catch(async (err) => {
     state.status = "failed";
     state.error = err instanceof Error ? err.message : String(err);
     state.completedAt = new Date().toISOString();
+    await updateHistoryEvent(project.id, historyEventId, {
+      status: "failed",
+      error: state.error,
+      completedAt: state.completedAt,
+    });
   });
 
   return state;
@@ -89,13 +122,66 @@ export async function startDocument(
 
 /**
  * Run the documenter agent synchronously (used by the loop post-SUCCESS).
- * Returns the exit code.
+ * Allocates its own sequence number and writes a history event.
+ * Returns the exit code and log file info.
  */
 export async function runDocumentSync(
   project: ProjectConfig,
-): Promise<{ exitCode: number; logFile: string }> {
-  const logFile = getIterationLogPath(project.id, 0, "documenter");
+): Promise<{ exitCode: number; logFile: string; logFileName: string; sequence: number }> {
   await ensureProjectLogDir(project.id);
+  const sequence = await nextAgentRunSequence(project.id, "documenter");
+  const logFile = getAgentRunLogPath(project.id, "documenter", sequence);
+  const logFileName = `documenter-${String(sequence).padStart(3, "0")}.log`;
+
+  const adapter = getAdapter(project.documenterAgent.adapter);
+  if (!adapter) {
+    throw new Error(`Unknown documenter agent adapter: ${project.documenterAgent.adapter}`);
+  }
+
+  // Record history event
+  const historyEventId = randomBytes(8).toString("hex");
+  const startedAt = new Date().toISOString();
+  await appendHistoryEvent(project.id, {
+    id: historyEventId,
+    type: "document",
+    status: "running",
+    startedAt,
+    logFile: logFileName,
+    agent: project.documenterAgent.adapter,
+    model: project.documenterAgent.model,
+  });
+
+  await writeDocumenterInstructions(project.repoPath, project);
+
+  const prompt = `Read cfcf-docs/cfcf-documenter-instructions.md and follow the instructions exactly. Produce comprehensive project documentation in the docs/ directory before exiting.`;
+  const cmd = adapter.buildCommand(project.repoPath, prompt, project.documenterAgent.model);
+
+  const managed = await spawnProcess({
+    command: cmd.command,
+    args: cmd.args,
+    cwd: project.repoPath,
+    logFile,
+  });
+
+  const result = await managed.result;
+
+  // Finalize history event
+  await updateHistoryEvent(project.id, historyEventId, {
+    status: result.exitCode === 0 ? "completed" : "failed",
+    completedAt: new Date().toISOString(),
+  });
+
+  return { exitCode: result.exitCode, logFile, logFileName, sequence };
+}
+
+/**
+ * Execute the documenter (async version for CLI).
+ */
+async function runDocument(
+  project: ProjectConfig,
+  state: DocumentState,
+): Promise<void> {
+  state.status = "executing";
 
   const adapter = getAdapter(project.documenterAgent.adapter);
   if (!adapter) {
@@ -111,25 +197,17 @@ export async function runDocumentSync(
     command: cmd.command,
     args: cmd.args,
     cwd: project.repoPath,
-    logFile,
+    logFile: state.logFile,
   });
 
   const result = await managed.result;
-  return { exitCode: result.exitCode, logFile };
-}
-
-/**
- * Execute the documenter (async version for CLI).
- */
-async function runDocument(
-  project: ProjectConfig,
-  state: DocumentState,
-): Promise<void> {
-  state.status = "executing";
-
-  const result = await runDocumentSync(project);
   state.exitCode = result.exitCode;
 
   state.status = "completed";
   state.completedAt = new Date().toISOString();
+
+  await updateHistoryEvent(project.id, state.historyEventId, {
+    status: result.exitCode === 0 ? "completed" : "failed",
+    completedAt: state.completedAt,
+  });
 }

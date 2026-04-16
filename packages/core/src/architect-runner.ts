@@ -11,7 +11,9 @@ import { readFile, writeFile, mkdir, copyFile, access } from "fs/promises";
 import type { ProjectConfig, ArchitectSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
-import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
+import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
 
@@ -26,7 +28,14 @@ export interface ReviewState {
   startedAt: string;
   completedAt?: string;
   exitCode?: number;
+  /** Absolute path to the log file (for server use) */
   logFile: string;
+  /** Log file name only (for web clients to reference via the logs API) */
+  logFileName: string;
+  /** Sequence number for this review run */
+  sequence: number;
+  /** History event ID */
+  historyEventId: string;
   signals?: ArchitectSignals;
   error?: string;
 }
@@ -103,24 +112,48 @@ export async function startReview(
   project: ProjectConfig,
   opts?: { problemPackPath?: string },
 ): Promise<ReviewState> {
-  const logFile = getIterationLogPath(project.id, 0, "architect");
   await ensureProjectLogDir(project.id);
+  const sequence = await nextAgentRunSequence(project.id, "architect");
+  const logFile = getAgentRunLogPath(project.id, "architect", sequence);
+  const logFileName = `architect-${String(sequence).padStart(3, "0")}.log`;
+
+  const historyEventId = randomBytes(8).toString("hex");
+  const startedAt = new Date().toISOString();
+
+  // Record the history event immediately
+  await appendHistoryEvent(project.id, {
+    id: historyEventId,
+    type: "review",
+    status: "running",
+    startedAt,
+    logFile: logFileName,
+    agent: project.architectAgent.adapter,
+    model: project.architectAgent.model,
+  });
 
   const state: ReviewState = {
     projectId: project.id,
     projectName: project.name,
     status: "preparing",
-    startedAt: new Date().toISOString(),
+    startedAt,
     logFile,
+    logFileName,
+    sequence,
+    historyEventId,
   };
 
   reviewStore.set(project.id, state);
 
   // Run in background
-  runReview(project, state, opts).catch((err) => {
+  runReview(project, state, opts).catch(async (err) => {
     state.status = "failed";
     state.error = err instanceof Error ? err.message : String(err);
     state.completedAt = new Date().toISOString();
+    await updateHistoryEvent(project.id, historyEventId, {
+      status: "failed",
+      error: state.error,
+      completedAt: state.completedAt,
+    });
   });
 
   return state;
@@ -184,4 +217,11 @@ async function runReview(
 
   state.status = "completed";
   state.completedAt = new Date().toISOString();
+
+  // Update history event with final status
+  await updateHistoryEvent(project.id, state.historyEventId, {
+    status: result.exitCode === 0 ? "completed" : "failed",
+    completedAt: state.completedAt,
+    readiness: signals?.readiness,
+  } as Partial<import("./project-history.js").ReviewHistoryEvent>);
 }

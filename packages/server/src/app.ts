@@ -21,7 +21,7 @@ import {
   deleteProject,
   validateProjectRepo,
 } from "@cfcf/core";
-import { getIterationLogPath } from "@cfcf/core";
+import { getIterationLogPath, getLogPathByFilename, readHistory } from "@cfcf/core";
 import {
   startIteration,
   getIterationState,
@@ -432,6 +432,143 @@ export function createApp() {
     }
 
     return c.json(state);
+  });
+
+  // --- Project history ---
+
+  app.get("/api/projects/:id/history", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const events = await readHistory(project.id);
+    return c.json(events);
+  });
+
+  // --- Generic log streaming (by filename) ---
+
+  app.get("/api/projects/:id/logs/:filename", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const filename = c.req.param("filename");
+    const logPath = getLogPathByFilename(project.id, filename);
+    if (!logPath) {
+      return c.json({ error: "Invalid log filename" }, 400);
+    }
+
+    return streamSSE(c, async (stream) => {
+      // Determine if the log is for a "live" agent run.
+      // For iteration logs: check if loopState.currentIteration matches AND phase is active
+      // For architect/documenter logs: check if their state is "running"/"executing"
+      let isLive = false;
+
+      if (filename.startsWith("iteration-")) {
+        const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
+        if (match) {
+          const iterNum = parseInt(match[1], 10);
+          const loopState = await getLoopState(project.id);
+          isLive = !!loopState &&
+            loopState.currentIteration === iterNum &&
+            ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
+        }
+      } else if (filename.startsWith("architect-")) {
+        const reviewState = getReviewState(project.id);
+        isLive = !!reviewState &&
+          reviewState.logFileName === filename &&
+          ["preparing", "executing", "collecting"].includes(reviewState.status);
+      } else if (filename.startsWith("documenter-")) {
+        const docState = getDocumentState(project.id);
+        const loopState = await getLoopState(project.id);
+        // Check both: standalone documenter run OR loop's documenting phase
+        isLive = (!!docState && docState.logFileName === filename &&
+          ["preparing", "executing"].includes(docState.status)) ||
+          (!!loopState && loopState.phase === "documenting");
+      }
+
+      let lastSize = 0;
+      let retries = 0;
+
+      try {
+        while (true) {
+          const file = Bun.file(logPath);
+          const exists = await file.exists();
+
+          if (exists) {
+            const content = await file.text();
+            if (content.length > lastSize) {
+              const newContent = content.slice(lastSize);
+              const lines = newContent.split("\n");
+              for (const line of lines) {
+                if (line.length > 0) {
+                  await stream.writeSSE({ event: "log", data: line });
+                }
+              }
+              lastSize = content.length;
+              retries = 0;
+            }
+          }
+
+          if (!isLive) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // Re-check live status
+          if (filename.startsWith("iteration-")) {
+            const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
+            if (match) {
+              const iterNum = parseInt(match[1], 10);
+              const currentLoop = await getLoopState(project.id);
+              const stillLive = !!currentLoop &&
+                currentLoop.currentIteration === iterNum &&
+                ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
+              if (!stillLive) isLive = false;
+            }
+          } else if (filename.startsWith("architect-")) {
+            const reviewState = getReviewState(project.id);
+            const stillLive = !!reviewState &&
+              reviewState.logFileName === filename &&
+              ["preparing", "executing", "collecting"].includes(reviewState.status);
+            if (!stillLive) isLive = false;
+          } else if (filename.startsWith("documenter-")) {
+            const docState = getDocumentState(project.id);
+            const loopState = await getLoopState(project.id);
+            const stillLive = (!!docState && docState.logFileName === filename &&
+              ["preparing", "executing"].includes(docState.status)) ||
+              (!!loopState && loopState.phase === "documenting");
+            if (!stillLive) isLive = false;
+          }
+
+          if (!isLive) continue; // Will exit on next iteration
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          retries++;
+          if (retries > 600) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Stream timeout" }),
+            });
+            return;
+          }
+        }
+      } catch {
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({ error: "Error reading log file" }),
+        });
+      }
+    });
   });
 
   // --- Iteration Loop (dark factory) ---

@@ -36,6 +36,8 @@ import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
 
@@ -89,6 +91,11 @@ export interface LoopIterationRecord {
   judgeError?: string;
   devLogFile: string;
   judgeLogFile: string;
+  /** Log filenames only (for web clients) */
+  devLogFileName: string;
+  judgeLogFileName: string;
+  /** History event ID */
+  historyEventId: string;
   startedAt: string;
   completedAt?: string;
   merged: boolean;
@@ -471,16 +478,42 @@ async function runLoop(
     await ensureProjectLogDir(project.id);
     const devLogFile = getIterationLogPath(project.id, iterationNum, "dev");
     const judgeLogFile = getIterationLogPath(project.id, iterationNum, "judge");
+    const iterStr = String(iterationNum).padStart(3, "0");
+    const devLogFileName = `iteration-${iterStr}-dev.log`;
+    const judgeLogFileName = `iteration-${iterStr}-judge.log`;
+
+    const historyEventId = randomBytes(8).toString("hex");
+    const startedAt = new Date().toISOString();
 
     const iterRecord: LoopIterationRecord = {
       number: iterationNum,
       branch: branchName,
       devLogFile,
       judgeLogFile,
-      startedAt: new Date().toISOString(),
+      devLogFileName,
+      judgeLogFileName,
+      historyEventId,
+      startedAt,
       merged: false,
     };
     state.iterations.push(iterRecord);
+
+    // Record history event (will be updated when iteration completes)
+    await appendHistoryEvent(project.id, {
+      id: historyEventId,
+      type: "iteration",
+      status: "running",
+      startedAt,
+      iteration: iterationNum,
+      branch: branchName,
+      logFile: devLogFileName, // primary log file for display
+      devLogFile: devLogFileName,
+      judgeLogFile: judgeLogFileName,
+      agent: project.devAgent.adapter, // used by BaseHistoryEvent
+      model: project.devAgent.model,
+      devAgent: project.devAgent.adapter,
+      judgeAgent: project.judgeAgent.adapter,
+    });
 
     const problemPack = await readProblemPack(packPath);
 
@@ -653,6 +686,16 @@ async function runJudgeAndDecide(
 
   iterRecord.completedAt = new Date().toISOString();
 
+  // Update history event for this iteration
+  await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+    status: "completed",
+    completedAt: iterRecord.completedAt,
+    devExitCode: iterRecord.devExitCode,
+    judgeExitCode: iterRecord.judgeExitCode,
+    judgeDetermination: judgeSignals?.determination,
+    judgeQuality: judgeSignals?.quality_score,
+  } as Partial<import("./project-history.js").IterationHistoryEvent>);
+
   // --- DECIDE ---
   state.phase = "deciding";
   await saveLoopState(state);
@@ -684,6 +727,10 @@ async function runJudgeAndDecide(
       // If merge fails, stay on the feature branch
       await gitManager.checkoutBranch(project.repoPath, branchName);
     }
+    // Update history with merge status
+    await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+      merged: iterRecord.merged,
+    } as Partial<import("./project-history.js").IterationHistoryEvent>);
   }
 
   // Clear user feedback after it's been consumed
