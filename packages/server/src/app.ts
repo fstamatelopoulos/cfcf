@@ -7,7 +7,9 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { join } from "path";
+import { serveStatic } from "hono/bun";
+import { cors } from "hono/cors";
+import { join, dirname } from "path";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig } from "@cfcf/core";
 import {
@@ -40,6 +42,9 @@ const startedAt = Date.now();
 
 export function createApp() {
   const app = new Hono();
+
+  // CORS for development (Vite dev server on different port)
+  app.use("/api/*", cors());
 
   // --- Health / Status ---
 
@@ -458,6 +463,56 @@ export function createApp() {
       return c.json({ error: message }, 400);
     }
   });
+
+  // --- Loop Events SSE ---
+
+  app.get("/api/projects/:id/loop/events", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    return streamSSE(c, async (stream) => {
+      let lastPhase = "";
+      let lastIteration = 0;
+
+      while (true) {
+        const state = await getLoopState(project.id);
+        if (!state) {
+          await stream.writeSSE({ event: "error", data: JSON.stringify({ error: "No active loop" }) });
+          return;
+        }
+
+        // Emit state when phase or iteration changes
+        if (state.phase !== lastPhase || state.currentIteration !== lastIteration) {
+          lastPhase = state.phase;
+          lastIteration = state.currentIteration;
+          await stream.writeSSE({ event: "state", data: JSON.stringify(state) });
+        }
+
+        // Terminal states end the stream
+        if (["completed", "failed", "stopped", "paused"].includes(state.phase)) {
+          await stream.writeSSE({ event: "done", data: JSON.stringify(state) });
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    });
+  });
+
+  // --- Static file serving (Web GUI) ---
+
+  // Resolve the path to packages/web/dist/ relative to this file
+  const webDistPath = join(dirname(new URL(import.meta.url).pathname), "..", "..", "web", "dist");
+
+  // Serve static files from the web build directory
+  app.use("/*", serveStatic({ root: webDistPath }));
+
+  // SPA fallback: serve index.html for non-API routes that don't match a file
+  app.get("*", serveStatic({ root: webDistPath, path: "/index.html" }));
 
   // --- Server shutdown ---
 
