@@ -34,15 +34,21 @@ export function LogViewer({
   // Browsers handle large text in a single <pre> far better than
   // thousands of individual DOM elements.
   const text = lines.join("\n");
+  const isLoading = !done && lines.length === 0;
+  const isStreaming = connected && !done;
 
   return (
-    <div className="log-viewer">
+    <div className={`log-viewer ${isStreaming ? "log-viewer--loading" : ""}`}>
       <div className="log-viewer__header">
         <span>
-          Iteration {iteration} ({role}) — {lines.length.toLocaleString()} lines
+          Iteration {iteration} ({role})
+          {lines.length > 0 && ` — ${lines.length.toLocaleString()} lines`}
+          {isStreaming && " (loading...)"}
         </span>
         <span className="log-viewer__status">
-          {connected ? (
+          {isLoading ? (
+            <span className="log-viewer__spinner" />
+          ) : connected ? (
             <span className="status-dot status-dot--ok" title="streaming" />
           ) : done ? (
             "complete"
