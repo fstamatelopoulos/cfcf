@@ -351,10 +351,13 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] Process definition template versioning
   - Track which process template version was used
   - Ship default template, support user customization
-- [ ] Configurable loop behavior flags:
-  - `autoDocumenter` (default true): run documenter post-SUCCESS automatically. When false, user must invoke `cfcf document` manually
-  - `autoReviewSpecs` (default false): run architect review automatically before starting the loop. When true, `cfcf run` first invokes the architect and fails/pauses if readiness is BLOCKED
-  - Both flags in ProjectConfig and global config with per-project overrides
+- [ ] Configurable loop behavior flags (aligned across CLI and web UI):
+  - `autoDocumenter` (default true): run documenter post-SUCCESS automatically. When false, user must invoke `cfcf document` (CLI) or click Document (web) manually.
+  - `autoReviewSpecs` (default false): run architect review automatically before starting the loop. When true, `cfcf run` / "Start Loop" first invokes the architect and fails/pauses if readiness is BLOCKED.
+  - Both flags in global config (set via `cfcf init`) with per-project overrides in ProjectConfig.
+  - **CLI/Web alignment**: `cfcf run` and web "Start Loop" must behave identically — both honor the flags, both show the same phase transitions, both run or skip the auto-review/auto-document step the same way.
+  - **Per-run overrides**: CLI flags `--auto-document=false` / `--auto-review-specs=true` override project config for that single run. Web UI has matching toggles in the Start Loop dialog or project config view.
+  - **Discoverability**: web UI shows the effective flag values in the Config tab. Starting a loop with `autoDocumenter: false` should show a note in the UI reminding the user they'll need to run Document manually.
 - [ ] Auto-delete (or archive) merged iteration branches
   - Optional cleanup after successful merge to main
   - Configurable: `cleanupMergedBranches` (default false — preserve for audit)
