@@ -412,6 +412,26 @@
   flex-wrap: wrap;
 }
 
+.loop-controls__status {
+  color: var(--color-info);
+  font-size: 0.8rem;
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.loop-controls__status::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 .loop-controls__error {
   color: var(--color-error);
   font-size: 0.8rem;
