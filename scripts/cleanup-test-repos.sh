@@ -4,12 +4,17 @@
 #
 # This removes:
 #   - Test repos at /tmp/cfcf-calc, /tmp/cfcf-tracker (and legacy /tmp/cfcf-test-repo, /tmp/cfcf-task-tracker, /tmp/cfcf-web-test)
+#   - All cfcf projects (via the server API if it's running, or direct file removal as fallback)
 #   - cfcf project configs and loop state (~/Library/Application Support/cfcf/projects/)
 #   - cfcf agent logs (~/.cfcf/logs/)
 #
 # This does NOT touch:
 #   - Your cfcf dev repo (~/src/cfcf)
 #   - The global cfcf config file (agents, models, etc.) at ~/Library/Application Support/cfcf/config.json
+#
+# If the cfcf server is running, projects are deleted via DELETE /api/projects/:id
+# so the server can clean up in-memory state. Falls back to direct file removal if
+# the server is not reachable.
 #
 # Prompts for confirmation before deleting anything.
 #
@@ -75,6 +80,32 @@ fi
 echo ""
 echo "Cleaning up..."
 
+# Try to delete projects via the CLI first (lets the server clean up
+# in-memory state, run any future teardown logic, etc.). Falls back to
+# direct file removal if the server is not reachable.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+server_up=false
+if curl -s -f -o /dev/null --max-time 2 "http://localhost:${CFCF_PORT:-7233}/api/health" 2>/dev/null; then
+  server_up=true
+fi
+
+if [[ "${server_up}" == "true" ]] && command -v bun >/dev/null 2>&1; then
+  echo "  Server is running -- deleting projects via CLI..."
+  # List project names and delete each (the CLI's project delete prompts,
+  # so we use the API directly via curl for non-interactive cleanup)
+  projects_json=$(curl -s "http://localhost:${CFCF_PORT:-7233}/api/projects" 2>/dev/null || echo "[]")
+  project_ids=$(echo "${projects_json}" | grep -oE '"id":"[^"]+"' | sed 's/"id":"\([^"]*\)"/\1/g' || true)
+
+  for id in ${project_ids}; do
+    curl -s -X DELETE "http://localhost:${CFCF_PORT:-7233}/api/projects/${id}" >/dev/null 2>&1 || true
+    echo "    Deleted project ${id}"
+  done
+else
+  echo "  Server not running -- falling back to direct file removal"
+fi
+
 # Delete test repos
 for r in "${REPOS[@]}"; do
   if [[ -d "${r}" ]]; then
@@ -83,7 +114,8 @@ for r in "${REPOS[@]}"; do
   fi
 done
 
-# Delete project configs/state
+# Delete any remaining project configs/state (safety net in case the CLI/API
+# didn't get them, or server wasn't running)
 if [[ -d "${PROJECTS_DIR}" ]]; then
   rm -rf "${PROJECTS_DIR}"
   mkdir -p "${PROJECTS_DIR}"
