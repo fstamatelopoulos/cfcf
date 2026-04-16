@@ -339,6 +339,16 @@ Each iteration re-reads all context. Strategies to manage this:
 - [ ] Process definition template versioning
   - Track which process template version was used
   - Ship default template, support user customization
+- [ ] Embed templates into binary (true single-file distribution)
+  - Import .md and .json templates as string constants at build time
+  - Binary works without external template files on disk
+  - Prerequisite for the installer
+- [ ] Installer script: `curl -fsSL https://cerefox.org/install | bash`
+  - Detects platform (darwin-arm64, darwin-x64, linux-x64)
+  - Downloads binary from GitHub Releases
+  - Installs to /usr/local/bin/ or ~/.local/bin/
+  - Verifies checksum
+  - Single binary = single download, no template files to manage
 
 ---
 
