@@ -73,10 +73,10 @@ export function LoopControls({
         )}
 
         {/* Start Loop / Stop Loop / Resume */}
-        {canStart && !isBusy && (
+        {canStart && (
           <button
             className="btn btn--primary"
-            disabled={loading !== null}
+            disabled={loading !== null || isBusy}
             onClick={() => doAction("start", () => api.startLoop(projectId))}
           >
             {loading === "start" ? "Starting..." : "Start Loop"}
