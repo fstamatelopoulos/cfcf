@@ -110,6 +110,9 @@ export interface ReviewState {
   completedAt?: string;
   exitCode?: number;
   logFile: string;
+  logFileName?: string;
+  sequence?: number;
+  historyEventId?: string;
   signals?: {
     readiness: string;
     gaps: string[];
@@ -128,6 +131,9 @@ export interface DocumentState {
   completedAt?: string;
   exitCode?: number;
   logFile: string;
+  logFileName?: string;
+  sequence?: number;
+  historyEventId?: string;
   error?: string;
 }
 

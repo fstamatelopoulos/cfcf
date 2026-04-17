@@ -4,7 +4,7 @@
 
 import { createApp } from "./app.js";
 import { VERSION } from "@cfcf/core";
-import { writePidFile, removePidFile } from "@cfcf/core";
+import { writePidFile, removePidFile, cleanupAllStaleRunningEvents } from "@cfcf/core";
 
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
 
@@ -18,6 +18,16 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   }
 
   const app = createApp();
+
+  // Clean up any stale "running" history events from a previous crash/restart.
+  // Agent processes don't survive server restarts, so any "running" event
+  // is orphaned and should be marked as failed.
+  const cleaned = await cleanupAllStaleRunningEvents(
+    "Server restarted while this event was running",
+  );
+  if (cleaned > 0) {
+    console.log(`Marked ${cleaned} stale running event(s) as failed`);
+  }
 
   serverInstance = Bun.serve({
     port,

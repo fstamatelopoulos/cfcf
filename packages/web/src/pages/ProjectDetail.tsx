@@ -1,16 +1,29 @@
 import { useState, useCallback, useEffect } from "react";
-import { fetchProject, fetchLoopStatus, fetchHistory } from "../api";
+import {
+  fetchProject,
+  fetchLoopStatus,
+  fetchHistory,
+  fetchReviewStatus,
+  fetchDocumentStatus,
+} from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import { StatusBadge } from "../components/StatusBadge";
 import { PhaseIndicator } from "../components/PhaseIndicator";
-import { LoopControls, type AgentAction } from "../components/LoopControls";
+import { LoopControls, type AgentAction, type ActiveAgent } from "../components/LoopControls";
 import { FeedbackForm } from "../components/FeedbackForm";
 import { LogViewer, type LogTarget } from "../components/LogViewer";
 import { ConfigDisplay } from "../components/ConfigDisplay";
 import { JudgeAssessment } from "../components/JudgeAssessment";
 import { ProjectHistory } from "../components/ProjectHistory";
 import { TabBar } from "../components/TabBar";
-import type { ProjectConfig, LoopState, HistoryEvent, IterationHistoryEvent } from "../types";
+import type {
+  ProjectConfig,
+  LoopState,
+  HistoryEvent,
+  IterationHistoryEvent,
+  ReviewState,
+  DocumentState,
+} from "../types";
 
 const tabs = [
   { key: "status", label: "Status" },
@@ -19,14 +32,18 @@ const tabs = [
   { key: "config", label: "Config" },
 ];
 
+const LOOP_ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "deciding", "documenting"];
+const REVIEW_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
+const DOCUMENT_ACTIVE_STATUSES = ["preparing", "executing"];
+
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const [activeTab, setActiveTab] = useState("status");
   const [project, setProject] = useState<ProjectConfig | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [loopState, setLoopState] = useState<LoopState | null>(null);
+  const [reviewState, setReviewState] = useState<ReviewState | null>(null);
+  const [documentState, setDocumentState] = useState<DocumentState | null>(null);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
-
-  // Log target is lifted here so it persists across tab switches
   const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
 
   // --- Fetchers ---
@@ -50,6 +67,24 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     }
   }, [projectId]);
 
+  const refreshReview = useCallback(async () => {
+    try {
+      const state = await fetchReviewStatus(projectId);
+      setReviewState(state);
+    } catch {
+      setReviewState(null);
+    }
+  }, [projectId]);
+
+  const refreshDocument = useCallback(async () => {
+    try {
+      const state = await fetchDocumentStatus(projectId);
+      setDocumentState(state);
+    } catch {
+      setDocumentState(null);
+    }
+  }, [projectId]);
+
   const refreshHistory = useCallback(async () => {
     try {
       const events = await fetchHistory(projectId);
@@ -59,44 +94,50 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     }
   }, [projectId]);
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshProject(), refreshLoop(), refreshReview(), refreshDocument(), refreshHistory()]);
+  }, [refreshProject, refreshLoop, refreshReview, refreshDocument, refreshHistory]);
+
+  // --- Derived state ---
+
+  const isLoopActive = !!loopState && LOOP_ACTIVE_PHASES.includes(loopState.phase);
+  const isReviewActive = !!reviewState && REVIEW_ACTIVE_STATUSES.includes(reviewState.status);
+  const isDocumentActive = !!documentState && DOCUMENT_ACTIVE_STATUSES.includes(documentState.status);
+  const activeAgent: ActiveAgent = isLoopActive
+    ? "loop"
+    : isReviewActive
+      ? "review"
+      : isDocumentActive
+        ? "document"
+        : null;
+
+  const hasRunningHistory = history.some((e) => e.status === "running");
+  const anyAgentRunning = !!activeAgent || hasRunningHistory;
+
   // --- Polling ---
 
-  const ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "deciding", "documenting"];
-  const isLoopActive = !!loopState && ACTIVE_PHASES.includes(loopState.phase);
-
-  // Initial fetch of everything
+  // Initial fetch
   useEffect(() => {
-    refreshProject();
-    refreshLoop();
-    refreshHistory();
-  }, [refreshProject, refreshLoop, refreshHistory]);
+    refreshAll();
+  }, [refreshAll]);
 
-  // Poll loop state + history while active
+  // Continuous polling: fast (3s) when any agent is running, slow (10s) otherwise
   useEffect(() => {
-    if (!isLoopActive) return;
-    const id = setInterval(() => {
-      refreshLoop();
-      refreshHistory();
-    }, 3000);
+    const interval = anyAgentRunning ? 3000 : 10000;
+    const id = setInterval(refreshAll, interval);
     return () => clearInterval(id);
-  }, [isLoopActive, refreshLoop, refreshHistory]);
+  }, [anyAgentRunning, refreshAll]);
 
   // --- Agent action handler ---
 
   const handleAgentAction = async (action: AgentAction) => {
-    // Refresh history after every action so new events show up
-    await refreshHistory();
-    refreshProject();
-    refreshLoop();
+    await refreshAll();
 
-    // Auto-switch to logs tab and focus on the new run's log
+    // Auto-switch to Logs tab for new agent starts
     if (action === "review" || action === "start" || action === "resume" || action === "document") {
-      // Need to refetch history right after starting so we get the new event's log filename
       setTimeout(async () => {
         const events = await fetchHistory(projectId);
         setHistory(events);
-
-        // Find the most recently started event matching the action
         const targetType =
           action === "review" ? "review" : action === "document" ? "document" : "iteration";
         const sorted = [...events].sort(
@@ -115,7 +156,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           setLogTarget({ projectId, logFile, label });
           setActiveTab("logs");
         }
-      }, 500); // Small delay so the server has time to register the new event
+      }, 500);
     }
   };
 
@@ -130,6 +171,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const currentPhase = loopState?.phase;
   const isPaused = currentPhase === "paused";
 
+  // Which state drives the top-of-page indicator + header badge?
+  const headerBadgeStatus = isReviewActive
+    ? "running"
+    : isDocumentActive
+      ? "running"
+      : currentPhase || project.status;
+
   return (
     <div className="project-detail">
       <div className="project-detail__header">
@@ -137,19 +185,38 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           &larr; Projects
         </button>
         <h2>{project.name}</h2>
-        <StatusBadge status={currentPhase || project.status} />
+        <StatusBadge status={headerBadgeStatus} />
+        {isReviewActive && <span className="project-detail__active-tag">review running</span>}
+        {isDocumentActive && <span className="project-detail__active-tag">document running</span>}
       </div>
 
       <LoopControls
         projectId={project.id}
         phase={currentPhase}
+        activeAgent={activeAgent}
         onAction={handleAgentAction}
       />
 
-      {loopState && currentPhase && !["idle", "completed", "failed", "stopped"].includes(currentPhase) && (
+      {/* Phase indicator: shows for whichever agent is active */}
+      {isLoopActive && loopState && (
         <PhaseIndicator
-          phase={currentPhase}
-          iteration={loopState.currentIteration}
+          agentType="loop"
+          phase={loopState.phase}
+          title={`Iteration ${loopState.currentIteration}`}
+        />
+      )}
+      {isReviewActive && reviewState && (
+        <PhaseIndicator
+          agentType="review"
+          phase={reviewState.status}
+          title={reviewState.sequence ? `Review run ${reviewState.sequence}` : "Review"}
+        />
+      )}
+      {isDocumentActive && documentState && (
+        <PhaseIndicator
+          agentType="document"
+          phase={documentState.status}
+          title={documentState.sequence ? `Document run ${documentState.sequence}` : "Document"}
         />
       )}
 
@@ -167,7 +234,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {loopState?.outcome && (
+      {loopState?.outcome && !isLoopActive && (
         <div className={`project-detail__outcome project-detail__outcome--${loopState.outcome}`}>
           Outcome: {loopState.outcome}
           {loopState.completedAt && (
@@ -181,13 +248,41 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <TabBar tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
       <div className="project-detail__panel">
-        {/* Keep all tabs mounted so LogViewer preserves SSE state across tab switches */}
         <div style={{ display: activeTab === "status" ? "block" : "none" }}>
           <div className="status-panel">
+            {isReviewActive && reviewState && (
+              <div className="status-panel__section">
+                <h3>Review in progress</h3>
+                <div className="status-panel__info">
+                  <span>Started: {new Date(reviewState.startedAt).toLocaleTimeString()}</span>
+                  <span>Agent: {reviewState.projectName ? "" : ""}{project.architectAgent.adapter}</span>
+                </div>
+              </div>
+            )}
+            {isDocumentActive && documentState && (
+              <div className="status-panel__section">
+                <h3>Document in progress</h3>
+                <div className="status-panel__info">
+                  <span>Started: {new Date(documentState.startedAt).toLocaleTimeString()}</span>
+                  <span>Agent: {project.documenterAgent.adapter}</span>
+                </div>
+              </div>
+            )}
             {lastIteration?.judgeSignals && (
               <div className="status-panel__section">
                 <h3>Latest Judge Assessment</h3>
                 <JudgeAssessment signals={lastIteration.judgeSignals} />
+              </div>
+            )}
+            {reviewState?.signals && !isReviewActive && (
+              <div className="status-panel__section">
+                <h3>Latest Review</h3>
+                <div className="status-panel__info">
+                  <span>Readiness: {reviewState.signals.readiness}</span>
+                  {reviewState.completedAt && (
+                    <span>Completed: {new Date(reviewState.completedAt).toLocaleString()}</span>
+                  )}
+                </div>
               </div>
             )}
             {loopState && (
@@ -206,9 +301,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </div>
               </div>
             )}
-            {!loopState && (
+            {!loopState && !reviewState && !documentState && (
               <div className="status-panel__empty">
-                No active loop. Click "Start Loop" to begin.
+                Nothing has run yet. Click Review to start, or Start Loop to begin iterating.
               </div>
             )}
           </div>

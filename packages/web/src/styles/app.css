@@ -251,6 +251,15 @@
   font-size: 1.5rem;
 }
 
+.project-detail__active-tag {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  background: color-mix(in srgb, var(--color-info) 20%, transparent);
+  color: var(--color-info);
+  border-radius: 12px;
+  font-weight: 500;
+}
+
 .project-detail__error-banner {
   background: var(--color-error);
   color: white;

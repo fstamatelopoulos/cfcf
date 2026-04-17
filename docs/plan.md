@@ -316,6 +316,14 @@ Each iteration re-reads all context. Strategies to manage this:
   - Web: clicking Review/Start Loop/Document auto-switches to Logs tab and streams that agent's log
   - LogViewer state lifted to ProjectDetail so streaming persists across tab switches
   - Simplify LoopControls: removed separate status polling; log stream IS the feedback
+- [ ] Unified agent-run model (review, loop, document share the same state machine):
+  - **Stop buttons**: while review or document is running, the Review/Document button becomes "Stop Review" / "Stop Document" (red). Other action buttons disabled during any active agent run.
+  - **Stop endpoints**: `POST /api/projects/:id/review/stop`, `POST /api/projects/:id/document/stop`. Kill the agent process, update state to `stopped`, finalize history event with error "stopped by user".
+  - **Stale history cleanup**: on server startup, scan all projects' `history.json` and mark any `status: "running"` events as `failed` with error "server restarted" so stuck events don't hang the UI.
+  - **Continuous history polling**: web UI polls `/history` every 5s on the project detail page (faster while any agent is running). Fixes the bug where a standalone review/document completes but the history stays at "running" because nothing was polling.
+  - **Status tab unification**: the Status tab shows progress for whichever agent is active (review/loop/document), not just the loop. Same PhaseIndicator-style visual for each.
+  - **Phase model**: review has phases {preparing, executing, collecting, completed}; document has {preparing, executing, completed}; loop has its existing set. PhaseIndicator renders the appropriate steps for the active agent type.
+  - **Sets up for iteration 5**: once the three agents share this model, adding `autoReviewSpecs` and `autoDocumenter` flags becomes a matter of chaining them (review → loop → document) in one unified flow.
 - [ ] `cfcf log <project-name>`: iteration history viewer
 - [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
 - [ ] Research: Sandbox / guardrails for unattended agent execution

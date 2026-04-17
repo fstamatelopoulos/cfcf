@@ -129,3 +129,46 @@ export async function updateHistoryEvent(
   await writeHistory(projectId, events);
   return events[idx];
 }
+
+/**
+ * Clean up stale "running" events for a project by marking them as "failed".
+ * Called on server startup to recover from crashes/restarts.
+ * Returns the number of events marked as failed.
+ */
+export async function cleanupStaleRunningEvents(
+  projectId: string,
+  reason: string = "Server restarted while this event was running",
+): Promise<number> {
+  const events = await readHistory(projectId);
+  let changed = 0;
+  const now = new Date().toISOString();
+  for (const event of events) {
+    if (event.status === "running") {
+      event.status = "failed";
+      event.error = reason;
+      event.completedAt = now;
+      changed++;
+    }
+  }
+  if (changed > 0) {
+    await writeHistory(projectId, events);
+  }
+  return changed;
+}
+
+/**
+ * Clean up stale running events across all projects.
+ * Returns the total number of events marked failed.
+ */
+export async function cleanupAllStaleRunningEvents(
+  reason: string = "Server restarted while this event was running",
+): Promise<number> {
+  // Lazy import to avoid circular dep
+  const { listProjects } = await import("./projects.js");
+  const projects = await listProjects();
+  let total = 0;
+  for (const p of projects) {
+    total += await cleanupStaleRunningEvents(p.id, reason);
+  }
+  return total;
+}

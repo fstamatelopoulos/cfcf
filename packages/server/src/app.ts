@@ -34,8 +34,10 @@ import {
   getLoopState,
   startReview,
   getReviewState,
+  stopReview,
   startDocument,
   getDocumentState,
+  stopDocument,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -394,6 +396,21 @@ export function createApp() {
     return c.json(state);
   });
 
+  app.post("/api/projects/:id/review/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = await stopReview(project.id);
+    if (!state) {
+      return c.json({ error: "No review running for this project" }, 404);
+    }
+    return c.json({ projectId: state.projectId, status: state.status, message: "Review stopped." });
+  });
+
   // --- Documenter ---
 
   app.post("/api/projects/:id/document", async (c) => {
@@ -432,6 +449,21 @@ export function createApp() {
     }
 
     return c.json(state);
+  });
+
+  app.post("/api/projects/:id/document/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = await stopDocument(project.id);
+    if (!state) {
+      return c.json({ error: "No documenter running for this project" }, 404);
+    }
+    return c.json({ projectId: state.projectId, status: state.status, message: "Documenter stopped." });
   });
 
   // --- Project history ---
