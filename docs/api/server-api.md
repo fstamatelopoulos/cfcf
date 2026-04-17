@@ -391,6 +391,20 @@ Start a Solution Architect review of the Problem Pack. User-invoked, advisory, r
 
 ---
 
+### POST /api/projects/:id/review/stop
+
+Stop a running architect review. Kills the agent process and marks the review as failed with "Stopped by user".
+
+**Response:** `200 OK`
+
+```json
+{ "projectId": "...", "status": "failed", "message": "Review stopped." }
+```
+
+**Error:** `404` if no review is running for this project.
+
+---
+
 ### GET /api/projects/:id/review/status
 
 Get the status of an architect review.
@@ -434,6 +448,20 @@ Run the Documenter agent to produce polished final project documentation. User-i
   "message": "Documenter started. Poll GET /api/projects/:id/document/status for progress."
 }
 ```
+
+---
+
+### POST /api/projects/:id/document/stop
+
+Stop a running documenter. Kills the agent process and marks the document run as failed with "Stopped by user".
+
+**Response:** `200 OK`
+
+```json
+{ "projectId": "...", "status": "failed", "message": "Documenter stopped." }
+```
+
+**Error:** `404` if no document run is active for this project.
 
 ---
 

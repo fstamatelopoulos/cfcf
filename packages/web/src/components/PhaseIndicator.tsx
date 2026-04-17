@@ -1,6 +1,11 @@
 import type { LoopPhase } from "../types";
 
-const phases: { key: LoopPhase; label: string }[] = [
+/**
+ * Phase indicators for different agent types.
+ * Each agent type has its own sequence of phases.
+ */
+
+const loopPhases: { key: LoopPhase; label: string }[] = [
   { key: "preparing", label: "Prepare" },
   { key: "dev_executing", label: "Dev" },
   { key: "judging", label: "Judge" },
@@ -8,25 +13,44 @@ const phases: { key: LoopPhase; label: string }[] = [
   { key: "documenting", label: "Document" },
 ];
 
+const reviewPhases: { key: string; label: string }[] = [
+  { key: "preparing", label: "Prepare" },
+  { key: "executing", label: "Executing" },
+  { key: "collecting", label: "Collecting" },
+];
+
+const documentPhases: { key: string; label: string }[] = [
+  { key: "preparing", label: "Prepare" },
+  { key: "executing", label: "Executing" },
+];
+
+const terminalStates = new Set(["completed", "failed", "stopped", "paused"]);
+
+export type AgentType = "loop" | "review" | "document";
+
 export function PhaseIndicator({
+  agentType,
   phase,
-  iteration,
+  title,
 }: {
-  phase: LoopPhase;
-  iteration: number;
+  agentType: AgentType;
+  phase: string;
+  /** Optional header text, e.g. "Iteration 2" or "Review run 1" */
+  title?: string;
 }) {
-  const isTerminal = ["completed", "failed", "stopped", "paused"].includes(phase);
+  const phases =
+    agentType === "loop" ? loopPhases : agentType === "review" ? reviewPhases : documentPhases;
+
+  const isTerminal = terminalStates.has(phase);
+  const currentIdx = phases.findIndex((x) => x.key === phase);
 
   return (
     <div className="phase-indicator">
-      <div className="phase-indicator__iteration">Iteration {iteration}</div>
+      {title && <div className="phase-indicator__iteration">{title}</div>}
       <div className="phase-indicator__steps">
-        {phases.map((p) => {
+        {phases.map((p, i) => {
           const isActive = p.key === phase;
-          const isPast =
-            !isTerminal &&
-            phases.findIndex((x) => x.key === phase) >
-              phases.findIndex((x) => x.key === p.key);
+          const isPast = !isTerminal && currentIdx > i;
 
           return (
             <div

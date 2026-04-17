@@ -10,7 +10,7 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { randomBytes } from "crypto";
 import type { ProjectConfig } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
-import { spawnProcess } from "./process-manager.js";
+import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 
@@ -37,9 +37,40 @@ export interface DocumentState {
 }
 
 const documentStore = new Map<string, DocumentState>();
+const documentProcessStore = new Map<string, ManagedProcess>();
 
 export function getDocumentState(projectId: string): DocumentState | undefined {
   return documentStore.get(projectId);
+}
+
+/**
+ * Stop a running documenter for a project. Kills the process and updates state.
+ * Only works for user-invoked document runs (not the in-loop documenter).
+ */
+export async function stopDocument(projectId: string): Promise<DocumentState | null> {
+  const state = documentStore.get(projectId);
+  if (!state) return null;
+  if (!["preparing", "executing"].includes(state.status)) {
+    return state;
+  }
+
+  const proc = documentProcessStore.get(projectId);
+  if (proc) {
+    proc.kill();
+    documentProcessStore.delete(projectId);
+  }
+
+  state.status = "failed";
+  state.error = "Stopped by user";
+  state.completedAt = new Date().toISOString();
+
+  await updateHistoryEvent(projectId, state.historyEventId, {
+    status: "failed",
+    error: "Stopped by user",
+    completedAt: state.completedAt,
+  });
+
+  return state;
 }
 
 // --- Core Functions ---
@@ -175,7 +206,7 @@ export async function runDocumentSync(
 }
 
 /**
- * Execute the documenter (async version for CLI).
+ * Execute the documenter (async version for CLI / web).
  */
 async function runDocument(
   project: ProjectConfig,
@@ -199,15 +230,22 @@ async function runDocument(
     cwd: project.repoPath,
     logFile: state.logFile,
   });
+  documentProcessStore.set(project.id, managed);
 
-  const result = await managed.result;
-  state.exitCode = result.exitCode;
+  try {
+    const result = await managed.result;
+    state.exitCode = result.exitCode;
 
-  state.status = "completed";
-  state.completedAt = new Date().toISOString();
+    if ((state.status as string) === "failed") return; // externally stopped
 
-  await updateHistoryEvent(project.id, state.historyEventId, {
-    status: result.exitCode === 0 ? "completed" : "failed",
-    completedAt: state.completedAt,
-  });
+    state.status = "completed";
+    state.completedAt = new Date().toISOString();
+
+    await updateHistoryEvent(project.id, state.historyEventId, {
+      status: result.exitCode === 0 ? "completed" : "failed",
+      completedAt: state.completedAt,
+    });
+  } finally {
+    documentProcessStore.delete(project.id);
+  }
 }

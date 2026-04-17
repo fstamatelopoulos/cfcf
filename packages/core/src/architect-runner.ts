@@ -10,7 +10,7 @@ import { join, dirname } from "path";
 import { readFile, writeFile, mkdir, copyFile, access } from "fs/promises";
 import type { ProjectConfig, ArchitectSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
-import { spawnProcess } from "./process-manager.js";
+import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { randomBytes } from "crypto";
@@ -41,9 +41,39 @@ export interface ReviewState {
 }
 
 const reviewStore = new Map<string, ReviewState>();
+const reviewProcessStore = new Map<string, ManagedProcess>();
 
 export function getReviewState(projectId: string): ReviewState | undefined {
   return reviewStore.get(projectId);
+}
+
+/**
+ * Stop a running review for a project. Kills the process and updates state.
+ */
+export async function stopReview(projectId: string): Promise<ReviewState | null> {
+  const state = reviewStore.get(projectId);
+  if (!state) return null;
+  if (!["preparing", "executing", "collecting"].includes(state.status)) {
+    return state; // already terminal
+  }
+
+  const proc = reviewProcessStore.get(projectId);
+  if (proc) {
+    proc.kill();
+    reviewProcessStore.delete(projectId);
+  }
+
+  state.status = "failed";
+  state.error = "Stopped by user";
+  state.completedAt = new Date().toISOString();
+
+  await updateHistoryEvent(projectId, state.historyEventId, {
+    status: "failed",
+    error: "Stopped by user",
+    completedAt: state.completedAt,
+  });
+
+  return state;
 }
 
 // --- Core Functions ---
@@ -206,22 +236,30 @@ async function runReview(
     cwd: project.repoPath,
     logFile: state.logFile,
   });
+  reviewProcessStore.set(project.id, managed);
 
-  const result = await managed.result;
-  state.exitCode = result.exitCode;
+  try {
+    const result = await managed.result;
+    state.exitCode = result.exitCode;
 
-  // Collect results
-  state.status = "collecting";
-  const signals = await parseArchitectSignals(project.repoPath);
-  state.signals = signals ?? undefined;
+    // If stopped externally, state.status was already set to "failed"
+    if ((state.status as string) === "failed") return;
 
-  state.status = "completed";
-  state.completedAt = new Date().toISOString();
+    // Collect results
+    state.status = "collecting";
+    const signals = await parseArchitectSignals(project.repoPath);
+    state.signals = signals ?? undefined;
 
-  // Update history event with final status
-  await updateHistoryEvent(project.id, state.historyEventId, {
-    status: result.exitCode === 0 ? "completed" : "failed",
-    completedAt: state.completedAt,
-    readiness: signals?.readiness,
-  } as Partial<import("./project-history.js").ReviewHistoryEvent>);
+    state.status = "completed";
+    state.completedAt = new Date().toISOString();
+
+    // Update history event with final status
+    await updateHistoryEvent(project.id, state.historyEventId, {
+      status: result.exitCode === 0 ? "completed" : "failed",
+      completedAt: state.completedAt,
+      readiness: signals?.readiness,
+    } as Partial<import("./project-history.js").ReviewHistoryEvent>);
+  } finally {
+    reviewProcessStore.delete(project.id);
+  }
 }

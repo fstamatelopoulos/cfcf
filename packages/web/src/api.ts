@@ -82,6 +82,10 @@ export function fetchReviewStatus(projectId: string): Promise<ReviewState> {
   return request<ReviewState>(`/api/projects/${encodeURIComponent(projectId)}/review/status`);
 }
 
+export function stopReview(projectId: string): Promise<{ status: string }> {
+  return post(`/api/projects/${encodeURIComponent(projectId)}/review/stop`);
+}
+
 // --- Document ---
 
 export function startDocument(projectId: string): Promise<DocumentState> {
@@ -90,6 +94,10 @@ export function startDocument(projectId: string): Promise<DocumentState> {
 
 export function fetchDocumentStatus(projectId: string): Promise<DocumentState> {
   return request<DocumentState>(`/api/projects/${encodeURIComponent(projectId)}/document/status`);
+}
+
+export function stopDocument(projectId: string): Promise<{ status: string }> {
+  return post(`/api/projects/${encodeURIComponent(projectId)}/document/stop`);
 }
 
 // --- History ---
