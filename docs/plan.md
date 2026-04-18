@@ -204,7 +204,7 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 | 4.19 | ⏸ | Cross-project knowledge | Deferred to iteration 5 or beyond — needs memory layer design first |
 | 4.20 | ⏸ | Tier 3 Strategic Reflection | Deferred — build once loop is battle-tested |
 | 4.21 | ⏸ | Sandbox / guardrails research | Deferred — iteration 5 item |
-| 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (paired with template embedding) |
+| 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (item 5.6), paired with template embedding (5.7) and the installer (5.8) |
 
 **In progress branch:** `iteration-4/web-gui`
 
@@ -227,14 +227,13 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 | 5.3 | ❌ | Process template versioning | Ship default, support customization, track version used |
 | 5.4 | ❌ | `autoDocumenter` + `autoReviewSpecs` config flags | Global + per-project + per-run overrides. CLI and web UI must behave identically. Discoverability in Config tab. |
 | 5.5 | ❌ | Auto-delete merged iteration branches | Configurable `cleanupMergedBranches` (default false — preserve for audit) |
-| 5.6 | ❌ | Embed templates into binary | Import .md/.json as string constants at build time. Prerequisite for installer. |
-| 5.7 | ❌ | Installer script | `curl -fsSL https://cerefox.org/install \| bash`. Detects platform, downloads from GitHub Releases, verifies checksum |
-| 5.8 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required — file-based memory is fully functional standalone |
-| 5.9 | ❌ | Sandbox / guardrails research + POC | Filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Review Anthropic's sandbox concept. |
-| 5.10 | ❌ | Cross-project knowledge (carried from iter 4) | Agent assessments + lessons learned accumulated across projects |
-| 5.11 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history, injects recommendations into next iteration |
-
----
+| 5.6 | ❌ | Binary self-hosting: `cfcf server start` works from compiled binary without Bun | Today `cfcf server start` requires a Bun runtime (it invokes `bun run packages/server/src/index.ts`). The compiled binary should spawn itself with a `--serve` flag to run the server in-process. Enables true zero-dependency distribution |
+| 5.7 | ❌ | Embed templates into binary | Import .md/.json as string constants at build time. Prerequisite for the installer (so users don't need to separately download templates) |
+| 5.8 | ❌ | Installer script | `curl -fsSL https://cerefox.org/install \| bash`. Detects platform, downloads from GitHub Releases, verifies checksum. Depends on 5.6 + 5.7 so the binary alone is self-sufficient |
+| 5.9 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required — file-based memory is fully functional standalone |
+| 5.10 | ❌ | Sandbox / guardrails research + POC | Filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Review Anthropic's sandbox concept. |
+| 5.11 | ❌ | Cross-project knowledge (carried from iter 4) | Agent assessments + lessons learned accumulated across projects |
+| 5.12 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history, injects recommendations into next iteration |
 
 ---
 
