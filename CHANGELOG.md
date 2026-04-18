@@ -9,17 +9,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-### Added
-- **Live elapsed-time counter on PhaseIndicator (item 4.25):** while an agent run (iteration / review / document) is active, the subtitle row now shows the running duration (e.g. "Iteration 2 · 2m 14s"). Hides on completed/failed/stopped; freezes on paused. Ticks every second locally -- no extra server calls. First web-package test suite added (9 tests for the shared `formatDuration` util); `test:web` script added at the root.
-- **Per-iteration plan execution prompt, all surfaces (item 4.24):** the one-phase-per-iteration discipline is injected at three levels so it reaches every run, every existing project, and both adapters: (1) `context-assembler.generateInstructionContent()` embeds an "Iteration Scope" section in the Tier-1 `CLAUDE.md` / `AGENTS.md` file generated fresh every iteration -- this is the live channel that reaches existing projects whose `process.md` was copied before this change; (2) the one-line dev-agent CLI prompt now spells out "execute only the next pending chunk from plan.md"; (3) the static `process.md` and architect `plan.md` templates model the same structure for newly initialized projects. Agent-agnostic -- same generated content is written to whichever filename each adapter specifies (Claude Code: `CLAUDE.md`; Codex: `AGENTS.md`). All repo docs (workflow, agent-process-and-context, technical-design, CLAUDE.md, README) updated to reflect this architecture.
-- **Architect review presentation in web UI (item 4.23):** the Status tab now renders the full parsed `ArchitectSignals` (readiness, gaps, suggestions, risks, recommended approach) in a new `ArchitectReview` component, with guidance text keyed to readiness (e.g. "Edit files under problem-pack/ and rerun Review" for `NEEDS_REFINEMENT`). The History tab turns the readiness cell into a clickable pill that expands an inline detail row with the same component in compact mode. Prior reviews remain viewable even after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
+## [0.4.0] -- 2026-04-18
 
-### Changed
-- **`ReviewHistoryEvent` now persists full `signals` inline** (`packages/core/src/project-history.ts`). The repo file is a scratchpad overwritten every review, so inline persistence on the history event is what lets the UI surface prior reviews. Backward-compatible: pre-existing history entries without `signals` continue to render their readiness label as plain text.
-
-## [0.4.0] -- 2026-04-17
-
-Iteration 4: Web GUI + operational robustness + notifications.
+Iteration 4: Web GUI + operational robustness + notifications + architect-review UI + live timer + per-iteration scope discipline.
 
 ### Added
 
@@ -61,13 +53,33 @@ Iteration 4: Web GUI + operational robustness + notifications.
 - Global + per-project config; configured during `cfcf init`
 - Webhook channel and additional events (iteration.completed, review.completed, etc.) deferred to iteration 5
 
+**Architect review presentation (item 4.23):**
+- Full parsed `ArchitectSignals` now persisted inline on `ReviewHistoryEvent.signals` (the repo file `cfcf-docs/cfcf-architect-signals.json` is overwritten by every review run, so inline persistence is what makes prior reviews viewable)
+- New `ArchitectReview` React component renders readiness + guidance banner keyed to readiness (e.g. "Edit files under `problem-pack/` and rerun Review" for `NEEDS_REFINEMENT`) + collapsible gaps / suggestions / risks / recommended_approach sections
+- Integrated into Status tab (latest review) and History tab (clickable readiness pill expands an inline detail row in compact mode)
+- Backward-compatible: pre-4.23 review events without `signals` still render their readiness label as plain text
+
+**Per-iteration plan execution discipline (item 4.24):**
+- One-phase-per-iteration discipline injected at three levels: (1) `context-assembler.generateInstructionContent()` embeds an "Iteration Scope" section in the Tier-1 instruction file regenerated fresh every iteration — reaches existing projects whose static `process.md` was copied before this change; (2) one-line dev-agent CLI prompt spells out "execute only the next pending chunk from `plan.md`"; (3) static `process.md` and architect `plan.md` templates model the same phases-as-iterations structure for new projects
+- Agent-agnostic — same generated content is written to whichever filename each adapter specifies (Claude Code: `CLAUDE.md`; Codex: `AGENTS.md`)
+- Discovered empirically via a user-authored hint while running the tracker example, promoted into the core prompts so every project gets checkpointed iterations by default
+
+**Live elapsed-time counter (item 4.25):**
+- Shared `formatDuration` util + `useElapsed` hook (1s local tick, no server calls) renders the active agent-run's elapsed time next to the title row (e.g. "Iteration 2 · 2m 14s")
+- Same format used by the History tab Duration column (now sourced from the shared util)
+- Hides on completed/failed/stopped; freezes on paused
+- First web-package test suite added (9 tests for `formatDuration`); `test:web` script added at the root
+
 **Other:**
 - `git merge --no-ff` for iteration merges — preserves iteration boundaries in `git log --graph`
 - Claude Code adapter: added `--verbose` flag (note: `-p` print mode still emits final-only; `--verbose` helps in mixed modes)
 - `docsFileCount` / `committed` / `exitCode` fields on Document history events, shown in the History tab
 - Test repo setup/cleanup scripts (`scripts/setup-test-repos.sh`, `scripts/cleanup-test-repos.sh`)
 - Tabular iteration plan format in `docs/plan.md`
-- 188 tests (364 assertions), up from 146
+- 205 tests total (170 core + 24 server + 2 cli + 9 web)
+
+### Changed
+- `ReviewHistoryEvent` now persists full `signals` inline (`packages/core/src/project-history.ts`). Backward-compatible with pre-4.23 entries.
 
 ### Fixed
 - Log viewer performance on large logs (50K+ lines) — single `<pre>` block with all lines
