@@ -88,297 +88,153 @@ Each iteration re-reads all context. Strategies to manage this:
 
 ## Iteration Plan
 
-### Iteration 0: Project Scaffolding + Server Skeleton
+Status legend: ✅ Done · 🟡 In progress · ❌ Not started · ⏸ Deferred · ⚠️ Blocked
 
-**Goal:** Monorepo structure, build pipeline, basic server, basic CLI that talks to the server.
-
-**Deliverables:**
-- [ ] Monorepo with `packages/cli`, `packages/server`, `packages/core`
-- [ ] Bun workspace configuration
-- [ ] Basic Hono server (`cfcf server start`) with health endpoint
-- [ ] Basic CLI entry point (`cfcf` command with `--help`) that communicates with server
-- [ ] Test suite structure with unit tests for all components (Bun test)
-- [ ] README with setup instructions, project structure, and contributor guide
-- [ ] decisions-log.md for tracking non-obvious decisions and failed experiments
-
-- [ ] First-run interactive configuration flow:
-  - Agent detection (Claude Code, Codex)
-  - Dependency check (git)
-  - User prompts for defaults (dev agent, judge agent, max iterations)
-  - Permission acknowledgment (`--dangerously-skip-permissions` explanation)
-  - Config file storage (XDG-compliant location)
-
-**No agents, no orchestration.** Server + CLI + config skeleton. Web GUI deferred to Iteration 4.
+The tables below are the authoritative view of iteration progress. The **Notes** column records the outcome, commit reference, or reason for deferral — read these first when reorienting between sessions.
 
 ---
 
-### Iteration 1: Project Management + Process Manager + Log Capture + Git Branch Management
+### Iteration 0: Project Scaffolding + Server Skeleton
 
-**Goal:** cfcf can manage projects, spawn local processes, stream & capture logs, and manage git branches. No AI agent yet -- just prove the plumbing works end-to-end.
+**Goal:** Monorepo structure, build pipeline, basic server, basic CLI that talks to the server. No agents, no orchestration.
 
-**Deliverables:**
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 0.1 | ✅ | Bun monorepo with `packages/core`, `packages/server`, `packages/cli` | Workspace aliases set up: `@cfcf/core`, `@cfcf/server` |
+| 0.2 | ✅ | Hono server with `/api/health`, `/api/status`, `/api/config` | Bun.serve, single process |
+| 0.3 | ✅ | Commander.js CLI: `cfcf`, `cfcf init`, `cfcf server start/stop/status` | |
+| 0.4 | ✅ | First-run interactive configuration | Agent detection (Claude Code, Codex), dependency check, permission acknowledgment, XDG-compliant config storage |
+| 0.5 | ✅ | Agent adapter interface + Claude Code + Codex adapters | Plugin contract defined in `types.ts` |
+| 0.6 | ✅ | Test suite structure (Bun test) | Colocated test files |
+| 0.7 | ✅ | `decisions-log.md` | Captures non-obvious decisions and failed experiments |
 
-**Project management:**
-- [ ] `packages/core`: Project types (ProjectConfig, project CRUD operations)
-- [ ] `packages/core`: Project storage (`~/.cfcf/projects/<project-id>/config.json`)
-- [ ] Server endpoints: project CRUD (`POST/GET /api/projects`, `GET/PUT /api/projects/:id`)
-- [ ] CLI commands:
-  - `cfcf project init --repo <path> --name <name>` (create project, link repo, inherit/override global config)
-  - `cfcf project list` (list all projects)
-  - `cfcf project show <name>` (show project config)
-- [ ] CLI commands for global config:
-  - `cfcf config show` (display current global config)
-  - `cfcf config edit` (re-run interactive setup, same as `cfcf init --force`)
+**Tag:** v0.0.0
 
-**Process manager:**
-- [ ] `packages/core`: Process manager (spawn, stream logs, wait for exit, kill)
-- [ ] `packages/core`: Log capture system -- tee stdout/stderr to terminal + disk file
-- [ ] `packages/core`: Log storage directory structure (`~/.cfcf/logs/<project-id>/`)
+---
 
-**Git manager:**
-- [ ] `packages/core`: Git manager (create feature branch, commit, diff, reset, push)
-- [ ] Branch naming: `cfcf/iteration-<N>`
+### Iteration 1: Project Management + Process Manager + Git + CI
 
-**Server: process execution + SSE:**
-- [ ] Server endpoint: `POST /api/projects/:id/iterate` triggers the next iteration
-- [ ] Server endpoint: `GET /api/projects/:id/iterations/:n/logs` streams logs via SSE
-- [ ] Server: proper `cfcf server stop` using PID file (fix the placeholder from iteration 0)
+**Goal:** cfcf can manage projects, spawn local processes, capture logs, manage git branches. No AI agent yet — prove the plumbing.
 
-**CLI: `cfcf run`:**
-- [ ] `cfcf run --project <name> -- <command>` triggers server to:
-  - Create a cfcf feature branch (`cfcf/iteration-N`) in the project's repo
-  - Spawn the user-specified command (e.g., `npm test`)
-  - Stream stdout/stderr to CLI via SSE
-  - Capture exit code and full logs to `~/.cfcf/logs/`
-  - Commit results to the feature branch
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 1.1 | ✅ | Project CRUD + storage | `~/.cfcf/projects/<id>/config.json`; `currentIteration` counter |
+| 1.2 | ✅ | CLI: `cfcf project init/list/show/delete` | |
+| 1.3 | ✅ | CLI: `cfcf config show/edit` | |
+| 1.4 | ✅ | Process manager | `Bun.spawn()`, streaming stdout/stderr, kill, timeout |
+| 1.5 | ✅ | Log storage | `~/.cfcf/logs/<project-id>/iteration-NNN-<role>.log` |
+| 1.6 | ✅ | Git manager | Branch (`cfcf/iteration-N`), commit, diff, reset, push, merge |
+| 1.7 | ✅ | Server: project CRUD, `POST /api/projects/:id/iterate`, SSE logs | |
+| 1.8 | ✅ | `cfcf run --project <name> -- <command>` (manual mode) | Branch → spawn → capture → commit |
+| 1.9 | ✅ | Build script + GitHub Actions CI | `bun build --compile` self-contained binary; darwin-arm64, darwin-x64, linux-x64 |
+| 1.10 | ✅ | Reliable `cfcf server stop` via PID file | |
 
-**Build + CI:**
-- [ ] Build script: `bun build --compile` to produce self-contained binary for current platform
-- [ ] CI pipeline (GitHub Actions): build, test, and lint on push
-- [ ] Cross-platform binary targets: darwin-arm64, darwin-x64, linux-x64 (Windows deferred)
-
-**Tests:**
-- [ ] Unit tests for process manager (spawn, log, exit, kill)
-- [ ] Unit tests for git manager (branch, commit, diff, reset)
-- [ ] Unit tests for project CRUD
-- [ ] Integration tests: full `cfcf run` cycle (project init → run command → logs captured → committed)
-- [ ] Server API tests for new endpoints
-- [ ] Error handling tests: process crash, git conflicts, missing project
-
-**Key decisions to validate:**
-- Log storage format and location
-- Git branch naming strategy
-- Process spawning: Bun.spawn() vs child_process
-- Binary size and startup time benchmarks
-- PID file location for server stop
+**Tag:** v0.1.0
 
 ---
 
 ### Iteration 2: Problem Pack + Context Assembly + One-Shot Agent Run
 
-**Goal:** cfcf reads a Problem Pack, assembles context (CLAUDE.md + cfcf-docs/), writes it into the repo, spawns a real AI coding agent, runs one iteration, and captures results. First end-to-end useful flow.
+**Goal:** cfcf reads a Problem Pack, assembles context (CLAUDE.md + `cfcf-docs/`), spawns a real AI coding agent, runs one iteration, captures results. First end-to-end useful flow.
 
-**Deliverables:**
-- [ ] `packages/core`: Problem Pack parser (reads problem.md, success.md, constraints.md, hints.md, context/)
-- [ ] `packages/core`: Context assembler -- generates and writes to repo:
-  - CLAUDE.md (agent instructions with tiered context pointers)
-  - cfcf-docs/ folder contents (problem definition, success criteria, process template, etc.)
-  - Iteration-specific handoff template and signal file template
-- [ ] `packages/adapters/claude-code`: Claude Code adapter
-  - `checkAvailability()`: verify Claude Code is installed and authenticated
-  - `generateInstructionFile()`: generates CLAUDE.md from assembled context
-  - `buildCommand()`: builds the `claude --dangerously-skip-permissions -p "..."` command
-  - `unattendedFlags()`: returns `["--dangerously-skip-permissions"]`
-- [ ] `packages/adapters/codex`: Codex CLI adapter
-  - `checkAvailability()`: verify Codex is installed and authenticated
-  - `generateInstructionFile()`: generates equivalent instruction file for Codex
-  - `buildCommand()`: builds the `codex -a never exec -s danger-full-access "..."` command
-  - `unattendedFlags()`: returns `["-a", "never", "exec", "-s", "danger-full-access"]`
-- [ ] cfcf-docs/ file templates (see `design/agent-process-and-context.md` for full spec):
-  - process.md (process definition)
-  - Handoff document template
-  - Signal file template (cfcf-iteration-signals.json)
-  - Decision & lessons log template
-  - Plan template
-- [ ] `cfcf init` command: scaffolds an empty Problem Pack directory with templates
-- [ ] `cfcf run` extended: `--agent claude-code`, `--repo <path>`
-- [ ] Post-iteration: parse handoff + signal file, commit all changes to cfcf branch
-- [ ] Example Problem Pack in `problem-packs/example/`
-- [ ] **Token measurement**: Track context file sizes, parse agent token usage from logs where possible
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 2.1 | ✅ | Problem Pack parser | Reads problem.md, success.md, constraints.md, hints.md, context/ |
+| 2.2 | ✅ | Context assembler | Tiered context; writes CLAUDE.md + cfcf-docs/ templates into repo |
+| 2.3 | ✅ | Claude Code adapter: `checkAvailability`, `buildCommand`, `instructionFilename` | `claude --dangerously-skip-permissions -p "..."` (later added `--verbose` in iteration 4) |
+| 2.4 | ✅ | Codex adapter | `codex exec -a never -s danger-full-access "..."` (updated in iteration 3 from deprecated `--approval-mode`) |
+| 2.5 | ✅ | `cfcf-docs/` file templates | process.md, handoff, signals JSON, plan, decision log |
+| 2.6 | ✅ | `cfcf project init` scaffolds `problem-pack/` | |
+| 2.7 | ✅ | `cfcf run` agent mode — full end-to-end flow | Context assembly → agent spawn → handoff parse → commit |
+| 2.8 | ✅ | Example Problem Pack | `problem-packs/calculator/` (single iteration) |
+| 2.9 | ✅ | Async iteration runner | Server returns 202, CLI polls for status. Fixes HTTP timeout on long runs |
+| 2.10 | ⏸ | Token measurement | Deferred — agents' token reporting is not standardized |
 
-**Key decisions to validate:**
-- CLAUDE.md format and content structure (real test with Claude Code)
-- Does the agent actually fill in the handoff document and signal file?
-- How much context fits before hitting agent context limits (token measurement)
-- Claude Code non-interactive execution reliability and exit code semantics
+**Tag:** v0.2.0
 
 ---
 
-### Iteration 3: Iteration Loop + Agent Judge + Human-on-the-Loop
+### Iteration 3: Iteration Loop + Judge + Architect + Documenter + Human-on-the-Loop (MVP)
 
-**Goal:** cfcf runs multiple iterations in a loop. After each iteration, a separate judge agent evaluates results and produces guidance for the next iteration. The user can be alerted and provide feedback every N iterations. This is the **MVP**.
+**Goal:** Multiple iterations in a loop, with a judge evaluating after each, architect reviewing Problem Pack, documenter producing final docs. Pause/resume/stop. This is the MVP.
 
-**Deliverables:**
-- [ ] `packages/core`: Iteration loop controller
-  - Manages iteration count, max iterations, stop conditions
-  - Orchestrates: prepare → execute dev → commit → execute judge → commit → decide cycle
-  - State machine: IDLE → PREPARING → DEV_EXECUTING → JUDGING → DECIDING → loop
-- [ ] `packages/core`: Judge runner
-  - Spawns a separate agent (configurable, encouraged to be different from dev agent)
-  - Judge runs in the same repo directory with read access to everything
-  - cfcf generates `cfcf-judge-instructions.md` with judge-specific guidance
-  - Parses judge assessment (Markdown) and signal file (JSON)
-  - Assessment determines: continue, stop (success), stop (failure/anomaly), request user input
-- [ ] Signal file schemas solidified:
-  - Finalize `cfcf-iteration-signals.json` schema (dev agent → cf²): status, tests, questions, blockers
-  - Finalize `cfcf-judge-signals.json` schema (judge → cf²): determination, quality, anomalies, guidance
-  - cfcf validates signal files against schema, reports malformed as anomaly
-  - Judge assessment archiving: cf² copies `judge-assessment.md` → `iteration-reviews/iteration-N.md` before next iteration
-- [ ] `packages/core`: Iteration state manager
-  - Updates decision & lessons log after each iteration
-  - Generates compressed iteration summary for next iteration's context
-  - Maintains the evolving plan across iterations
-- [ ] Context assembler extended:
-  - Tiered context strategy (Tier 1 in CLAUDE.md, Tier 2 in separate files, Tier 3 on-demand)
-  - Includes iteration history, previous judge assessment, decision log
-  - Aggressive summarization of older iterations in iteration-history.md
-  - Manages context growth: track total context file sizes per iteration
-- [ ] Human-on-the-loop:
-  - `--pause-every N` implementation
-  - At pause: display summary via CLI
-  - Notification: terminal notification when user input needed or pause reached
-  - Accept user input: resume, provide direction, update hints, stop
-  - Signal file detection: cfcf reads `cfcf-iteration-signals.json` for `user_input_needed`, presents questions to user
-- [ ] Solution Architect (user-invoked advisory review):
-  - New agent role: Solution Architect (configurable agent + model)
-  - `cfcf review --project <name>` CLI command (user-invoked, optional, repeatable)
-  - Server endpoint: `POST /api/projects/:id/review`
-  - Produces `architect-review.md` (readiness assessment, gaps, suggestions, risks)
-  - Produces `cfcf-architect-signals.json` (READY / NEEDS_REFINEMENT / BLOCKED)
-  - **Produces initial `plan.md` outline** for dev agents to build on -- forces the architect to identify gaps and ambiguities that the user should address before the unattended loop starts
-  - Review persists in repo as context for dev agents
-  - Advisory only -- does not block `cfcf run`. User decides when to proceed
-- [ ] Model selection per role:
-  - `cfcf init` and `cfcf project init` ask for model choice per role (dev, judge, architect, documenter)
-  - Agent adapters accept model parameter and pass to CLI (e.g., `claude --model opus`)
-  - Project config stores model per role
-  - Four roles: dev agent, judge agent, solution architect, documenter
-- [ ] Monitoring and control:
-  - `cfcf status --project <name>`: current iteration state + loop progress
-  - `cfcf resume --project <name>`: continue after pause (with optional feedback)
-  - `cfcf stop --project <name>`: stop the iteration loop
-- [ ] Persist loop state to disk (recover after server restart)
-  - Write loop state to project config dir on every phase transition
-  - On server start / resume, reload active/paused loops from disk
-  - `cfcf resume` works after server restart, watch-mode reload, or crash
-- [ ] Documenter role (post-SUCCESS documentation polish):
-  - New agent role: Documenter (configurable agent + model)
-  - Runs automatically after judge says SUCCESS (before loop exits), or on demand via `cfcf document --project <name>`
-  - Reads the final codebase, iteration history, and existing doc stubs
-  - Produces polished final versions of: `docs/architecture.md`, `docs/api-reference.md`, `docs/setup-guide.md`
-  - Configurable: `documenterAgent` in project config
-  - Server endpoint: `POST /api/projects/:id/document`, `GET .../document/status`
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 3.1 | ✅ | Iteration loop controller + state machine | prepare → dev → commit → judge → commit → decide cycle; loop state machine |
+| 3.2 | ✅ | Judge runner | Spawn, parse signals + assessment, archive to `iteration-reviews/` |
+| 3.3 | ✅ | Signal file schemas | `cfcf-iteration-signals.json` (dev), `cfcf-judge-signals.json` (judge); validated by cfcf |
+| 3.4 | ✅ | Human-on-the-loop: `pauseEvery`, `cfcf resume`, `cfcf stop` | Pause cadence + signal-driven pause (user_input_needed). Resume with `--feedback` |
+| 3.5 | ✅ | Solution Architect + `cfcf review` | Generates architect-review.md, plan.md outline, docs/ stubs |
+| 3.6 | ✅ | Documenter role (`cfcf document`, auto post-SUCCESS) | Produces docs/architecture.md, api-reference.md, setup-guide.md, README.md |
+| 3.7 | ✅ | Model selection per role | `cfcf init` asks for dev/judge/architect/documenter agent + model |
+| 3.8 | ✅ | Loop state persistence to disk | `~/.cfcf/projects/<id>/loop-state.json`; survives server restarts |
+| 3.9 | ✅ | `cfcf status --project <name>` | Current loop state + iteration progress |
+| 3.10 | ✅ | Three-layer docs strategy (architect stubs → dev maintains → documenter polishes) | |
+| 3.11 | ✅ | Elapsed time counter in CLI polling | Replaces dots |
+| 3.12 | ✅ | Judge retry on same branch after failure | Fixes "server restart killed judge" scenario |
 
-**This is the MVP.** After this iteration, cfcf can validate a problem definition via the Solution Architect, run a dev agent at it iteratively with a separate judge providing feedback, and converge toward a solution with human oversight.
+**Tag:** v0.3.0
 
 ---
 
-### Iteration 4: Web GUI + Memory Layer Polish + Reflection
+### Iteration 4: Web GUI + Unified Agent-Run Model
 
-**Goal:** Web GUI for monitoring and control. Full memory layer with cross-run knowledge. Tier 3 strategic reflection.
+**Goal:** React web GUI for monitoring and control. Unified state machine across review/loop/document. Start preparing for iteration 5 infrastructure.
 
-**Deliverables:**
-- [ ] `packages/web`: React web GUI served by Hono server
-  - Project status and configuration view
-  - Iteration history with expandable details
-  - Log viewer (real-time via SSE and historical)
-  - Diff viewer per iteration
-  - Judge assessment display
-  - User feedback input (for pause/review cycles)
-- [ ] `packages/core`: Cross-project knowledge
-  - Agent assessments accumulated across projects
-  - Lessons learned accumulated across projects
-  - Query interface for context assembly to pull relevant prior knowledge
-- [ ] `packages/core`: Tier 3 Strategic Reflection
-  - Configurable frequency (`--reflect-frequency N`)
-  - Spawns a reflection agent that reviews full iteration history across the project
-  - Produces: pattern analysis, strategy recommendation, convergence assessment
-  - Output injected into next iteration's context
-- [x] Git merge strategy: use `--no-ff` for iteration merges
-  - Preserves iteration boundaries in git history
-  - Makes `git log --graph` show the iteration structure visually
-  - One-line change in `git-manager.ts` merge()
-- [x] Project history + unified log streaming:
-  - Persistent `history.json` per project tracking every agent invocation (review, iteration, document)
-  - Sequence-numbered log files for architect/documenter (architect-001.log, architect-002.log, etc.) so re-runs preserve history
-  - Server: `GET /api/projects/:id/history` returns all events; new `GET /api/projects/:id/logs/:filename` streams any log file
-  - Web: History tab shows unified timeline (reviews + iterations + documents) with log link per entry
-  - Web: clicking Review/Start Loop/Document auto-switches to Logs tab and streams that agent's log
-  - LogViewer state lifted to ProjectDetail so streaming persists across tab switches
-  - Simplify LoopControls: removed separate status polling; log stream IS the feedback
-- [ ] Unified agent-run model (review, loop, document share the same state machine):
-  - **Stop buttons**: while review or document is running, the Review/Document button becomes "Stop Review" / "Stop Document" (red). Other action buttons disabled during any active agent run.
-  - **Stop endpoints**: `POST /api/projects/:id/review/stop`, `POST /api/projects/:id/document/stop`. Kill the agent process, update state to `stopped`, finalize history event with error "stopped by user".
-  - **Stale history cleanup**: on server startup, scan all projects' `history.json` and mark any `status: "running"` events as `failed` with error "server restarted" so stuck events don't hang the UI.
-  - **Continuous history polling**: web UI polls `/history` every 5s on the project detail page (faster while any agent is running). Fixes the bug where a standalone review/document completes but the history stays at "running" because nothing was polling.
-  - **Status tab unification**: the Status tab shows progress for whichever agent is active (review/loop/document), not just the loop. Same PhaseIndicator-style visual for each.
-  - **Phase model**: review has phases {preparing, executing, collecting, completed}; document has {preparing, executing, completed}; loop has its existing set. PhaseIndicator renders the appropriate steps for the active agent type.
-  - **Sets up for iteration 5**: once the three agents share this model, adding `autoReviewSpecs` and `autoDocumenter` flags becomes a matter of chaining them (review → loop → document) in one unified flow.
-- [ ] `cfcf log <project-name>`: iteration history viewer
-- [ ] `cfcf push <project-name>`: push cfcf branch to remote on demand
-- [ ] Research: Sandbox / guardrails for unattended agent execution
-  - Review Anthropic's sandbox concept (https://code.claude.com/docs/en/security)
-  - Evaluate applicability to cfcf's dark factory loop (agents run with `--dangerously-skip-permissions`)
-  - Original plan was container isolation but dropped due to auth complexity
-  - Goal: find guardrails that add security without extreme complexity or loss of flexibility
-  - Consider: filesystem scoping, network restrictions, process sandboxing, permission allow-lists
-- [ ] Token/cost tracking: best-effort measurement per iteration, per role
-- [ ] Notification hooks: extensible system (terminal, webhook placeholder)
-- [ ] `cfcf prepare` dry-run command: show assembled context without launching
-- [ ] Robust error handling, graceful shutdown, process cleanup on crash
-- [ ] Binary self-hosting: `cfcf server start` works from compiled binary without Bun
-  - Binary spawns itself with `--serve` flag (in-process server)
-  - Enables true zero-dependency distribution
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 4.1 | ✅ | `packages/web`: React + Vite web GUI | Dashboard, project detail, 4 tabs (Status/History/Logs/Config), dark theme. Served by Hono via serveStatic |
+| 4.2 | ✅ | Log viewer: real-time SSE streaming + historical | Handles 50K+ line logs via single `<pre>`. Auto-scroll with top/bottom buttons |
+| 4.3 | ✅ | LoopControls + FeedbackForm + PhaseIndicator | Visual state machine, phase transitions, feedback injection on pause |
+| 4.4 | ✅ | Loop events SSE endpoint | `GET /api/projects/:id/loop/events` |
+| 4.5 | ✅ | Git merge strategy: `--no-ff` | Preserves iteration boundaries in git history. One-line change in `git-manager.ts`. |
+| 4.6 | ✅ | Project history + unified log streaming | Persistent `history.json`; sequence-numbered logs (architect-001.log, etc.); generic `/logs/:filename` endpoint; ProjectHistory unified timeline UI |
+| 4.7 | ✅ | Unified agent-run state machine | Stop Review/Document buttons; stop endpoints; stale history cleanup on server startup; continuous history polling; unified Status tab for all three agents |
+| 4.8 | ✅ | `documenting` phase in LoopPhase | Loop UI remains active during post-SUCCESS documenter run |
+| 4.9 | ✅ | Consistent agent display in CLI (`adapter:model`) | `formatAgent()` helper; same format in config show, project show/list, status |
+| 4.10 | ✅ | Test repo setup/cleanup scripts | `scripts/setup-test-repos.sh`, `scripts/cleanup-test-repos.sh` (only touches `/tmp/cfcf-*`) |
+| 4.11 | ✅ | Claude Code `--verbose` flag | Shows live turn-by-turn progress in logs, matching Codex's verbose default |
+| 4.12 | ❌ | Diff viewer per iteration | Part of original scope; not started |
+| 4.13 | ❌ | `cfcf log <project-name>` CLI | Iteration history viewer from the CLI (the web History tab covers this now, but CLI parity is still useful) |
+| 4.14 | ❌ | `cfcf push <project-name>` CLI | Push branch to remote on demand |
+| 4.15 | ❌ | `cfcf prepare` dry-run command | Show assembled context without launching |
+| 4.16 | ❌ | Robust error handling + graceful shutdown | Needs audit: orphaned processes on shutdown, unhandled rejections, SIGTERM cleanup |
+| 4.17 | ❌ | Token/cost tracking | Best-effort per iteration per role |
+| 4.18 | ❌ | Notification hooks | Terminal bell, webhook placeholder |
+| 4.19 | ⏸ | Cross-project knowledge | Deferred to iteration 5 or beyond — needs memory layer design first |
+| 4.20 | ⏸ | Tier 3 Strategic Reflection | Deferred — build once loop is battle-tested |
+| 4.21 | ⏸ | Sandbox / guardrails research | Deferred — iteration 5 item |
+| 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (paired with template embedding) |
+
+**In progress branch:** `iteration-4/web-gui`
+
+**Known issues / lessons**:
+- Claude Code's `-p` print mode is silent without `--verbose` (fixed in 4.11)
+- Codex CLI flag ordering: `-a never` is global, must precede `exec` subcommand
+- `bun --watch` restart during active runs orphans agent processes; loop state persistence (3.8) mitigates
+- Each `startLoop` resets `loop-state.json`; historical iterations survive only in git branches. The `history.json` (4.6) solves this for reviews/documents but iterations within a run still reset per run start.
 
 ---
 
-### Iteration 5: Third Agent Adapter + Multi-Project
+### Iteration 5: Third Agent + Multi-Project + Distribution
 
-**Goal:** Validate the plugin interface with a third agent (beyond Claude Code and Codex). Support running multiple projects.
+**Goal:** Validate the plugin interface with a third agent. Multi-project concurrent execution. Self-contained binary and installer.
 
-**Deliverables:**
-- [ ] `packages/adapters/<third-agent>`: Third agent adapter (e.g., Aider, OpenCode, or Goose)
-  - Further validates the plugin interface with a meaningfully different agent
-- [ ] Multi-project support in the server
-  - Project configuration and state management
-  - Concurrent execution (multiple projects, each running iterations via worker threads)
-  - Web GUI: project list, per-project views
-- [ ] Optional Cerefox memory backend integration
-  - Sync memory documents to Cerefox for semantic search across projects
-  - Not required -- file-based memory is fully functional standalone
-- [ ] Process definition template versioning
-  - Track which process template version was used
-  - Ship default template, support user customization
-- [ ] Configurable loop behavior flags (aligned across CLI and web UI):
-  - `autoDocumenter` (default true): run documenter post-SUCCESS automatically. When false, user must invoke `cfcf document` (CLI) or click Document (web) manually.
-  - `autoReviewSpecs` (default false): run architect review automatically before starting the loop. When true, `cfcf run` / "Start Loop" first invokes the architect and fails/pauses if readiness is BLOCKED.
-  - Both flags in global config (set via `cfcf init`) with per-project overrides in ProjectConfig.
-  - **CLI/Web alignment**: `cfcf run` and web "Start Loop" must behave identically — both honor the flags, both show the same phase transitions, both run or skip the auto-review/auto-document step the same way.
-  - **Per-run overrides**: CLI flags `--auto-document=false` / `--auto-review-specs=true` override project config for that single run. Web UI has matching toggles in the Start Loop dialog or project config view.
-  - **Discoverability**: web UI shows the effective flag values in the Config tab. Starting a loop with `autoDocumenter: false` should show a note in the UI reminding the user they'll need to run Document manually.
-- [ ] Auto-delete (or archive) merged iteration branches
-  - Optional cleanup after successful merge to main
-  - Configurable: `cleanupMergedBranches` (default false — preserve for audit)
-- [ ] Embed templates into binary (true single-file distribution)
-  - Import .md and .json templates as string constants at build time
-  - Binary works without external template files on disk
-  - Prerequisite for the installer
-- [ ] Installer script: `curl -fsSL https://cerefox.org/install | bash`
-  - Detects platform (darwin-arm64, darwin-x64, linux-x64)
-  - Downloads binary from GitHub Releases
-  - Installs to /usr/local/bin/ or ~/.local/bin/
-  - Verifies checksum
-  - Single binary = single download, no template files to manage
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 5.1 | ❌ | Third agent adapter (Aider / OpenCode / Goose) | Validates plugin interface with meaningfully different agent |
+| 5.2 | ❌ | Multi-project support in server | Concurrent execution via worker threads; web GUI per-project views |
+| 5.3 | ❌ | Process template versioning | Ship default, support customization, track version used |
+| 5.4 | ❌ | `autoDocumenter` + `autoReviewSpecs` config flags | Global + per-project + per-run overrides. CLI and web UI must behave identically. Discoverability in Config tab. |
+| 5.5 | ❌ | Auto-delete merged iteration branches | Configurable `cleanupMergedBranches` (default false — preserve for audit) |
+| 5.6 | ❌ | Embed templates into binary | Import .md/.json as string constants at build time. Prerequisite for installer. |
+| 5.7 | ❌ | Installer script | `curl -fsSL https://cerefox.org/install \| bash`. Detects platform, downloads from GitHub Releases, verifies checksum |
+| 5.8 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required — file-based memory is fully functional standalone |
+| 5.9 | ❌ | Sandbox / guardrails research + POC | Filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Review Anthropic's sandbox concept. |
+| 5.10 | ❌ | Cross-project knowledge (carried from iter 4) | Agent assessments + lessons learned accumulated across projects |
+| 5.11 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history, injects recommendations into next iteration |
+
+---
 
 ---
 
