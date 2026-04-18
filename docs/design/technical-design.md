@@ -63,26 +63,19 @@ The execution interface is designed so that swapping in a container backend does
 │                                                                     │
 │  ┌──────────┐    HTTP/SSE     ┌──────────────────────────────────┐  │
 │  │  CLI     │◄───────────────►│         cfcf Server              │  │
-│  │  (cfcf)  │                 │                                  │  │
-│  └──────────┘                 │  ┌────────────┐ ┌─────────────┐  │  │
-│                               │  │  Project   │ │  Process    │  │  │
-│  ┌──────────┐    HTTP/SSE     │  │  Manager   │ │  Manager    │  │  │
-│  │  Web GUI │◄───────────────►│  └─────┬──────┘ └──────┬──────┘  │  │
-│  │  (React) │                 │        │               │         │  │
-│  └──────────┘                 │  ┌─────┴──────┐ ┌──────┴──────┐  │  │
-│                               │  │ Iteration  │ │  Log        │  │  │
-│                               │  │ Controller │ │  Collector  │  │  │
-│                               │  └─────┬──────┘ └──────┬──────┘  │  │
-│                               │        │               │         │  │
-│                               │  ┌─────┴──────┐ ┌──────┴──────┐  │  │
-│                               │  │  Context   │ │  Judge      │  │  │
-│                               │  │  Assembler │ │  Runner     │  │  │
-│                               │  └─────┬──────┘ └─────────────┘  │  │
-│                               │        │                         │  │
-│                               │  ┌─────┴───────┐                 │  │
-│                               │  │  Memory     │                 │  │
-│                               │  │  Layer      │                 │  │
-│                               │  └─────────────┘                 │  │
+│  │  (cfcf)  │                 │         (Hono on Bun)            │  │
+│  └──────────┘                 │                                  │  │
+│                               │  Project | Iteration | Process   │  │
+│  ┌──────────┐    HTTP/SSE     │  Manager | Controller | Manager  │  │
+│  │  Web GUI │◄───────────────►│  ─────────────────────────────── │  │
+│  │  (React) │  (served via    │  Review   | Document  | Judge    │  │
+│  │  served  │   serveStatic   │  Runner   | Runner    | Runner   │  │
+│  │  by Hono)│   from Hono)    │  ─────────────────────────────── │  │
+│  └──────────┘                 │  Context  | Active    | Notif.   │  │
+│                               │  Assembler| Processes | Dispatcher│  │
+│                               │  ─────────────────────────────── │  │
+│                               │  History  | Log       | Graceful │  │
+│                               │  Store    | Collector | Shutdown │  │
 │                               └──────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -90,17 +83,30 @@ The execution interface is designed so that swapping in a container backend does
 │  │    /path/to/project/                                         │   │
 │  │      src/                     (user's source code)           │   │
 │  │      cfcf-docs/               (cfcf-managed context files)   │   │
-│  │      CLAUDE.md                (agent instructions, generated)│   │
+│  │      docs/                    (project docs: arch, api, etc.)│   │
+│  │      CLAUDE.md / AGENTS.md    (agent instructions, generated)│   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  ~/.cfcf/                   (cfcf home - external memory)    │   │
-│  │    projects/<id>/iterations/001/agent-logs.txt               │   │
-│  │    projects/<id>/knowledge/lessons-learned.md                │   │
+│  │  <cfcf config dir>                                           │   │
+│  │    config.json               (global config, from cfcf init) │   │
+│  │    projects/<id>/config.json (per-project config)            │   │
+│  │    projects/<id>/loop-state.json   (persists across restarts)│   │
+│  │    projects/<id>/history.json      (all agent-run events)    │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Remote Git Repo (GitHub)   (source of truth, push on commit)│   │
+│  │  ~/.cfcf/logs/                (agent logs, too large for repo)│   │
+│  │    <project-id>/                                             │   │
+│  │      iteration-NNN-dev.log                                   │   │
+│  │      iteration-NNN-judge.log                                 │   │
+│  │      architect-NNN.log        (sequence-numbered per project)│   │
+│  │      documenter-NNN.log                                      │   │
+│  │      notifications.log        (JSON Lines audit trail)       │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  Remote Git Repo (GitHub)   (source of truth, push on success)│  │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```

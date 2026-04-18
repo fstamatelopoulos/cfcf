@@ -76,17 +76,25 @@ On each tagged release, CI (GitHub Actions) runs `bun build --compile --target=<
 - **Role**: Manages project and iteration lifecycles, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
 - **Transport**: HTTP/SSE for streaming event output to the web GUI. WebSocket as an option for bidirectional agent communication.
 
-### Web GUI (Optional, Deferred)
+### Web GUI (Iteration 4 — Available)
 
-The CLI is the primary interface. A local web GUI is planned for use cases that benefit from richer visualization:
+A React + Vite web GUI at `packages/web`, served by the Hono server via `serveStatic` middleware. The CLI remains the primary headless interface; the web GUI is for monitoring and control. Both drive the same server.
 
-- Iteration history and diffs.
-- Agent telemetry and token usage.
-- Configuration management.
-- Real-time log streaming.
-- Dependency and call graphs.
+Implemented (iteration 4):
+- Dashboard with project list + status badges
+- Project detail page with tabs: Status, History, Logs, Config
+- Unified PhaseIndicator for loop / review / document runs
+- LoopControls with Start / Stop / Resume / Review / Document
+- Real-time log streaming via SSE (persists across tab switches)
+- Unified project history timeline (reviews + iterations + documents)
 
-When implemented, the GUI will be a React app served by the Hono server on localhost. It shares types with the server via the monorepo. Remote access (tunneled or network-exposed) is a configuration option.
+Still planned for later iterations:
+- Diff viewer per iteration
+- Agent telemetry and token usage dashboards
+- Configuration editing in the web UI (currently read-only)
+- Remote access (tunneled or network-exposed)
+
+The GUI is a plain React + Vite app with no UI framework. Dark theme, minimal CSS, no routing library (hash-based routing).
 
 ---
 
@@ -147,7 +155,7 @@ cfcf runs as a background service on the user's machine. The server process mana
 - **Start**: `cfcf server start` launches the server as a background process. Auto-start on boot is an optional setup step (via launchd on macOS, systemd on Linux, or a Windows service).
 - **Communication**: CLI talks to the server via HTTP on a configurable local port (default: `localhost:7233`).
 - **Event streaming**: The server exposes an SSE endpoint for real-time updates (iteration progress, test results, alerts). The CLI and web GUI subscribe to this stream.
-- **Notifications**: The server can alert the user via multiple channels when iterations complete, pause for review, or encounter errors. Initially: terminal notifications. Planned: Slack, email, webhook integrations.
+- **Notifications**: The server alerts the user via configurable channels when loops pause, complete, or an agent fails. v1 channels (iteration 4): terminal bell, macOS Notification Center (osascript), Linux notify-send, JSON Lines log file. Webhook channel (Slack, email, custom URLs) deferred to iteration 5.
 - **Graceful degradation**: If the server is not running, `cfcf iterate` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. This is useful for quick one-off iterations and development/debugging of cfcf itself.
 
 ---

@@ -143,11 +143,11 @@ cfcf-docs/
 | iteration-reviews/*.md | cf² (archived) | Dev agent, User | After each iteration | History of all judge assessments |
 | architect-review.md | Solution Architect | Dev agent, Judge, User | Pre-iteration (`cfcf review`) | Persists across iterations |
 | cfcf-architect-signals.json | Solution Architect | cf² | Pre-iteration | Readiness gate |
-| docs/architecture.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | System architecture, components, data flow |
-| docs/api-reference.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration (if API exists) | Endpoints, models, errors |
-| docs/setup-guide.md | Architect (initial) / Dev agent | Dev agent, Judge, User | Every iteration | Prerequisites, install, run, config |
+| docs/architecture.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration + polished post-SUCCESS | System architecture, components, data flow |
+| docs/api-reference.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration (if API exists) + polished post-SUCCESS | Endpoints, models, errors |
+| docs/setup-guide.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration + polished post-SUCCESS | Prerequisites, install, run, config |
 | docs/README.md | Documenter | User | Post-SUCCESS | Project overview, quick start |
-| cfcf-documenter-instructions.md | cf² | Documenter | Post-SUCCESS | cf² generates |
+| cfcf-documenter-instructions.md | cf² | Documenter | Before each documenter run | cf² generates (sequence-numbered) |
 
 ---
 
