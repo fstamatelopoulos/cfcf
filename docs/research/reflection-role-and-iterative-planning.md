@@ -1,9 +1,9 @@
 # Reflection role and iterative planning — design doc
 
-**Status:** Draft for discussion — target implementation is iteration-6 clean session.
-**Depends on:** current cfcf v0.4 (shipped) + iter-5 distribution items (landing).
-**Supersedes / absorbs:** plan item 5.6 (Tier 3 Strategic Reflection), portions of 5.7 (cross-project knowledge — only the per-project learnings substrate).
-**Related vision doc:** `[CF-CF] Requirements & Vision v0.2` (Cerefox project, id `34646577-117a-412b-8beb-b8be54ee64d1`) — the "three-tier evaluation model" this doc refines.
+**Status:** **Finalized 2026-04-18.** All Q1–Q7 and U1–U5 resolved. Ready for a clean implementation session.
+**Depends on:** current cfcf v0.4 (shipped) + iter-5 distribution items (landing on `iteration-5/distribution`).
+**Supersedes / absorbs:** plan item 5.6 (Tier 3 Strategic Reflection); absorbs the per-project "lessons" substrate that v0.2 put in a separate Cerefox doc.
+**Related vision doc:** "CF-CF: Cerefox Code Factory — Requirements & Vision v0.2" (Cerefox knowledge base, project "Cerefox Agent", document id `34646577-117a-412b-8beb-b8be54ee64d1`). Retrieve via the Cerefox MCP tool: `cerefox_get_document(document_id="34646577-117a-412b-8beb-b8be54ee64d1")`. See §12 for the detailed relationship.
 
 ---
 
@@ -78,7 +78,7 @@ This is a flip from the v0.2 vision doc (which defaulted to reflection every 5 i
 
 ### 2.3 The judge's two new duties
 
-1. **Produce a `reflection_needed` signal** (`true` / `false` / omit). Setting `false` is an affirmative claim that the plan is correct and the strategy is healthy. Omitting the field or setting `true` runs reflection.
+1. **Produce a `reflection_needed` signal** (`true` / `false` / omit). Setting `false` is an **affirmative claim** that (a) the iteration made clean, on-plan progress, (b) no new risks emerged that warrant strategic review, and (c) prior iterations have not shown a drift pattern this iteration continued. Omitting the field or setting `true` runs reflection. The judge instruction template spells out this reasoning explicitly so the judge doesn't opt out thoughtlessly; the `reflectSafeguardAfter` ceiling catches an over-aggressive judge.
 
 2. **Produce a `reflection_reason` string** when `reflection_needed: true`. The reflection agent reads this as a prompt for where to focus (e.g., "the token refresh approach failed three ways; consider whether the whole auth layer decomposition is wrong").
 
@@ -410,59 +410,93 @@ reflectSafeguardAfter?: number;       // default: globalConfig.reflectSafeguardA
 
 ---
 
-## 8. Open questions and proposed answers
+## 8. Resolved design decisions (Q1–Q7)
 
-### Q1. Does the reflection agent ever see the failing test output directly, or only the judge's summary?
+All confirmed by the user on 2026-04-18.
 
-**Proposed:** It sees the last iteration's **dev log tail** (last ~500 lines, compressed if needed) in addition to the judge assessment. Judge interpretation is one data point; raw evidence is another. This is a context-assembly change — the reflection prompt includes a "raw tail" section separate from the structured context.
+### Q1. Does the reflection agent see raw agent output?
 
-### Q2. What if the reflection agent wants to change `success.md` (e.g., "the original criteria are over-specified and harmful")?
+**Resolved:** Yes — the reflection agent receives the **tail of the last iteration's dev log** (~500 lines, SLM-compressed if needed in a future iteration) in addition to the judge's interpretation. Raw evidence + judge interpretation = two independent data points. Implementation: context-assembler adds a "raw tail" section to the reflection prompt separate from the structured context.
 
-**Proposed for iter-6:** Strictly not allowed. `success.md` is user-defined and under user control; if reflection thinks it should change, it appends a `decision-log.md` entry of category `risk` flagging the issue, and optionally sets `recommend_stop: true` to pause and notify the user. The user is the only one who edits `problem.md` / `success.md` / `constraints.md`. Same for `hints.md` — user-owned.
+### Q2. Can reflection modify problem/success/constraints/hints?
 
-### Q3. Do we pass the reflection agent the signed `git log` of each iteration branch, or just the compiled history?
+**Resolved:** **No.** `problem.md`, `success.md`, `constraints.md`, `hints.md` are user-owned and explicitly protected. If reflection thinks they should change, it appends a `decision-log.md` entry of category `risk` flagging the issue and may set `recommend_stop: true` in its signals to pause the loop and notify the user. The user is the only editor of these four files.
 
-**Proposed:** Pass a compact summary (one line per commit: hash + date + message) for the iteration branches. If the agent wants to dig deeper it can `git show <hash>`, but the default context is the summary to keep token usage predictable.
+### Q3. Does reflection see the git log of iteration branches?
 
-### Q4. Should reflection output be visible on the web UI History tab?
+**Resolved:** Yes — a compact summary (one line per commit: hash + date + message) covering every `cfcf/iteration-*` branch. If the agent wants to dig into a specific commit it can `git show <hash>`; the default context keeps token usage predictable.
 
-**Proposed:** Yes — add a row per reflection event similar to judge/iteration rows. Make `iteration_health` the "Result" column with its own color scheme (converging=green, stable=blue, stalled=yellow, diverging=red, inconclusive=grey). Click to expand → `reflection-analysis.md` rendered inline, same pattern as the `ArchitectReview` component for iter-4 architect signals.
+### Q4. Reflection output in the web UI History tab?
 
-### Q5. Can the reflection agent escalate to the user?
+**Resolved:** Yes. A new row type per reflection event, alongside iteration/review/document rows. The "Result" column shows `iteration_health` with color coding: converging=green, stable=blue, stalled=yellow, diverging=red, inconclusive=grey. Row expands to an inline `ReflectionAnalysis` component (mirrors the `ArchitectReview` pattern from iter-4) that renders the parsed `cfcf-reflection-signals.json`.
 
-**Proposed:** Yes, via `recommend_stop: true` in the signals file. The harness then pauses the loop and fires a `loop.paused` notification with reason `"reflection flagged loop as stuck"`. The user reviews, decides whether to resume, and can optionally provide feedback via `cfcf resume --feedback "..."` (existing mechanism).
+### Q5. Can reflection escalate to the user?
 
-### Q6. What if the judge and reflection disagree — judge says "continue", reflection says `recommend_stop: true`?
+**Resolved:** Yes, via `recommend_stop: true` in the signals file. The harness then pauses the loop and fires a `loop.paused` notification with reason `"reflection flagged loop as stuck"`. The user reviews, decides whether to resume, and can provide feedback via `cfcf resume --feedback "..."` (existing mechanism).
 
-**Proposed:** Reflection wins. Its broader context makes its "stop" signal more trustworthy than the judge's "continue." The harness pauses; user arbitrates.
+### Q6. Judge / reflection disagreement precedence
 
-### Q7. What if `plan.md` is missing when reflection runs?
+**Resolved:** Reflection wins. Its broader context makes its "stop" signal more trustworthy than the judge's "continue." The harness pauses; the user arbitrates. This precedence rule is what proves the value of the reflection signals file — without it the disagreement has nowhere to be recorded.
 
-**Proposed:** Reflection creates one. This shouldn't happen in practice (architect or dev-iter-1 creates it), but defensively: reflection reads problem/success, writes a phases-as-iterations plan like the architect would, and continues. Logged to `decision-log.md`.
+### Q7. Missing `plan.md` when reflection runs
+
+**Resolved:** Reflection creates one. Shouldn't happen in practice (architect or dev-iter-1 creates it), but defensively: reflection reads problem/success, writes a phases-as-iterations plan like the architect would, and continues. Logs a `decision-log.md` entry (category `strategy`) documenting the bootstrap.
 
 ---
 
-## 9. Open questions for the user (push back welcome)
+## 9. Resolved: user open questions (U1–U5)
+
+All confirmed by the user on 2026-04-18.
 
 ### U1. `reflectSafeguardAfter` default value
 
-I'm proposing `3` — meaning judge can skip reflection at most 3 iterations in a row before the harness forces it. You could argue for `2` (tighter safety net) or `5` (trust the judge more). Thoughts?
+**Resolved: default `3`.** The judge may set `reflection_needed: false` for at most 3 consecutive iterations; on the 4th the harness forces reflection regardless. Per-project override allowed.
 
 ### U2. Reflection output commit separation
 
-I'm proposing three commits per iteration when reflection rewrites the plan: `dev(iter N): ...`, `judge(iter N): ...`, `reflect(iter N): ...`. Today we have `dev(iter N)` only (judge outputs are committed together with dev). Should judge continue to ride on the dev commit, or get its own? The clean story is three separate commits, but it triples the commit noise. I lean three separate commits.
+**Resolved: three commits per iteration** when reflection modifies the plan:
 
-### U3. Reflection on iteration 1?
+- `dev(iter N): <summary>` — code changes, `iteration-logs/iteration-N.md`, `iteration-handoff.md`, signals.
+- `judge(iter N): <determination>` — `judge-assessment.md`, judge signals, archival of prior judge output.
+- `reflect(iter N): <health>: <key_observation>` — `reflection-analysis.md`, reflection signals, **and** any changes to `plan.md` + `decision-log.md` made by reflection.
 
-Iteration 1 has one data point — the first iteration. Reflection there can only validate the plan, not observe patterns. Should we skip reflection on iteration 1 automatically, or let it run (likely producing `iteration_health: inconclusive` + no plan changes)? I lean skip-on-iter-1 to save cost.
+Each commit is produced by the harness after the corresponding phase completes. `git log --oneline` reads as a clean three-line story per iteration. When the judge rides on a single iteration with no reflection (judge opted out, under the safeguard ceiling), only two commits are produced.
 
-### U4. Context assembly slicing for decision-log.md
+### U3. Reflection on iteration 1
 
-If `decision-log.md` grows unbounded, do we auto-archive entries older than N iterations into a sibling `decision-log.archive.md`? I lean yes, with N = 50 iterations as the threshold, to keep the live file cheap to slice.
+**Resolved: never auto-skip.** Reflection runs on every iteration unless the judge explicitly sets `reflection_needed: false`. Iteration 1 is included — reflection there serves as a sanity check on the initial plan and the judge's first call.
+
+**Implication for the judge instruction template:** the judge must be taught to reason carefully before opting out. The template (`cfcf-judge-instructions.md`) will include guidance along these lines:
+
+> You may set `reflection_needed: false` ONLY when you are confident that:
+> 1. The iteration made clean, on-plan progress that matches the current `plan.md` item(s).
+> 2. No new risks, concerns, or surprising behaviors emerged that warrant strategic review.
+> 3. Prior iterations have not shown a pattern of drift that this iteration continued.
+>
+> When in doubt, omit the field or set `true`. The cost of an unnecessary reflection pass is cheap compared to the cost of a strategic drift going unchecked. If you consistently opt out, cfcf will force reflection after `reflectSafeguardAfter` consecutive skips.
+
+The safeguard ceiling (U1) catches an over-aggressive judge.
+
+### U4. Decision-log archiving
+
+**Resolved: no auto-archive. Issue a warning instead.** `decision-log.md` grows unbounded in the repo. At iteration 50 (hardcoded, reviewable), the harness:
+- Appends a soft warning to `iteration-history.md` noting that the decision log is getting large.
+- Fires a `loop.paused` — **wait, no**, we don't want to pause the loop for this. Instead, emits an **informational notification** via the existing notification dispatcher with event type `project.decision_log_large`. Treat it as a new optional event type users can opt into.
+
+No actual trimming — the user owns the decision log and decides when to archive. If they want to archive, they can do it manually (`cp decision-log.md decision-log.archive-iter-50.md && echo "[archived at iter 50]" >> decision-log.md`). A future helper CLI like `cfcf archive-log` could automate this but is not in scope.
 
 ### U5. Manual reflection on user demand
 
-A future `cfcf reflect --project <name>` CLI that runs reflection ad-hoc against the current state — useful when the user suspects drift but the judge hasn't signaled it. Worth including in the initial implementation, or defer?
+**Resolved: yes, include in the initial implementation.** New CLI command:
+
+```bash
+cfcf reflect --project <name>           # run reflection once, ad-hoc
+cfcf reflect --project <name> --prompt "focus on the auth module drift"
+```
+
+Runs the same reflection runner as the loop-triggered path, but independent of an iteration. Does NOT write an `iteration-logs/iteration-N.md` (no iteration happened), and does NOT modify `loop-state.json`. Writes `reflection-analysis.md` + signals as usual; archives any prior reflection analysis; appends a `decision-log.md` entry of category `strategy` noting the manual trigger.
+
+**CLI parity note:** this surfaces the broader need to audit CLI ↔ web-GUI parity as more roles are added. Tracked as a follow-up item (see §13 Not-in-scope / follow-ups).
 
 ---
 
@@ -483,28 +517,34 @@ Three PRs, ordered by dependency. Each is self-contained and mergeable.
 - Tests: updated context-assembler tests for iteration-history rebuild + new iteration-log artifact, updated template tests.
 - Backward compatible: existing `decision-log.md` files with un-tagged entries still work. New entries follow the new format. Pre-existing projects without `iteration-logs/*.md` files fall back to showing "No previous iterations" in `iteration-history.md` — same as today.
 
-### PR 2 — Reflection role (agent + runner + signal + templates + config)
+### PR 2 — Reflection role (agent + runner + signal + templates + config + manual CLI)
 
 - New `packages/core/src/reflection-runner.ts` (shape mirrors `architect-runner.ts` and `documenter-runner.ts`).
 - New templates: `cfcf-reflection-instructions.md`, `cfcf-reflection-signals.json`, `reflection-analysis.md` placeholder.
 - New `ReflectionSignals` type in `types.ts`.
-- New `reflectionAgent: AgentConfig` + `reflectSafeguardAfter: number` on both `CfcfGlobalConfig` and `ProjectConfig`.
-- `cfcf init` extended to ask for reflection agent + model.
-- Context assembler: new `assembleReflectionContext()` that pulls the full decision log, all prior reflection analyses, all archived judge assessments, history.json, and the current plan.
-- Web types + API endpoint: `/api/projects/:id/reflections` and SSE log streaming parity.
-- **NOT YET wired into the loop.** Only callable via a manual `cfcf reflect` command (if we include U5) or via a direct API endpoint for testing. This lets us validate the role in isolation before adding loop orchestration.
-- Tests: unit tests for signal parsing, template resolution, config default propagation.
+- New `reflectionAgent: AgentConfig` + `reflectSafeguardAfter: number` on both `CfcfGlobalConfig` and `ProjectConfig`. Backfill for pre-5.6 configs.
+- `cfcf init` extended to ask for reflection agent + model, with the guidance text from §7.2.
+- Context assembler: new `assembleReflectionContext()` that pulls the full decision log, all prior reflection analyses, all archived judge assessments, all `iteration-logs/iteration-*.md`, compact git log of iteration branches (Q3), the dev log tail of the last iteration (Q1), and the current plan.
+- **New CLI command `cfcf reflect` (U5):**
+  - `cfcf reflect --project <name>` — runs reflection ad-hoc against current state.
+  - `cfcf reflect --project <name> --prompt "<focus hint>"` — optional user-supplied hint passed to the reflection agent.
+  - Does NOT write `iteration-logs/iteration-N.md`. Does NOT modify `loop-state.json`. Appends a `decision-log.md` entry of category `strategy` noting the manual trigger.
+- Web API endpoint: `POST /api/projects/:id/reflect` for web-UI parity (calls the same runner).
+- Web types + existing log-streaming endpoint covers reflection logs the same way as architect/documenter (sequence-numbered: `reflection-NNN.log`).
+- **NOT YET wired into the iteration loop.** Callable only via `cfcf reflect` CLI or the new API endpoint. This isolates the role for testing before PR 3 adds loop orchestration.
+- Tests: unit tests for signal parsing, template resolution, config default propagation, manual-trigger path (no loop state mutation, no iteration-log artifact).
 
 ### PR 3 — Wire reflection into the iteration loop
 
 - Judge signals extended: `reflection_needed`, `reflection_reason` fields.
-- Update judge instruction template to explain the new signals.
+- Update judge instruction template with the "set to false only when" checklist from §2.3 so the judge opts out thoughtfully.
 - Iteration loop: after judge, evaluate the trigger logic (§2.2); if reflection runs, call `runReflection()`.
-- Non-destructive plan validation before accepting reflection's rewrite.
-- Separate git commit for reflection changes.
-- Loop-state extended: `iterationsSinceLastReflection` counter.
-- Iteration history event type: new `"reflection"` kind (alongside `"review"`, `"iteration"`, `"document"`). Web UI History tab gets a new row type and detail component (renders `reflection-analysis.md`).
-- Tests: judge signal extension, reflection trigger logic (4 cases: needed=true, needed=false + under safeguard, needed=false + at safeguard, needed=missing), non-destructive validation (accept / reject cases).
+- Non-destructive plan validation before accepting reflection's rewrite (see §6.3 criteria).
+- **Three separate commits per iteration** (U2): `dev(iter N): ...`, `judge(iter N): ...`, `reflect(iter N): ...`. The harness produces each after the corresponding phase completes.
+- Loop-state extended: `iterationsSinceLastReflection` counter (reset when reflection runs, incremented when judge opts out).
+- **Decision-log size warning** (U4): when `iterationsSinceLastReflection` + total iteration count >= 50, emit a one-line warning into `iteration-history.md` and fire an optional notification event `project.decision_log_large` via the existing dispatcher. No auto-trim.
+- Iteration history event type: new `"reflection"` kind (alongside `"review"`, `"iteration"`, `"document"`). Web UI History tab gets a new row type and a `ReflectionAnalysis` detail component (mirror of `ArchitectReview`; renders the parsed `cfcf-reflection-signals.json`).
+- Tests: judge signal extension, reflection trigger logic (4 cases: needed=true, needed=false + under safeguard, needed=false + at safeguard, needed=missing), non-destructive validation (accept / reject cases), three-commit sequence assertion on a real git repo fixture.
 
 Total implementation estimate: ~1500–2000 lines of new code + tests, ~5–7 days of focused work. Each PR is independently valuable — you could ship PR 1 alone as a polish pass, and PR 2 alone as a "manual reflection CLI" preview, before committing to the full loop integration in PR 3.
 
@@ -521,6 +561,19 @@ Total implementation estimate: ~1500–2000 lines of new code + tests, ~5–7 da
 
 ## 12. Relationship to the v0.2 vision doc
 
+"v0.2 vision doc" refers to **"CF-CF: Cerefox Code Factory — Requirements & Vision v0.2"**, authored April 1 2026. It introduced cfcf's three-tier evaluation model (mechanical / judge / reflection). It lives in the **Cerefox knowledge base** under the "Cerefox Agent" project and is retrievable via the Cerefox MCP tool:
+
+- **Title:** `CF-CF: Cerefox Code Factory -- Requirements & Vision v0.2`
+- **Cerefox project:** `Cerefox Agent`
+- **Document ID:** `34646577-117a-412b-8beb-b8be54ee64d1`
+- **Retrieve via MCP:** `cerefox_get_document(document_id="34646577-117a-412b-8beb-b8be54ee64d1")`
+- **Related earlier draft (v0.1):** `CF-CF: Cerefox Code Factory -- Requirements & Vision v0.1`, ID `5d6a3720-c25f-4208-b64b-bf4d8ef39e9f` (same project). v0.1 predates the three-tier evaluation model.
+- **Related broader agent concept:** `Cerefox Agent — Full Vision Document v0.1`, ID `b027a566-41f7-45e1-acc4-7ae4f36323e2` (same project). Origin of the OODA+R loop and the memory-first design philosophy that cfcf inherits.
+
+A local mirror of the v0.2 file is **not** kept in this repo — the authoritative copy is in Cerefox. When working on this design doc, retrieve the full v0.2 text from Cerefox to verify the relationship claims below.
+
+### Where this doc diverges from v0.2
+
 This design is consistent with but sharper than the v0.2 three-tier model:
 
 | v0.2 | This doc |
@@ -529,15 +582,21 @@ This design is consistent with but sharper than the v0.2 three-tier model:
 | Plan edits via `should_update_plan` + `suggested_plan_changes` structured flags | Reflection rewrites `plan.md` directly (non-destructively); flags are simpler (`plan_modified: bool`) |
 | Cross-project `[CF-CF] Lessons Learned` Cerefox doc | Project-local `decision-log.md` with multi-role entries; cross-project aggregation deferred to iter-6 item 6.9 |
 | SLM workers for log compression | Still deferred; may be added when token pressure demands it |
-
-The v0.2 doc's unanswered Open Question #9 ("reflection-triggered strategy shifts — how aggressive?") is resolved here as: reflection can rewrite the pending plan freely but never auto-stops. Only `recommend_stop: true` + user arbitration.
+| v0.2 Open Question #9 ("reflection-triggered strategy shifts — how aggressive?") was left unanswered | Resolved here: reflection can rewrite the pending plan freely but never auto-stops. Only `recommend_stop: true` + user arbitration (Q5, Q6). |
 
 ---
 
-## 13. Not in scope (intentionally deferred)
+## 13. Not in scope / follow-ups
 
+### Deferred to later iterations
 - Cross-project learnings aggregation (iter-6 item 6.9).
-- SLM-based log compression (may surface if token usage becomes a problem).
-- User-edit of reflection output before commit.
-- `cfcf reflect` ad-hoc CLI (pending U5).
+- SLM-based log compression for the reflection prompt (may surface if token usage becomes a problem).
+- User-edit of reflection output before commit (manual intervention gate).
 - Applying reflection to non-coding tasks (iter-6 item 6.11 — separate research).
+- Auto-archiving of `decision-log.md` at thresholds (warning only in this scope per U4; a `cfcf archive-log` helper could land later).
+
+### CLI ↔ web-GUI parity audit (raised by U5)
+
+Adding `cfcf reflect` brings total CLI commands to: `init`, `server start/stop/status`, `project init/list/show/delete`, `config show/edit`, `run`, `resume`, `stop`, `review`, `document`, `reflect`. Every one of these has (or should have) a web-GUI equivalent. A parity audit is its own task — flagged here so the next iteration can pick it up.
+
+Suggested placement: new plan item in iteration 6 ("CLI ↔ web-GUI parity audit"), paired with item 6.2 (`cfcf log` CLI) and 6.3 (`cfcf push` CLI) which also surface parity gaps.
