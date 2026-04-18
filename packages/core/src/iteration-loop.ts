@@ -36,6 +36,10 @@ import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { registerProcess } from "./active-processes.js";
+import { dispatchForProject, makeEvent } from "./notifications/index.js";
+import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
 
@@ -45,6 +49,7 @@ export type LoopPhase =
   | "dev_executing"
   | "judging"
   | "deciding"
+  | "documenting"
   | "paused"
   | "completed"
   | "failed"
@@ -88,6 +93,11 @@ export interface LoopIterationRecord {
   judgeError?: string;
   devLogFile: string;
   judgeLogFile: string;
+  /** Log filenames only (for web clients) */
+  devLogFileName: string;
+  judgeLogFileName: string;
+  /** History event ID */
+  historyEventId: string;
   startedAt: string;
   completedAt?: string;
   merged: boolean;
@@ -136,6 +146,45 @@ async function loadLoopState(projectId: string): Promise<LoopState | null> {
 async function saveLoopState(state: LoopState): Promise<void> {
   loopStore.set(state.projectId, state);
   await persistLoopState(state);
+}
+
+/**
+ * Clean up stale loop-state files on server startup.
+ * Any loop-state.json whose phase is an active phase (preparing, dev_executing,
+ * judging, deciding, documenting) is orphaned because the agent process did
+ * not survive the server restart. Marks these as "failed" with a clear error.
+ *
+ * Returns the number of loops marked failed.
+ */
+export async function cleanupStaleActiveLoops(
+  reason: string = "Server restarted while this loop was in progress",
+): Promise<number> {
+  const { listProjects } = await import("./projects.js");
+  const projects = await listProjects();
+  let total = 0;
+  const activePhases: LoopPhase[] = [
+    "preparing",
+    "dev_executing",
+    "judging",
+    "deciding",
+    "documenting",
+  ];
+
+  for (const p of projects) {
+    const state = await loadLoopState(p.id);
+    if (!state) continue;
+    if (activePhases.includes(state.phase)) {
+      state.phase = "failed";
+      state.error = `${reason} (was in phase: ${state.phase === "failed" ? "unknown" : state.phase})`;
+      state.completedAt = new Date().toISOString();
+      state.outcome = "failure";
+      await persistLoopState(state);
+      await updateProject(p.id, { status: "failed" }).catch(() => {});
+      total++;
+    }
+  }
+
+  return total;
 }
 
 /**
@@ -300,13 +349,30 @@ export async function startLoop(
   // Update project status
   await updateProject(project.id, { status: "running" });
 
-  // Run loop in background
+  // Run loop in background. Error handler is itself try/catch-wrapped so a
+  // disk write failure during error recording doesn't silently swallow the error.
   runLoop(project, state, opts).catch(async (err) => {
-    state.phase = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await saveLoopState(state);
-    updateProject(project.id, { status: "failed" }).catch(() => {});
+    try {
+      state.phase = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
+      updateProject(project.id, { status: "failed" }).catch(() => {});
+      dispatchForProject(
+        makeEvent({
+          type: "loop.completed",
+          title: "Loop failed",
+          message: `${project.name}: ${state.error}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { outcome: "failure", error: state.error },
+        }),
+        project.notifications,
+      );
+    } catch (handlerErr) {
+      console.error(`[iteration-loop] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -341,13 +407,18 @@ export async function resumeLoop(
   await saveLoopState(state);
   await updateProject(projectId, { status: "running" });
 
-  // Resume loop in background
+  // Resume loop in background. Error handler itself is try/catch-wrapped.
   runLoop(project, state).catch(async (err) => {
-    state.phase = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await saveLoopState(state);
-    updateProject(projectId, { status: "failed" }).catch(() => {});
+    try {
+      state.phase = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
+      updateProject(projectId, { status: "failed" }).catch(() => {});
+    } catch (handlerErr) {
+      console.error(`[iteration-loop] Failed to record resume error for ${projectId}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -381,6 +452,22 @@ export async function stopLoop(projectId: string): Promise<LoopState> {
  */
 function isStopped(state: LoopState): boolean {
   return state.phase === "stopped";
+}
+
+/** Map a pause reason to a human-readable title for notifications */
+function pauseReasonTitle(reason?: LoopState["pauseReason"]): string {
+  switch (reason) {
+    case "cadence":
+      return "Loop paused for review";
+    case "anomaly":
+      return "Loop paused: anomaly detected";
+    case "user_input_needed":
+      return "Loop needs your input";
+    case "max_iterations":
+      return "Loop reached max iterations";
+    default:
+      return "Loop paused";
+  }
 }
 
 /**
@@ -470,16 +557,42 @@ async function runLoop(
     await ensureProjectLogDir(project.id);
     const devLogFile = getIterationLogPath(project.id, iterationNum, "dev");
     const judgeLogFile = getIterationLogPath(project.id, iterationNum, "judge");
+    const iterStr = String(iterationNum).padStart(3, "0");
+    const devLogFileName = `iteration-${iterStr}-dev.log`;
+    const judgeLogFileName = `iteration-${iterStr}-judge.log`;
+
+    const historyEventId = randomBytes(8).toString("hex");
+    const startedAt = new Date().toISOString();
 
     const iterRecord: LoopIterationRecord = {
       number: iterationNum,
       branch: branchName,
       devLogFile,
       judgeLogFile,
-      startedAt: new Date().toISOString(),
+      devLogFileName,
+      judgeLogFileName,
+      historyEventId,
+      startedAt,
       merged: false,
     };
     state.iterations.push(iterRecord);
+
+    // Record history event (will be updated when iteration completes)
+    await appendHistoryEvent(project.id, {
+      id: historyEventId,
+      type: "iteration",
+      status: "running",
+      startedAt,
+      iteration: iterationNum,
+      branch: branchName,
+      logFile: devLogFileName, // primary log file for display
+      devLogFile: devLogFileName,
+      judgeLogFile: judgeLogFileName,
+      agent: project.devAgent.adapter, // used by BaseHistoryEvent
+      model: project.devAgent.model,
+      devAgent: project.devAgent.adapter,
+      judgeAgent: project.judgeAgent.adapter,
+    });
 
     const problemPack = await readProblemPack(packPath);
 
@@ -544,7 +657,7 @@ async function runLoop(
     state.phase = "dev_executing";
     await saveLoopState(state);
 
-    const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
+    const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. This is a single iteration in a multi-iteration loop -- execute only the next pending chunk from cfcf-docs/plan.md (map phases to iterations first if the plan is not yet structured that way), update plan.md with what you completed, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
     const devCmd = devAdapter.buildCommand(project.repoPath, devPrompt, project.devAgent.model);
 
     const devProcess = await spawnProcess({
@@ -553,8 +666,21 @@ async function runLoop(
       cwd: project.repoPath,
       logFile: devLogFile,
     });
+    const unregisterDev = registerProcess({
+      projectId: project.id,
+      role: "dev",
+      process: devProcess,
+      startedAt: iterRecord.startedAt,
+      historyEventId: iterRecord.historyEventId,
+      logFileName: iterRecord.devLogFileName,
+    });
 
-    const devResult = await devProcess.result;
+    let devResult: Awaited<typeof devProcess.result>;
+    try {
+      devResult = await devProcess.result;
+    } finally {
+      unregisterDev();
+    }
     iterRecord.devExitCode = devResult.exitCode;
 
     // Check if stopped during dev execution
@@ -622,8 +748,21 @@ async function runJudgeAndDecide(
     cwd: project.repoPath,
     logFile: judgeLogFile,
   });
+  const unregisterJudge = registerProcess({
+    projectId: project.id,
+    role: "judge",
+    process: judgeProcess,
+    startedAt: iterRecord.startedAt,
+    historyEventId: iterRecord.historyEventId,
+    logFileName: iterRecord.judgeLogFileName,
+  });
 
-  const judgeResult = await judgeProcess.result;
+  let judgeResult: Awaited<typeof judgeProcess.result>;
+  try {
+    judgeResult = await judgeProcess.result;
+  } finally {
+    unregisterJudge();
+  }
   iterRecord.judgeExitCode = judgeResult.exitCode;
 
   // Check if stopped during judge execution
@@ -651,6 +790,16 @@ async function runJudgeAndDecide(
   await archiveJudgeAssessment(project.repoPath, iterationNum);
 
   iterRecord.completedAt = new Date().toISOString();
+
+  // Update history event for this iteration
+  await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+    status: "completed",
+    completedAt: iterRecord.completedAt,
+    devExitCode: iterRecord.devExitCode,
+    judgeExitCode: iterRecord.judgeExitCode,
+    judgeDetermination: judgeSignals?.determination,
+    judgeQuality: judgeSignals?.quality_score,
+  } as Partial<import("./project-history.js").IterationHistoryEvent>);
 
   // --- DECIDE ---
   state.phase = "deciding";
@@ -683,6 +832,10 @@ async function runJudgeAndDecide(
       // If merge fails, stay on the feature branch
       await gitManager.checkoutBranch(project.repoPath, branchName);
     }
+    // Update history with merge status
+    await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+      merged: iterRecord.merged,
+    } as Partial<import("./project-history.js").IterationHistoryEvent>);
   }
 
   // Clear user feedback after it's been consumed
@@ -690,29 +843,59 @@ async function runJudgeAndDecide(
 
   switch (decision.action) {
     case "stop":
-      state.phase = "completed";
-      state.outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
+      // Determine the final outcome
+      const outcome = judgeSignals?.determination === "SUCCESS" ? "success" :
                       decision.pauseReason === "max_iterations" ? "max_iterations" :
                       "failure";
+
+      // On success: run documenter BEFORE marking loop as completed
+      // so the UI knows the documenter is still producing output.
+      if (outcome === "success") {
+        state.phase = "documenting";
+        await saveLoopState(state);
+
+        try {
+          const docResult = await runDocumentSync(project);
+          let committed = false;
+          if (await gitManager.hasChanges(project.repoPath)) {
+            const commitResult = await gitManager.commitAll(
+              project.repoPath,
+              `cfcf documentation (${project.documenterAgent.adapter})`,
+            );
+            committed = commitResult.success;
+          }
+          // Update the history event with the commit status
+          await updateHistoryEvent(project.id, docResult.historyEventId, {
+            committed,
+          } as Partial<import("./project-history.js").DocumentHistoryEvent>);
+        } catch {
+          // Documenter failure is not fatal -- the code is done
+        }
+      }
+
+      state.phase = "completed";
+      state.outcome = outcome;
       state.completedAt = new Date().toISOString();
       await saveLoopState(state);
       await updateProject(project.id, { status: "completed" });
 
-      // On success: run documenter, commit docs, then push
-      if (state.outcome === "success") {
-        // Run the documenter agent to produce final polished documentation
-        try {
-          const docResult = await runDocumentSync(project);
-          if (await gitManager.hasChanges(project.repoPath)) {
-            await gitManager.commitAll(
-              project.repoPath,
-              `cfcf documentation (${project.documenterAgent.adapter})`,
-            );
-          }
-        } catch {
-          // Documenter failure is not fatal -- the code is done
-        }
+      // Notify on loop completion
+      dispatchForProject(
+        makeEvent({
+          type: "loop.completed",
+          title: `Loop ${outcome === "success" ? "completed successfully" : "ended"}`,
+          message: outcome === "success"
+            ? `${project.name}: all success criteria met (${iterationNum} iteration${iterationNum === 1 ? "" : "s"})`
+            : `${project.name}: loop ended with outcome "${outcome}" after ${iterationNum} iteration${iterationNum === 1 ? "" : "s"}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { outcome, iterations: iterationNum },
+        }),
+        project.notifications,
+      );
 
+      // Push to remote on success
+      if (outcome === "success") {
         await gitManager.push(project.repoPath).catch(() => {
           // Push failure is not fatal
         });
@@ -731,6 +914,43 @@ async function runJudgeAndDecide(
       }
       await saveLoopState(state);
       await updateProject(project.id, { status: "paused" });
+
+      // Notify on pause (cadence, anomaly, user input needed)
+      dispatchForProject(
+        makeEvent({
+          type: "loop.paused",
+          title: pauseReasonTitle(decision.pauseReason),
+          message: `${project.name}: ${decision.reason}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: {
+            iteration: iterationNum,
+            pauseReason: decision.pauseReason,
+            questions: decision.questions,
+          },
+        }),
+        project.notifications,
+      );
+
+      // For judge failure (null signals + non-zero exit), also fire agent.failed
+      if (!judgeSignals && iterRecord.judgeExitCode !== undefined && iterRecord.judgeExitCode !== 0) {
+        dispatchForProject(
+          makeEvent({
+            type: "agent.failed",
+            title: "Judge agent failed",
+            message: `${project.name}: judge exited with code ${iterRecord.judgeExitCode} and produced no signals. Check log.`,
+            projectId: project.id,
+            projectName: project.name,
+            details: {
+              iteration: iterationNum,
+              role: "judge",
+              exitCode: iterRecord.judgeExitCode,
+            },
+          }),
+          project.notifications,
+        );
+      }
+
       return; // Loop exits -- will be restarted by resumeLoop()
 
     case "continue":

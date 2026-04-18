@@ -142,6 +142,22 @@ describe("context-assembler", () => {
       expect(content).toContain("iteration-history.md");
     });
 
+    it("injects iteration-scope discipline on every iteration", () => {
+      // Reaches live CLAUDE.md every run -- not just via process.md template
+      // which is copied only on first iteration.
+      const first = generateInstructionContent(makeCtx({ iteration: 1 }));
+      const later = generateInstructionContent(makeCtx({ iteration: 4 }));
+      for (const content of [first, later]) {
+        expect(content).toContain("Iteration Scope");
+        expect(content).toContain("one phase per iteration");
+        expect(content).toContain("cfcf-docs/plan.md");
+      }
+      // First iteration tells the agent to map phases to iterations;
+      // later iterations tell it to pick up the next pending chunk.
+      expect(first).toContain("map phases to concrete iterations");
+      expect(later).toContain("next pending iteration");
+    });
+
     it("includes judge feedback when present", () => {
       const content = generateInstructionContent(
         makeCtx({ previousJudgeAssessment: "Good progress on the calculator." }),

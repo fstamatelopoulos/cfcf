@@ -6,16 +6,20 @@
   "workspaces": [
     "packages/core",
     "packages/server",
-    "packages/cli"
+    "packages/cli",
+    "packages/web"
   ],
   "scripts": {
-    "test": "bun test packages/core && bun test packages/server && bun test packages/cli",
+    "test": "bun test packages/core && bun test packages/server && bun test packages/cli && bun test packages/web",
     "test:core": "bun test packages/core",
     "test:server": "bun test packages/server",
     "test:cli": "bun test packages/cli",
+    "test:web": "bun test packages/web",
     "dev:server": "bun run --watch packages/server/src/index.ts",
+    "dev:web": "cd packages/web && bun run dev",
     "dev:cli": "bun run packages/cli/src/index.ts",
     "typecheck": "tsc --noEmit",
+    "build:web": "cd packages/web && bun run build",
     "build": "bun build packages/cli/src/index.ts --compile --outfile cfcf-binary"
   },
   "devDependencies": {

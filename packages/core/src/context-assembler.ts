@@ -150,6 +150,24 @@ export function generateInstructionContent(ctx: IterationContext): string {
   }
   lines.push("");
 
+  // --- Iteration scope discipline (always injected, not just in process.md template) ---
+  lines.push("## Iteration Scope -- one phase per iteration");
+  lines.push("");
+  lines.push("**Each iteration is a separate, clean process.** cfcf spawns a fresh agent invocation per iteration with no session continuity. The next iteration inherits nothing from this one except the files you leave on disk. Plan for that:");
+  lines.push("");
+  lines.push("1. Read `cfcf-docs/plan.md` first. It is the shared source of truth between iterations.");
+  if (ctx.iteration === 1) {
+    lines.push("2. If the plan is missing or not mapped to iterations, **map phases to concrete iterations now** (e.g. `## Iteration 1 -- Foundation`, `## Iteration 2 -- Core features`). Pick chunks small enough that one unattended run can complete and test them.");
+  } else {
+    lines.push("2. If the plan already maps phases to iterations, locate the **next pending iteration** and execute only that chunk. Do not skip ahead. Do not try to finish everything in one run.");
+  }
+  lines.push("3. Before you exit, update `cfcf-docs/plan.md`:");
+  lines.push("   - Mark completed items `[x]` with a brief note of what you actually did (files touched, tests added, deviations).");
+  lines.push("   - Leave everything else pending so the next iteration picks up from there.");
+  lines.push("   - Add new pending items if you discover work.");
+  lines.push("4. This is what makes the judge's per-iteration assessment meaningful and the loop resumable after a pause. Do one chunk well; the next iteration will do the next one.");
+  lines.push("");
+
   // Tier 2 pointers
   lines.push("## Context Files to Read");
   lines.push("");

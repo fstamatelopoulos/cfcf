@@ -64,7 +64,9 @@ Write a comprehensive review following this structure:
 
 ### 2. Implementation plan outline: `cfcf-docs/plan.md`
 
-Create an initial implementation plan that the dev agent will read and expand. Structure it as:
+Create an initial implementation plan that the dev agent will read and expand. **Map phases to concrete iterations.** cfcf executes one iteration per agent run, so the plan is also the iteration schedule. Each iteration should be a small, testable chunk -- typically one phase or a few tightly related tasks. Err on the side of smaller iterations.
+
+Structure it as:
 
 ```markdown
 # Implementation Plan
@@ -72,20 +74,22 @@ Create an initial implementation plan that the dev agent will read and expand. S
 ## Approach
 <!-- High-level approach: what architecture, what patterns, what order -->
 
-## Phase 1: Foundation
-<!-- What to build first -- the base that everything else depends on -->
+## Iteration 1 -- Foundation
+<!-- What to build first -- the base that everything else depends on. Pick a chunk small enough that a single unattended iteration can complete and test it. -->
 - [ ] Task 1
 - [ ] Task 2
 
-## Phase 2: Core Features
-<!-- The main functionality -->
+## Iteration 2 -- Core Features
+<!-- The main functionality. -->
 - [ ] Task 1
 - [ ] Task 2
 
-## Phase 3: Integration & Polish
-<!-- Connecting pieces, error handling, edge cases -->
+## Iteration 3 -- Integration & Polish
+<!-- Connecting pieces, error handling, edge cases. -->
 - [ ] Task 1
 - [ ] Task 2
+
+<!-- Add more iterations as needed. Two to five is typical; more for larger projects. -->
 
 ## Testing Strategy
 <!-- How to validate: unit tests, integration tests, manual checks -->
@@ -95,7 +99,7 @@ Create an initial implementation plan that the dev agent will read and expand. S
 <!-- The dev agent should document these in decision-log.md -->
 ```
 
-The dev agent will read this plan, refine it, and check off items as it works. You are creating the starting point -- not a rigid prescription.
+The dev agent will read this plan, execute the **next pending iteration** (not all of them), mark completed items `[x]` with brief notes, and exit. The next cfcf iteration picks up from the next pending item. You are creating the starting point -- not a rigid prescription -- but the iteration breakdown is what makes each run checkpointed and resumable.
 
 ### 3. Project documentation stubs: `docs/` directory
 

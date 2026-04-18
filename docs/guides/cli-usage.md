@@ -343,6 +343,8 @@ cfcf config dir/
   projects/
     my-project-a1b2c3/
       config.json           # Project-specific config
+      loop-state.json       # Current loop run state (phase, iterations, etc.)
+      history.json          # Persistent history of all agent runs (reviews, iterations, documents)
 ```
 
 ### Log storage:
@@ -353,11 +355,71 @@ Agent output logs are stored separately (they can be large):
 ~/.cfcf/
   logs/
     my-project-a1b2c3/
-      iteration-001-dev.log
-      iteration-001-judge.log
+      iteration-001-dev.log       # Dev agent log per iteration
+      iteration-001-judge.log     # Judge agent log per iteration
+      architect-001.log           # Nth architect review
+      documenter-001.log          # Nth documenter run
+      notifications.log           # JSON Lines audit trail of notifications
 ```
 
+Each architect/documenter invocation gets its own sequence-numbered log
+so re-running preserves history.
+
 Override with `CFCF_LOGS_DIR` environment variable.
+
+---
+
+## Notifications
+
+cfcf can ping you at key moments during long-running unattended loops so you
+can walk away and get notified only when needed. This is the "dark factory"
+operating mode.
+
+### Events
+
+- **`loop.paused`** — Loop pauses because of the review cadence, agent questions, an anomaly, or reaching max iterations
+- **`loop.completed`** — Loop reaches a terminal state (success, failure, stopped, max iterations)
+- **`agent.failed`** — An agent process exits with non-zero status and no signals (e.g., judge config was wrong)
+
+### Channels
+
+| Channel | What it does | Platforms |
+|---------|-------------|-----------|
+| `terminal-bell` | Writes the ASCII BEL character (`\a`) to server stderr — most terminals beep or flash | all |
+| `macos` | Native macOS Notification Center entry via `osascript` | macOS only |
+| `linux` | Native Linux desktop notification via `notify-send` (part of libnotify) | Linux only |
+| `log` | Appends a JSON Lines entry to `~/.cfcf/logs/<project>/notifications.log` — always-on audit trail | all |
+
+### Configuration
+
+Configured via `cfcf init` or by editing the global config file directly:
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "loop.paused": ["terminal-bell", "macos", "log"],
+      "loop.completed": ["terminal-bell", "macos", "log"],
+      "agent.failed": ["terminal-bell", "macos", "log"]
+    }
+  }
+}
+```
+
+Set `enabled: false` to disable all notifications. Remove channels from
+a specific event's array to silence that event. Project config can
+override the global default.
+
+### Notes
+
+- macOS notifications require Terminal.app (or the calling terminal) to have
+  notification permission in System Settings → Notifications. First use may
+  silently fail if permission has never been granted.
+- Dispatch is fire-and-forget with a 5-second per-channel timeout. A slow or
+  failing channel never blocks the loop or other channels.
+- No rate limiting in v1 — if you set `pauseEvery: 1`, you'll get a
+  notification on every iteration.
 
 ---
 

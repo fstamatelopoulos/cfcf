@@ -19,6 +19,26 @@
 
 ## Log
 
+### 2026-04-16 -- Web GUI iteration 4: known bugs and next steps
+
+**Completed**: React + Vite web GUI with dashboard, project detail, phase indicator, log viewer, iteration history, judge assessment display, feedback form, loop controls. Served from Hono via serveStatic.
+
+**Known bugs to fix in next session**:
+1. **Live log streaming during loop runs**: The SSE log endpoint now tails log files for active iterations (file-based polling). Needs verification — the `--watch` server restart killed the test run before we could confirm it works.
+2. **`--watch` mode kills active loops**: Server restart (from `--watch` detecting file changes) orphans agent processes and leaves loop state stuck. **Workaround**: Don't use `--watch` during active runs. **Fix needed**: Either detect orphaned loops on server start and clean up, or warn the user.
+3. **Review button not prominent enough**: The "Review" (architect) button exists but is easy to miss as an outline button next to the solid "Start Loop". Consider: reorder buttons to show Review first for un-reviewed projects, or add a hint.
+4. **Old config files crash server**: Fixed — config validation now backfills missing `architectAgent`/`documenterAgent`. But users who created projects before iteration 3 may hit the `formatAgent` crash in the CLI binary (needs rebuild).
+5. **Stuck loop state after server restart**: Loop state persisted on disk says "judging" but no process is running. Need a mechanism to detect and recover from this on server startup.
+
+**Remaining iteration 4 items** (not started):
+- `cfcf log`, `cfcf push`, `cfcf prepare` CLI commands
+- Cross-project knowledge
+- Tier 3 Strategic Reflection
+- Token/cost tracking
+- Notification hooks
+- Robust error handling / graceful shutdown
+- Binary self-hosting
+
 ### 2026-04-12 -- Loop state must be persisted to disk
 
 In-memory loop state is lost on server restart. This includes `bun --watch` restarts (triggered by file changes during development), crashes, and manual restarts. Without persistence, `cfcf resume` fails after any restart with "No active loop for this project". Fix: persist `LoopState` to `~/.cfcf/projects/<id>/loop-state.json` on every phase transition, load from disk as fallback in `getLoopState()`.
