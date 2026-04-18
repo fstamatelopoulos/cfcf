@@ -43,7 +43,11 @@ export const claudeCodeAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    const args = ["--dangerously-skip-permissions"];
+    // --verbose gives live turn-by-turn text output (so the user can watch
+    // progress in the log). Without it, Claude Code in print mode is silent
+    // until the final response. Matches Codex's verbose-by-default behavior
+    // for consistency across agents.
+    const args = ["--dangerously-skip-permissions", "--verbose"];
     if (model) {
       args.push("--model", model);
     }
