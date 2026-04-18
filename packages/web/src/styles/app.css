@@ -362,6 +362,21 @@
   font-size: 0.8rem;
   color: var(--color-text-muted);
   margin-bottom: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.phase-indicator__sep {
+  color: var(--color-border);
+}
+
+.phase-indicator__timer {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
 }
 
 .phase-indicator__steps {

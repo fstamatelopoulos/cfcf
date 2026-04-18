@@ -198,12 +198,22 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         onAction={handleAgentAction}
       />
 
-      {/* Phase indicator: shows for whichever agent is active */}
-      {isLoopActive && loopState && (
+      {/* Phase indicator: shows for whichever agent is active.
+          startedAt drives the live elapsed-time counter in the subtitle.
+          Also rendered during `paused` so the user sees the frozen elapsed
+          for the current iteration while deciding how to proceed. */}
+      {(isLoopActive || isPaused) && loopState && (
         <PhaseIndicator
           agentType="loop"
           phase={loopState.phase}
           title={`Iteration ${loopState.currentIteration}`}
+          startedAt={
+            loopState.iterations[loopState.iterations.length - 1]?.startedAt ||
+            loopState.startedAt
+          }
+          completedAt={
+            loopState.iterations[loopState.iterations.length - 1]?.completedAt
+          }
         />
       )}
       {isReviewActive && reviewState && (
@@ -211,6 +221,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           agentType="review"
           phase={reviewState.status}
           title={reviewState.sequence ? `Review run ${reviewState.sequence}` : "Review"}
+          startedAt={reviewState.startedAt}
+          completedAt={reviewState.completedAt}
         />
       )}
       {isDocumentActive && documentState && (
@@ -218,6 +230,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           agentType="document"
           phase={documentState.status}
           title={documentState.sequence ? `Document run ${documentState.sequence}` : "Document"}
+          startedAt={documentState.startedAt}
+          completedAt={documentState.completedAt}
         />
       )}
 
