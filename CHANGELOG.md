@@ -10,6 +10,8 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 ## [Unreleased]
 
 ### Added
+- **Live elapsed-time counter on PhaseIndicator (item 4.25):** while an agent run (iteration / review / document) is active, the subtitle row now shows the running duration (e.g. "Iteration 2 · 2m 14s"). Hides on completed/failed/stopped; freezes on paused. Ticks every second locally -- no extra server calls. First web-package test suite added (9 tests for the shared `formatDuration` util); `test:web` script added at the root.
+- **Per-iteration plan execution prompt (item 4.24):** the dev-agent `process.md` and the architect plan template now explicitly encode the "one phase per iteration" pattern. The architect maps phases to concrete iterations in `cfcf-docs/plan.md`; the dev agent executes the next pending iteration only, marks completed items `[x]` with brief notes, and exits. Discovered empirically via a user-authored hint while running the tracker example, then promoted into the core prompts so every project gets checkpointed iterations by default.
 - **Architect review presentation in web UI (item 4.23):** the Status tab now renders the full parsed `ArchitectSignals` (readiness, gaps, suggestions, risks, recommended approach) in a new `ArchitectReview` component, with guidance text keyed to readiness (e.g. "Edit files under problem-pack/ and rerun Review" for `NEEDS_REFINEMENT`). The History tab turns the readiness cell into a clickable pill that expands an inline detail row with the same component in compact mode. Prior reviews remain viewable even after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
 
 ### Changed

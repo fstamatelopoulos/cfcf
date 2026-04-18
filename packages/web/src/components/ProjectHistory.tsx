@@ -7,6 +7,7 @@ import type {
 } from "../types";
 import type { LogTarget } from "./LogViewer";
 import { ArchitectReview } from "./ArchitectReview";
+import { formatDurationOrRunning } from "../utils/time";
 
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
@@ -32,14 +33,8 @@ function formatTime(iso: string): string {
   });
 }
 
-function formatDuration(startedAt: string, completedAt?: string): string {
-  if (!completedAt) return "running";
-  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${s % 60}s`;
-}
+// Duration formatter moved to ../utils/time so PhaseIndicator's live timer
+// and this static column render identically.
 
 export function ProjectHistory({
   events,
@@ -168,7 +163,7 @@ function HistoryRow({
             <DocumentResult event={event as DocumentHistoryEvent} />
           )}
         </td>
-        <td>{formatDuration(event.startedAt, event.completedAt)}</td>
+        <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
         <td className="project-history__actions">
           {event.type === "iteration" ? (
             <>

@@ -1,4 +1,5 @@
 import type { LoopPhase } from "../types";
+import { useElapsed } from "../hooks/useElapsed";
 
 /**
  * Phase indicators for different agent types.
@@ -32,11 +33,21 @@ export function PhaseIndicator({
   agentType,
   phase,
   title,
+  startedAt,
+  completedAt,
 }: {
   agentType: AgentType;
   phase: string;
   /** Optional header text, e.g. "Iteration 2" or "Review run 1" */
   title?: string;
+  /**
+   * ISO timestamp when the current agent run (iteration / review / document)
+   * started. When provided together with a non-terminal phase, a live timer
+   * is rendered next to the title.
+   */
+  startedAt?: string;
+  /** Completion timestamp (only used for the paused case to show frozen elapsed). */
+  completedAt?: string;
 }) {
   const phases =
     agentType === "loop" ? loopPhases : agentType === "review" ? reviewPhases : documentPhases;
@@ -44,9 +55,30 @@ export function PhaseIndicator({
   const isTerminal = terminalStates.has(phase);
   const currentIdx = phases.findIndex((x) => x.key === phase);
 
+  // Freeze the timer once the run is in a terminal state, but keep it
+  // visible during "paused" so the user sees how long the current iteration
+  // has taken so far. Hide entirely for other terminal states (completed /
+  // failed / stopped) -- the History tab already shows the final duration.
+  const isPaused = phase === "paused";
+  const isRunning = !isTerminal;
+  const showTimer = (isRunning || isPaused) && !!startedAt;
+  const elapsed = useElapsed(startedAt, isRunning, completedAt);
+
   return (
     <div className="phase-indicator">
-      {title && <div className="phase-indicator__iteration">{title}</div>}
+      {(title || showTimer) && (
+        <div className="phase-indicator__iteration">
+          {title}
+          {showTimer && elapsed && (
+            <>
+              <span className="phase-indicator__sep"> · </span>
+              <span className="phase-indicator__timer" title="Elapsed time">
+                {elapsed}
+              </span>
+            </>
+          )}
+        </div>
+      )}
       <div className="phase-indicator__steps">
         {phases.map((p, i) => {
           const isActive = p.key === phase;
