@@ -8,10 +8,11 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-Early development. Iteration 4 in progress.
+Early development. Iteration 5 in progress.
 
 - **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence
-- **Iteration 4 (current)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications
+- **Iteration 4 (v0.4.0, shipped)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications, architect-review UI, live elapsed-timer, one-phase-per-iteration discipline
+- **Iteration 5 (current, distribution phase on `iteration-5/distribution`)** — single-binary self-hosting (no Bun runtime needed), embedded templates + web bundle with local override layer, `cleanupMergedBranches` flag. **Designing next:** Tier 3 Reflection role with non-destructive plan editing — see [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md)
 
 cfcf can be driven from the CLI or from the web GUI served by the same Hono server. See `docs/plan.md` for the full roadmap and current status table.
 

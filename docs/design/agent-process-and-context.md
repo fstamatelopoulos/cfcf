@@ -103,10 +103,10 @@ cfcf-docs/
   iteration-history.md    # Aggressively compressed summaries of ALL previous iterations (Tier 2 context)
   user-feedback.md        # User's latest feedback/direction from a pause review (cf² writes when user provides input)
 
-  # --- Detailed logs (Tier 3 reference, agent reads on demand) ---
-  iteration-logs/         # Detailed per-iteration summaries
-    iteration-1-summary.md
-    iteration-2-summary.md
+  # --- Per-iteration changelogs (written by dev agent, audit trail) ---
+  iteration-logs/         # Changelog-style summary of each iteration's changes
+    iteration-1.md        # Dev agent writes at end of iteration N
+    iteration-2.md        # (see research/reflection-role-and-iterative-planning.md §4.3)
     ...
 ```
 

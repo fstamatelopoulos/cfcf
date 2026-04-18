@@ -397,16 +397,19 @@ The judge does not decide whether to continue or stop. Its output is logged to t
 - `judge_frequency`: How often Tier 2 runs. Default: 1 (every cycle).
 - `judge_model`: Configurable. Recommended frontier-class model.
 
-### 9.3 Tier 3: Strategic Reflection (default: every 5 cycles, configurable)
+### 9.3 Tier 3: Strategic Reflection
 
-Every N iterations, Mission Control invokes a deeper reflection pass. The reflection LLM reviews the full iteration history -- not just the latest iteration, but the accumulated pattern across all iterations in the project.
+> **Refined spec (April 2026):** see [`docs/research/reflection-role-and-iterative-planning.md`](../research/reflection-role-and-iterative-planning.md) for the detailed design driving iteration-5 item 5.6. The frequency model and plan-editing semantics below are kept here for historical context; the research doc supersedes them.
 
-The reflection produces strategic guidance: pattern analysis across iterations, a strategy recommendation, suggestions for updating hints or the plan, and an iteration health assessment (converging, stalled, diverging).
+Mission Control invokes a deeper reflection pass after the judge. The reflection LLM reviews the full iteration history -- not just the latest iteration, but the accumulated pattern across all iterations in the project.
 
-Like Tier 2, the reflection output is advisory and logged to the memory layer. If the reflection flags that hints or the plan should be updated, Mission Control executes those updates as deterministic actions -- not LLM-driven control flow.
+The reflection produces strategic guidance: pattern analysis across iterations, a strategy recommendation, direct (non-destructive) rewrite of the pending part of `plan.md`, and an iteration health assessment (converging, stable, stalled, diverging).
 
-**Configuration:**
-- `reflect_frequency`: How often Tier 3 runs. Default: 5 (every 5 cycles).
+Like Tier 2, the reflection output is advisory. The plan rewrite is deterministic (applied by the harness from structured flags in `cfcf-reflection-signals.json`), not LLM-driven control flow.
+
+**Configuration (refined in research doc):**
+- `reflectSafeguardAfter`: The judge can opt out of reflection per-iteration via a signal field; this sets a ceiling on consecutive skips before the harness forces reflection. Default: 3.
+- `reflectionAgent`: Fifth independently configurable agent + model slot; recommended frontier-class model, and matching the dev adapter is encouraged.
 - `reflect_model`: Configurable, defaults to same as judge_model.
 
 ### 9.4 SLM Preparation Workers

@@ -78,7 +78,7 @@ On each tagged release, CI (GitHub Actions) runs `bun build --compile --target=<
 
 ### Web GUI (Iteration 4 — Available)
 
-A React + Vite web GUI at `packages/web`, served by the Hono server via `serveStatic` middleware. The CLI remains the primary headless interface; the web GUI is for monitoring and control. Both drive the same server.
+A React + Vite web GUI at `packages/web`. The Vite build output (`packages/web/dist/`) is **embedded into the compiled binary at build time** via `scripts/embed-web-dist.ts` — the Hono server serves the embedded bytes directly, so a single `cfcf-binary` artifact carries both the API and the web UI with no separate asset deployment. In dev mode (`bun run dev:server`), the server falls back to reading `packages/web/dist/` from disk. The CLI remains the primary headless interface; the web GUI is for monitoring and control. Both drive the same server.
 
 Implemented (iteration 4):
 - Dashboard with project list + status badges
