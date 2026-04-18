@@ -6,13 +6,26 @@
  */
 
 import { join, dirname } from "path";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import { randomBytes } from "crypto";
 import type { ProjectConfig } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+
+/**
+ * Count markdown files in the project's docs/ directory.
+ * Returns 0 if the directory doesn't exist.
+ */
+async function countDocsFiles(repoPath: string): Promise<number> {
+  try {
+    const entries = await readdir(join(repoPath, "docs"));
+    return entries.filter((e) => e.endsWith(".md")).length;
+  } catch {
+    return 0;
+  }
+}
 
 const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
 
@@ -158,7 +171,7 @@ export async function startDocument(
  */
 export async function runDocumentSync(
   project: ProjectConfig,
-): Promise<{ exitCode: number; logFile: string; logFileName: string; sequence: number }> {
+): Promise<{ exitCode: number; logFile: string; logFileName: string; sequence: number; historyEventId: string }> {
   await ensureProjectLogDir(project.id);
   const sequence = await nextAgentRunSequence(project.id, "documenter");
   const logFile = getAgentRunLogPath(project.id, "documenter", sequence);
@@ -195,14 +208,18 @@ export async function runDocumentSync(
   });
 
   const result = await managed.result;
+  const docsFileCount = await countDocsFiles(project.repoPath);
 
-  // Finalize history event
+  // Finalize history event. `committed` is updated separately by iteration-loop
+  // after it commits (if there were changes).
   await updateHistoryEvent(project.id, historyEventId, {
     status: result.exitCode === 0 ? "completed" : "failed",
     completedAt: new Date().toISOString(),
-  });
+    exitCode: result.exitCode,
+    docsFileCount,
+  } as Partial<import("./project-history.js").DocumentHistoryEvent>);
 
-  return { exitCode: result.exitCode, logFile, logFileName, sequence };
+  return { exitCode: result.exitCode, logFile, logFileName, sequence, historyEventId };
 }
 
 /**
@@ -241,10 +258,15 @@ async function runDocument(
     state.status = "completed";
     state.completedAt = new Date().toISOString();
 
+    const docsFileCount = await countDocsFiles(project.repoPath);
+
     await updateHistoryEvent(project.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: state.completedAt,
-    });
+      exitCode: result.exitCode,
+      docsFileCount,
+      committed: false, // standalone document runs don't auto-commit
+    } as Partial<import("./project-history.js").DocumentHistoryEvent>);
   } finally {
     documentProcessStore.delete(project.id);
   }

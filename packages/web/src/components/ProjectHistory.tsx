@@ -1,4 +1,9 @@
-import type { HistoryEvent, IterationHistoryEvent, ReviewHistoryEvent } from "../types";
+import type {
+  HistoryEvent,
+  IterationHistoryEvent,
+  ReviewHistoryEvent,
+  DocumentHistoryEvent,
+} from "../types";
 import type { LogTarget } from "./LogViewer";
 
 const determinationColor: Record<string, string> = {
@@ -137,6 +142,9 @@ function HistoryRow({
           {event.type === "iteration" && (event as IterationHistoryEvent).merged && (
             <span className="project-history__merged"> ✓ merged</span>
           )}
+          {event.type === "document" && event.status === "completed" && (
+            <DocumentResult event={event as DocumentHistoryEvent} />
+          )}
         </td>
         <td>{formatDuration(event.startedAt, event.completedAt)}</td>
         <td className="project-history__actions">
@@ -192,4 +200,43 @@ function HistoryRow({
       )}
     </>
   );
+}
+
+function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
+  const parts: React.ReactNode[] = [];
+
+  // File count in docs/
+  if (event.docsFileCount !== undefined) {
+    parts.push(
+      <span key="files" style={{ color: "var(--color-success)" }}>
+        {event.docsFileCount} doc{event.docsFileCount === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+
+  // Committed flag (only set when run via iteration loop post-SUCCESS)
+  if (event.committed) {
+    parts.push(
+      <span key="committed" className="project-history__merged">
+        {" "}
+        ✓ committed
+      </span>,
+    );
+  } else if (event.committed === false && event.docsFileCount && event.docsFileCount > 0) {
+    parts.push(
+      <span key="uncommitted" style={{ color: "var(--color-text-muted)", fontSize: "0.75rem" }}>
+        {" "}(not committed)
+      </span>,
+    );
+  }
+
+  if (parts.length === 0) {
+    return (
+      <span style={{ color: "var(--color-text-muted)" }}>
+        {event.exitCode === 0 ? "✓" : "—"}
+      </span>
+    );
+  }
+
+  return <>{parts}</>;
 }

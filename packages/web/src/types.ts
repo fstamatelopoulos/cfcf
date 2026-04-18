@@ -182,6 +182,9 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {
   type: "document";
+  docsFileCount?: number;
+  committed?: boolean;
+  exitCode?: number;
 }
 
 export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;
