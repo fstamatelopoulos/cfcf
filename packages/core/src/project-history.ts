@@ -67,6 +67,12 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {
   type: "document";
+  /** Number of files in docs/ that exist after the run (includes new + updated + pre-existing) */
+  docsFileCount?: number;
+  /** Whether cfcf committed new/changed docs to git */
+  committed?: boolean;
+  /** Exit code of the documenter process */
+  exitCode?: number;
 }
 
 export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;

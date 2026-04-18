@@ -750,13 +750,19 @@ async function runJudgeAndDecide(
         await saveLoopState(state);
 
         try {
-          await runDocumentSync(project);
+          const docResult = await runDocumentSync(project);
+          let committed = false;
           if (await gitManager.hasChanges(project.repoPath)) {
-            await gitManager.commitAll(
+            const commitResult = await gitManager.commitAll(
               project.repoPath,
               `cfcf documentation (${project.documenterAgent.adapter})`,
             );
+            committed = commitResult.success;
           }
+          // Update the history event with the commit status
+          await updateHistoryEvent(project.id, docResult.historyEventId, {
+            committed,
+          } as Partial<import("./project-history.js").DocumentHistoryEvent>);
         } catch {
           // Documenter failure is not fatal -- the code is done
         }
