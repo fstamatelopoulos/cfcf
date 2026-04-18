@@ -4,6 +4,8 @@
 
 This guide walks through the complete cf² workflow: from setting up a project to running iterative AI agent development cycles.
 
+cfcf can be driven from either the **CLI** or the **web GUI** (served by the same local server at `http://localhost:7233`). This guide uses CLI commands in examples, but every action shown here has a web UI equivalent. See `cli-usage.md` for the CLI reference.
+
 ---
 
 ## Overview

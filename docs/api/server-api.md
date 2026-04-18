@@ -558,6 +558,7 @@ Get the full loop state including iteration history.
 | `dev_executing` | Dev agent is running |
 | `judging` | Judge agent is running |
 | `deciding` | Evaluating judge signals |
+| `documenting` | Judge said SUCCESS; documenter is producing final docs before terminal state |
 | `paused` | Waiting for user input or review |
 | `completed` | Loop finished (success, failure, or max iterations) |
 | `failed` | Loop encountered an error |

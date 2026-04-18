@@ -8,7 +8,12 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-Early development. Iteration 2 complete -- cfcf can launch AI agents against problem definitions, assemble context, and capture results. See `docs/plan.md` for the full roadmap.
+Early development. Iteration 4 in progress.
+
+- **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence
+- **Iteration 4 (current)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications
+
+cfcf can be driven from the CLI or from the web GUI served by the same Hono server. See `docs/plan.md` for the full roadmap and current status table.
 
 ## Prerequisites
 
@@ -133,13 +138,17 @@ cfcf/
 User (CLI / Web GUI)
     |
     v
-cfcf Server (Hono on Bun)
+cfcf Server (Hono on Bun, serves API + static web GUI)
     |
-    +-- Project Manager      (config, state)
-    +-- Iteration Controller  (the loop: prepare -> dev -> judge -> decide)
-    +-- Process Manager       (spawn agents, capture logs)
-    +-- Context Assembler     (build CLAUDE.md + cfcf-docs/)
-    +-- Memory Layer          (file-based, in repo + ~/.cfcf/ for logs)
+    +-- Project Manager           (config, state)
+    +-- Iteration Controller      (loop: prepare -> dev -> judge -> decide -> documenting)
+    +-- Review / Document Runners (architect + documenter)
+    +-- Process Manager           (spawn agents, capture logs)
+    +-- Active Processes Registry (track + kill on shutdown)
+    +-- Context Assembler         (build CLAUDE.md + cfcf-docs/)
+    +-- Project History           (persistent audit trail of all agent runs)
+    +-- Notifications Dispatcher  (terminal bell / macOS / Linux / log)
+    +-- Memory Layer              (file-based, in repo + ~/.cfcf/ for logs)
     |
     v
 Agent Processes (Claude Code, Codex, etc.)
