@@ -201,9 +201,9 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 | 4.16 | ❌ | Robust error handling + graceful shutdown | Needs audit: orphaned processes on shutdown, unhandled rejections, SIGTERM cleanup |
 | 4.17 | ❌ | Token/cost tracking | Best-effort per iteration per role |
 | 4.18 | ❌ | Notification hooks | Terminal bell, webhook placeholder |
-| 4.19 | ⏸ | Cross-project knowledge | Deferred to iteration 5 or beyond — needs memory layer design first |
-| 4.20 | ⏸ | Tier 3 Strategic Reflection | Deferred — build once loop is battle-tested |
-| 4.21 | ⏸ | Sandbox / guardrails research | Deferred — iteration 5 item |
+| 4.19 | ⏸ | Cross-project knowledge | Agent assessments and lessons learned accumulated across projects, with a query interface for context assembly to pull relevant prior knowledge into new projects. Deferred to iteration 5 (item 5.11) — needs memory layer design first |
+| 4.20 | ⏸ | Tier 3 Strategic Reflection | A reflection agent that periodically reviews the full iteration history of a project (not just the last iteration) and produces pattern analysis, strategy recommendation, and convergence assessment. Output is injected into the next iteration's context. Complements the judge (Tier 2, per-iteration) with bigger-picture analysis. Configurable frequency via `--reflect-frequency N`. Deferred to iteration 5 (item 5.12) — build once loop is battle-tested |
+| 4.21 | ⏸ | Sandbox / guardrails research | Deferred to iteration 5 (item 5.10). Review Anthropic's sandbox concept and evaluate applicability to cfcf's dark factory loop. Consider filesystem scoping, network restrictions, process sandboxing, permission allow-lists |
 | 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (item 5.6), paired with template embedding (5.7) and the installer (5.8) |
 
 **In progress branch:** `iteration-4/web-gui`
@@ -233,7 +233,7 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 | 5.9 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required — file-based memory is fully functional standalone |
 | 5.10 | ❌ | Sandbox / guardrails research + POC | Filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Review Anthropic's sandbox concept. |
 | 5.11 | ❌ | Cross-project knowledge (carried from iter 4) | Agent assessments + lessons learned accumulated across projects |
-| 5.12 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history, injects recommendations into next iteration |
+| 5.12 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history at configurable cadence (`--reflect-frequency N`). Produces pattern analysis, strategy recommendation, convergence assessment. Output injected into next iteration's context. Complements the per-iteration judge (Tier 2) with bigger-picture analysis across many iterations |
 
 ---
 
