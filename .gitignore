@@ -5,6 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated asset bundle (produced by `bun run build:web`)
+packages/server/src/web-assets.generated.ts
+
 # Bun
 bun.lock
 

@@ -7,9 +7,8 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { serveStatic } from "hono/bun";
+import { loadAsset, loadIndex } from "./web-assets.js";
 import { cors } from "hono/cors";
-import { join, dirname } from "path";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig } from "@cfcf/core";
 import {
@@ -737,15 +736,37 @@ export function createApp() {
   });
 
   // --- Static file serving (Web GUI) ---
+  //
+  // The web bundle is embedded into the server module (via
+  // `scripts/embed-web-dist.ts` -> `web-assets.generated.ts`). This keeps
+  // the compiled binary self-contained. In dev, if the generated file is
+  // not yet built, we fall back to reading from `packages/web/dist/` on
+  // disk (which is what the fallback path inside `loadAsset` handles).
 
-  // Resolve the path to packages/web/dist/ relative to this file
-  const webDistPath = join(dirname(new URL(import.meta.url).pathname), "..", "..", "web", "dist");
-
-  // Serve static files from the web build directory
-  app.use("/*", serveStatic({ root: webDistPath }));
-
-  // SPA fallback: serve index.html for non-API routes that don't match a file
-  app.get("*", serveStatic({ root: webDistPath, path: "/index.html" }));
+  app.get("/*", async (c) => {
+    const path = c.req.path;
+    // API routes never fall into this handler (they're registered before this).
+    // Try the literal path first.
+    const asset = await loadAsset(path);
+    if (asset) {
+      return new Response(asset.body as unknown as BodyInit, {
+        status: 200,
+        headers: { "Content-Type": asset.contentType },
+      });
+    }
+    // SPA fallback: if no asset matches, serve index.html so client-side routing works.
+    const index = await loadIndex();
+    if (index) {
+      return new Response(index.body as unknown as BodyInit, {
+        status: 200,
+        headers: { "Content-Type": index.contentType },
+      });
+    }
+    return c.text(
+      "Web GUI assets are not available. Run `bun run build:web` to produce them, or use the CLI.",
+      404,
+    );
+  });
 
   // --- Server shutdown ---
 

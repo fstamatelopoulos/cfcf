@@ -836,6 +836,21 @@ async function runJudgeAndDecide(
     await updateHistoryEvent(project.id, iterRecord.historyEventId, {
       merged: iterRecord.merged,
     } as Partial<import("./project-history.js").IterationHistoryEvent>);
+
+    // Auto-delete the merged iteration branch when configured (item 5.2).
+    // Default is false -- we keep branches so the audit trail is preserved
+    // and the user can still diff iterations after the fact. Enabling this
+    // is useful for long-running projects that would otherwise accumulate
+    // hundreds of merged `cfcf/iteration-N` branches.
+    if (mergeResult.success && project.cleanupMergedBranches === true) {
+      const delResult = await gitManager.deleteBranch(project.repoPath, branchName);
+      if (!delResult.success) {
+        // Non-fatal -- branch is still there, audit trail is still intact
+        console.warn(
+          `[iteration ${iterationNum}] cleanupMergedBranches: could not delete ${branchName}: ${delResult.error}`,
+        );
+      }
+    }
   }
 
   // Clear user feedback after it's been consumed
