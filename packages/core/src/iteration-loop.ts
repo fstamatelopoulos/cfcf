@@ -657,7 +657,7 @@ async function runLoop(
     state.phase = "dev_executing";
     await saveLoopState(state);
 
-    const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
+    const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. This is a single iteration in a multi-iteration loop -- execute only the next pending chunk from cfcf-docs/plan.md (map phases to iterations first if the plan is not yet structured that way), update plan.md with what you completed, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
     const devCmd = devAdapter.buildCommand(project.repoPath, devPrompt, project.devAgent.model);
 
     const devProcess = await spawnProcess({

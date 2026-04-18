@@ -227,12 +227,14 @@ cfcf run --project my-project
 ┌──────────────────────────────────────────────────────────────────┐
 │ ITERATION LOOP (cf² manages this autonomously)                    │
 │                                                                   │
-│  1. Assemble context (CLAUDE.md + cfcf-docs/ from Problem Pack)   │
+│  1. Assemble context (CLAUDE.md / AGENTS.md + cfcf-docs/)         │
 │  2. Create git feature branch: cfcf/iteration-N                   │
-│  3. Launch dev agent (e.g., Codex)                                │
-│  4. Agent works: reads context, plans, codes, tests               │
+│  3. Launch dev agent (e.g., Codex) as a FRESH process             │
+│  4. Agent works: reads context, picks up next pending chunk from  │
+│     cfcf-docs/plan.md, codes, tests                               │
 │  5. Agent updates project docs (architecture, API ref, setup)     │
-│  6. Agent produces handoff doc + signal file                      │
+│  6. Agent updates cfcf-docs/plan.md (marks [x] + notes) and       │
+│     produces handoff doc + signal file                            │
 │  7. cf² captures logs, commits all changes                        │
 │  8. Launch judge agent (e.g., Claude Code)                        │
 │  9. Judge reviews: determines SUCCESS/PROGRESS/STALLED/ANOMALY    │
@@ -247,6 +249,17 @@ cfcf run --project my-project
 │  Loop continues until: success, max iterations, or user stops     │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+### One phase per iteration, one clean session per phase
+
+Every iteration is a **separate, clean agent process** -- no session continuity, no memory carried over between iterations except files on disk. cf² enforces and leverages this:
+
+- The Solution Architect's `cfcf-docs/plan.md` maps phases to concrete iterations (`## Iteration 1 -- Foundation`, `## Iteration 2 -- Core features`, ...).
+- Each iteration's generated `CLAUDE.md` (for Claude Code) or `AGENTS.md` (for Codex) includes an **Iteration Scope** section instructing the agent to execute only the **next pending chunk** from the plan.
+- Before exiting, the agent marks completed items `[x]` in `plan.md` with a short note of what it actually did. The next iteration -- a brand new agent process -- picks up from there by reading `plan.md` first.
+- This is what makes the judge's per-iteration assessment meaningful, lets you pause/resume between iterations, and prevents an unattended run from trying to finish the entire project in one 20-minute session (which typically produces shallow work).
+
+You do not have to configure this -- it is baked into the dev-agent prompt generated for every iteration.
 
 ### The CLI shows real-time progress:
 
