@@ -194,17 +194,17 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 | 4.9 | ✅ | Consistent agent display in CLI (`adapter:model`) | `formatAgent()` helper; same format in config show, project show/list, status |
 | 4.10 | ✅ | Test repo setup/cleanup scripts | `scripts/setup-test-repos.sh`, `scripts/cleanup-test-repos.sh` (only touches `/tmp/cfcf-*`) |
 | 4.11 | ✅ | Claude Code `--verbose` flag | Shows live turn-by-turn progress in logs, matching Codex's verbose default |
-| 4.12 | ❌ | Diff viewer per iteration | Part of original scope; not started |
-| 4.13 | ❌ | `cfcf log <project-name>` CLI | Iteration history viewer from the CLI (the web History tab covers this now, but CLI parity is still useful) |
-| 4.14 | ❌ | `cfcf push <project-name>` CLI | Push branch to remote on demand |
-| 4.15 | ❌ | `cfcf prepare` dry-run command | Show assembled context without launching |
+| 4.12 | ⏸ | Diff viewer per iteration | Deferred to iteration 6 (item 6.1) |
+| 4.13 | ⏸ | `cfcf log <project-name>` CLI | Deferred to iteration 6 (item 6.2). Web History tab covers this for now |
+| 4.14 | ⏸ | `cfcf push <project-name>` CLI | Deferred to iteration 6 (item 6.3). Manual `git push` works today |
+| 4.15 | ⏸ | `cfcf prepare` dry-run command | Deferred to iteration 6 (item 6.4) |
 | 4.16 | ✅ | Robust error handling + graceful shutdown | Active process registry (`active-processes.ts`); SIGINT/SIGTERM kills all tracked processes, marks history events and loop states as failed; on startup, stale active loops + running history events are marked failed; unhandledRejection/uncaughtException handlers trigger graceful shutdown; fire-and-forget error handlers now try/catch their own recording logic; watch-mode warning printed at startup; web UI shows improved error banner with hint. 8 new unit tests for registry. |
-| 4.17 | ❌ | Token/cost tracking | Best-effort per iteration per role |
+| 4.17 | ⏸ | Token/cost tracking | Deferred to iteration 6 (item 6.5). Best-effort per iteration per role |
 | 4.18 | ✅ | Notification hooks: extensible event-driven notifications | cfcf emits 3 event types (`loop.paused`, `loop.completed`, `agent.failed`) and an extensible dispatcher routes each to configured channels. v1 channels: `terminal-bell` (BEL char to stderr), `macos` (osascript), `linux` (notify-send), `log` (JSON Lines appended to `<project-logs>/notifications.log`). Fire-and-forget with per-channel 5s timeout; one failing channel never blocks another. Global + per-project config in `notifications.events[eventType] = channels[]`. Asked during `cfcf init`. Webhook channel deferred to iteration 5. |
-| 4.19 | ⏸ | Cross-project knowledge | Agent assessments and lessons learned accumulated across projects, with a query interface for context assembly to pull relevant prior knowledge into new projects. Deferred to iteration 5 (item 5.11) — needs memory layer design first |
-| 4.20 | ⏸ | Tier 3 Strategic Reflection | A reflection agent that periodically reviews the full iteration history of a project (not just the last iteration) and produces pattern analysis, strategy recommendation, and convergence assessment. Output is injected into the next iteration's context. Complements the judge (Tier 2, per-iteration) with bigger-picture analysis. Configurable frequency via `--reflect-frequency N`. Deferred to iteration 5 (item 5.12) — build once loop is battle-tested |
-| 4.21 | ⏸ | Sandbox / guardrails research | Deferred to iteration 5 (item 5.10). Review Anthropic's sandbox concept and evaluate applicability to cfcf's dark factory loop. Consider filesystem scoping, network restrictions, process sandboxing, permission allow-lists |
-| 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (item 5.6), paired with template embedding (5.7) and the installer (5.8) |
+| 4.19 | ⏸ | Cross-project knowledge | Deferred to iteration 5 (item 5.7) — needs memory layer design first. Agent assessments and lessons learned accumulated across projects, with a query interface for context assembly to pull relevant prior knowledge into new projects |
+| 4.20 | ⏸ | Tier 3 Strategic Reflection | Deferred to iteration 5 (item 5.6) — build once loop is battle-tested. Reflection agent that periodically reviews the full iteration history (not just the last iteration) and produces pattern analysis, strategy recommendation, and convergence assessment. Output injected into next iteration's context. Configurable frequency via `--reflect-frequency N` |
+| 4.21 | ⏸ | Sandbox / guardrails research | Deferred to iteration 6 (item 6.10). Review Anthropic's sandbox concept and evaluate applicability to cfcf's dark factory loop. Consider filesystem scoping, network restrictions, process sandboxing, permission allow-lists |
+| 4.22 | ⏸ | Binary self-hosting | Deferred to iteration 5 (item 5.3), paired with template embedding (5.4) and the installer (5.5) |
 | 4.24 | ✅ | Per-iteration plan execution prompt (all surfaces) | The one-phase-per-iteration discipline is now injected at **three levels** so it reaches every run, new or existing project, Claude Code or Codex: (1) `context-assembler.generateInstructionContent()` embeds an "Iteration Scope" section in the Tier-1 `CLAUDE.md` / `AGENTS.md` file generated fresh every iteration (this is the authoritative live channel -- reaches existing projects whose `process.md` was copied before the change); (2) the one-line dev-agent CLI prompt in `iteration-loop.ts` now spells out "execute only the next pending chunk from plan.md"; (3) the static `process.md` template (used on first-time project init) has a new "Iteration Scope -- one phase per iteration" section, and the architect's `plan.md` template maps phases to concrete iterations (`## Iteration 1 -- Foundation`). Agent-agnostic: same generated content is written to whichever filename the adapter specifies. Discovered empirically while running the tracker example with a user hint -- captured and promoted into the core prompts so every project gets checkpointed iterations by default. New context-assembler test asserts the discipline is present in both first-iteration and later-iteration instruction files. All repo docs (workflow.md, agent-process-and-context.md, technical-design.md, CLAUDE.md, README.md) updated to reflect the one-phase-per-iteration architecture. |
 | 4.25 | ✅ | Live elapsed-time counter on PhaseIndicator | Shared `formatDuration` + `useElapsed` hook (1s tick, no server calls) renders the active agent-run's elapsed time next to the title row (e.g. "Iteration 2 · 2m 14s"). Uses the same format as the History tab's Duration column (now also sourced from the shared util). Hides on completed/failed/stopped, freezes on paused. 9 new util tests in `packages/web/` (first web-package test suite; `test:web` script added at the root). |
 | 4.23 | ✅ | Architect review presentation in web UI | The full parsed `ArchitectSignals` (gaps/suggestions/risks/recommended_approach) is now persisted inline on `ReviewHistoryEvent.signals` — the repo file `cfcf-docs/cfcf-architect-signals.json` is overwritten on every review run, so inline persistence is what makes prior reviews viewable. New `ArchitectReview` React component renders the structured JSON with a readiness badge, guidance banner keyed to readiness (e.g. "Edit problem-pack/ files and rerun Review" for NEEDS_REFINEMENT), and collapsible gaps/suggestions/risks/approach sections. Integrated into Status tab (latest review) and History tab (expandable row via clickable readiness pill). Backward-compatible: pre-4.23 review events without `signals` still render their readiness label as plain text. 4 new unit tests in `project-history.test.ts`. |
@@ -219,28 +219,51 @@ The tables below are the authoritative view of iteration progress. The **Notes**
 
 ---
 
-### Iteration 5: Third Agent + Multi-Project + Distribution
+### Iteration 5: Distribution + Loop Quality + Reflection
 
-**Goal:** Validate the plugin interface with a third agent. Multi-project concurrent execution. Self-contained binary and installer.
+**Goal:** Turn cfcf from a developer checkout into a self-contained installable tool, tighten the loop's default behavior, and add the bigger-picture reflection that individual-iteration judging can't give us. This iteration has two loose themes -- **Distribution** (5.3-5.5) and **Loop quality** (5.1, 5.2, 5.6, 5.7) -- either can be picked up independently; 5.3-5.5 form a tight sequence and should ship together.
 
 | # | Status | Title | Notes |
 |---|--------|-------|-------|
-| 5.1 | ❌ | Third agent adapter (Aider / OpenCode / Goose) | Validates plugin interface with meaningfully different agent |
-| 5.2 | ❌ | Multi-project support in server | Concurrent execution via worker threads; web GUI per-project views |
-| 5.3 | ❌ | Process template versioning | Ship default, support customization, track version used |
-| 5.4 | ❌ | `autoDocumenter` + `autoReviewSpecs` config flags | Global + per-project + per-run overrides. CLI and web UI must behave identically. Discoverability in Config tab. |
-| 5.5 | ❌ | Auto-delete merged iteration branches | Configurable `cleanupMergedBranches` (default false — preserve for audit) |
-| 5.6 | ❌ | Binary self-hosting: `cfcf server start` works from compiled binary without Bun | Today `cfcf server start` requires a Bun runtime (it invokes `bun run packages/server/src/index.ts`). The compiled binary should spawn itself with a `--serve` flag to run the server in-process. Enables true zero-dependency distribution |
-| 5.7 | ❌ | Embed templates into binary | Import .md/.json as string constants at build time. Prerequisite for the installer (so users don't need to separately download templates) |
-| 5.8 | ❌ | Installer script | `curl -fsSL https://cerefox.org/install \| bash`. Detects platform, downloads from GitHub Releases, verifies checksum. Depends on 5.6 + 5.7 so the binary alone is self-sufficient |
-| 5.9 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required — file-based memory is fully functional standalone |
-| 5.10 | ❌ | Sandbox / guardrails research + POC | Filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Review Anthropic's sandbox concept. |
-| 5.11 | ❌ | Cross-project knowledge (carried from iter 4) | Agent assessments + lessons learned accumulated across projects |
-| 5.12 | ❌ | Tier 3 Strategic Reflection (carried from iter 4) | Reflection agent reviews full iteration history at configurable cadence (`--reflect-frequency N`). Produces pattern analysis, strategy recommendation, convergence assessment. Output injected into next iteration's context. Complements the per-iteration judge (Tier 2) with bigger-picture analysis across many iterations |
+| 5.1 | ❌ | `autoDocumenter` + `autoReviewSpecs` config flags | Global + per-project + per-run overrides. CLI and web UI must behave identically. Discoverability in Config tab. Small, self-contained; good warm-up |
+| 5.2 | ❌ | Auto-delete merged iteration branches | Configurable `cleanupMergedBranches` (default false -- preserve for audit). Small cleanup improvement; pairs naturally with 5.1 as "loop polish" |
+| 5.3 | ❌ | Binary self-hosting: `cfcf server start` works from compiled binary without Bun | Today `cfcf server start` requires a Bun runtime (it invokes `bun run packages/server/src/index.ts`). The compiled binary should spawn itself with a `--serve` flag to run the server in-process. Prerequisite for true zero-dependency distribution. **Blocks 5.5** |
+| 5.4 | ❌ | Embed templates into binary | Import `.md` / `.json` templates as string constants at build time instead of reading from the packages/core/src/templates directory. Prerequisite for the installer (users don't separately download templates). **Blocks 5.5** |
+| 5.5 | ❌ | Installer script | `curl -fsSL https://cerefox.org/install \| bash`. Detects platform, downloads from GitHub Releases, verifies checksum. Depends on 5.3 + 5.4 so the single binary is self-sufficient |
+| 5.6 | ❌ | Tier 3 Strategic Reflection | Reflection agent reviews full iteration history at configurable cadence (`--reflect-frequency N`). Produces pattern analysis, strategy recommendation, convergence assessment. Output injected into next iteration's context. Complements the per-iteration judge (Tier 2) with bigger-picture analysis across many iterations. Standalone -- no dependencies on other 5.x items |
+| 5.7 | ❌ | Cross-project knowledge | Agent assessments and lessons learned accumulated across projects, with a query interface for context assembly to pull relevant prior knowledge into new projects. Needs a small memory-layer design doc first. Standalone; could also push to iter 6 if 5.3-5.5 become the whole iteration |
+
+**Dependency map for this iteration:**
+- `5.3 → 5.5` and `5.4 → 5.5` (distribution chain)
+- All others (`5.1`, `5.2`, `5.6`, `5.7`) are independent and can be picked in any order
+
+**Candidate scope reductions (if we want a small iteration 5):**
+- **Distribution-only iter 5**: ship 5.3 + 5.4 + 5.5 and defer the rest to iter 6. Cleanest "0.5.0 is installable" story.
+- **Loop-quality-only iter 5**: ship 5.1 + 5.2 + 5.6 and defer distribution. Keeps the tool in developer-checkout mode but makes each run smarter.
+- **Full scope**: ship all seven. Larger iteration; acceptable if appetite is there.
 
 ---
 
-## Future Iterations (v0.4+)
+### Iteration 6: CLI parity + New agents + Multi-project + Isolation + Observability
+
+**Goal:** Bring the CLI back to parity with the web GUI, validate the agent plugin interface with a third adapter, run multiple projects concurrently, research sandboxing, and start on observability (diffs, logs, token/cost).
+
+| # | Status | Title | Notes |
+|---|--------|-------|-------|
+| 6.1 | ❌ | Diff viewer per iteration | Side-by-side diff of each iteration's branch vs main, viewable in both CLI (text diff) and web UI (syntax-highlighted). Originally part of iteration 4 scope |
+| 6.2 | ❌ | `cfcf log <project-name>` CLI | Iteration history viewer from the CLI -- brings the web History tab to parity on the CLI side. Reads `history.json` |
+| 6.3 | ❌ | `cfcf push <project-name>` CLI | Push branch to remote on demand. Manual `git push` works today; this wraps it with project awareness and notification hooks |
+| 6.4 | ❌ | `cfcf prepare` dry-run command | Show assembled context (CLAUDE.md + cfcf-docs/) without launching an agent. Useful for debugging context assembly and previewing what an agent will see |
+| 6.5 | ❌ | Token / cost tracking | Best-effort per iteration per role, stored on `IterationHistoryEvent` and surfaced in History tab. Adapter-specific parsing (Claude Code emits usage in `--verbose`; Codex has its own shape). Aggregate shown on project dashboard |
+| 6.6 | ❌ | Third agent adapter (Aider / OpenCode / Goose) | Validates plugin interface with a meaningfully different agent. Pick based on maturity at the time of implementation |
+| 6.7 | ❌ | Multi-project support in server | Concurrent execution via worker threads or separate child processes; web GUI already supports per-project views but server currently assumes one active loop at a time |
+| 6.8 | ❌ | Process template versioning | Ship default templates, support user customization, track which version was used per project. Migration path when cfcf ships template updates |
+| 6.9 | ❌ | Optional Cerefox memory backend | Semantic search across projects. Not required -- file-based memory is fully functional standalone. Depends on 5.7 (cross-project knowledge) |
+| 6.10 | ❌ | Sandbox / guardrails research + POC | Review Anthropic's sandbox concept. Evaluate applicability to cfcf's dark factory loop. Consider filesystem scoping, network restrictions, process sandboxing, permission allow-lists. Start with a research doc; POC only if research warrants it |
+
+---
+
+## Future Iterations (v0.7+)
 
 ### Coordinator Agent Pattern
 - Main agent that launches and directs sub-agents within each iteration
