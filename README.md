@@ -8,7 +8,12 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-Early development. Iteration 2 complete -- cfcf can launch AI agents against problem definitions, assemble context, and capture results. See `docs/plan.md` for the full roadmap.
+Early development. Iteration 4 in progress.
+
+- **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence
+- **Iteration 4 (current)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications
+
+cfcf can be driven from the CLI or from the web GUI served by the same Hono server. See `docs/plan.md` for the full roadmap and current status table.
 
 ## Prerequisites
 
@@ -133,13 +138,17 @@ cfcf/
 User (CLI / Web GUI)
     |
     v
-cfcf Server (Hono on Bun)
+cfcf Server (Hono on Bun, serves API + static web GUI)
     |
-    +-- Project Manager      (config, state)
-    +-- Iteration Controller  (the loop: prepare -> dev -> judge -> decide)
-    +-- Process Manager       (spawn agents, capture logs)
-    +-- Context Assembler     (build CLAUDE.md + cfcf-docs/)
-    +-- Memory Layer          (file-based, in repo + ~/.cfcf/ for logs)
+    +-- Project Manager           (config, state)
+    +-- Iteration Controller      (loop: prepare -> dev -> judge -> decide -> documenting)
+    +-- Review / Document Runners (architect + documenter)
+    +-- Process Manager           (spawn agents, capture logs)
+    +-- Active Processes Registry (track + kill on shutdown)
+    +-- Context Assembler         (build CLAUDE.md + cfcf-docs/)
+    +-- Project History           (persistent audit trail of all agent runs)
+    +-- Notifications Dispatcher  (terminal bell / macOS / Linux / log)
+    +-- Memory Layer              (file-based, in repo + ~/.cfcf/ for logs)
     |
     v
 Agent Processes (Claude Code, Codex, etc.)
@@ -149,11 +158,12 @@ Agent Processes (Claude Code, Codex, etc.)
 ## How It Works (When Complete)
 
 1. You define your problem in Markdown files (problem.md, success.md, test scenarios)
-2. cfcf creates a feature branch and assembles context for the AI agent
-3. The agent reads context, codes, tests, and produces a handoff document
-4. A separate judge agent reviews the work and provides structured feedback
-5. cfcf merges to main (or creates a PR) and starts the next iteration with accumulated knowledge
-6. Repeat until success criteria are met or iteration limits are reached
+2. (Recommended) The Solution Architect reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.)
+3. cfcf creates a feature branch and assembles context for the AI agent (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex -- regenerated each iteration)
+4. The dev agent reads context and executes **one phase per iteration**: picks up the next pending chunk from `cfcf-docs/plan.md`, does just that, marks it `[x]` with a brief note, and exits. Each iteration is a fresh agent process -- no session continuity -- so the plan is the checkpoint between runs.
+5. A separate judge agent reviews the work and provides structured feedback
+6. cfcf merges to main (or creates a PR) and starts the next iteration -- a brand new agent process that reads the updated plan and picks up from there
+7. Repeat until success criteria are met or iteration limits are reached
 
 ## Configuration
 

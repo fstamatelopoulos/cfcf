@@ -183,6 +183,25 @@ export function registerInitCommand(program: Command): void {
       );
       config.pauseEvery = parseInt(pauseEvery, 10) || DEFAULT_PAUSE_EVERY;
 
+      // Notifications
+      console.log();
+      console.log("Notifications");
+      console.log("-------------");
+      const osChannel = process.platform === "darwin" ? "macOS notification center"
+        : process.platform === "linux" ? "Linux notify-send"
+        : "terminal bell only";
+      console.log(`cfcf can ping you when a loop pauses, completes, or an agent fails.`);
+      console.log(`Channels on your system: terminal bell + ${osChannel} + notifications.log`);
+      console.log();
+      const notifEnabled = await prompt(
+        "Enable notifications? (yes/no)",
+        config.notifications?.enabled ? "yes" : "no",
+      );
+      if (config.notifications) {
+        config.notifications.enabled =
+          notifEnabled.toLowerCase() === "yes" || notifEnabled.toLowerCase() === "y";
+      }
+
       // Step 3: Permission acknowledgment
       console.log();
       console.log("Permission Notice");

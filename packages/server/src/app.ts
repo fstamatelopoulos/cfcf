@@ -7,7 +7,9 @@
 
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { join } from "path";
+import { serveStatic } from "hono/bun";
+import { cors } from "hono/cors";
+import { join, dirname } from "path";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig } from "@cfcf/core";
 import {
@@ -19,7 +21,7 @@ import {
   deleteProject,
   validateProjectRepo,
 } from "@cfcf/core";
-import { getIterationLogPath } from "@cfcf/core";
+import { getIterationLogPath, getLogPathByFilename, readHistory } from "@cfcf/core";
 import {
   startIteration,
   getIterationState,
@@ -32,14 +34,19 @@ import {
   getLoopState,
   startReview,
   getReviewState,
+  stopReview,
   startDocument,
   getDocumentState,
+  stopDocument,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
 
 export function createApp() {
   const app = new Hono();
+
+  // CORS for development (Vite dev server on different port)
+  app.use("/api/*", cors());
 
   // --- Health / Status ---
 
@@ -258,20 +265,84 @@ export function createApp() {
         return;
       }
 
-      // Fall back to reading from log file (for completed iterations)
+      // Fall back to reading from log file (works for both completed and in-progress iterations)
       const logFile = getIterationLogPath(project.id, iterationNum, "dev");
+
+      // Check if this iteration is part of an active loop
+      const loopState = await getLoopState(project.id);
+      const isLiveIteration = loopState &&
+        loopState.currentIteration === iterationNum &&
+        ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
+
+      let lastSize = 0;
+      let retries = 0;
+
       try {
-        const content = await Bun.file(logFile).text();
-        const lines = content.split("\n");
-        for (const line of lines) {
-          if (line.length > 0) {
-            await stream.writeSSE({ event: "log", data: line });
+        while (true) {
+          const file = Bun.file(logFile);
+          const exists = await file.exists();
+
+          if (exists) {
+            const content = await file.text();
+            if (content.length > lastSize) {
+              const newContent = content.slice(lastSize);
+              const lines = newContent.split("\n");
+              for (const line of lines) {
+                if (line.length > 0) {
+                  await stream.writeSSE({ event: "log", data: line });
+                }
+              }
+              lastSize = content.length;
+              retries = 0;
+            }
+          }
+
+          // If not a live iteration, we're done after reading once
+          if (!isLiveIteration) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // For live iterations, check if the loop moved past this iteration
+          const currentLoop = await getLoopState(project.id);
+          const stillLive = currentLoop &&
+            currentLoop.currentIteration === iterationNum &&
+            ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
+
+          if (!stillLive) {
+            // Read any final content
+            if (exists) {
+              const finalContent = await Bun.file(logFile).text();
+              if (finalContent.length > lastSize) {
+                const remaining = finalContent.slice(lastSize).split("\n");
+                for (const line of remaining) {
+                  if (line.length > 0) {
+                    await stream.writeSSE({ event: "log", data: line });
+                  }
+                }
+              }
+            }
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // Wait and poll again
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          retries++;
+          if (retries > 600) { // 10 minute timeout
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Stream timeout" }),
+            });
+            return;
           }
         }
-        await stream.writeSSE({
-          event: "done",
-          data: JSON.stringify({ message: "Log stream complete" }),
-        });
       } catch {
         await stream.writeSSE({
           event: "error",
@@ -325,6 +396,21 @@ export function createApp() {
     return c.json(state);
   });
 
+  app.post("/api/projects/:id/review/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = await stopReview(project.id);
+    if (!state) {
+      return c.json({ error: "No review running for this project" }, 404);
+    }
+    return c.json({ projectId: state.projectId, status: state.status, message: "Review stopped." });
+  });
+
   // --- Documenter ---
 
   app.post("/api/projects/:id/document", async (c) => {
@@ -363,6 +449,158 @@ export function createApp() {
     }
 
     return c.json(state);
+  });
+
+  app.post("/api/projects/:id/document/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const state = await stopDocument(project.id);
+    if (!state) {
+      return c.json({ error: "No documenter running for this project" }, 404);
+    }
+    return c.json({ projectId: state.projectId, status: state.status, message: "Documenter stopped." });
+  });
+
+  // --- Project history ---
+
+  app.get("/api/projects/:id/history", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const events = await readHistory(project.id);
+    return c.json(events);
+  });
+
+  // --- Generic log streaming (by filename) ---
+
+  app.get("/api/projects/:id/logs/:filename", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const filename = c.req.param("filename");
+    const logPath = getLogPathByFilename(project.id, filename);
+    if (!logPath) {
+      return c.json({ error: "Invalid log filename" }, 400);
+    }
+
+    return streamSSE(c, async (stream) => {
+      // Determine if the log is for a "live" agent run.
+      // For iteration logs: check if loopState.currentIteration matches AND phase is active
+      // For architect/documenter logs: check if their state is "running"/"executing"
+      let isLive = false;
+
+      if (filename.startsWith("iteration-")) {
+        const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
+        if (match) {
+          const iterNum = parseInt(match[1], 10);
+          const loopState = await getLoopState(project.id);
+          isLive = !!loopState &&
+            loopState.currentIteration === iterNum &&
+            ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
+        }
+      } else if (filename.startsWith("architect-")) {
+        const reviewState = getReviewState(project.id);
+        isLive = !!reviewState &&
+          reviewState.logFileName === filename &&
+          ["preparing", "executing", "collecting"].includes(reviewState.status);
+      } else if (filename.startsWith("documenter-")) {
+        const docState = getDocumentState(project.id);
+        const loopState = await getLoopState(project.id);
+        // Check both: standalone documenter run OR loop's documenting phase
+        isLive = (!!docState && docState.logFileName === filename &&
+          ["preparing", "executing"].includes(docState.status)) ||
+          (!!loopState && loopState.phase === "documenting");
+      }
+
+      let lastSize = 0;
+      let retries = 0;
+
+      try {
+        while (true) {
+          const file = Bun.file(logPath);
+          const exists = await file.exists();
+
+          if (exists) {
+            const content = await file.text();
+            if (content.length > lastSize) {
+              const newContent = content.slice(lastSize);
+              const lines = newContent.split("\n");
+              for (const line of lines) {
+                if (line.length > 0) {
+                  await stream.writeSSE({ event: "log", data: line });
+                }
+              }
+              lastSize = content.length;
+              retries = 0;
+            }
+          }
+
+          if (!isLive) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Log stream complete" }),
+            });
+            return;
+          }
+
+          // Re-check live status
+          if (filename.startsWith("iteration-")) {
+            const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
+            if (match) {
+              const iterNum = parseInt(match[1], 10);
+              const currentLoop = await getLoopState(project.id);
+              const stillLive = !!currentLoop &&
+                currentLoop.currentIteration === iterNum &&
+                ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
+              if (!stillLive) isLive = false;
+            }
+          } else if (filename.startsWith("architect-")) {
+            const reviewState = getReviewState(project.id);
+            const stillLive = !!reviewState &&
+              reviewState.logFileName === filename &&
+              ["preparing", "executing", "collecting"].includes(reviewState.status);
+            if (!stillLive) isLive = false;
+          } else if (filename.startsWith("documenter-")) {
+            const docState = getDocumentState(project.id);
+            const loopState = await getLoopState(project.id);
+            const stillLive = (!!docState && docState.logFileName === filename &&
+              ["preparing", "executing"].includes(docState.status)) ||
+              (!!loopState && loopState.phase === "documenting");
+            if (!stillLive) isLive = false;
+          }
+
+          if (!isLive) continue; // Will exit on next iteration
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          retries++;
+          if (retries > 600) {
+            await stream.writeSSE({
+              event: "done",
+              data: JSON.stringify({ message: "Stream timeout" }),
+            });
+            return;
+          }
+        }
+      } catch {
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({ error: "Error reading log file" }),
+        });
+      }
+    });
   });
 
   // --- Iteration Loop (dark factory) ---
@@ -458,6 +696,56 @@ export function createApp() {
       return c.json({ error: message }, 400);
     }
   });
+
+  // --- Loop Events SSE ---
+
+  app.get("/api/projects/:id/loop/events", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    return streamSSE(c, async (stream) => {
+      let lastPhase = "";
+      let lastIteration = 0;
+
+      while (true) {
+        const state = await getLoopState(project.id);
+        if (!state) {
+          await stream.writeSSE({ event: "error", data: JSON.stringify({ error: "No active loop" }) });
+          return;
+        }
+
+        // Emit state when phase or iteration changes
+        if (state.phase !== lastPhase || state.currentIteration !== lastIteration) {
+          lastPhase = state.phase;
+          lastIteration = state.currentIteration;
+          await stream.writeSSE({ event: "state", data: JSON.stringify(state) });
+        }
+
+        // Terminal states end the stream
+        if (["completed", "failed", "stopped", "paused"].includes(state.phase)) {
+          await stream.writeSSE({ event: "done", data: JSON.stringify(state) });
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    });
+  });
+
+  // --- Static file serving (Web GUI) ---
+
+  // Resolve the path to packages/web/dist/ relative to this file
+  const webDistPath = join(dirname(new URL(import.meta.url).pathname), "..", "..", "web", "dist");
+
+  // Serve static files from the web build directory
+  app.use("/*", serveStatic({ root: webDistPath }));
+
+  // SPA fallback: serve index.html for non-API routes that don't match a file
+  app.get("*", serveStatic({ root: webDistPath, path: "/index.html" }));
 
   // --- Server shutdown ---
 

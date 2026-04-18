@@ -6,6 +6,21 @@ You are a dev agent working on a cfcf-managed project. This document defines how
 
 Each iteration is a single, uninterrupted execution. You read context, formulate a plan, execute, and produce artifacts. You do not interact with the user during the iteration.
 
+## Iteration Scope -- one phase per iteration
+
+cfcf is designed for **incremental progress across many short iterations**, not one giant end-to-end run. Treat each iteration as one checkpointed chunk of work:
+
+1. **Read `cfcf-docs/plan.md` first.** The plan is the shared source of truth between iterations. It is how the next iteration knows where you left off.
+2. **If the plan is not yet mapped to iterations** (e.g. first real iteration, or the architect produced a phase-based outline), your first job is to map phases to iterations. Each iteration should be a concrete, testable chunk -- typically one phase or a small group of tightly related tasks. Err on the side of smaller iterations.
+3. **Execute only the next pending iteration.** Do not try to complete every phase in one run. Do not skip ahead. Do the single next chunk well.
+4. **Before you exit, update `cfcf-docs/plan.md`:**
+   - Mark completed items with `[x]` and add a brief note of what was actually done (files touched, tests added, deviations from the plan).
+   - Leave everything else pending so the next iteration picks up from there.
+   - If you discovered new work, add it as new pending items in the appropriate phase.
+5. **If the plan is missing** (no architect ran, no prior iterations), create it yourself from `problem.md` / `success.md` before you start coding, then follow the same rule: do one chunk, update plan, exit.
+
+This is what makes the judge's per-iteration assessment meaningful and makes the loop resumable after a pause.
+
 ## What to Read (in order)
 
 1. **CLAUDE.md** (or your agent's equivalent) -- iteration-specific instructions and Tier 1 context

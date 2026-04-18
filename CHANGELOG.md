@@ -9,6 +9,73 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added
+- **Live elapsed-time counter on PhaseIndicator (item 4.25):** while an agent run (iteration / review / document) is active, the subtitle row now shows the running duration (e.g. "Iteration 2 · 2m 14s"). Hides on completed/failed/stopped; freezes on paused. Ticks every second locally -- no extra server calls. First web-package test suite added (9 tests for the shared `formatDuration` util); `test:web` script added at the root.
+- **Per-iteration plan execution prompt, all surfaces (item 4.24):** the one-phase-per-iteration discipline is injected at three levels so it reaches every run, every existing project, and both adapters: (1) `context-assembler.generateInstructionContent()` embeds an "Iteration Scope" section in the Tier-1 `CLAUDE.md` / `AGENTS.md` file generated fresh every iteration -- this is the live channel that reaches existing projects whose `process.md` was copied before this change; (2) the one-line dev-agent CLI prompt now spells out "execute only the next pending chunk from plan.md"; (3) the static `process.md` and architect `plan.md` templates model the same structure for newly initialized projects. Agent-agnostic -- same generated content is written to whichever filename each adapter specifies (Claude Code: `CLAUDE.md`; Codex: `AGENTS.md`). All repo docs (workflow, agent-process-and-context, technical-design, CLAUDE.md, README) updated to reflect this architecture.
+- **Architect review presentation in web UI (item 4.23):** the Status tab now renders the full parsed `ArchitectSignals` (readiness, gaps, suggestions, risks, recommended approach) in a new `ArchitectReview` component, with guidance text keyed to readiness (e.g. "Edit files under problem-pack/ and rerun Review" for `NEEDS_REFINEMENT`). The History tab turns the readiness cell into a clickable pill that expands an inline detail row with the same component in compact mode. Prior reviews remain viewable even after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
+
+### Changed
+- **`ReviewHistoryEvent` now persists full `signals` inline** (`packages/core/src/project-history.ts`). The repo file is a scratchpad overwritten every review, so inline persistence on the history event is what lets the UI surface prior reviews. Backward-compatible: pre-existing history entries without `signals` continue to render their readiness label as plain text.
+
+## [0.4.0] -- 2026-04-17
+
+Iteration 4: Web GUI + operational robustness + notifications.
+
+### Added
+
+**Web GUI (`packages/web`, React + Vite):**
+- Dashboard with project list and status badges
+- Project detail page with Status / History / Logs / Config tabs
+- PhaseIndicator for loop / review / document runs
+- LoopControls with Start / Stop / Resume / Review / Document buttons; Stop Review and Stop Document while running
+- FeedbackForm for resuming paused loops with user direction
+- Real-time log streaming via SSE; persists across tab switches
+- Unified ProjectHistory timeline (reviews + iterations + documents) with per-entry log link
+- Hono serves built assets via `serveStatic`; CORS for `/api/*` during dev
+
+**Server API:**
+- `GET /api/projects/:id/history` — persistent history of all agent runs
+- `GET /api/projects/:id/logs/:filename` — generic log streaming by filename (with path-traversal safety)
+- `GET /api/projects/:id/loop/events` — SSE stream of loop phase transitions
+- `POST /api/projects/:id/review/stop` — kill a running review
+- `POST /api/projects/:id/document/stop` — kill a running documenter
+
+**Persistence and state:**
+- `loop-state.json` per project persists across server restarts
+- `history.json` per project tracks every agent run (review, iteration, document) across loop restarts
+- Sequence-numbered logs for architect and documenter (`architect-001.log`, `documenter-001.log`, etc.) so re-runs preserve history
+- `documenting` phase added to `LoopPhase` (loop stays active while docs are generated post-SUCCESS)
+
+**Operational robustness (item 4.16):**
+- Central active-processes registry (`packages/core/src/active-processes.ts`) tracks all running agent processes
+- Graceful shutdown on SIGINT/SIGTERM: kills all tracked processes, marks history events + loop states as failed, removes PID file
+- Startup recovery: stale "running" history events and stale active loop states are marked failed (recovers from crashes)
+- `--watch` mode warning at startup so users know file changes will kill active agents
+- `process.on('unhandledRejection')` and `process.on('uncaughtException')` handlers trigger graceful shutdown
+- Fire-and-forget `.catch()` handlers in runners now try/catch themselves so recording failures don't silently swallow the original error
+
+**Notifications (item 4.18):**
+- 3 event types: `loop.paused`, `loop.completed`, `agent.failed`
+- 4 channels: `terminal-bell` (BEL to stderr), `macos` (osascript), `linux` (notify-send), `log` (JSON Lines audit trail)
+- Fire-and-forget dispatcher with 5s per-channel timeout
+- Global + per-project config; configured during `cfcf init`
+- Webhook channel and additional events (iteration.completed, review.completed, etc.) deferred to iteration 5
+
+**Other:**
+- `git merge --no-ff` for iteration merges — preserves iteration boundaries in `git log --graph`
+- Claude Code adapter: added `--verbose` flag (note: `-p` print mode still emits final-only; `--verbose` helps in mixed modes)
+- `docsFileCount` / `committed` / `exitCode` fields on Document history events, shown in the History tab
+- Test repo setup/cleanup scripts (`scripts/setup-test-repos.sh`, `scripts/cleanup-test-repos.sh`)
+- Tabular iteration plan format in `docs/plan.md`
+- 188 tests (364 assertions), up from 146
+
+### Fixed
+- Log viewer performance on large logs (50K+ lines) — single `<pre>` block with all lines
+- Review / Document buttons: auto-switch to Logs tab and stream the log on click
+- History tab correctly shows completion status for reviews and documents (previously could get stuck at "running" when polling was disabled)
+- Review / Document / Start Loop buttons remain visible (disabled) while another agent is running — no longer disappear
+- Configuration validation backfills `architectAgent` and `documenterAgent` in older config files
+
 ## [0.3.0] -- 2026-04-15
 
 Iteration 3: Iteration loop, judge agent, Solution Architect, human-on-the-loop. **This is the MVP.**
@@ -124,7 +191,8 @@ Iteration 0: Project scaffolding, server skeleton, CLI, first-run configuration.
 - CLAUDE.md with project principles for AI coding agents
 - docs/ structure: design/, api/, research/, guides/
 
-[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.0.0...v0.1.0

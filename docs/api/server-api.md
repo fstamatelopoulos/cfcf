@@ -73,18 +73,28 @@ Returns the current global configuration.
 ```json
 {
   "version": 1,
-  "devAgent": {
-    "adapter": "claude-code"
-  },
-  "judgeAgent": {
-    "adapter": "codex"
-  },
+  "devAgent": { "adapter": "claude-code" },
+  "judgeAgent": { "adapter": "codex" },
+  "architectAgent": { "adapter": "claude-code" },
+  "documenterAgent": { "adapter": "claude-code" },
   "maxIterations": 10,
   "pauseEvery": 0,
   "availableAgents": ["claude-code", "codex"],
-  "permissionsAcknowledged": true
+  "permissionsAcknowledged": true,
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "loop.paused": ["terminal-bell", "macos", "log"],
+      "loop.completed": ["terminal-bell", "macos", "log"],
+      "agent.failed": ["terminal-bell", "macos", "log"]
+    }
+  }
 }
 ```
+
+The `notifications` field controls how cfcf notifies the user when
+long-running loops need attention. See `docs/guides/cli-usage.md` for
+details on channels and events.
 
 **Response:** `404 Not Found` (when not configured)
 
@@ -282,12 +292,92 @@ Same response format as `/iterations/:n/status`.
 
 ### GET /api/projects/:id/iterations/:n/logs
 
-SSE stream of log events for a completed iteration.
+SSE stream of log events for a completed iteration (the dev agent log). Tails the file if the iteration is still active.
 
 **Events:**
 - `event: log` -- Log line from agent output
 - `event: done` -- Stream complete
 - `event: error` -- Error reading logs
+
+---
+
+### GET /api/projects/:id/logs/:filename
+
+Generic SSE log streaming by filename. Used for architect / documenter / judge logs and any other file under the project's log directory.
+
+The server detects if the log belongs to a live agent run (iteration in progress, review in progress, etc.) and tails the file accordingly. For completed runs, reads the file once and closes the stream.
+
+**Examples:**
+- `/api/projects/my-app/logs/iteration-001-dev.log`
+- `/api/projects/my-app/logs/iteration-001-judge.log`
+- `/api/projects/my-app/logs/architect-001.log`
+- `/api/projects/my-app/logs/documenter-001.log`
+
+**Events:** same as above (`log`, `done`, `error`).
+
+**Security:** the filename must not contain path separators or `..`, and must end with `.log`. Otherwise returns 400.
+
+---
+
+### GET /api/projects/:id/history
+
+Returns the project's history events array. Each event represents an agent invocation (review, iteration, document). History persists across loop restarts — unlike `loop-state.json` which resets on each `startLoop`.
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "id": "a1b2c3d4e5f67890",
+    "type": "review",
+    "status": "completed",
+    "startedAt": "2026-04-16T10:15:00.000Z",
+    "completedAt": "2026-04-16T10:17:30.000Z",
+    "logFile": "architect-001.log",
+    "agent": "claude-code",
+    "model": "opus",
+    "readiness": "READY",
+    "signals": {
+      "readiness": "READY",
+      "gaps": [],
+      "suggestions": ["Consider adding rate-limit acceptance tests"],
+      "risks": ["External API dependency"],
+      "recommended_approach": "Start with the happy path, add edge cases in later iterations."
+    }
+  },
+  {
+    "id": "b2c3d4e5f6789012",
+    "type": "iteration",
+    "status": "completed",
+    "startedAt": "2026-04-16T10:20:00.000Z",
+    "completedAt": "2026-04-16T10:30:00.000Z",
+    "iteration": 1,
+    "branch": "cfcf/iteration-1",
+    "logFile": "iteration-001-dev.log",
+    "devLogFile": "iteration-001-dev.log",
+    "judgeLogFile": "iteration-001-judge.log",
+    "agent": "codex",
+    "devAgent": "codex",
+    "judgeAgent": "claude-code",
+    "devExitCode": 0,
+    "judgeExitCode": 0,
+    "judgeDetermination": "PROGRESS",
+    "judgeQuality": 7,
+    "merged": true
+  },
+  {
+    "id": "c3d4e5f678901234",
+    "type": "document",
+    "status": "completed",
+    "startedAt": "2026-04-16T10:32:00.000Z",
+    "completedAt": "2026-04-16T10:34:00.000Z",
+    "logFile": "documenter-001.log",
+    "agent": "claude-code"
+  }
+]
+```
+
+Events are returned in insertion order (chronological). Clients should sort if a different order is needed.
 
 ---
 
@@ -315,6 +405,20 @@ Start a Solution Architect review of the Problem Pack. User-invoked, advisory, r
   "message": "Architect review started. Poll GET /api/projects/:id/review/status for progress."
 }
 ```
+
+---
+
+### POST /api/projects/:id/review/stop
+
+Stop a running architect review. Kills the agent process and marks the review as failed with "Stopped by user".
+
+**Response:** `200 OK`
+
+```json
+{ "projectId": "...", "status": "failed", "message": "Review stopped." }
+```
+
+**Error:** `404` if no review is running for this project.
 
 ---
 
@@ -361,6 +465,20 @@ Run the Documenter agent to produce polished final project documentation. User-i
   "message": "Documenter started. Poll GET /api/projects/:id/document/status for progress."
 }
 ```
+
+---
+
+### POST /api/projects/:id/document/stop
+
+Stop a running documenter. Kills the agent process and marks the document run as failed with "Stopped by user".
+
+**Response:** `200 OK`
+
+```json
+{ "projectId": "...", "status": "failed", "message": "Documenter stopped." }
+```
+
+**Error:** `404` if no document run is active for this project.
 
 ---
 
@@ -447,6 +565,7 @@ Get the full loop state including iteration history.
 | `dev_executing` | Dev agent is running |
 | `judging` | Judge agent is running |
 | `deciding` | Evaluating judge signals |
+| `documenting` | Judge said SUCCESS; documenter is producing final docs before terminal state |
 | `paused` | Waiting for user input or review |
 | `completed` | Loop finished (success, failure, or max iterations) |
 | `failed` | Loop encountered an error |
