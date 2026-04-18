@@ -1,12 +1,96 @@
 /**
  * Server start/stop lifecycle.
+ *
+ * Handles graceful shutdown: on SIGINT/SIGTERM, all active agent processes
+ * are killed, loop states are marked failed (preserves disk state), history
+ * events are finalized, and the PID file is removed before exit.
+ *
+ * Also installs uncaught exception / unhandled rejection handlers that log
+ * and attempt graceful shutdown instead of dying silently.
  */
 
 import { createApp } from "./app.js";
 import { VERSION } from "@cfcf/core";
-import { writePidFile, removePidFile, cleanupAllStaleRunningEvents } from "@cfcf/core";
+import {
+  writePidFile,
+  removePidFile,
+  cleanupAllStaleRunningEvents,
+  cleanupStaleActiveLoops,
+  killAllActiveProcesses,
+  getAllActiveProcesses,
+  updateHistoryEvent,
+} from "@cfcf/core";
 
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
+let shuttingDown = false;
+
+/**
+ * Detect if the server process was started with bun --watch.
+ * Bun sets BUN_WATCH=1 when running in watch mode (verified via testing).
+ * Falls back to checking process.execArgv for '--watch' if that env is not set.
+ */
+function isWatchMode(): boolean {
+  if (process.env.BUN_WATCH === "1" || process.env.BUN_WATCH === "true") return true;
+  if (process.execArgv.some((a) => a.includes("--watch"))) return true;
+  return false;
+}
+
+/**
+ * Gracefully shut down the server: kill active agent processes, mark their
+ * state as failed, remove PID file, exit.
+ *
+ * Called on SIGINT/SIGTERM and after uncaught errors.
+ */
+async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<void> {
+  if (shuttingDown) {
+    // Already shutting down — second signal forces immediate exit
+    console.log(`\nReceived second ${signal}, exiting immediately`);
+    process.exit(1);
+  }
+  shuttingDown = true;
+
+  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+
+  const active = getAllActiveProcesses();
+  if (active.length > 0) {
+    console.log(`  Killing ${active.length} active agent process(es)...`);
+
+    // Mark each active process's history event as failed (do this first
+    // so the state is recorded even if the kill or the server stop races).
+    const reason = `Server shutdown (${signal}) while agent was running`;
+    for (const entry of active) {
+      if (entry.historyEventId) {
+        try {
+          await updateHistoryEvent(entry.projectId, entry.historyEventId, {
+            status: "failed",
+            error: reason,
+            completedAt: new Date().toISOString(),
+          });
+        } catch {
+          // Swallow — we're shutting down
+        }
+      }
+    }
+
+    // Kill all the processes
+    killAllActiveProcesses();
+  }
+
+  // Flush PID file and stop the HTTP listener
+  try {
+    await removePidFile();
+  } catch { /* ignore */ }
+
+  if (serverInstance) {
+    try {
+      serverInstance.stop();
+    } catch { /* ignore */ }
+    serverInstance = null;
+  }
+
+  console.log("cfcf server stopped");
+  process.exit(exitCode);
+}
 
 /**
  * Start the cfcf server on the specified port.
@@ -19,14 +103,28 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
 
   const app = createApp();
 
-  // Clean up any stale "running" history events from a previous crash/restart.
-  // Agent processes don't survive server restarts, so any "running" event
-  // is orphaned and should be marked as failed.
-  const cleaned = await cleanupAllStaleRunningEvents(
+  // Warn if we're running in watch mode — file changes will kill active agents
+  if (isWatchMode()) {
+    console.log(
+      "⚠️  Running in watch mode. File changes will restart the server and kill any active agent runs.",
+    );
+    console.log(
+      "    Use plain 'bun run packages/server/src/index.ts' for production testing.",
+    );
+  }
+
+  // Startup recovery: clean up state from a previous crash/restart
+  const staleHistoryCount = await cleanupAllStaleRunningEvents(
     "Server restarted while this event was running",
   );
-  if (cleaned > 0) {
-    console.log(`Marked ${cleaned} stale running event(s) as failed`);
+  if (staleHistoryCount > 0) {
+    console.log(`Marked ${staleHistoryCount} stale running history event(s) as failed`);
+  }
+  const staleLoopCount = await cleanupStaleActiveLoops(
+    "Server restarted while this loop was in progress",
+  );
+  if (staleLoopCount > 0) {
+    console.log(`Marked ${staleLoopCount} stale active loop(s) as failed`);
   }
 
   serverInstance = Bun.serve({
@@ -39,14 +137,22 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   // Write PID file so `cfcf server stop` can find us
   await writePidFile(process.pid, port);
 
-  // Clean up PID file on exit
-  process.on("SIGINT", async () => {
-    await removePidFile();
-    process.exit(0);
+  // Signal handlers: graceful shutdown
+  process.on("SIGINT", () => {
+    gracefulShutdown("SIGINT", 0);
   });
-  process.on("SIGTERM", async () => {
-    await removePidFile();
-    process.exit(0);
+  process.on("SIGTERM", () => {
+    gracefulShutdown("SIGTERM", 0);
+  });
+
+  // Catch-all error handlers: log then attempt graceful shutdown
+  process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection:", reason);
+    gracefulShutdown("unhandledRejection", 1).catch(() => process.exit(1));
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception:", err);
+    gracefulShutdown("uncaughtException", 1).catch(() => process.exit(1));
   });
 
   console.log(`cfcf server v${VERSION} listening on http://localhost:${port}`);
@@ -54,7 +160,7 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
 }
 
 /**
- * Stop the running server.
+ * Stop the running server (programmatic, e.g. from tests or /api/shutdown).
  */
 export async function stopServer(): Promise<void> {
   if (serverInstance) {

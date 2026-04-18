@@ -11,6 +11,7 @@ import { readFile, writeFile, mkdir, copyFile, access } from "fs/promises";
 import type { ProjectConfig, ArchitectSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
+import { registerProcess } from "./active-processes.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { randomBytes } from "crypto";
@@ -174,16 +175,23 @@ export async function startReview(
 
   reviewStore.set(project.id, state);
 
-  // Run in background
+  // Run in background. Wrap the error handler itself in try/catch so that
+  // a failure to update state (e.g., disk write error) doesn't result in
+  // a silent failure with no trace.
   runReview(project, state, opts).catch(async (err) => {
-    state.status = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await updateHistoryEvent(project.id, historyEventId, {
-      status: "failed",
-      error: state.error,
-      completedAt: state.completedAt,
-    });
+    try {
+      state.status = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await updateHistoryEvent(project.id, historyEventId, {
+        status: "failed",
+        error: state.error,
+        completedAt: state.completedAt,
+      });
+    } catch (handlerErr) {
+      console.error(`[architect-runner] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -237,6 +245,14 @@ async function runReview(
     logFile: state.logFile,
   });
   reviewProcessStore.set(project.id, managed);
+  const unregister = registerProcess({
+    projectId: project.id,
+    role: "architect",
+    process: managed,
+    startedAt: state.startedAt,
+    historyEventId: state.historyEventId,
+    logFileName: state.logFileName,
+  });
 
   try {
     const result = await managed.result;
@@ -261,5 +277,6 @@ async function runReview(
     } as Partial<import("./project-history.js").ReviewHistoryEvent>);
   } finally {
     reviewProcessStore.delete(project.id);
+    unregister();
   }
 }

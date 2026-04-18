@@ -230,7 +230,19 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
       {loopState?.error && (
         <div className="project-detail__error-banner">
-          Error: {loopState.error}
+          <div className="project-detail__error-banner-title">
+            ⚠️ Loop failed
+          </div>
+          <div className="project-detail__error-banner-message">
+            {loopState.error}
+          </div>
+          {loopState.error.toLowerCase().includes("server") && (
+            <div className="project-detail__error-banner-hint">
+              The server was restarted while the loop was running. The loop has been
+              marked as failed. You can start a new loop — cfcf will create a new
+              iteration branch from the current HEAD.
+            </div>
+          )}
         </div>
       )}
 

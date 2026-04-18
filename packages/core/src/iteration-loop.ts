@@ -37,6 +37,7 @@ import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { registerProcess } from "./active-processes.js";
 import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
@@ -144,6 +145,45 @@ async function loadLoopState(projectId: string): Promise<LoopState | null> {
 async function saveLoopState(state: LoopState): Promise<void> {
   loopStore.set(state.projectId, state);
   await persistLoopState(state);
+}
+
+/**
+ * Clean up stale loop-state files on server startup.
+ * Any loop-state.json whose phase is an active phase (preparing, dev_executing,
+ * judging, deciding, documenting) is orphaned because the agent process did
+ * not survive the server restart. Marks these as "failed" with a clear error.
+ *
+ * Returns the number of loops marked failed.
+ */
+export async function cleanupStaleActiveLoops(
+  reason: string = "Server restarted while this loop was in progress",
+): Promise<number> {
+  const { listProjects } = await import("./projects.js");
+  const projects = await listProjects();
+  let total = 0;
+  const activePhases: LoopPhase[] = [
+    "preparing",
+    "dev_executing",
+    "judging",
+    "deciding",
+    "documenting",
+  ];
+
+  for (const p of projects) {
+    const state = await loadLoopState(p.id);
+    if (!state) continue;
+    if (activePhases.includes(state.phase)) {
+      state.phase = "failed";
+      state.error = `${reason} (was in phase: ${state.phase === "failed" ? "unknown" : state.phase})`;
+      state.completedAt = new Date().toISOString();
+      state.outcome = "failure";
+      await persistLoopState(state);
+      await updateProject(p.id, { status: "failed" }).catch(() => {});
+      total++;
+    }
+  }
+
+  return total;
 }
 
 /**
@@ -308,13 +348,19 @@ export async function startLoop(
   // Update project status
   await updateProject(project.id, { status: "running" });
 
-  // Run loop in background
+  // Run loop in background. Error handler is itself try/catch-wrapped so a
+  // disk write failure during error recording doesn't silently swallow the error.
   runLoop(project, state, opts).catch(async (err) => {
-    state.phase = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await saveLoopState(state);
-    updateProject(project.id, { status: "failed" }).catch(() => {});
+    try {
+      state.phase = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
+      updateProject(project.id, { status: "failed" }).catch(() => {});
+    } catch (handlerErr) {
+      console.error(`[iteration-loop] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -349,13 +395,18 @@ export async function resumeLoop(
   await saveLoopState(state);
   await updateProject(projectId, { status: "running" });
 
-  // Resume loop in background
+  // Resume loop in background. Error handler itself is try/catch-wrapped.
   runLoop(project, state).catch(async (err) => {
-    state.phase = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await saveLoopState(state);
-    updateProject(projectId, { status: "failed" }).catch(() => {});
+    try {
+      state.phase = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await saveLoopState(state);
+      updateProject(projectId, { status: "failed" }).catch(() => {});
+    } catch (handlerErr) {
+      console.error(`[iteration-loop] Failed to record resume error for ${projectId}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -587,8 +638,21 @@ async function runLoop(
       cwd: project.repoPath,
       logFile: devLogFile,
     });
+    const unregisterDev = registerProcess({
+      projectId: project.id,
+      role: "dev",
+      process: devProcess,
+      startedAt: iterRecord.startedAt,
+      historyEventId: iterRecord.historyEventId,
+      logFileName: iterRecord.devLogFileName,
+    });
 
-    const devResult = await devProcess.result;
+    let devResult: Awaited<typeof devProcess.result>;
+    try {
+      devResult = await devProcess.result;
+    } finally {
+      unregisterDev();
+    }
     iterRecord.devExitCode = devResult.exitCode;
 
     // Check if stopped during dev execution
@@ -656,8 +720,21 @@ async function runJudgeAndDecide(
     cwd: project.repoPath,
     logFile: judgeLogFile,
   });
+  const unregisterJudge = registerProcess({
+    projectId: project.id,
+    role: "judge",
+    process: judgeProcess,
+    startedAt: iterRecord.startedAt,
+    historyEventId: iterRecord.historyEventId,
+    logFileName: iterRecord.judgeLogFileName,
+  });
 
-  const judgeResult = await judgeProcess.result;
+  let judgeResult: Awaited<typeof judgeProcess.result>;
+  try {
+    judgeResult = await judgeProcess.result;
+  } finally {
+    unregisterJudge();
+  }
   iterRecord.judgeExitCode = judgeResult.exitCode;
 
   // Check if stopped during judge execution
