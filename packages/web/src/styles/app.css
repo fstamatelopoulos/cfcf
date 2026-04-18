@@ -492,6 +492,112 @@
   font-style: italic;
 }
 
+/* --- Architect Review --- */
+
+.architect-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+}
+
+.architect-review--compact {
+  padding: 0.5rem 0.75rem;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.architect-review__header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.architect-review__readiness {
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.architect-review__counts {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.architect-review__guidance {
+  border-left: 3px solid var(--color-warning);
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.architect-review__section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.5rem;
+}
+
+.architect-review__summary {
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.875rem;
+  user-select: none;
+}
+
+.architect-review__summary:hover {
+  color: var(--color-info);
+}
+
+.architect-review__count {
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-size: 0.8rem;
+  margin-left: 0.25rem;
+}
+
+.architect-review__list {
+  margin: 0.5rem 0 0.25rem 1.25rem;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.architect-review__list li {
+  margin-bottom: 0.25rem;
+}
+
+.architect-review__approach {
+  margin: 0.5rem 0 0.25rem 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* Clickable readiness pill in history table */
+.project-history__readiness-pill {
+  background: none;
+  border: 1px dashed currentColor;
+  border-radius: 10px;
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.project-history__readiness-pill:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.project-history__detail-row td {
+  background: var(--color-bg);
+  padding: 0.75rem 1rem;
+  border-top: 1px dashed var(--color-border);
+}
+
 /* --- Feedback Form --- */
 
 .feedback-form {

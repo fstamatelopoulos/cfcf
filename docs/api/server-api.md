@@ -336,7 +336,14 @@ Returns the project's history events array. Each event represents an agent invoc
     "logFile": "architect-001.log",
     "agent": "claude-code",
     "model": "opus",
-    "readiness": "READY"
+    "readiness": "READY",
+    "signals": {
+      "readiness": "READY",
+      "gaps": [],
+      "suggestions": ["Consider adding rate-limit acceptance tests"],
+      "risks": ["External API dependency"],
+      "recommended_approach": "Start with the happy path, add edge cases in later iterations."
+    }
   },
   {
     "id": "b2c3d4e5f6789012",

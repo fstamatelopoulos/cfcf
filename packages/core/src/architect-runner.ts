@@ -281,11 +281,14 @@ async function runReview(
     state.status = "completed";
     state.completedAt = new Date().toISOString();
 
-    // Update history event with final status
+    // Update history event with final status.
+    // We persist the full signals inline so prior reviews remain viewable
+    // after `cfcf-docs/cfcf-architect-signals.json` is overwritten by later runs.
     await updateHistoryEvent(project.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: state.completedAt,
       readiness: signals?.readiness,
+      signals: signals ?? undefined,
     } as Partial<import("./project-history.js").ReviewHistoryEvent>);
   } finally {
     reviewProcessStore.delete(project.id);

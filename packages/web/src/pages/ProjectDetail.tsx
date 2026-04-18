@@ -14,6 +14,7 @@ import { FeedbackForm } from "../components/FeedbackForm";
 import { LogViewer, type LogTarget } from "../components/LogViewer";
 import { ConfigDisplay } from "../components/ConfigDisplay";
 import { JudgeAssessment } from "../components/JudgeAssessment";
+import { ArchitectReview } from "../components/ArchitectReview";
 import { ProjectHistory } from "../components/ProjectHistory";
 import { TabBar } from "../components/TabBar";
 import type {
@@ -288,13 +289,18 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             )}
             {reviewState?.signals && !isReviewActive && (
               <div className="status-panel__section">
-                <h3>Latest Review</h3>
-                <div className="status-panel__info">
-                  <span>Readiness: {reviewState.signals.readiness}</span>
+                <h3>
+                  Latest Review
                   {reviewState.completedAt && (
-                    <span>Completed: {new Date(reviewState.completedAt).toLocaleString()}</span>
+                    <span
+                      className="status-panel__timestamp"
+                      style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                    >
+                      ({new Date(reviewState.completedAt).toLocaleString()})
+                    </span>
                   )}
-                </div>
+                </h3>
+                <ArchitectReview signals={reviewState.signals} />
               </div>
             )}
             {loopState && (
