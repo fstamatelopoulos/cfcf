@@ -158,11 +158,12 @@ Agent Processes (Claude Code, Codex, etc.)
 ## How It Works (When Complete)
 
 1. You define your problem in Markdown files (problem.md, success.md, test scenarios)
-2. cfcf creates a feature branch and assembles context for the AI agent
-3. The agent reads context, codes, tests, and produces a handoff document
-4. A separate judge agent reviews the work and provides structured feedback
-5. cfcf merges to main (or creates a PR) and starts the next iteration with accumulated knowledge
-6. Repeat until success criteria are met or iteration limits are reached
+2. (Recommended) The Solution Architect reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.)
+3. cfcf creates a feature branch and assembles context for the AI agent (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex -- regenerated each iteration)
+4. The dev agent reads context and executes **one phase per iteration**: picks up the next pending chunk from `cfcf-docs/plan.md`, does just that, marks it `[x]` with a brief note, and exits. Each iteration is a fresh agent process -- no session continuity -- so the plan is the checkpoint between runs.
+5. A separate judge agent reviews the work and provides structured feedback
+6. cfcf merges to main (or creates a PR) and starts the next iteration -- a brand new agent process that reads the updated plan and picks up from there
+7. Repeat until success criteria are met or iteration limits are reached
 
 ## Configuration
 

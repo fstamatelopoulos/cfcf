@@ -304,11 +304,18 @@ Builds and writes the context files into the repo before each iteration.
 **Tiered context strategy:**
 
 ```
-Tier 1 - MUST READ (~500 words, always included in CLAUDE.md directly):
+Tier 1 - MUST READ (~500 words, always included in CLAUDE.md / AGENTS.md directly):
   - Problem summary (compressed from problem.md)
   - Current plan status (from plan.md, last 5-10 lines)
   - Last judge assessment (compressed)
   - Iteration directive ("this iteration, focus on X")
+  - **Iteration Scope discipline** (injected every run by
+    context-assembler.generateInstructionContent()): "each iteration is a
+    separate, clean process; read plan.md, execute only the next pending
+    chunk, mark [x] with a brief note, exit." This reaches both Claude
+    Code and Codex adapters uniformly because both receive the same
+    generated content, written to whichever instruction filename the
+    adapter specifies.
 
 Tier 2 - SHOULD READ (~2000 words, separate files, agent reads if needed):
   - cfcf-docs/iteration-history.md (aggressively compressed)
