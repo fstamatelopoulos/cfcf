@@ -5,8 +5,8 @@
  * Runs automatically after judge says SUCCESS, or on demand via `cfcf document`.
  */
 
-import { join, dirname } from "path";
-import { readFile, writeFile, mkdir, readdir } from "fs/promises";
+import { join } from "path";
+import { writeFile, mkdir, readdir } from "fs/promises";
 import { randomBytes } from "crypto";
 import type { ProjectConfig } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
@@ -15,6 +15,7 @@ import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from ".
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForProject, makeEvent } from "./notifications/index.js";
+import { getTemplate } from "./templates.js";
 
 /**
  * Count markdown files in the project's docs/ directory.
@@ -29,7 +30,7 @@ async function countDocsFiles(repoPath: string): Promise<number> {
   }
 }
 
-const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
+// Templates resolved via templates.ts (embedded + overrides).
 
 // --- Document State ---
 
@@ -97,9 +98,7 @@ export async function writeDocumenterInstructions(
   repoPath: string,
   project: ProjectConfig,
 ): Promise<void> {
-  const templatePath = join(TEMPLATES_DIR, "cfcf-documenter-instructions.md");
-  let template = await readFile(templatePath, "utf-8");
-
+  let template = await getTemplate("cfcf-documenter-instructions.md", { repoPath });
   template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");

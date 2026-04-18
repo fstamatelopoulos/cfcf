@@ -21,6 +21,9 @@
       "@cfcf/server/*": ["./packages/server/src/*"]
     }
   },
-  "include": ["packages/*/src/**/*.ts"],
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/core/src/templates/*.json"
+  ],
   "exclude": ["node_modules", "dist"]
 }

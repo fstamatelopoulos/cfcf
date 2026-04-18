@@ -68,9 +68,9 @@ The execution interface is designed so that swapping in a container backend does
 │                               │  Project | Iteration | Process   │  │
 │  ┌──────────┐    HTTP/SSE     │  Manager | Controller | Manager  │  │
 │  │  Web GUI │◄───────────────►│  ─────────────────────────────── │  │
-│  │  (React) │  (served via    │  Review   | Document  | Judge    │  │
-│  │  served  │   serveStatic   │  Runner   | Runner    | Runner   │  │
-│  │  by Hono)│   from Hono)    │  ─────────────────────────────── │  │
+│  │  (React) │  (embedded in   │  Review   | Document  | Judge    │  │
+│  │  served  │   binary; dev   │  Runner   | Runner    | Runner   │  │
+│  │  by Hono)│   fallback disk)│  ─────────────────────────────── │  │
 │  └──────────┘                 │  Context  | Active    | Notif.   │  │
 │                               │  Assembler| Processes | Dispatcher│  │
 │                               │  ─────────────────────────────── │  │
@@ -354,6 +354,8 @@ Runs a **separate agent** (not an API call) to evaluate the iteration.
 5. The judge also writes a machine-parseable signal file: `cfcf-docs/cfcf-judge-signals.json`
 6. The judge agent exits
 7. cfcf reads the assessment and signal file
+
+> **Coming in iteration 5 (item 5.6):** A fifth agent role — **Reflection** — runs after the judge on every iteration (unless the judge opts out via a signal) and may non-destructively rewrite the pending part of `plan.md` based on the full project history. The judge's signal schema is extended with `reflection_needed` / `reflection_reason` to drive the trigger. A new `reflection-runner.ts` mirrors `architect-runner.ts` / `documenter-runner.ts`. Full design, flow diagram, signal schemas, non-destructive plan rules, implementation ordering: **[`docs/research/reflection-role-and-iterative-planning.md`](../research/reflection-role-and-iterative-planning.md)**. This technical-design doc will be updated with the 4.x component sections (Reflection Runner, updated iteration controller flow) once PR 3 of that design lands.
 
 ### 4.7 Signal Files (Machine-Readable Communication)
 

@@ -31,23 +31,51 @@ export function registerServerCommands(program: Command): void {
         await removePidFile();
       }
 
-      // Start server as a detached background process
-      const serverEntry = new URL("../../server/src/index.ts", import.meta.url).pathname;
-      const child = Bun.spawn(["bun", "run", serverEntry], {
-        env: { ...process.env, CFCF_PORT: String(port) },
-        stdio: ["ignore", "ignore", "ignore"],
-      });
+      // Start server as a detached background process.
+      //
+      // Two modes:
+      //   (a) Dev mode: we're running via `bun run packages/cli/src/index.ts`.
+      //       Spawn `bun run packages/server/src/index.ts` directly. The
+      //       server entry file is on disk, so this path works.
+      //   (b) Compiled binary: we're running via `cfcf-binary`. The server
+      //       source file does not exist on disk. Re-spawn ourselves with
+      //       CFCF_INTERNAL_SERVE=1 so the single binary hosts both the CLI
+      //       and the server (item 5.3).
+      //
+      // We detect which mode by checking if the server entry file exists
+      // on disk. No Bun-specific magic required.
+      const { spawnServerChild } = await import("../server-spawn.js");
+      const child = await spawnServerChild(port);
 
-      // Give the server a moment to start
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The client helpers below read CFCF_PORT from our own env to pick
+      // which port to probe. If the user passed --port, make sure we probe
+      // that one, not the default.
+      process.env.CFCF_PORT = String(port);
 
-      if (await isServerReachable()) {
+      // Poll for readiness. Dev mode (bun run) is fast (~300ms); the
+      // compiled binary cold-starts in ~1-2s on a cool macOS disk, so we
+      // give it up to ~5s before reporting a failure.
+      const deadline = Date.now() + 5000;
+      let ready = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        if (await isServerReachable()) {
+          ready = true;
+          break;
+        }
+      }
+
+      if (ready) {
         console.log(`cfcf server v${VERSION} started on port ${port} (pid: ${child.pid})`);
         console.log();
         console.log("Ready. Create a project:  cfcf project init --repo <path> --name <name>");
         console.log("Or check status:          cfcf status");
+        // Explicit exit so the CLI parent doesn't stay tethered to the
+        // spawned server child (Bun.spawn children keep the parent alive
+        // until they exit unless we detach; simplest is to exit on success).
+        process.exit(0);
       } else {
-        console.error("Failed to start cfcf server. Try running directly: bun run dev:server");
+        console.error("Failed to start cfcf server after 5s. Try running directly: bun run dev:server");
         process.exit(1);
       }
     });

@@ -70,6 +70,7 @@ export async function createProject(opts: {
     pauseEvery: opts.pauseEvery ?? globalConfig?.pauseEvery ?? DEFAULT_PAUSE_EVERY,
     onStalled: "alert",
     mergeStrategy: "auto",
+    cleanupMergedBranches: globalConfig?.cleanupMergedBranches ?? false,
     processTemplate: "default",
     currentIteration: 0,
     status: "idle",
