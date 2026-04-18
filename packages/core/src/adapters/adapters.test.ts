@@ -48,6 +48,7 @@ describe("claude-code adapter", () => {
     );
     expect(command).toBe("claude");
     expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--verbose");
     expect(args).toContain("-p");
     expect(args).toContain("read CLAUDE.md and execute");
   });
