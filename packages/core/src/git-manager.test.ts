@@ -13,6 +13,8 @@ import {
   getHeadHash,
   branchExists,
   getLog,
+  deleteBranch,
+  merge,
 } from "./git-manager.js";
 
 describe("git manager", () => {
@@ -135,6 +137,36 @@ describe("git manager", () => {
     it("returns commit log", async () => {
       const log = await getLog(repoDir);
       expect(log).toContain("initial");
+    });
+  });
+
+  describe("deleteBranch + merge (item 5.2 cleanup flow)", () => {
+    it("deletes a fully-merged iteration branch after merge", async () => {
+      // Create a cfcf-style iteration branch, commit on it, merge to main, delete it.
+      const mainBranch = await getCurrentBranch(repoDir);
+      await createBranch(repoDir, "cfcf/iteration-1");
+      await writeFile(join(repoDir, "feature.txt"), "iteration work\n");
+      await commitAll(repoDir, "iteration 1 work");
+
+      // Merge back
+      await checkoutBranch(repoDir, mainBranch!);
+      const mergeResult = await merge(repoDir, "cfcf/iteration-1", "merge iter 1");
+      expect(mergeResult.success).toBe(true);
+
+      // Branch still exists before cleanup
+      expect(await branchExists(repoDir, "cfcf/iteration-1")).toBe(true);
+
+      // Delete it (this is what iteration-loop does when cleanupMergedBranches is true)
+      const delResult = await deleteBranch(repoDir, "cfcf/iteration-1");
+      expect(delResult.success).toBe(true);
+      expect(await branchExists(repoDir, "cfcf/iteration-1")).toBe(false);
+    });
+
+    it("deleteBranch reports failure without crashing when branch doesn't exist", async () => {
+      const result = await deleteBranch(repoDir, "cfcf/iteration-never-existed");
+      // Git exits non-zero; our helper surfaces that as success=false + an error string
+      expect(result.success).toBe(false);
+      expect(result.error).toBeTruthy();
     });
   });
 });

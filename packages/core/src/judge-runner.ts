@@ -6,12 +6,11 @@
  * cfcf reads the signal file to make deterministic loop decisions.
  */
 
-import { join, dirname } from "path";
-import { readFile, writeFile, mkdir, copyFile, access } from "fs/promises";
+import { join } from "path";
+import { readFile, writeFile, mkdir, access, copyFile } from "fs/promises";
 import type { ProjectConfig, JudgeSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
-
-const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
+import { getTemplate, writeTemplate } from "./templates.js";
 
 /**
  * Generate judge instructions for a specific iteration.
@@ -22,10 +21,7 @@ export async function writeJudgeInstructions(
   project: ProjectConfig,
   iteration: number,
 ): Promise<void> {
-  const templatePath = join(TEMPLATES_DIR, "cfcf-judge-instructions.md");
-  let template = await readFile(templatePath, "utf-8");
-
-  // Replace placeholders
+  let template = await getTemplate("cfcf-judge-instructions.md", { repoPath });
   template = template.replace(/\{\{ITERATION\}\}/g, String(iteration));
   template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
 
@@ -39,9 +35,11 @@ export async function writeJudgeInstructions(
 export async function resetJudgeSignals(
   repoPath: string,
 ): Promise<void> {
-  const src = join(TEMPLATES_DIR, "cfcf-judge-signals.json");
-  const dest = join(repoPath, "cfcf-docs", "cfcf-judge-signals.json");
-  await copyFile(src, dest);
+  await writeTemplate(
+    join(repoPath, "cfcf-docs"),
+    "cfcf-judge-signals.json",
+    { repoPath },
+  );
 }
 
 /**

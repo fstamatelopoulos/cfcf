@@ -19,6 +19,22 @@ import { registerStopCommand } from "./commands/stop.js";
 import { registerReviewCommand } from "./commands/review.js";
 import { registerDocumentCommand } from "./commands/document.js";
 
+// --- Internal: run the server in-process ---
+// When the CLI is a compiled binary, `cfcf server start` re-spawns the same
+// binary with `CFCF_INTERNAL_SERVE=1` so a single artifact hosts both the
+// CLI and the server (item 5.3). We intercept here before commander parses.
+if (process.env.CFCF_INTERNAL_SERVE === "1") {
+  const { DEFAULT_PORT } = await import("@cfcf/core");
+  const { startServer } = await import("@cfcf/server/start.js");
+  const port = parseInt(process.env.CFCF_PORT || "", 10) || DEFAULT_PORT;
+  await startServer(port);
+  // The server keeps the event loop alive; do not fall through to CLI parsing.
+} else {
+  runCli();
+}
+
+function runCli(): void {
+
 const program = new Command();
 
 program
@@ -38,3 +54,4 @@ registerReviewCommand(program);
 registerDocumentCommand(program);
 
 program.parse();
+}

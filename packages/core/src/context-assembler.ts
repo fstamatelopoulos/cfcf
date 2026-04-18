@@ -6,12 +6,14 @@
  * and writes everything into the project repo as cfcf-docs/ + CLAUDE.md.
  */
 
-import { join, dirname } from "path";
-import { mkdir, writeFile, readFile, copyFile, access, readdir } from "fs/promises";
+import { join } from "path";
+import { mkdir, writeFile, readFile, readdir } from "fs/promises";
 import type { ProblemPack } from "./problem-pack.js";
 import type { ProjectConfig, DevSignals } from "./types.js";
+import { writeTemplate, writeTemplateIfMissing } from "./templates.js";
 
-const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
+// Templates are now resolved via `getTemplate()` from templates.ts (embedded
+// at build time with optional per-repo / per-user filesystem overrides).
 
 export interface IterationContext {
   /** Current iteration number */
@@ -69,13 +71,14 @@ export async function writeContextToRepo(
 
   // --- Template files (written on first iteration only, agent updates them) ---
 
-  await copyTemplateIfMissing(cfcfDocsDir, "process.md");
-  await copyTemplateIfMissing(cfcfDocsDir, "decision-log.md");
-  await copyTemplateIfMissing(cfcfDocsDir, "plan.md");
+  const tplOpts = { repoPath };
+  await writeTemplateIfMissing(cfcfDocsDir, "process.md", tplOpts);
+  await writeTemplateIfMissing(cfcfDocsDir, "decision-log.md", tplOpts);
+  await writeTemplateIfMissing(cfcfDocsDir, "plan.md", tplOpts);
 
   // Handoff and signal templates are always refreshed (agent fills them in each iteration)
-  await copyTemplate(cfcfDocsDir, "iteration-handoff.md");
-  await copyTemplate(cfcfDocsDir, "cfcf-iteration-signals.json");
+  await writeTemplate(cfcfDocsDir, "iteration-handoff.md", tplOpts);
+  await writeTemplate(cfcfDocsDir, "cfcf-iteration-signals.json", tplOpts);
 
   // --- Dynamic files (cfcf regenerates these each iteration) ---
 
@@ -292,20 +295,5 @@ export function generateIterationSummary(
   return lines.join("\n");
 }
 
-// --- Template helpers ---
-
-async function copyTemplate(destDir: string, filename: string): Promise<void> {
-  const src = join(TEMPLATES_DIR, filename);
-  const dest = join(destDir, filename);
-  await copyFile(src, dest);
-}
-
-async function copyTemplateIfMissing(destDir: string, filename: string): Promise<void> {
-  const dest = join(destDir, filename);
-  try {
-    await access(dest);
-    // File exists, don't overwrite
-  } catch {
-    await copyTemplate(destDir, filename);
-  }
-}
+// Template helpers now live in `./templates.ts` (getTemplate / writeTemplate /
+// writeTemplateIfMissing). Call those directly.

@@ -19,8 +19,8 @@
     "dev:web": "cd packages/web && bun run dev",
     "dev:cli": "bun run packages/cli/src/index.ts",
     "typecheck": "tsc --noEmit",
-    "build:web": "cd packages/web && bun run build",
-    "build": "bun build packages/cli/src/index.ts --compile --outfile cfcf-binary"
+    "build:web": "cd packages/web && bun run build && cd ../.. && bun run scripts/embed-web-dist.ts",
+    "build": "bun run build:web && bun build packages/cli/src/index.ts --compile --outfile cfcf-binary"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

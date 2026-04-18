@@ -6,9 +6,10 @@
  * User-invoked, advisory, repeatable.
  */
 
-import { join, dirname } from "path";
-import { readFile, writeFile, mkdir, copyFile, access } from "fs/promises";
+import { join } from "path";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import type { ProjectConfig, ArchitectSignals } from "./types.js";
+import { getTemplate, writeTemplate } from "./templates.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { registerProcess } from "./active-processes.js";
@@ -19,7 +20,8 @@ import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
 
-const TEMPLATES_DIR = join(dirname(new URL(import.meta.url).pathname), "templates");
+// Templates are resolved via the central templates module (embedded at build
+// time with per-repo / per-user filesystem overrides).
 
 // --- Review State ---
 
@@ -87,9 +89,7 @@ export async function writeArchitectInstructions(
   repoPath: string,
   project: ProjectConfig,
 ): Promise<void> {
-  const templatePath = join(TEMPLATES_DIR, "cfcf-architect-instructions.md");
-  let template = await readFile(templatePath, "utf-8");
-
+  let template = await getTemplate("cfcf-architect-instructions.md", { repoPath });
   template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
@@ -106,10 +106,11 @@ export async function writeArchitectInstructions(
  * Reset the architect signal file to the template.
  */
 export async function resetArchitectSignals(repoPath: string): Promise<void> {
-  const src = join(TEMPLATES_DIR, "cfcf-architect-signals.json");
-  const dest = join(repoPath, "cfcf-docs", "cfcf-architect-signals.json");
-  await mkdir(join(repoPath, "cfcf-docs"), { recursive: true });
-  await copyFile(src, dest);
+  await writeTemplate(
+    join(repoPath, "cfcf-docs"),
+    "cfcf-architect-signals.json",
+    { repoPath },
+  );
 }
 
 /**

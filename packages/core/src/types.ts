@@ -64,6 +64,12 @@ export interface CfcfGlobalConfig {
   permissionsAcknowledged: boolean;
   /** Notification configuration (optional; defaults applied if missing) */
   notifications?: NotificationConfig;
+  /**
+   * Default for new projects' `cleanupMergedBranches`. When true, merged
+   * iteration branches are deleted after a successful auto-merge. Default
+   * false (keep for audit). (item 5.2)
+   */
+  cleanupMergedBranches?: boolean;
 }
 
 // --- Notifications ---
@@ -122,6 +128,14 @@ export interface ProjectConfig {
   pauseEvery: number;
   onStalled: "continue" | "stop" | "alert";
   mergeStrategy: "auto" | "pr";
+  /**
+   * When true, delete the `cfcf/iteration-N` branch after a successful
+   * auto-merge to main. Default false: keeps branches so iteration diffs
+   * remain accessible via `git diff main..cfcf/iteration-N` even after
+   * merge. Enable this for long-running projects that would otherwise
+   * accumulate many merged branches. (item 5.2)
+   */
+  cleanupMergedBranches?: boolean;
   processTemplate: string;
   /** Monotonically increasing iteration counter for this project */
   currentIteration: number;

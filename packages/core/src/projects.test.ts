@@ -59,6 +59,15 @@ describe("projects", () => {
       expect(project.devAgent.adapter).toBe("codex");
       expect(project.maxIterations).toBe(5);
     });
+
+    it("defaults cleanupMergedBranches to false (item 5.2)", async () => {
+      const project = await createProject({
+        name: "cleanup-default",
+        repoPath: repoDir,
+      });
+      // Default: false -- we preserve merged iteration branches for audit.
+      expect(project.cleanupMergedBranches).toBe(false);
+    });
   });
 
   describe("getProject", () => {
