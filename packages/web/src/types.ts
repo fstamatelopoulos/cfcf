@@ -122,13 +122,7 @@ export interface ReviewState {
   logFileName?: string;
   sequence?: number;
   historyEventId?: string;
-  signals?: {
-    readiness: string;
-    gaps: string[];
-    suggestions: string[];
-    risks: string[];
-    recommended_approach?: string;
-  };
+  signals?: ArchitectSignals;
   error?: string;
 }
 
@@ -169,9 +163,19 @@ export interface BaseHistoryEvent {
   error?: string;
 }
 
+export interface ArchitectSignals {
+  readiness: "READY" | "NEEDS_REFINEMENT" | "BLOCKED";
+  gaps: string[];
+  suggestions: string[];
+  risks: string[];
+  recommended_approach?: string;
+}
+
 export interface ReviewHistoryEvent extends BaseHistoryEvent {
   type: "review";
   readiness?: string;
+  /** Full parsed architect signals (added in 0.4.0) */
+  signals?: ArchitectSignals;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {

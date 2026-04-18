@@ -9,6 +9,12 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added
+- **Architect review presentation in web UI (item 4.23):** the Status tab now renders the full parsed `ArchitectSignals` (readiness, gaps, suggestions, risks, recommended approach) in a new `ArchitectReview` component, with guidance text keyed to readiness (e.g. "Edit files under problem-pack/ and rerun Review" for `NEEDS_REFINEMENT`). The History tab turns the readiness cell into a clickable pill that expands an inline detail row with the same component in compact mode. Prior reviews remain viewable even after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
+
+### Changed
+- **`ReviewHistoryEvent` now persists full `signals` inline** (`packages/core/src/project-history.ts`). The repo file is a scratchpad overwritten every review, so inline persistence on the history event is what lets the UI surface prior reviews. Backward-compatible: pre-existing history entries without `signals` continue to render their readiness label as plain text.
+
 ## [0.4.0] -- 2026-04-17
 
 Iteration 4: Web GUI + operational robustness + notifications.

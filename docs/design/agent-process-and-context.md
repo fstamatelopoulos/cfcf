@@ -193,7 +193,7 @@ The user drives this process. It is iterative and optional:
 
 Readiness values: `READY` | `NEEDS_REFINEMENT` | `BLOCKED`
 
-The signal file is primarily useful for future web UI integration (showing readiness status in the dashboard). The user reads the Markdown review for actionable feedback.
+The signal file is rewritten from the template at the start of every review run, so it only reflects the most recent review. cfcf parses it after the architect exits and persists the full `ArchitectSignals` object inline on the corresponding `ReviewHistoryEvent` in `history.json` — that is what lets the web UI surface prior reviews (Status tab shows the latest; History tab expands each review row to display its gaps/suggestions/risks/approach and guidance for next steps).
 
 ### 4.0.4 Key Design Principles
 

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   HistoryEvent,
   IterationHistoryEvent,
@@ -5,6 +6,7 @@ import type {
   DocumentHistoryEvent,
 } from "../types";
 import type { LogTarget } from "./LogViewer";
+import { ArchitectReview } from "./ArchitectReview";
 
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
@@ -110,6 +112,30 @@ function HistoryRow({
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
 
+  const reviewEvent = event.type === "review" ? (event as ReviewHistoryEvent) : null;
+  const hasReviewDetail = !!reviewEvent?.signals;
+  const [expanded, setExpanded] = useState(false);
+
+  const readinessCell =
+    reviewEvent?.readiness && (
+      <span
+        style={{ color: readinessColor[reviewEvent.readiness] || "inherit" }}
+      >
+        {hasReviewDetail ? (
+          <button
+            type="button"
+            className="project-history__readiness-pill"
+            onClick={() => setExpanded((v) => !v)}
+            title="Click to view gaps, suggestions, and risks"
+          >
+            {reviewEvent.readiness} {expanded ? "▾" : "▸"}
+          </button>
+        ) : (
+          reviewEvent.readiness
+        )}
+      </span>
+    );
+
   return (
     <>
       <tr className="project-history__row">
@@ -120,11 +146,7 @@ function HistoryRow({
           <span style={{ color: statusColor }}>{event.status}</span>
         </td>
         <td>
-          {event.type === "review" && (event as ReviewHistoryEvent).readiness && (
-            <span style={{ color: readinessColor[(event as ReviewHistoryEvent).readiness!] || "inherit" }}>
-              {(event as ReviewHistoryEvent).readiness}
-            </span>
-          )}
+          {readinessCell}
           {event.type === "iteration" && (event as IterationHistoryEvent).judgeDetermination && (
             <span
               style={{
@@ -195,6 +217,13 @@ function HistoryRow({
         <tr className="project-history__error-row">
           <td colSpan={7} className="project-history__error">
             Error: {event.error}
+          </td>
+        </tr>
+      )}
+      {expanded && hasReviewDetail && reviewEvent?.signals && (
+        <tr className="project-history__detail-row">
+          <td colSpan={7}>
+            <ArchitectReview signals={reviewEvent.signals} compact />
           </td>
         </tr>
       )}

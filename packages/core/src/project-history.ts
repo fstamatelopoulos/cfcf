@@ -14,6 +14,7 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { getProjectDir } from "./projects.js";
+import type { ArchitectSignals } from "./types.js";
 
 const HISTORY_FILENAME = "history.json";
 
@@ -44,6 +45,12 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
   type: "review";
   /** Readiness assessment result */
   readiness?: string;
+  /**
+   * Full parsed architect signals (gaps, suggestions, risks, recommended approach).
+   * Persisted inline so prior reviews can be viewed from the History tab even
+   * after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
+   */
+  signals?: ArchitectSignals;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {
