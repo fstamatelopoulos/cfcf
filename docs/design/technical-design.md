@@ -68,9 +68,9 @@ The execution interface is designed so that swapping in a container backend does
 │                               │  Project | Iteration | Process   │  │
 │  ┌──────────┐    HTTP/SSE     │  Manager | Controller | Manager  │  │
 │  │  Web GUI │◄───────────────►│  ─────────────────────────────── │  │
-│  │  (React) │  (served via    │  Review   | Document  | Judge    │  │
-│  │  served  │   serveStatic   │  Runner   | Runner    | Runner   │  │
-│  │  by Hono)│   from Hono)    │  ─────────────────────────────── │  │
+│  │  (React) │  (embedded in   │  Review   | Document  | Judge    │  │
+│  │  served  │   binary; dev   │  Runner   | Runner    | Runner   │  │
+│  │  by Hono)│   fallback disk)│  ─────────────────────────────── │  │
 │  └──────────┘                 │  Context  | Active    | Notif.   │  │
 │                               │  Assembler| Processes | Dispatcher│  │
 │                               │  ─────────────────────────────── │  │

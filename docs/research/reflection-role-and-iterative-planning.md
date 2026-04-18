@@ -150,11 +150,99 @@ The `reflection-analysis.md` covers:
 | `plan.md` | Dev agent maintains it | Dev agent maintains *completed* items; Reflection agent rewrites *pending* items. Both follow a non-destructive discipline (see §6). |
 | `iteration-history.md` | Dev agent reads (cfcf regenerates) | Fixed: now sourced from `history.json` (iter-4) so it survives loop restarts. Still dev-read-only. |
 
-### 4.3 Files to deprecate
+### 4.3 `cfcf-docs/iteration-logs/` — repurposed
 
-| Path | Reason |
+The empty `iteration-logs/` directory (today created by context-assembler but never populated) is **repurposed** to hold per-iteration **agent-authored changelogs**, not raw agent output.
+
+| Raw logs | Iteration-log (this folder) |
 |---|---|
-| `cfcf-docs/iteration-logs/` | Empty directory created by context-assembler and never populated. Real logs live in `~/.cfcf/logs/`. Drop the mkdir. |
+| `~/.cfcf/logs/<project>/iteration-NNN-dev.log` | `<repo>/cfcf-docs/iteration-logs/iteration-NNN.md` |
+| Full stdout/stderr of the agent process, potentially megabytes | 1-page changelog-style summary written by the dev agent at end of iteration |
+| Not in the repo (size, PII risk) | In the repo (small, human-curated, safe) |
+| Consumed by humans during debugging | Consumed by judge / reflection / dev-of-next-iteration as context |
+
+**File format — `iteration-NNN.md`:**
+
+```markdown
+# Iteration N — <short title>
+
+**Branch:** cfcf/iteration-N
+**Started:** 2026-04-18T12:00:00Z
+**Finished:** 2026-04-18T12:34:56Z
+**Agent:** codex:gpt-5
+
+## Summary
+One or two sentences describing what this iteration accomplished.
+This is the line that gets prepended to iteration-history.md.
+
+## Changes
+
+### Added
+- `src/auth/tokenRefresh.ts` — new async token refresh module with exponential backoff
+- Test scenarios for token refresh edge cases (empty queue, concurrent requests)
+
+### Modified
+- `src/api/client.ts` — switched from inline token handling to the new refresh module
+- `tests/auth.test.ts` — replaced fake-timers setup with real-time yield
+
+### Removed
+- `src/auth/legacy.ts` — superseded by the new module
+
+## Tests
+- Ran: `bun test packages/core`
+- Passed: 178 / 180
+- Failed: 2 (test_session_expiry, test_concurrent_refresh) — see handoff for next steps
+
+## Commits
+- a1b2c3d — feat(auth): add tokenRefresh module
+- e4f5g6h — refactor(api): delegate token handling to refresh module
+- 7i8j9k0 — test(auth): real-time yields for race-prone tests
+
+## Plan items closed
+- [x] Iteration 3, item 1: "Implement token refresh"
+- [x] Iteration 3, item 2: "Replace fake timers with real-time yields in auth tests"
+```
+
+**Why introduce this artifact:**
+
+1. **Context density.** Raw logs are high-volume, low-signal. A 1-page curated changelog is exactly the context the judge, reflection agent, and next-iteration dev agent need.
+2. **Audit trail that survives loop restarts.** Because this file lives in the repo (and is committed with the iteration's changes), it is preserved across `cfcf stop` / restart cycles — unlike `loop-state.json`.
+3. **Fixes the `iteration-history.md` bug.** `iteration-history.md` can be deterministically rebuilt each iteration by reading the `iteration-N.md` files in the repo and concatenating their `## Summary` sections newest-first. No more dependence on `state.iterations` memory being intact.
+4. **Clean inputs to reflection.** The reflection agent can read all `iteration-logs/iteration-*.md` files to get a curated, agent-written history of the whole project — much better than raw terminal output.
+
+**Who writes it:**
+
+The **dev agent** writes `iteration-logs/iteration-N.md` at the end of its iteration, as one of its required output artifacts (alongside `iteration-handoff.md` and the iteration signals file). The dev-agent instruction template is extended to include this.
+
+**Relationship to `iteration-handoff.md`:**
+
+| `iteration-handoff.md` | `iteration-logs/iteration-N.md` |
+|---|---|
+| Forward-looking: "next iteration should …" | Backward-looking: "this iteration did …" |
+| Open questions, blockers, user-input needs | Changes, tests, commits |
+| Consumed primarily by judge + user | Consumed primarily by reflection + future-iteration dev |
+| Reset each iteration (single file) | Accumulates per iteration (file-per-iteration) |
+
+Both are produced by the dev agent; neither replaces the other.
+
+**`iteration-history.md` rebuild algorithm:**
+
+At the start of each iteration, the context-assembler regenerates `iteration-history.md` from the repo:
+
+```
+iteration-history.md contents :=
+  "# Iteration History"
+  +
+  for i = N-1 down to 1:
+    if cfcf-docs/iteration-logs/iteration-i.md exists:
+      extract the "## Summary" body
+      prepend as:
+        "## Iteration i — <title>
+         <summary>
+         [full log: cfcf-docs/iteration-logs/iteration-i.md]"
+```
+
+So the history is always current, always ordered newest-first, and always readable without dependence on `loop-state.json`.
 
 ### 4.4 Signal file schema changes
 
@@ -382,17 +470,18 @@ A future `cfcf reflect --project <name>` CLI that runs reflection ad-hoc against
 
 Three PRs, ordered by dependency. Each is self-contained and mergeable.
 
-### PR 1 — decision-log.md expanded charter + metadata format + bug fixes
+### PR 1 — iteration-log artifacts + decision-log expanded charter + metadata format
 
-- Rewrite `packages/core/src/templates/decision-log.md` with the new charter + entry format guidance.
+- **New artifact: `cfcf-docs/iteration-logs/iteration-N.md`.** Dev agent writes this at end of iteration (changelog-style, see §4.3). Extend the dev agent's instruction template (`CLAUDE.md` / `AGENTS.md` generator in `context-assembler.generateInstructionContent`) and `process.md` with the required file + format.
+- **Rebuild `iteration-history.md` from iteration-logs.** Context-assembler now reads `cfcf-docs/iteration-logs/iteration-*.md` (newest-first) and concatenates their `## Summary` sections. Fixes the loop-restart bug.
+- **Repurpose the existing `iteration-logs/` mkdir** (currently empty) — it now serves the iteration-log artifact, not raw logs.
+- **decision-log.md expanded charter.** Rewrite `packages/core/src/templates/decision-log.md` with the new charter + entry format guidance (timestamp + `[role: X]` + `[iter: N]` + `[category: Y]` tags).
 - Update all four runner instruction templates to tell their agent:
-  - How to format entries (timestamp + role tag + iter tag + category tag).
+  - How to format decision-log entries.
   - Which categories they own.
-  - What NOT to put here.
-- Context-assembler change: read `history.json` and feed the compressed per-iteration summary into `iteration-history.md` on every iteration — fixes the bug where `iteration-history.md` shows "No previous iterations" after a loop restart.
-- Drop the empty `iteration-logs/` directory creation.
-- Tests: updated template tests, new context-assembler test for history-from-history.json.
-- Backward compatible: existing `decision-log.md` files with un-tagged entries still work. New entries follow the new format.
+  - What NOT to put here (changelog → iteration-N.md; progress → plan.md).
+- Tests: updated context-assembler tests for iteration-history rebuild + new iteration-log artifact, updated template tests.
+- Backward compatible: existing `decision-log.md` files with un-tagged entries still work. New entries follow the new format. Pre-existing projects without `iteration-logs/*.md` files fall back to showing "No previous iterations" in `iteration-history.md` — same as today.
 
 ### PR 2 — Reflection role (agent + runner + signal + templates + config)
 
