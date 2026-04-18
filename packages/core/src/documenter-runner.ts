@@ -13,6 +13,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { registerProcess } from "./active-processes.js";
 
 /**
  * Count markdown files in the project's docs/ directory.
@@ -149,16 +150,22 @@ export async function startDocument(
 
   documentStore.set(project.id, state);
 
-  // Run in background
+  // Run in background. Error handler is itself wrapped in try/catch so that
+  // a failure to record the error (disk write, etc.) doesn't silently swallow it.
   runDocument(project, state).catch(async (err) => {
-    state.status = "failed";
-    state.error = err instanceof Error ? err.message : String(err);
-    state.completedAt = new Date().toISOString();
-    await updateHistoryEvent(project.id, historyEventId, {
-      status: "failed",
-      error: state.error,
-      completedAt: state.completedAt,
-    });
+    try {
+      state.status = "failed";
+      state.error = err instanceof Error ? err.message : String(err);
+      state.completedAt = new Date().toISOString();
+      await updateHistoryEvent(project.id, historyEventId, {
+        status: "failed",
+        error: state.error,
+        completedAt: state.completedAt,
+      });
+    } catch (handlerErr) {
+      console.error(`[documenter-runner] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`  Original error:`, err);
+    }
   });
 
   return state;
@@ -206,20 +213,32 @@ export async function runDocumentSync(
     cwd: project.repoPath,
     logFile,
   });
+  const unregister = registerProcess({
+    projectId: project.id,
+    role: "documenter",
+    process: managed,
+    startedAt,
+    historyEventId,
+    logFileName,
+  });
 
-  const result = await managed.result;
-  const docsFileCount = await countDocsFiles(project.repoPath);
+  try {
+    const result = await managed.result;
+    const docsFileCount = await countDocsFiles(project.repoPath);
 
-  // Finalize history event. `committed` is updated separately by iteration-loop
-  // after it commits (if there were changes).
-  await updateHistoryEvent(project.id, historyEventId, {
-    status: result.exitCode === 0 ? "completed" : "failed",
-    completedAt: new Date().toISOString(),
-    exitCode: result.exitCode,
-    docsFileCount,
-  } as Partial<import("./project-history.js").DocumentHistoryEvent>);
+    // Finalize history event. `committed` is updated separately by iteration-loop
+    // after it commits (if there were changes).
+    await updateHistoryEvent(project.id, historyEventId, {
+      status: result.exitCode === 0 ? "completed" : "failed",
+      completedAt: new Date().toISOString(),
+      exitCode: result.exitCode,
+      docsFileCount,
+    } as Partial<import("./project-history.js").DocumentHistoryEvent>);
 
-  return { exitCode: result.exitCode, logFile, logFileName, sequence, historyEventId };
+    return { exitCode: result.exitCode, logFile, logFileName, sequence, historyEventId };
+  } finally {
+    unregister();
+  }
 }
 
 /**
@@ -248,6 +267,14 @@ async function runDocument(
     logFile: state.logFile,
   });
   documentProcessStore.set(project.id, managed);
+  const unregister = registerProcess({
+    projectId: project.id,
+    role: "documenter",
+    process: managed,
+    startedAt: state.startedAt,
+    historyEventId: state.historyEventId,
+    logFileName: state.logFileName,
+  });
 
   try {
     const result = await managed.result;
@@ -269,5 +296,6 @@ async function runDocument(
     } as Partial<import("./project-history.js").DocumentHistoryEvent>);
   } finally {
     documentProcessStore.delete(project.id);
+    unregister();
   }
 }

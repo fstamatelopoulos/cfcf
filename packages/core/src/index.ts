@@ -18,3 +18,4 @@ export * from "./iteration-loop.js";
 export * from "./architect-runner.js";
 export * from "./documenter-runner.js";
 export * from "./project-history.js";
+export * from "./active-processes.js";
