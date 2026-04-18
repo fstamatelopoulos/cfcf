@@ -14,6 +14,7 @@ import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
+import { dispatchForProject, makeEvent } from "./notifications/index.js";
 
 /**
  * Count markdown files in the project's docs/ directory.
@@ -162,6 +163,17 @@ export async function startDocument(
         error: state.error,
         completedAt: state.completedAt,
       });
+      dispatchForProject(
+        makeEvent({
+          type: "agent.failed",
+          title: "Documenter failed",
+          message: `${project.name}: ${state.error}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { role: "documenter", error: state.error },
+        }),
+        project.notifications,
+      );
     } catch (handlerErr) {
       console.error(`[documenter-runner] Failed to record error for ${project.id}:`, handlerErr);
       console.error(`  Original error:`, err);

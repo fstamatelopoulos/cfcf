@@ -95,6 +95,17 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
       ? "claude-code"
       : devAdapter;
 
+  // Default notifications: pick the OS channel for the current platform
+  const osChannel = process.platform === "darwin" ? "macos" : process.platform === "linux" ? "linux" : "terminal-bell";
+  const defaultNotifications: import("./types.js").NotificationConfig = {
+    enabled: true,
+    events: {
+      "loop.paused": ["terminal-bell", osChannel as import("./types.js").NotificationChannelName, "log"],
+      "loop.completed": ["terminal-bell", osChannel as import("./types.js").NotificationChannelName, "log"],
+      "agent.failed": ["terminal-bell", osChannel as import("./types.js").NotificationChannelName, "log"],
+    },
+  };
+
   return {
     version: CONFIG_VERSION,
     devAgent: { adapter: devAdapter },
@@ -105,6 +116,7 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
     permissionsAcknowledged: false,
+    notifications: defaultNotifications,
   };
 }
 

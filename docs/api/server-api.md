@@ -73,18 +73,28 @@ Returns the current global configuration.
 ```json
 {
   "version": 1,
-  "devAgent": {
-    "adapter": "claude-code"
-  },
-  "judgeAgent": {
-    "adapter": "codex"
-  },
+  "devAgent": { "adapter": "claude-code" },
+  "judgeAgent": { "adapter": "codex" },
+  "architectAgent": { "adapter": "claude-code" },
+  "documenterAgent": { "adapter": "claude-code" },
   "maxIterations": 10,
   "pauseEvery": 0,
   "availableAgents": ["claude-code", "codex"],
-  "permissionsAcknowledged": true
+  "permissionsAcknowledged": true,
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "loop.paused": ["terminal-bell", "macos", "log"],
+      "loop.completed": ["terminal-bell", "macos", "log"],
+      "agent.failed": ["terminal-bell", "macos", "log"]
+    }
+  }
 }
 ```
+
+The `notifications` field controls how cfcf notifies the user when
+long-running loops need attention. See `docs/guides/cli-usage.md` for
+details on channels and events.
 
 **Response:** `404 Not Found` (when not configured)
 
