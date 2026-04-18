@@ -60,6 +60,22 @@ export function ConfigDisplay({ project }: { project: ProjectConfig }) {
             <th>Iterations Completed</th>
             <td>{project.currentIteration || 0}</td>
           </tr>
+          {project.notifications && (
+            <tr>
+              <th>Notifications</th>
+              <td>
+                {project.notifications.enabled ? "enabled (project override)" : "disabled (project override)"}
+              </td>
+            </tr>
+          )}
+          {!project.notifications && (
+            <tr>
+              <th>Notifications</th>
+              <td style={{ color: "var(--color-text-muted)", fontStyle: "italic" }}>
+                inheriting from global config
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

@@ -290,6 +290,12 @@ cat cfcf-docs/judge-assessment.md
 cat cfcf-docs/iteration-history.md
 ```
 
+### Notifications
+
+When running unattended, cf² can notify you via terminal bell + native macOS/Linux
+notifications when a loop pauses, completes, or an agent fails. Configured during
+`cfcf init`. See `docs/guides/cli-usage.md` under "Notifications" for details.
+
 ### When cf² involves the user:
 
 | Situation | What happens |

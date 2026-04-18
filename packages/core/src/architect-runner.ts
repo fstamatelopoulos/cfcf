@@ -12,6 +12,7 @@ import type { ProjectConfig, ArchitectSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { registerProcess } from "./active-processes.js";
+import { dispatchForProject, makeEvent } from "./notifications/index.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { randomBytes } from "crypto";
@@ -188,6 +189,17 @@ export async function startReview(
         error: state.error,
         completedAt: state.completedAt,
       });
+      dispatchForProject(
+        makeEvent({
+          type: "agent.failed",
+          title: "Architect review failed",
+          message: `${project.name}: ${state.error}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { role: "architect", error: state.error },
+        }),
+        project.notifications,
+      );
     } catch (handlerErr) {
       console.error(`[architect-runner] Failed to record error for ${project.id}:`, handlerErr);
       console.error(`  Original error:`, err);

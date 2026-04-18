@@ -62,6 +62,49 @@ export interface CfcfGlobalConfig {
   availableAgents: string[];
   /** Whether the user acknowledged the permission flags */
   permissionsAcknowledged: boolean;
+  /** Notification configuration (optional; defaults applied if missing) */
+  notifications?: NotificationConfig;
+}
+
+// --- Notifications ---
+
+/** The kinds of events cfcf can emit */
+export type NotificationEventType =
+  | "loop.paused"
+  | "loop.completed"
+  | "agent.failed";
+
+/** The channels available for notification delivery */
+export type NotificationChannelName =
+  | "terminal-bell"
+  | "macos"
+  | "linux"
+  | "log";
+
+export interface NotificationConfig {
+  /** Master switch. When false, all notifications are suppressed */
+  enabled: boolean;
+  /** Per-event channel mappings. Key = event type, value = list of channels to fire */
+  events: Partial<Record<NotificationEventType, NotificationChannelName[]>>;
+}
+
+/** Payload passed to channel dispatchers */
+export interface NotificationEvent {
+  /** Event kind */
+  type: NotificationEventType;
+  /** Short title (used in OS notification heading) */
+  title: string;
+  /** Longer body (used in OS notification body / log entry) */
+  message: string;
+  /** Project context */
+  project: {
+    id: string;
+    name: string;
+  };
+  /** ISO timestamp when the event fired */
+  timestamp: string;
+  /** Event-specific details (e.g., iteration number, reason, determination) */
+  details?: Record<string, unknown>;
 }
 
 export type ProjectStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
@@ -84,6 +127,8 @@ export interface ProjectConfig {
   currentIteration: number;
   /** Current project status in the iteration loop */
   status?: ProjectStatus;
+  /** Per-project notification override (defaults to global config) */
+  notifications?: NotificationConfig;
 }
 
 // --- Server Communication ---

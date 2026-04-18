@@ -38,6 +38,7 @@ import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
+import { dispatchForProject, makeEvent } from "./notifications/index.js";
 import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
@@ -357,6 +358,17 @@ export async function startLoop(
       state.completedAt = new Date().toISOString();
       await saveLoopState(state);
       updateProject(project.id, { status: "failed" }).catch(() => {});
+      dispatchForProject(
+        makeEvent({
+          type: "loop.completed",
+          title: "Loop failed",
+          message: `${project.name}: ${state.error}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { outcome: "failure", error: state.error },
+        }),
+        project.notifications,
+      );
     } catch (handlerErr) {
       console.error(`[iteration-loop] Failed to record error for ${project.id}:`, handlerErr);
       console.error(`  Original error:`, err);
@@ -440,6 +452,22 @@ export async function stopLoop(projectId: string): Promise<LoopState> {
  */
 function isStopped(state: LoopState): boolean {
   return state.phase === "stopped";
+}
+
+/** Map a pause reason to a human-readable title for notifications */
+function pauseReasonTitle(reason?: LoopState["pauseReason"]): string {
+  switch (reason) {
+    case "cadence":
+      return "Loop paused for review";
+    case "anomaly":
+      return "Loop paused: anomaly detected";
+    case "user_input_needed":
+      return "Loop needs your input";
+    case "max_iterations":
+      return "Loop reached max iterations";
+    default:
+      return "Loop paused";
+  }
 }
 
 /**
@@ -851,6 +879,21 @@ async function runJudgeAndDecide(
       await saveLoopState(state);
       await updateProject(project.id, { status: "completed" });
 
+      // Notify on loop completion
+      dispatchForProject(
+        makeEvent({
+          type: "loop.completed",
+          title: `Loop ${outcome === "success" ? "completed successfully" : "ended"}`,
+          message: outcome === "success"
+            ? `${project.name}: all success criteria met (${iterationNum} iteration${iterationNum === 1 ? "" : "s"})`
+            : `${project.name}: loop ended with outcome "${outcome}" after ${iterationNum} iteration${iterationNum === 1 ? "" : "s"}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: { outcome, iterations: iterationNum },
+        }),
+        project.notifications,
+      );
+
       // Push to remote on success
       if (outcome === "success") {
         await gitManager.push(project.repoPath).catch(() => {
@@ -871,6 +914,43 @@ async function runJudgeAndDecide(
       }
       await saveLoopState(state);
       await updateProject(project.id, { status: "paused" });
+
+      // Notify on pause (cadence, anomaly, user input needed)
+      dispatchForProject(
+        makeEvent({
+          type: "loop.paused",
+          title: pauseReasonTitle(decision.pauseReason),
+          message: `${project.name}: ${decision.reason}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: {
+            iteration: iterationNum,
+            pauseReason: decision.pauseReason,
+            questions: decision.questions,
+          },
+        }),
+        project.notifications,
+      );
+
+      // For judge failure (null signals + non-zero exit), also fire agent.failed
+      if (!judgeSignals && iterRecord.judgeExitCode !== undefined && iterRecord.judgeExitCode !== 0) {
+        dispatchForProject(
+          makeEvent({
+            type: "agent.failed",
+            title: "Judge agent failed",
+            message: `${project.name}: judge exited with code ${iterRecord.judgeExitCode} and produced no signals. Check log.`,
+            projectId: project.id,
+            projectName: project.name,
+            details: {
+              iteration: iterationNum,
+              role: "judge",
+              exitCode: iterRecord.judgeExitCode,
+            },
+          }),
+          project.notifications,
+        );
+      }
+
       return; // Loop exits -- will be restarted by resumeLoop()
 
     case "continue":

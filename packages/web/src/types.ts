@@ -10,6 +10,14 @@ export interface AgentConfig {
 
 export type ProjectStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
 
+export type NotificationEventType = "loop.paused" | "loop.completed" | "agent.failed";
+export type NotificationChannelName = "terminal-bell" | "macos" | "linux" | "log";
+
+export interface NotificationConfig {
+  enabled: boolean;
+  events: Partial<Record<NotificationEventType, NotificationChannelName[]>>;
+}
+
 export interface ProjectConfig {
   id: string;
   name: string;
@@ -26,6 +34,7 @@ export interface ProjectConfig {
   processTemplate: string;
   currentIteration: number;
   status?: ProjectStatus;
+  notifications?: NotificationConfig;
 }
 
 export type LoopPhase =

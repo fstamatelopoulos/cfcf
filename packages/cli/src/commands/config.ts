@@ -36,6 +36,16 @@ export function registerConfigCommands(program: Command): void {
       console.log(`Pause every:     ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
       console.log(`Permissions:     ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);
       console.log(`Available agents: ${cfg.availableAgents.join(", ") || "none detected"}`);
+      if (cfg.notifications) {
+        console.log(`Notifications:    ${cfg.notifications.enabled ? "enabled" : "disabled"}`);
+        if (cfg.notifications.enabled) {
+          for (const [eventType, channels] of Object.entries(cfg.notifications.events)) {
+            if (channels && channels.length > 0) {
+              console.log(`  ${eventType}: ${channels.join(", ")}`);
+            }
+          }
+        }
+      }
     });
 
   config
