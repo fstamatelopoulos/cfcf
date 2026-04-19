@@ -66,6 +66,8 @@ export async function createProject(opts: {
     judgeAgent: opts.judgeAgent ?? globalConfig?.judgeAgent ?? { adapter: "codex" },
     architectAgent: opts.architectAgent ?? globalConfig?.architectAgent ?? { adapter: "claude-code" },
     documenterAgent: opts.documenterAgent ?? globalConfig?.documenterAgent ?? { adapter: "claude-code" },
+    reflectionAgent: globalConfig?.reflectionAgent ?? globalConfig?.architectAgent ?? { adapter: "claude-code" },
+    reflectSafeguardAfter: globalConfig?.reflectSafeguardAfter ?? 3,
     maxIterations: opts.maxIterations ?? globalConfig?.maxIterations ?? DEFAULT_MAX_ITERATIONS,
     pauseEvery: opts.pauseEvery ?? globalConfig?.pauseEvery ?? DEFAULT_PAUSE_EVERY,
     onStalled: "alert",
@@ -89,7 +91,22 @@ export async function createProject(opts: {
 export async function getProject(projectId: string): Promise<ProjectConfig | null> {
   try {
     const raw = await readFile(join(getProjectDir(projectId), "config.json"), "utf-8");
-    return JSON.parse(raw) as ProjectConfig;
+    const parsed = JSON.parse(raw) as ProjectConfig;
+    // Backfill fields introduced after the project was created. (item 5.6
+    // adds reflectionAgent / reflectSafeguardAfter; older project configs
+    // don't have them.) Kept in-memory only -- do not rewrite the file here.
+    if (!parsed.reflectionAgent?.adapter) {
+      parsed.reflectionAgent = {
+        adapter:
+          parsed.architectAgent?.adapter ??
+          parsed.devAgent?.adapter ??
+          "claude-code",
+      };
+    }
+    if (typeof parsed.reflectSafeguardAfter !== "number" || parsed.reflectSafeguardAfter < 1) {
+      parsed.reflectSafeguardAfter = 3;
+    }
+    return parsed;
   } catch {
     return null;
   }

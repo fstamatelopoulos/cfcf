@@ -76,9 +76,39 @@ Write a JSON file with this exact structure:
   "tests_total": 0,
   "should_continue": true,
   "user_input_needed": false,
-  "key_concern": "Brief description of main concern or null"
+  "key_concern": "Brief description of main concern or null",
+  "reflection_needed": null,
+  "reflection_reason": null
 }
 ```
+
+## Reflection-trigger signals (`reflection_needed`, `reflection_reason`)
+
+cfcf has a Tier 3 **reflection** role that runs AFTER you and reviews the
+full cross-iteration history. By default, reflection runs every iteration.
+You may opt the next iteration OUT of reflection by setting
+`reflection_needed: false`.
+
+**Set `reflection_needed: false` ONLY when all three hold:**
+
+1. This iteration made **clean, on-plan progress** that matches the
+   current `plan.md` item(s). No scope drift.
+2. **No new risks, concerns, or surprising behaviors** emerged that
+   warrant strategic review.
+3. **Prior iterations have not shown a drift pattern** that this
+   iteration continued (same module churning, same test flapping,
+   same concern recurring).
+
+**Set `reflection_needed: true`** and populate `reflection_reason` with a
+short focus hint (e.g. `"token refresh approach has failed three ways;
+consider whether the whole auth layer decomposition is wrong"`) whenever
+you would benefit from a cross-iteration sanity check.
+
+**Omit the field (null) or set `true`** when in doubt. The cost of an
+unnecessary reflection pass is low; the cost of strategic drift going
+unchecked for many iterations is high. cfcf also enforces a safeguard:
+after several consecutive opt-outs it forces reflection regardless, so
+over-aggressive opting out is caught automatically.
 
 **Determination values:**
 - `SUCCESS`: All success criteria are met. The project is done.
@@ -92,6 +122,26 @@ Write a JSON file with this exact structure:
 - `circling`: Agent is repeating the same approach without progress
 - `no_changes`: Agent made no meaningful code changes
 - `regression`: Agent broke previously working functionality
+
+## Appending to decision-log.md
+
+You MAY append entries to `cfcf-docs/decision-log.md` when you notice a
+tactical pattern the project benefits from remembering. Use the tagged
+format (details in the header of that file):
+
+```markdown
+## <ISO 8601 UTC>  [role: judge]  [iter: {{ITERATION}}]  [category: observation]
+
+<one paragraph: what you noticed and why it matters for future iterations>
+```
+
+Typical judge categories: `observation` (a pattern in this iteration) or
+`risk` (a concern not covered by tests). Do NOT write `strategy` entries
+here -- cross-iteration strategy shifts are the reflection role's job. Do
+NOT write `decision` entries -- you do not make implementation choices.
+
+Appending is optional: skip it unless there's something concrete worth
+recording.
 
 ## Guidelines
 

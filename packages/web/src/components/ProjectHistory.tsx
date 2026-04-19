@@ -4,9 +4,13 @@ import type {
   IterationHistoryEvent,
   ReviewHistoryEvent,
   DocumentHistoryEvent,
+  ReflectionHistoryEvent,
+  IterationHealth,
 } from "../types";
 import type { LogTarget } from "./LogViewer";
 import { ArchitectReview } from "./ArchitectReview";
+import { JudgeDetail } from "./JudgeDetail";
+import { ReflectionDetail } from "./ReflectionDetail";
 import { formatDurationOrRunning } from "../utils/time";
 
 const determinationColor: Record<string, string> = {
@@ -20,6 +24,14 @@ const readinessColor: Record<string, string> = {
   READY: "var(--color-success)",
   NEEDS_REFINEMENT: "var(--color-warning)",
   BLOCKED: "var(--color-error)",
+};
+
+const healthColor: Record<IterationHealth, string> = {
+  converging: "var(--color-success)",
+  stable: "var(--color-info)",
+  stalled: "var(--color-warning)",
+  diverging: "var(--color-error)",
+  inconclusive: "var(--color-subtle, #888)",
 };
 
 function formatTime(iso: string): string {
@@ -103,13 +115,23 @@ function HistoryRow({
       ? `Iteration ${(event as IterationHistoryEvent).iteration}`
       : event.type === "review"
       ? "Review"
+      : event.type === "reflection"
+      ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
       : "Document";
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
 
   const reviewEvent = event.type === "review" ? (event as ReviewHistoryEvent) : null;
+  const iterationEvent = event.type === "iteration" ? (event as IterationHistoryEvent) : null;
+  const reflectionEvent = event.type === "reflection" ? (event as ReflectionHistoryEvent) : null;
+
   const hasReviewDetail = !!reviewEvent?.signals;
+  const hasIterationDetail = !!(iterationEvent?.judgeSignals || iterationEvent?.devSignals);
+  const hasReflectionDetail = !!reflectionEvent; // always expandable once it exists
+  const canExpand = hasReviewDetail || hasIterationDetail || hasReflectionDetail;
+
   const [expanded, setExpanded] = useState(false);
+  const toggle = () => setExpanded((v) => !v);
 
   const readinessCell =
     reviewEvent?.readiness && (
@@ -120,7 +142,7 @@ function HistoryRow({
           <button
             type="button"
             className="project-history__readiness-pill"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={toggle}
             title="Click to view gaps, suggestions, and risks"
           >
             {reviewEvent.readiness} {expanded ? "▾" : "▸"}
@@ -142,25 +164,53 @@ function HistoryRow({
         </td>
         <td>
           {readinessCell}
-          {event.type === "iteration" && (event as IterationHistoryEvent).judgeDetermination && (
-            <span
-              style={{
-                color:
-                  determinationColor[(event as IterationHistoryEvent).judgeDetermination!] ||
-                  "inherit",
-              }}
-            >
-              {(event as IterationHistoryEvent).judgeDetermination}
-              {(event as IterationHistoryEvent).judgeQuality !== undefined && (
-                <> ({(event as IterationHistoryEvent).judgeQuality}/10)</>
-              )}
-            </span>
+          {iterationEvent?.judgeDetermination && (
+            hasIterationDetail ? (
+              <button
+                type="button"
+                className="project-history__readiness-pill"
+                onClick={toggle}
+                title="Click to view judge + dev signals"
+                style={{
+                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
+                }}
+              >
+                {iterationEvent.judgeDetermination}
+                {iterationEvent.judgeQuality !== undefined && (
+                  <> ({iterationEvent.judgeQuality}/10)</>
+                )}
+                {" "}{expanded ? "▾" : "▸"}
+              </button>
+            ) : (
+              <span
+                style={{
+                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
+                }}
+              >
+                {iterationEvent.judgeDetermination}
+                {iterationEvent.judgeQuality !== undefined && (
+                  <> ({iterationEvent.judgeQuality}/10)</>
+                )}
+              </span>
+            )
           )}
-          {event.type === "iteration" && (event as IterationHistoryEvent).merged && (
+          {iterationEvent?.merged && (
             <span className="project-history__merged"> ✓ merged</span>
           )}
           {event.type === "document" && event.status === "completed" && (
             <DocumentResult event={event as DocumentHistoryEvent} />
+          )}
+          {reflectionEvent && (
+            <button
+              type="button"
+              className="project-history__readiness-pill"
+              onClick={toggle}
+              title="Click to view reflection details"
+              style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+            >
+              <ReflectionResult event={reflectionEvent} />
+              <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
+            </button>
           )}
         </td>
         <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
@@ -215,10 +265,21 @@ function HistoryRow({
           </td>
         </tr>
       )}
-      {expanded && hasReviewDetail && reviewEvent?.signals && (
+      {expanded && canExpand && (
         <tr className="project-history__detail-row">
           <td colSpan={7}>
-            <ArchitectReview signals={reviewEvent.signals} compact />
+            {hasReviewDetail && reviewEvent?.signals && (
+              <ArchitectReview signals={reviewEvent.signals} compact />
+            )}
+            {hasIterationDetail && iterationEvent && (
+              <JudgeDetail
+                judge={iterationEvent.judgeSignals}
+                dev={iterationEvent.devSignals}
+              />
+            )}
+            {hasReflectionDetail && reflectionEvent && (
+              <ReflectionDetail event={reflectionEvent} />
+            )}
           </td>
         </tr>
       )}
@@ -263,4 +324,40 @@ function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
   }
 
   return <>{parts}</>;
+}
+
+function ReflectionResult({ event }: { event: ReflectionHistoryEvent }) {
+  const health = event.iterationHealth ?? event.signals?.iteration_health;
+  if (!health && !event.signals) {
+    return (
+      <span style={{ color: "var(--color-text-muted)" }}>
+        {event.exitCode === 0 ? "✓" : "—"}
+      </span>
+    );
+  }
+  return (
+    <>
+      {health && (
+        <span style={{ color: healthColor[health] || "inherit" }}>{health}</span>
+      )}
+      {event.planModified || event.signals?.plan_modified ? (
+        <span className="project-history__merged"> ✎ plan edited</span>
+      ) : null}
+      {event.signals?.recommend_stop && (
+        <span
+          style={{ color: "var(--color-error)", marginLeft: "0.5rem" }}
+          title="Reflection recommends stopping the loop"
+        >
+          ! stop
+        </span>
+      )}
+      {event.signals?.key_observation && (
+        <div
+          style={{ color: "var(--color-text-muted)", fontSize: "0.75rem", marginTop: "0.25rem" }}
+        >
+          {event.signals.key_observation}
+        </div>
+      )}
+    </>
+  );
 }

@@ -188,6 +188,21 @@ Write a JSON file with this exact structure:
 - `NEEDS_REFINEMENT`: There are gaps or ambiguities that should be addressed. Development can proceed but may hit blockers.
 - `BLOCKED`: Critical information is missing. Development should not proceed until resolved.
 
+### 5. Seed entries in `cfcf-docs/decision-log.md` (optional but encouraged)
+
+When you identify a risk or record a question the user resolved, append a
+tagged entry to `cfcf-docs/decision-log.md`. Use the format:
+
+```markdown
+## <ISO 8601 UTC>  [role: architect]  [iter: 0]  [category: risk]
+
+<one paragraph or bullet list>
+```
+
+Typical architect categories: `risk` (a concern worth tracking through
+development) or `resolved-question` (an ambiguity the user clarified).
+Iteration is `0` because the architect runs before the loop starts.
+
 ## Guidelines
 
 - Be thorough but practical. The goal is to catch issues that would waste iteration cycles.

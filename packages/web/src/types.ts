@@ -37,11 +37,13 @@ export interface ProjectConfig {
   notifications?: NotificationConfig;
 }
 
+// Keep in sync with packages/core/src/iteration-loop.ts
 export type LoopPhase =
   | "idle"
   | "preparing"
   | "dev_executing"
   | "judging"
+  | "reflecting"
   | "deciding"
   | "documenting"
   | "paused"
@@ -148,7 +150,57 @@ export interface HealthResponse {
 
 // --- Project history ---
 
-export type HistoryEventType = "review" | "iteration" | "document";
+export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
+
+export type IterationHealth =
+  | "converging"
+  | "stable"
+  | "stalled"
+  | "diverging"
+  | "inconclusive";
+
+export interface ReflectionSignals {
+  iteration: number;
+  plan_modified: boolean;
+  iteration_health: IterationHealth;
+  key_observation: string;
+  recommend_stop?: boolean;
+}
+
+export interface DevSignalsWeb {
+  iteration: number;
+  agent: string;
+  status: "completed" | "partial" | "blocked";
+  user_input_needed: boolean;
+  questions?: string[];
+  tests_run: boolean;
+  tests_passed?: number;
+  tests_failed?: number;
+  tests_total?: number;
+  self_assessment: "high" | "medium" | "low";
+  blockers?: string[];
+}
+
+export interface JudgeSignalsWeb {
+  iteration: number;
+  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY";
+  anomaly_type?:
+    | "token_exhaustion"
+    | "user_input_needed"
+    | "circling"
+    | "no_changes"
+    | "regression";
+  quality_score: number;
+  tests_verified: boolean;
+  tests_passed?: number;
+  tests_failed?: number;
+  tests_total?: number;
+  should_continue: boolean;
+  user_input_needed: boolean;
+  key_concern?: string;
+  reflection_needed?: boolean;
+  reflection_reason?: string;
+}
 export type HistoryEventStatus = "running" | "completed" | "failed";
 
 export interface BaseHistoryEvent {
@@ -191,6 +243,10 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
   judgeDetermination?: string;
   judgeQuality?: number;
   merged?: boolean;
+  /** Full parsed dev signals (added in 0.6.0) -- lets the History row expand. */
+  devSignals?: DevSignalsWeb;
+  /** Full parsed judge signals (added in 0.6.0). */
+  judgeSignals?: JudgeSignalsWeb;
 }
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {
@@ -200,4 +256,20 @@ export interface DocumentHistoryEvent extends BaseHistoryEvent {
   exitCode?: number;
 }
 
-export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;
+export interface ReflectionHistoryEvent extends BaseHistoryEvent {
+  type: "reflection";
+  iteration: number;
+  trigger: "loop" | "manual";
+  signals?: ReflectionSignals;
+  iterationHealth?: IterationHealth;
+  planModified?: boolean;
+  /** Reason the non-destructive validator rejected a rewrite (added in 0.6.0). */
+  planRejectionReason?: string;
+  exitCode?: number;
+}
+
+export type HistoryEvent =
+  | ReviewHistoryEvent
+  | IterationHistoryEvent
+  | DocumentHistoryEvent
+  | ReflectionHistoryEvent;

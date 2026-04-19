@@ -37,6 +37,9 @@ import {
   startDocument,
   getDocumentState,
   stopDocument,
+  startReflection,
+  getReflectState,
+  stopReflection,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -55,6 +58,72 @@ export function createApp() {
       version: VERSION,
       uptime: Math.floor((Date.now() - startedAt) / 1000),
     });
+  });
+
+  // --- Activity (cross-project) ---
+  //
+  // Returns a compact list of currently-running agent runs across all
+  // projects. Drives the blue pulsing dot + phase label in the web header
+  // so the user can see "something is running" at a glance from any page.
+  //
+  // Implementation: read each project's history.json + loop-state.json.
+  // History events with status="running" are the source of truth for
+  // review / document / reflection. For loop iterations we also pick up
+  // the current phase from loop-state.json (which has finer-grained
+  // phase info -- preparing/dev_executing/judging/reflecting/etc.).
+  app.get("/api/activity", async (c) => {
+    const projects = await listProjects();
+    const items: Array<{
+      projectId: string;
+      projectName: string;
+      type: "iteration" | "review" | "document" | "reflection";
+      phase?: string; // LoopPhase when type=iteration
+      iteration?: number;
+      startedAt: string;
+    }> = [];
+    for (const p of projects) {
+      const history = await readHistory(p.id);
+      const running = history.filter((e) => e.status === "running");
+      // Loop-state gives a finer-grained phase for the current iteration.
+      const loopState = await getLoopState(p.id);
+      const activeLoopPhases = [
+        "preparing", "dev_executing", "judging",
+        "reflecting", "deciding", "documenting",
+      ];
+      const loopActive = loopState && activeLoopPhases.includes(loopState.phase);
+
+      // If the loop is active, emit a single item reflecting its current phase
+      // (more informative than the raw "running" iteration event, which
+      // stays `running` across dev/judge/reflect phases).
+      if (loopActive) {
+        items.push({
+          projectId: p.id,
+          projectName: p.name,
+          type: "iteration",
+          phase: loopState.phase,
+          iteration: loopState.currentIteration,
+          startedAt: loopState.startedAt,
+        });
+        continue; // skip raw history "running" entries when loop state is authoritative
+      }
+
+      // Otherwise fall back to whatever's running in history (review,
+      // document, ad-hoc reflection, or an iteration stuck at "running"
+      // after a crash that we haven't cleaned up yet).
+      for (const e of running) {
+        items.push({
+          projectId: p.id,
+          projectName: p.name,
+          type: e.type as "iteration" | "review" | "document" | "reflection",
+          iteration:
+            e.type === "iteration" || e.type === "reflection"
+              ? (e as { iteration?: number }).iteration
+              : undefined,
+          startedAt: e.startedAt,
+        });
+      }
+    }
+    return c.json({ active: items });
   });
 
   app.get("/api/status", async (c) => {
@@ -465,6 +534,50 @@ export function createApp() {
     return c.json({ projectId: state.projectId, status: state.status, message: "Documenter stopped." });
   });
 
+  // --- Reflection (ad-hoc, item 5.6) ---
+
+  app.post("/api/projects/:id/reflect", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+    const body = await c.req.json<{ prompt?: string }>().catch(() => ({} as { prompt?: string }));
+    try {
+      const state = await startReflection(project, body);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Reflection started. Poll GET /api/projects/:id/reflect/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/reflect/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    const state = getReflectState(project.id);
+    if (!state) return c.json({ error: "No reflection found for this project" }, 404);
+    return c.json(state);
+  });
+
+  app.post("/api/projects/:id/reflect/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    const state = await stopReflection(project.id);
+    if (!state) return c.json({ error: "No reflection running for this project" }, 404);
+    return c.json({ projectId: state.projectId, status: state.status, message: "Reflection stopped." });
+  });
+
   // --- Project history ---
 
   app.get("/api/projects/:id/history", async (c) => {
@@ -522,6 +635,12 @@ export function createApp() {
         isLive = (!!docState && docState.logFileName === filename &&
           ["preparing", "executing"].includes(docState.status)) ||
           (!!loopState && loopState.phase === "documenting");
+      } else if (filename.startsWith("reflection-")) {
+        const reflectState = getReflectState(project.id);
+        const loopState = await getLoopState(project.id);
+        isLive = (!!reflectState && reflectState.logFileName === filename &&
+          ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
+          (!!loopState && loopState.phase === "reflecting");
       }
 
       let lastSize = 0;
@@ -578,6 +697,13 @@ export function createApp() {
             const stillLive = (!!docState && docState.logFileName === filename &&
               ["preparing", "executing"].includes(docState.status)) ||
               (!!loopState && loopState.phase === "documenting");
+            if (!stillLive) isLive = false;
+          } else if (filename.startsWith("reflection-")) {
+            const reflectState = getReflectState(project.id);
+            const loopState = await getLoopState(project.id);
+            const stillLive = (!!reflectState && reflectState.logFileName === filename &&
+              ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
+              (!!loopState && loopState.phase === "reflecting");
             if (!stillLive) isLive = false;
           }
 

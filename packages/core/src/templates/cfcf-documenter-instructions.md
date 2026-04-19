@@ -13,10 +13,12 @@ Read ALL of the following to understand the project fully:
 3. **Problem definition**: `cfcf-docs/problem.md`
 4. **Success criteria**: `cfcf-docs/success.md`
 5. **Implementation plan**: `cfcf-docs/plan.md`
-6. **Decision log**: `cfcf-docs/decision-log.md`
+6. **Decision log**: `cfcf-docs/decision-log.md` (tagged entries from all roles — dev, judge, architect, reflection)
 7. **Iteration history**: `cfcf-docs/iteration-history.md`
-8. **Existing docs**: `docs/` directory (if present — may have stubs from architect/dev)
-9. **Package/config files**: `package.json`, `tsconfig.json`, etc.
+8. **Per-iteration changelogs**: `cfcf-docs/iteration-logs/iteration-*.md` (curated, written by the dev agent each iteration)
+9. **Reflection analyses** (if present): `cfcf-docs/reflection-reviews/reflection-*.md` and the latest `cfcf-docs/reflection-analysis.md`
+10. **Existing docs**: `docs/` directory (if present — may have stubs from architect/dev)
+11. **Package/config files**: `package.json`, `tsconfig.json`, etc.
 
 ## What to Produce
 

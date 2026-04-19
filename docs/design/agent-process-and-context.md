@@ -107,6 +107,16 @@ cfcf-docs/
   iteration-logs/         # Changelog-style summary of each iteration's changes
     iteration-1.md        # Dev agent writes at end of iteration N
     iteration-2.md        # (see research/reflection-role-and-iterative-planning.md §4.3)
+    ...                   # cf² rebuilds iteration-history.md from these each iteration
+
+  # --- Tier 3 Reflection role outputs (item 5.6; per-iteration + ad-hoc) ---
+  cfcf-reflection-instructions.md   # cf² generates from template per reflection run
+  cfcf-reflection-signals.json      # Reflection agent writes after each run
+  cfcf-reflection-context.md        # cf² assembles: compact per-iteration-branch git log + tail of the last dev log
+  reflection-analysis.md            # Human-readable cross-iteration review (latest)
+  reflection-reviews/               # ARCHIVED prior reflection analyses
+    reflection-1.md                 # cf² archives reflection-analysis.md → reflection-N.md after each run
+    reflection-2.md
     ...
 ```
 
@@ -132,7 +142,10 @@ cfcf-docs/
 | style-guide.md | User | Dev agent | Before first iteration (optional) | User creates if needed |
 | context/*.md | User | Dev agent | User adds as needed | Architecture, API specs, etc. |
 | plan.md | Dev agent | Dev agent, Judge, User | Every iteration | Agent evolves it |
-| decision-log.md | Dev agent | Dev agent, Judge | Every iteration | Agent appends |
+| decision-log.md | Dev, Judge, Architect, Reflection, User | All roles | When a role has something to record | Multi-role append-only journal with tagged entries (item 5.6). Format: `## <ISO-UTC>  [role: X]  [iter: N]  [category: decision\|lesson\|observation\|strategy\|risk\|resolved-question]`. Reflection reads the whole file; other roles read only the tail relevant to them. |
+| iteration-logs/iteration-N.md | Dev agent | Judge, Reflection, next-iteration dev | End of each iteration | Per-iteration changelog (backward-looking). cf² rebuilds `iteration-history.md` from these. |
+| reflection-analysis.md | Reflection agent | Next-iteration dev, Judge, User | Each time reflection runs | Cross-iteration review. Archived to `reflection-reviews/reflection-N.md` each iteration. |
+| cfcf-reflection-signals.json | Reflection agent | cf² | Each reflection run | Machine-readable. Drives UI history coloring and `recommend_stop` handling. |
 | iteration-handoff.md | Dev agent | cf², Judge | Every iteration | cf² resets template each iteration |
 | cfcf-iteration-signals.json | Dev agent | cf² | Every iteration | cf² resets template, agent fills in |
 | judge-assessment.md | Judge agent | Dev agent, User | Every iteration | cf² archives to iteration-reviews/ |

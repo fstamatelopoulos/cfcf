@@ -10,7 +10,7 @@
 
 import { join } from "path";
 import { writeFile, readFile, access, mkdir } from "fs/promises";
-import type { ProjectConfig, DevSignals, JudgeSignals } from "./types.js";
+import type { ProjectConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
 import { getProjectDir } from "./projects.js";
 import {
   writeContextToRepo,
@@ -36,6 +36,7 @@ import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
+import { runReflectionSync } from "./reflection-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForProject, makeEvent } from "./notifications/index.js";
@@ -48,6 +49,7 @@ export type LoopPhase =
   | "preparing"
   | "dev_executing"
   | "judging"
+  | "reflecting"
   | "deciding"
   | "documenting"
   | "paused"
@@ -81,6 +83,19 @@ export interface LoopState {
   /** When true, the last iteration's dev phase completed but the judge failed.
    *  On resume, retry the judge instead of running a new full iteration. */
   retryJudge?: boolean;
+  /**
+   * Number of consecutive iterations the judge has opted out of reflection
+   * (via `reflection_needed: false`). Reset to 0 each time reflection runs.
+   * When this reaches `project.reflectSafeguardAfter`, the next iteration
+   * forces reflection regardless of what the judge says. (item 5.6 U1)
+   */
+  iterationsSinceLastReflection?: number;
+  /**
+   * Whether cfcf has already emitted the `project.decision_log_large`
+   * notification for this loop run. Prevents re-firing each iteration
+   * once the 50-iteration threshold is crossed. (item 5.6 U4)
+   */
+  decisionLogWarningFired?: boolean;
 }
 
 export interface LoopIterationRecord {
@@ -101,6 +116,15 @@ export interface LoopIterationRecord {
   startedAt: string;
   completedAt?: string;
   merged: boolean;
+  /** Reflection outcome for this iteration (item 5.6). */
+  reflectionRan?: boolean;
+  reflectionSignals?: ReflectionSignals;
+  reflectionLogFileName?: string;
+  reflectionExitCode?: number;
+  /** When the reflection agent's plan rewrite was rejected by the
+   *  non-destructive validator, this captures the reason for the audit
+   *  trail. The previous plan.md is restored on disk. */
+  reflectionPlanRejectionReason?: string;
 }
 
 // --- State Store (in-memory + disk persistence) ---
@@ -206,6 +230,54 @@ export async function getLoopState(projectId: string): Promise<LoopState | undef
   return undefined;
 }
 
+// --- Reflection trigger logic (item 5.6 §2.2) ---
+
+/**
+ * Decide whether reflection should run after the judge completes.
+ *
+ * Rules (research doc §2.2):
+ *   - Run reflection when `judge.reflection_needed` is `true` or missing.
+ *   - Skip reflection when `judge.reflection_needed` is `false` AND the
+ *     number of consecutive skips has not yet reached the safeguard
+ *     ceiling `reflectSafeguardAfter` (default 3).
+ *   - Force reflection when we've already hit the safeguard ceiling.
+ *   - If judge signals are missing entirely (judge crashed / malformed
+ *     output), skip reflection too -- the harness will already pause
+ *     on the missing signals and retry the judge on resume.
+ */
+export function shouldRunReflection(
+  judgeSignals: JudgeSignals | null,
+  state: LoopState,
+  project: ProjectConfig,
+): { run: boolean; reason: string } {
+  if (!judgeSignals) {
+    return { run: false, reason: "judge signals missing -- harness will pause before reflection" };
+  }
+  const ceiling = project.reflectSafeguardAfter ?? 3;
+  const skipped = state.iterationsSinceLastReflection ?? 0;
+
+  if (judgeSignals.reflection_needed === false) {
+    if (skipped + 1 >= ceiling) {
+      // This would be the (ceiling)th consecutive skip -> force reflection.
+      return {
+        run: true,
+        reason: `judge opted out but safeguard ceiling reached (${skipped + 1} >= ${ceiling}); forcing reflection`,
+      };
+    }
+    return {
+      run: false,
+      reason: `judge opted out (reflection_needed=false); skip count ${skipped + 1} < ceiling ${ceiling}`,
+    };
+  }
+  // reflection_needed === true OR undefined/null
+  return {
+    run: true,
+    reason: judgeSignals.reflection_needed === true
+      ? `judge requested reflection${judgeSignals.reflection_reason ? `: "${judgeSignals.reflection_reason}"` : ""}`
+      : "judge did not set reflection_needed; default is to run",
+  };
+}
+
 // --- Decision Engine ---
 
 export interface LoopDecision {
@@ -217,12 +289,18 @@ export interface LoopDecision {
 
 /**
  * Make a deterministic decision based on judge signals and loop state.
+ *
+ * Reflection's `recommend_stop` (research Q5/Q6) takes precedence over
+ * the judge's determination: reflection has the cross-iteration view,
+ * so when it flags the loop as fundamentally stuck we pause for the
+ * user even if the judge said PROGRESS.
  */
 export function makeDecision(
   judgeSignals: JudgeSignals | null,
   devSignals: DevSignals | null,
   state: LoopState,
   project: ProjectConfig,
+  reflectionSignals?: ReflectionSignals | null,
 ): LoopDecision {
   // Check max iterations
   if (state.currentIteration >= state.maxIterations) {
@@ -236,6 +314,17 @@ export function makeDecision(
       reason: "Dev agent needs user input",
       pauseReason: "user_input_needed",
       questions: devSignals.questions,
+    };
+  }
+
+  // Reflection's recommend_stop wins over the judge's determination
+  // (research doc Q5, Q6). Never auto-stops -- always pauses + notifies.
+  if (reflectionSignals?.recommend_stop === true) {
+    return {
+      action: "pause",
+      reason: `Reflection flagged loop as stuck: ${reflectionSignals.key_observation || "no summary"}`,
+      pauseReason: "anomaly",
+      questions: reflectionSignals.key_observation ? [reflectionSignals.key_observation] : [],
     };
   }
 
@@ -789,9 +878,67 @@ async function runJudgeAndDecide(
   // Archive judge assessment
   await archiveJudgeAssessment(project.repoPath, iterationNum);
 
+  // --- REFLECT (item 5.6) ---
+  // Runs after the judge commits and before DECIDE. Decides whether to
+  // run the reflection role based on judge's opt-out signal + safeguard
+  // ceiling. When it runs, produces its OWN commit so `git log --oneline`
+  // reads as a three-line story per iteration:
+  //   dev(iter N) -> judge(iter N) -> reflect(iter N)
+  let reflectionSignals: ReflectionSignals | null = null;
+  if (judgeSignals) {
+    const trigger = shouldRunReflection(judgeSignals, state, project);
+    if (trigger.run) {
+      state.phase = "reflecting";
+      await saveLoopState(state);
+      try {
+        const reflectRes = await runReflectionSync(
+          project,
+          iterationNum,
+          judgeSignals.reflection_reason ? { reason: judgeSignals.reflection_reason } : undefined,
+        );
+        reflectionSignals = reflectRes.signals;
+        iterRecord.reflectionRan = true;
+        iterRecord.reflectionSignals = reflectRes.signals ?? undefined;
+        iterRecord.reflectionLogFileName = reflectRes.logFileName;
+        iterRecord.reflectionExitCode = reflectRes.exitCode;
+        if (!reflectRes.planAccepted) {
+          iterRecord.reflectionPlanRejectionReason = reflectRes.planRejectionReason;
+        }
+
+        // Archive the reflection analysis into reflection-reviews/reflection-N.md
+        const { archiveReflectionAnalysis } = await import("./reflection-runner.js");
+        await archiveReflectionAnalysis(project.repoPath, iterationNum);
+
+        // Commit the reflection outputs separately.
+        if (await gitManager.hasChanges(project.repoPath)) {
+          const health = reflectRes.signals?.iteration_health ?? "inconclusive";
+          const obs = reflectRes.signals?.key_observation || "reflection output";
+          const subject = `cfcf iteration ${iterationNum} reflect (${health}): ${obs}`.slice(0, 200);
+          await gitManager.commitAll(project.repoPath, subject);
+        }
+
+        // Reset the skip counter now that reflection has actually run.
+        state.iterationsSinceLastReflection = 0;
+      } catch (err) {
+        // Reflection failure is not fatal: log, record, and continue.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[iteration-loop] reflection failed for iter ${iterationNum}: ${msg}`);
+        iterRecord.reflectionRan = false;
+      }
+    } else {
+      // Judge opted out within safeguard ceiling -- just bump the counter.
+      state.iterationsSinceLastReflection = (state.iterationsSinceLastReflection ?? 0) + 1;
+      iterRecord.reflectionRan = false;
+    }
+  }
+
   iterRecord.completedAt = new Date().toISOString();
 
-  // Update history event for this iteration
+  // Update history event for this iteration. Persist the full parsed
+  // dev + judge signals inline so the web History tab can expand the
+  // row to show tests, quality, concerns, anomaly type, reflection
+  // opt-out, etc., even after the *-signals.json files on disk get
+  // overwritten next iteration.
   await updateHistoryEvent(project.id, iterRecord.historyEventId, {
     status: "completed",
     completedAt: iterRecord.completedAt,
@@ -799,7 +946,36 @@ async function runJudgeAndDecide(
     judgeExitCode: iterRecord.judgeExitCode,
     judgeDetermination: judgeSignals?.determination,
     judgeQuality: judgeSignals?.quality_score,
+    devSignals: iterRecord.devSignals,
+    judgeSignals: judgeSignals ?? undefined,
   } as Partial<import("./project-history.js").IterationHistoryEvent>);
+
+  // --- Decision-log size warning (item 5.6 U4) ---
+  // Emit a notification once per loop run when the iteration counter
+  // crosses 50. No auto-trim -- the user owns the log.
+  if (
+    iterationNum >= 50 &&
+    !state.decisionLogWarningFired
+  ) {
+    state.decisionLogWarningFired = true;
+    dispatchForProject(
+      makeEvent({
+        type: "loop.paused", // closest existing type; using it as an informational channel
+        title: "Decision log is getting large",
+        message:
+          `${project.name}: decision-log.md has accumulated through ${iterationNum} iterations. ` +
+          `Consider archiving it (copy to decision-log.archive-iter-${iterationNum}.md). No action required from cfcf.`,
+        projectId: project.id,
+        projectName: project.name,
+        details: {
+          informational: true,
+          kind: "decision_log_large",
+          iteration: iterationNum,
+        },
+      }),
+      project.notifications,
+    );
+  }
 
   // --- DECIDE ---
   state.phase = "deciding";
@@ -812,7 +988,7 @@ async function runJudgeAndDecide(
     state.consecutiveStalled = 0;
   }
 
-  const decision = makeDecision(judgeSignals, devSignals, state, project);
+  const decision = makeDecision(judgeSignals, devSignals, state, project, reflectionSignals);
 
   // Merge branch to main if auto-merge and progress/success
   if (

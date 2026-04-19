@@ -87,6 +87,41 @@
   background: var(--color-error);
 }
 
+/* Pulsing blue dot used in the header when any agent is running. */
+.status-dot--active {
+  background: var(--color-info);
+  box-shadow: 0 0 0 0 var(--color-info);
+  animation: status-dot-pulse 1.4s ease-out infinite;
+}
+
+@keyframes status-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-info) 65%, transparent);
+  }
+  80%,
+  100% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-info) 0%, transparent);
+  }
+}
+
+/* Header activity indicator (blue dot + short label). Sits to the right
+   of the title, left of the version/status on the far right. */
+.header__activity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-info);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.header__activity-label {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Status Badge --- */
 
 .status-badge {

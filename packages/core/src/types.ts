@@ -54,6 +54,19 @@ export interface CfcfGlobalConfig {
   architectAgent: AgentConfig;
   /** Default documenter agent configuration */
   documenterAgent: AgentConfig;
+  /**
+   * Default reflection agent configuration (item 5.6 Tier 3 Strategic
+   * Reflection role). The reflection role reviews the full run history
+   * and may rewrite pending plan items. We recommend the strongest
+   * available model. Backfilled to match devAgent when missing.
+   */
+  reflectionAgent?: AgentConfig;
+  /**
+   * Ceiling on the number of consecutive iterations the judge may skip
+   * reflection via `reflection_needed: false`. On the (N+1)th consecutive
+   * skip, cfcf forces reflection regardless. Default 3. (item 5.6 U1)
+   */
+  reflectSafeguardAfter?: number;
   /** Default max iterations */
   maxIterations: number;
   /** Default pause cadence (0 = no pauses) */
@@ -124,6 +137,11 @@ export interface ProjectConfig {
   judgeAgent: AgentConfig;
   architectAgent: AgentConfig;
   documenterAgent: AgentConfig;
+  /** Reflection agent (item 5.6). Optional override -- defaults to the
+   * global config's reflectionAgent, or devAgent if that is also unset. */
+  reflectionAgent?: AgentConfig;
+  /** Per-project override for the global reflectSafeguardAfter ceiling. */
+  reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;
   onStalled: "continue" | "stop" | "alert";
@@ -188,6 +206,41 @@ export interface JudgeSignals {
   should_continue: boolean;
   user_input_needed: boolean;
   key_concern?: string;
+  /**
+   * Judge opt-out for the reflection role (item 5.6 §2.3). When true or
+   * missing, reflection runs. When `false`, the judge affirmatively claims
+   * that (a) the iteration made clean on-plan progress, (b) no new risks
+   * emerged, (c) no drift-across-iterations pattern. The harness still
+   * forces reflection after `reflectSafeguardAfter` consecutive skips.
+   */
+  reflection_needed?: boolean;
+  /**
+   * Optional prompt / focus hint for the reflection agent when
+   * `reflection_needed: true`.
+   */
+  reflection_reason?: string;
+}
+
+export type IterationHealth =
+  | "converging"
+  | "stable"
+  | "stalled"
+  | "diverging"
+  | "inconclusive";
+
+export interface ReflectionSignals {
+  iteration: number;
+  /** Did the reflection agent rewrite any pending plan items? */
+  plan_modified: boolean;
+  /** One-line categorical assessment of the overall trajectory. */
+  iteration_health: IterationHealth;
+  /** One-line summary captured into the iteration log / UI history. */
+  key_observation: string;
+  /**
+   * When true, reflection believes the loop is fundamentally stuck and the
+   * user should intervene. Never auto-stops -- always pauses + notifies.
+   */
+  recommend_stop?: boolean;
 }
 
 export interface ArchitectSignals {

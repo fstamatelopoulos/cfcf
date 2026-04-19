@@ -10,6 +10,7 @@ const loopPhases: { key: LoopPhase; label: string }[] = [
   { key: "preparing", label: "Prepare" },
   { key: "dev_executing", label: "Dev" },
   { key: "judging", label: "Judge" },
+  { key: "reflecting", label: "Reflect" },
   { key: "deciding", label: "Decide" },
   { key: "documenting", label: "Document" },
 ];

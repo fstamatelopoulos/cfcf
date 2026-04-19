@@ -6,8 +6,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { mkdtemp, rm, mkdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
-import { makeDecision, getLoopState, startLoop, stopLoop, type LoopState } from "./iteration-loop.js";
-import type { ProjectConfig, DevSignals, JudgeSignals } from "./types.js";
+import { makeDecision, getLoopState, startLoop, stopLoop, shouldRunReflection, type LoopState } from "./iteration-loop.js";
+import type { ProjectConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
 
 function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
   return {
@@ -334,5 +334,133 @@ describe("Loop State Persistence", () => {
     expect(loaded!.currentIteration).toBe(3);
     expect(loaded!.pauseReason).toBe("cadence");
     expect(loaded!.retryJudge).toBe(true);
+  });
+});
+
+// --- Reflection trigger logic (item 5.6) ---
+
+describe("shouldRunReflection (trigger logic)", () => {
+  test("runs when judge.reflection_needed is true", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ reflection_needed: true, reflection_reason: "auth is stalling" }),
+      makeLoopState(),
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(true);
+    expect(res.reason).toContain("judge requested");
+  });
+
+  test("runs when reflection_needed is missing (default behavior)", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals(), // no reflection_needed
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(true);
+  });
+
+  test("skips when judge opts out and safeguard ceiling not reached", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 0 }),
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("judge opted out");
+  });
+
+  test("skips once more when count=1 and ceiling=3", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 1 }),
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(false);
+  });
+
+  test("forces reflection when skip would cross the safeguard ceiling", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 2 }),
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(true);
+    expect(res.reason).toContain("safeguard ceiling reached");
+  });
+
+  test("uses default safeguard=3 when project doesn't set one", () => {
+    const p = makeProject();
+    delete p.reflectSafeguardAfter;
+    const res = shouldRunReflection(
+      makeJudgeSignals({ reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 2 }),
+      p,
+    );
+    expect(res.run).toBe(true); // 2 + 1 >= 3 → force
+  });
+
+  test("skips when judge signals are missing (harness will pause separately)", () => {
+    const res = shouldRunReflection(null, makeLoopState(), makeProject());
+    expect(res.run).toBe(false);
+  });
+});
+
+describe("makeDecision - reflection precedence (research Q6)", () => {
+  function makeReflectionSignals(overrides?: Partial<ReflectionSignals>): ReflectionSignals {
+    return {
+      iteration: 1,
+      plan_modified: false,
+      iteration_health: "stalled",
+      key_observation: "auth approach keeps failing test X",
+      recommend_stop: true,
+      ...overrides,
+    };
+  }
+
+  test("reflection.recommend_stop pauses even when judge says PROGRESS", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "PROGRESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({ recommend_stop: true }),
+    );
+    expect(decision.action).toBe("pause");
+    expect(decision.pauseReason).toBe("anomaly");
+    expect(decision.reason).toContain("Reflection flagged");
+  });
+
+  test("reflection.recommend_stop=false does not interfere with judge", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "PROGRESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({ recommend_stop: false }),
+    );
+    expect(decision.action).toBe("continue");
+  });
+
+  test("max_iterations check still dominates reflection.recommend_stop", () => {
+    const decision = makeDecision(
+      makeJudgeSignals(),
+      makeDevSignals(),
+      makeLoopState({ currentIteration: 10, maxIterations: 10 }),
+      makeProject({ maxIterations: 10 }),
+      makeReflectionSignals({ recommend_stop: true }),
+    );
+    expect(decision.action).toBe("stop");
+    expect(decision.pauseReason).toBe("max_iterations");
+  });
+
+  test("no reflectionSignals: legacy behavior preserved", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "PROGRESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      undefined,
+    );
+    expect(decision.action).toBe("continue");
   });
 });

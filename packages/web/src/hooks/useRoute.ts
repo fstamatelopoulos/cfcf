@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 interface Route {
-  page: "dashboard" | "project";
+  page: "dashboard" | "project" | "server";
   projectId?: string;
 }
 
@@ -10,6 +10,9 @@ function parseHash(): Route {
   const projectMatch = hash.match(/^\/projects\/(.+)/);
   if (projectMatch) {
     return { page: "project", projectId: decodeURIComponent(projectMatch[1]) };
+  }
+  if (hash === "/server") {
+    return { page: "server" };
   }
   return { page: "dashboard" };
 }

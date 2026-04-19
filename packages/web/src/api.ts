@@ -38,10 +38,44 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
-// --- Health ---
+// --- Health + Status + Config ---
 
 export function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
+}
+
+export interface ServerStatus {
+  status: string;
+  version: string;
+  uptime: number;
+  pid: number;
+  port: number;
+  configured: boolean;
+  availableAgents: string[];
+}
+
+export function fetchServerStatus(): Promise<ServerStatus> {
+  return request<ServerStatus>("/api/status");
+}
+
+export interface GlobalConfig {
+  version: number;
+  devAgent: { adapter: string; model?: string };
+  judgeAgent: { adapter: string; model?: string };
+  architectAgent: { adapter: string; model?: string };
+  documenterAgent: { adapter: string; model?: string };
+  reflectionAgent?: { adapter: string; model?: string };
+  reflectSafeguardAfter?: number;
+  maxIterations: number;
+  pauseEvery: number;
+  availableAgents: string[];
+  permissionsAcknowledged: boolean;
+  cleanupMergedBranches?: boolean;
+  notifications?: unknown;
+}
+
+export function fetchGlobalConfig(): Promise<GlobalConfig> {
+  return request<GlobalConfig>("/api/config");
 }
 
 // --- Projects ---
@@ -101,6 +135,19 @@ export function stopDocument(projectId: string): Promise<{ status: string }> {
 }
 
 // --- History ---
+
+export interface ActivityItem {
+  projectId: string;
+  projectName: string;
+  type: "iteration" | "review" | "document" | "reflection";
+  phase?: string;
+  iteration?: number;
+  startedAt: string;
+}
+
+export function fetchActivity(): Promise<{ active: ActivityItem[] }> {
+  return request<{ active: ActivityItem[] }>(`/api/activity`);
+}
 
 export function fetchHistory(projectId: string): Promise<HistoryEvent[]> {
   return request<HistoryEvent[]>(`/api/projects/${encodeURIComponent(projectId)}/history`);

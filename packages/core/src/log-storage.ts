@@ -17,7 +17,7 @@ import { join } from "path";
 import { mkdir, readFile, readdir } from "fs/promises";
 import { getLogsDir } from "./constants.js";
 
-export type AgentRole = "dev" | "judge" | "architect" | "documenter";
+export type AgentRole = "dev" | "judge" | "architect" | "documenter" | "reflection";
 
 /**
  * Get the log directory for a project.
@@ -44,7 +44,7 @@ export function getIterationLogPath(
  */
 export function getAgentRunLogPath(
   projectId: string,
-  role: "architect" | "documenter",
+  role: "architect" | "documenter" | "reflection",
   sequence: number,
 ): string {
   const seqStr = String(sequence).padStart(3, "0");
@@ -57,7 +57,7 @@ export function getAgentRunLogPath(
  */
 export async function nextAgentRunSequence(
   projectId: string,
-  role: "architect" | "documenter",
+  role: "architect" | "documenter" | "reflection",
 ): Promise<number> {
   try {
     const dir = getProjectLogDir(projectId);
