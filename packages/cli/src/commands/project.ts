@@ -131,16 +131,26 @@ export function registerProjectCommands(program: Command): void {
       console.log(`  ID:             ${p.id}`);
       console.log(`  Repo:           ${p.repoPath}`);
       console.log(`  Remote:         ${p.repoUrl || "(not set)"}`);
-      console.log(`  Dev agent:      ${formatAgent(p.devAgent)}`);
-      console.log(`  Judge agent:    ${formatAgent(p.judgeAgent)}`);
-      console.log(`  Architect:      ${formatAgent(p.architectAgent)}`);
-      console.log(`  Documenter:     ${formatAgent(p.documenterAgent)}`);
-      console.log(`  Max iterations: ${p.maxIterations}`);
-      console.log(`  Pause every:    ${p.pauseEvery === 0 ? "never" : `${p.pauseEvery} iterations`}`);
-      console.log(`  On stalled:     ${p.onStalled}`);
-      console.log(`  Merge strategy: ${p.mergeStrategy}`);
-      console.log(`  Template:       ${p.processTemplate}`);
-      console.log(`  Iterations:     ${p.currentIteration || 0} completed`);
+      console.log(`  Dev agent:         ${formatAgent(p.devAgent)}`);
+      console.log(`  Judge agent:       ${formatAgent(p.judgeAgent)}`);
+      console.log(`  Architect:         ${formatAgent(p.architectAgent)}`);
+      console.log(`  Documenter:        ${formatAgent(p.documenterAgent)}`);
+      if (p.reflectionAgent) {
+        console.log(`  Reflection:        ${formatAgent(p.reflectionAgent)}`);
+      }
+      console.log(`  Max iterations:    ${p.maxIterations}`);
+      console.log(`  Pause every:       ${p.pauseEvery === 0 ? "never" : `${p.pauseEvery} iterations`}`);
+      console.log(`  On stalled:        ${p.onStalled}`);
+      console.log(`  Merge strategy:    ${p.mergeStrategy}`);
+      console.log(`  Reflect safeguard: force after ${p.reflectSafeguardAfter ?? 3} consecutive opt-outs`);
+      console.log(`  Auto review specs: ${p.autoReviewSpecs ? "yes (runs Solution Architect before every loop)" : "no (Review is optional)"}`);
+      if (p.autoReviewSpecs) {
+        console.log(`  Readiness gate:    ${p.readinessGate ?? "blocked"}`);
+      }
+      console.log(`  Auto documenter:   ${p.autoDocumenter === false ? "no (user invokes cfcf document manually)" : "yes (runs on SUCCESS)"}`);
+      console.log(`  Cleanup branches:  ${p.cleanupMergedBranches ? "yes (delete after merge)" : "no (keep for audit)"}`);
+      console.log(`  Template:          ${p.processTemplate}`);
+      console.log(`  Iterations:        ${p.currentIteration || 0} completed`);
     });
 
   project

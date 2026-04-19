@@ -9,6 +9,29 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.1] -- 2026-04-19
+
+Ships plan item **5.1** end-to-end plus two small polish fixes surfaced during smoke-testing.
+
+### Added
+- **`autoReviewSpecs` + `autoDocumenter` + `readinessGate` config keys (item 5.1).** Three tiers (global / project / per-run) following the same priority order as existing keys, with backfill on pre-5.1 configs + projects so nothing breaks. Defaults: `autoReviewSpecs=false`, `autoDocumenter=true`, `readinessGate="blocked"`.
+  - When `autoReviewSpecs=true`, Start Loop first runs the Solution Architect as a pre-loop phase. The standalone Review button is hidden in the web UI (a muted hint "Review is part of the Loop (autoReviewSpecs is on). Change in Settings." appears under the button row). A leading `Review (agent)` step appears in the `PhaseIndicator`. Review output commits to main (not an iteration branch -- it's a deterministic input to the loop, not iteration work). If the `readinessGate` rejects the architect's readiness signal, the loop pauses with the architect's gaps as `pendingQuestions`.
+  - When `autoDocumenter=false`, the loop reaches SUCCESS and skips the Documenter entirely; the `Document (agent)` step disappears from the phase indicator. `cfcf document` continues to work manually.
+  - `readinessGate` levels: `"never"` (always proceed), `"blocked"` (default; stop only on `BLOCKED`), `"needs_refinement_or_blocked"` (strictest; stop on anything but `READY`).
+- **`cfcf run` CLI flags:** `--auto-review` / `--no-auto-review`, `--auto-document` / `--no-auto-document`, `--readiness-gate <level>`. Per-run overrides persisted on `loop-state.json` so pause + resume keep the same behaviour.
+- **`cfcf init` prompts** for the three new keys (with contextual explanation, including that `readinessGate` is only asked when auto-review is on) + the reflection safeguard (`reflectSafeguardAfter`).
+- **`cfcf config show` + `cfcf project show`** now print the full current config, including the three new keys and the pre-existing `reflectionAgent`, `reflectSafeguardAfter`, and `cleanupMergedBranches` fields that were previously hidden from the text output.
+- **New `pre_loop_reviewing` loop phase.** Surfaced in `/api/activity`, the top-bar pulsing indicator, history-polling cadence, and the web `PhaseIndicator`.
+- **Shared `resolveLoopConfig` + `readinessGateBlocks` helpers** in `iteration-loop.ts` / `architect-runner.ts` implementing the priority + gate rules. +11 tests in `auto-flags.test.ts`.
+- **`runReviewSync`** in `architect-runner.ts`, mirroring the `runDocumentSync` / `runReflectionSync` shape so the loop can run the architect in-line (same re-review detection + non-destructive plan validation as the async entry).
+
+### Fixed
+- **`(item 5.1)` tag leaking into `cfcf run --help`.** The `.option()` descriptions for the three new flags referenced the internal plan item -- harmless but noisy for end users. Tags stripped from user-facing strings; code comments still reference items for maintainer context.
+- **`cfcf project show` was missing several fields.** Didn't list `reflectionAgent`, `reflectSafeguardAfter`, `cleanupMergedBranches`, or any of the three 5.1 keys. All now rendered, with `readinessGate` conditionally shown when auto-review is on (consistent with `cfcf config show`).
+
+### Changed
+- **Docs** refreshed for 5.1: `docs/guides/workflow.md` gains a pre-loop review block in the flow diagram and a new "Behaviour flags" subsection; `docs/guides/cli-usage.md` documents the new `cfcf init` prompts and `cfcf run` flags; `docs/api/server-api.md` updates the `/api/config` response sample, the loop-phase table (`pre_loop_reviewing`), and the `/loop/start` body sample.
+
 ## [0.7.0] -- 2026-04-18
 
 Post-0.6.0 hardening and UX refinement pass driven by first real-world testing of the Reflection role against an existing repo ("cfcf-calc"). Two small features (architect re-review, CLAUDE.md sentinel merge), a behavior-changing bug fix (iteration-row status during reflection), and a pass of UI polish on the History tab.

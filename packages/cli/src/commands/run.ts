@@ -75,9 +75,9 @@ export function registerRunCommand(program: Command): void {
     )
     .requiredOption("--project <name>", "Project name or ID")
     .option("--problem-pack <path>", "Path to Problem Pack directory (default: <repo>/problem-pack)")
-    .option("--auto-review", "Per-run override: run Solution Architect before iteration 1 (item 5.1)")
+    .option("--auto-review", "Per-run override: run Solution Architect before iteration 1")
     .option("--no-auto-review", "Per-run override: skip the pre-loop Solution Architect")
-    .option("--auto-document", "Per-run override: run Documenter on SUCCESS (item 5.1)")
+    .option("--auto-document", "Per-run override: run Documenter on SUCCESS")
     .option("--no-auto-document", "Per-run override: skip the post-SUCCESS Documenter")
     .option(
       "--readiness-gate <level>",
