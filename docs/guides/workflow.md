@@ -259,6 +259,21 @@ cfcf run --project my-project
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
+│ PRE-LOOP (conditional, only when autoReviewSpecs=true; item 5.1) │
+│                                                                  │
+│  REVIEW (agent)      Solution Architect runs against the         │
+│                      current Problem Pack. Output (review +      │
+│                      plan + doc stubs) commits to main (NOT an   │
+│                      iteration branch). readinessGate decides    │
+│                      whether the loop proceeds:                  │
+│                        "never"   -> always proceed (informational)│
+│                        "blocked" -> stop only on BLOCKED         │
+│                        "needs_refinement_or_blocked" -> stop on  │
+│                                     anything but READY.          │
+│                      On block: loop pauses with the architect's  │
+│                      gaps as pending questions.                  │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
 │ ITERATION N                                                      │
 │                                                                  │
 │  PREPARE (cf²)       Assemble context -- merge cfcf block into   │
@@ -303,8 +318,33 @@ cfcf run --project my-project
 │                                                                  │
 │  DOCUMENT (agent)    Only on SUCCESS. Produces polished          │
 │                      docs/ (architecture, api-reference,         │
-│                      setup-guide, README).                       │
+│                      setup-guide, README). Skipped when          │
+│                      autoDocumenter=false (item 5.1) -- user     │
+│                      can invoke `cfcf document` manually.        │
 └──────────────────────────────────────────────────────────────────┘
+```
+
+### Behaviour flags: `autoReviewSpecs`, `autoDocumenter`, `readinessGate` (item 5.1)
+
+Three settings shape whether Review runs inside the loop and whether the Documenter auto-runs on SUCCESS. Each is available at three tiers with the standard priority order: **per-run CLI flag → project config → global config → hard default**.
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `autoReviewSpecs` | `false` | When `true`, Start Loop first runs the Solution Architect as a pre-loop phase; the standalone Review button is hidden in the web UI; a leading `Review (agent)` step appears in the phase indicator. |
+| `autoDocumenter` | `true` | When `false`, the loop reaches SUCCESS and skips the Documenter; the `Document` step is absent from the phase indicator; the standalone `cfcf document` command still works. |
+| `readinessGate` | `"blocked"` | Only consulted when `autoReviewSpecs=true`. Levels: `"never"` (always proceed), `"blocked"` (stop only on `BLOCKED`), `"needs_refinement_or_blocked"` (strictest; stop on anything but `READY`). |
+
+Per-run CLI overrides on `cfcf run`:
+
+```
+--auto-review / --no-auto-review
+--auto-document / --no-auto-document
+--readiness-gate <never|blocked|needs_refinement_or_blocked>
+```
+
+Example: "try once without the pre-loop review even though the project default has it on":
+```bash
+cfcf run --project my-project --no-auto-review
 ```
 
 Each iteration produces **up to three separate commits** (dev / judge / reflect) on the feature branch, so `git log --oneline cfcf/iteration-N` reads as a clean per-iteration story.

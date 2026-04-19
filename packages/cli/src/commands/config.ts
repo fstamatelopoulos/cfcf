@@ -28,14 +28,24 @@ export function registerConfigCommands(program: Command): void {
 
       console.log(`Config file: ${getConfigPath()}`);
       console.log();
-      console.log(`Dev agent:       ${formatAgent(cfg.devAgent)}`);
-      console.log(`Judge agent:     ${formatAgent(cfg.judgeAgent)}`);
-      console.log(`Architect agent: ${formatAgent(cfg.architectAgent)}`);
-      console.log(`Documenter:      ${formatAgent(cfg.documenterAgent)}`);
-      console.log(`Max iterations:  ${cfg.maxIterations}`);
-      console.log(`Pause every:     ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
-      console.log(`Permissions:     ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);
-      console.log(`Available agents: ${cfg.availableAgents.join(", ") || "none detected"}`);
+      console.log(`Dev agent:        ${formatAgent(cfg.devAgent)}`);
+      console.log(`Judge agent:      ${formatAgent(cfg.judgeAgent)}`);
+      console.log(`Architect agent:  ${formatAgent(cfg.architectAgent)}`);
+      console.log(`Documenter:       ${formatAgent(cfg.documenterAgent)}`);
+      if (cfg.reflectionAgent) {
+        console.log(`Reflection agent: ${formatAgent(cfg.reflectionAgent)}`);
+      }
+      console.log(`Max iterations:   ${cfg.maxIterations}`);
+      console.log(`Pause every:      ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
+      console.log(`Reflect safeguard: force after ${cfg.reflectSafeguardAfter ?? 3} consecutive opt-outs`);
+      console.log(`Auto review specs: ${cfg.autoReviewSpecs ? "yes (Solution Architect runs before every loop)" : "no (Review is optional, user-invoked)"}`);
+      if (cfg.autoReviewSpecs) {
+        console.log(`Readiness gate:    ${cfg.readinessGate ?? "blocked"}`);
+      }
+      console.log(`Auto documenter:   ${cfg.autoDocumenter === false ? "no (user invokes cfcf document manually)" : "yes (runs on SUCCESS)"}`);
+      console.log(`Cleanup merged:    ${cfg.cleanupMergedBranches ? "yes (delete iteration branches after merge)" : "no (keep for audit)"}`);
+      console.log(`Permissions:       ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);
+      console.log(`Available agents:  ${cfg.availableAgents.join(", ") || "none detected"}`);
       if (cfg.notifications) {
         console.log(`Notifications:    ${cfg.notifications.enabled ? "enabled" : "disabled"}`);
         if (cfg.notifications.enabled) {

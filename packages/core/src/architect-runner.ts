@@ -338,3 +338,157 @@ async function runReview(
     unregister();
   }
 }
+
+// --- Sync entry point (used by the iteration loop for pre-loop review; item 5.1) ---
+
+export interface ReviewRunResult {
+  exitCode: number;
+  logFile: string;
+  logFileName: string;
+  sequence: number;
+  historyEventId: string;
+  signals: ArchitectSignals | null;
+}
+
+/**
+ * Run the Solution Architect synchronously and return the result.
+ * Used by the iteration loop when `autoReviewSpecs=true` -- Review runs
+ * as a pre-loop phase before iteration 1, commits to main (not an
+ * iteration branch, since review output is a deterministic input to the
+ * loop rather than iteration work), and the result feeds the readiness
+ * gate. Mirrors `runDocumentSync` in shape.
+ */
+export async function runReviewSync(
+  project: ProjectConfig,
+  opts?: { problemPackPath?: string },
+): Promise<ReviewRunResult> {
+  const adapter = getAdapter(project.architectAgent.adapter);
+  if (!adapter) {
+    throw new Error(`Unknown architect agent adapter: ${project.architectAgent.adapter}`);
+  }
+
+  // Validate + read Problem Pack
+  const packPath = opts?.problemPackPath || join(project.repoPath, "problem-pack");
+  const packValidation = await validateProblemPack(packPath);
+  if (!packValidation.valid) {
+    throw new Error(
+      `Problem Pack invalid: ${packValidation.errors.join(", ")}. Create a problem-pack/ directory with problem.md and success.md.`,
+    );
+  }
+  const problemPack = await readProblemPack(packPath);
+
+  // Log + history event
+  await ensureProjectLogDir(project.id);
+  const sequence = await nextAgentRunSequence(project.id, "architect");
+  const logFile = getAgentRunLogPath(project.id, "architect", sequence);
+  const logFileName = `architect-${String(sequence).padStart(3, "0")}.log`;
+  const historyEventId = randomBytes(8).toString("hex");
+  const startedAt = new Date().toISOString();
+
+  await appendHistoryEvent(project.id, {
+    id: historyEventId,
+    type: "review",
+    status: "running",
+    startedAt,
+    logFile: logFileName,
+    agent: project.architectAgent.adapter,
+    model: project.architectAgent.model,
+  });
+
+  // Write context files and architect-specific files into the repo
+  const ctx: IterationContext = { iteration: 0, problemPack, project };
+  await writeContextToRepo(project.repoPath, ctx);
+  await writeArchitectInstructions(project.repoPath, project);
+  await resetArchitectSignals(project.repoPath);
+
+  // Re-review snapshot (same non-destructive rule as the async entry)
+  const planPath = join(project.repoPath, "cfcf-docs", "plan.md");
+  let priorPlan = "";
+  try {
+    priorPlan = await readFile(planPath, "utf-8");
+  } catch {
+    priorPlan = "";
+  }
+  const reReviewMode = planHasCompletedItems(priorPlan);
+
+  const prompt = reReviewMode
+    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing project -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
+    : `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. Review the problem definition, produce cfcf-docs/architect-review.md, cfcf-docs/plan.md, and cfcf-docs/cfcf-architect-signals.json before exiting.`;
+  const cmd = adapter.buildCommand(project.repoPath, prompt, project.architectAgent.model);
+
+  const managed = await spawnProcess({
+    command: cmd.command,
+    args: cmd.args,
+    cwd: project.repoPath,
+    logFile,
+  });
+  const unregister = registerProcess({
+    projectId: project.id,
+    role: "architect",
+    process: managed,
+    startedAt,
+    historyEventId,
+    logFileName,
+  });
+
+  try {
+    const result = await managed.result;
+
+    // Non-destructive plan rewrite check
+    if (reReviewMode) {
+      let newPlan = "";
+      try {
+        newPlan = await readFile(planPath, "utf-8");
+      } catch {
+        newPlan = "";
+      }
+      if (newPlan !== priorPlan) {
+        const validation = validatePlanRewrite(priorPlan, newPlan);
+        if (!validation.valid) {
+          await writeFile(planPath, priorPlan, "utf-8");
+          console.warn(
+            `[architect-runner] pre-loop review rewrote plan.md destructively (${validation.reason}); reverted.`,
+          );
+        }
+      }
+    }
+
+    const signals = await parseArchitectSignals(project.repoPath);
+    await updateHistoryEvent(project.id, historyEventId, {
+      status: result.exitCode === 0 ? "completed" : "failed",
+      completedAt: new Date().toISOString(),
+      readiness: signals?.readiness,
+      signals: signals ?? undefined,
+    } as Partial<import("./project-history.js").ReviewHistoryEvent>);
+
+    return { exitCode: result.exitCode, logFile, logFileName, sequence, historyEventId, signals };
+  } finally {
+    unregister();
+  }
+}
+
+// --- Readiness gate helper (item 5.1) ---
+
+/**
+ * Apply a `readinessGate` policy to an architect readiness outcome.
+ * Returns whether the loop should be blocked from entering iteration 1.
+ *
+ * Rules:
+ *   - `gate === "never"`:                       never block.
+ *   - `gate === "blocked"` (default):           block only when readiness is `BLOCKED`.
+ *   - `gate === "needs_refinement_or_blocked"`: block on anything other than `READY`.
+ *   - If the architect failed to emit signals entirely: conservative --
+ *     block unless the gate is `never` (pre-loop without signals is a
+ *     genuine anomaly; the user should see what happened before we burn
+ *     an iteration's worth of compute).
+ */
+export function readinessGateBlocks(
+  readiness: string | undefined,
+  gate: import("./types.js").ReadinessGate,
+): boolean {
+  if (gate === "never") return false;
+  if (!readiness) return true;
+  if (gate === "blocked") return readiness === "BLOCKED";
+  if (gate === "needs_refinement_or_blocked") return readiness !== "READY";
+  return false;
+}

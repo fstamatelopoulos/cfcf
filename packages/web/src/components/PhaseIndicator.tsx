@@ -18,6 +18,15 @@ const loopPhases: { key: LoopPhase; label: string }[] = [
   { key: "documenting", label: "Document (agent)" },
 ];
 
+// When `autoReviewSpecs=true` the Solution Architect runs as a pre-loop
+// phase before iteration 1. When `autoDocumenter=false` the Documenter
+// is skipped. These modifiers are applied in `PhaseIndicator` based on
+// the project's config for this loop.
+const reviewStep: { key: LoopPhase; label: string } = {
+  key: "pre_loop_reviewing",
+  label: "Review (agent)",
+};
+
 // Review + document runs follow the same cf²/agent split as the loop:
 // "Prepare" is cfcf writing instructions + resetting signals, "Execute"
 // is the agent process running, "Collect" is cfcf parsing signals back.
@@ -42,6 +51,8 @@ export function PhaseIndicator({
   title,
   startedAt,
   completedAt,
+  autoReviewSpecs,
+  autoDocumenter,
 }: {
   agentType: AgentType;
   phase: string;
@@ -55,9 +66,29 @@ export function PhaseIndicator({
   startedAt?: string;
   /** Completion timestamp (only used for the paused case to show frozen elapsed). */
   completedAt?: string;
+  /**
+   * When `true`, the loop phase-indicator is prefixed with a leading
+   * `Review (agent)` step for the pre-loop Solution Architect. Ignored
+   * for `review` / `document` agent types. (item 5.1)
+   */
+  autoReviewSpecs?: boolean;
+  /**
+   * When explicitly `false`, the trailing `Document (agent)` step is
+   * hidden -- the loop skips the documenter on SUCCESS. Default `true`.
+   * (item 5.1)
+   */
+  autoDocumenter?: boolean;
 }) {
-  const phases =
-    agentType === "loop" ? loopPhases : agentType === "review" ? reviewPhases : documentPhases;
+  let phases: { key: string; label: string }[];
+  if (agentType === "loop") {
+    phases = [...loopPhases];
+    if (autoReviewSpecs) phases = [reviewStep, ...phases];
+    if (autoDocumenter === false) phases = phases.filter((p) => p.key !== "documenting");
+  } else if (agentType === "review") {
+    phases = reviewPhases;
+  } else {
+    phases = documentPhases;
+  }
 
   const isTerminal = terminalStates.has(phase);
   const currentIdx = phases.findIndex((x) => x.key === phase);

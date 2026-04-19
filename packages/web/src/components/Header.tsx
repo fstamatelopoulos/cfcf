@@ -9,6 +9,7 @@ import { navigateTo } from "../hooks/useRoute";
  * PhaseIndicator's loop-phase labels but shortened for the top bar.
  */
 const phaseLabel: Record<string, string> = {
+  pre_loop_reviewing: "review",
   preparing: "prepare",
   dev_executing: "dev",
   judging: "judge",

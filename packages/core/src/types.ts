@@ -83,7 +83,32 @@ export interface CfcfGlobalConfig {
    * false (keep for audit). (item 5.2)
    */
   cleanupMergedBranches?: boolean;
+  /**
+   * When true, the iteration loop runs the Solution Architect as a
+   * pre-loop phase before entering iteration 1. The standalone Review
+   * button is hidden from the web UI; Review becomes part of Start Loop.
+   * Default `false` -- Review remains an optional user-invoked step.
+   * (item 5.1)
+   */
+  autoReviewSpecs?: boolean;
+  /**
+   * When true, the iteration loop automatically runs the Documenter on
+   * SUCCESS before entering its terminal state. Default `true` (current
+   * behavior). When `false`, the loop skips the documenting phase and
+   * the user may run `cfcf document` manually. (item 5.1)
+   */
+  autoDocumenter?: boolean;
+  /**
+   * Controls the pre-loop readiness check when `autoReviewSpecs` is true.
+   * Mirrors `onStalled`'s three-level shape. (item 5.1)
+   *   - "never":                        review always informational; loop proceeds regardless
+   *   - "blocked" (default):            stop only on BLOCKED; proceed on NEEDS_REFINEMENT with warning
+   *   - "needs_refinement_or_blocked":  stop on anything but READY
+   */
+  readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
 }
+
+export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;
 
 // --- Notifications ---
 
@@ -154,6 +179,12 @@ export interface ProjectConfig {
    * accumulate many merged branches. (item 5.2)
    */
   cleanupMergedBranches?: boolean;
+  /** Per-project override for the global `autoReviewSpecs` default. (item 5.1) */
+  autoReviewSpecs?: boolean;
+  /** Per-project override for the global `autoDocumenter` default. (item 5.1) */
+  autoDocumenter?: boolean;
+  /** Per-project override for the global `readinessGate` default. (item 5.1) */
+  readinessGate?: ReadinessGate;
   processTemplate: string;
   /** Monotonically increasing iteration counter for this project */
   currentIteration: number;

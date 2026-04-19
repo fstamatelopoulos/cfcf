@@ -28,8 +28,12 @@ What it does:
 3. Asks you to choose agents for all five roles (dev, judge, architect, documenter, reflection)
 4. Asks for model selection per role (optional; reflection defaults to the strongest available model)
 5. Asks for default iteration limits (max iterations, pause cadence) and the reflection safeguard ceiling (`reflectSafeguardAfter`, default `3` -- the maximum consecutive iterations the judge may skip reflection before cfcf forces it)
-6. Explains the permission flags agents will run with (`--dangerously-skip-permissions` for Claude Code, `-a never -s danger-full-access` for Codex)
-7. Saves everything to the config file
+6. Asks for the pre-loop review + post-SUCCESS documenter flags (item 5.1):
+   - `autoReviewSpecs` (default `false`) -- if `true`, Start Loop first runs the Solution Architect and gates on its readiness signal
+   - `readinessGate` (default `blocked`) -- only consulted when `autoReviewSpecs=true`; levels are `never` / `blocked` / `needs_refinement_or_blocked`
+   - `autoDocumenter` (default `true`) -- if `false`, the loop skips the Documenter on SUCCESS; run `cfcf document` manually when you want docs
+7. Explains the permission flags agents will run with (`--dangerously-skip-permissions` for Claude Code, `-a never -s danger-full-access` for Codex)
+8. Saves everything to the config file
 
 To re-run setup (e.g., after installing a new agent):
 
@@ -258,6 +262,11 @@ What happens:
 Options:
 - `--project <name>` (required) -- project name or ID
 - `--problem-pack <path>` (optional) -- custom Problem Pack path (default: `<repo>/problem-pack/`)
+- `--auto-review` / `--no-auto-review` (optional, item 5.1) -- per-run override: force the Solution Architect to run as a pre-loop phase (`--auto-review`) or skip it (`--no-auto-review`). When the flag is omitted the project's `autoReviewSpecs` config value decides.
+- `--auto-document` / `--no-auto-document` (optional, item 5.1) -- per-run override for the post-SUCCESS Documenter. When omitted the project's `autoDocumenter` config value decides.
+- `--readiness-gate <level>` (optional, item 5.1) -- per-run override for the pre-loop readiness gate: `never | blocked | needs_refinement_or_blocked`. Only consulted when auto-review is on.
+
+Per-run overrides are persisted on `loop-state.json` for this run, so a pause + resume keeps the same behaviour across server restarts.
 
 ### `cfcf run` -- Manual Mode
 

@@ -33,7 +33,7 @@ const tabs = [
   { key: "config", label: "Config" },
 ];
 
-const LOOP_ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "reflecting", "deciding", "documenting"];
+const LOOP_ACTIVE_PHASES = ["pre_loop_reviewing", "preparing", "dev_executing", "judging", "reflecting", "deciding", "documenting"];
 const REVIEW_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
 const DOCUMENT_ACTIVE_STATUSES = ["preparing", "executing"];
 
@@ -196,6 +196,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         phase={currentPhase}
         activeAgent={activeAgent}
         onAction={handleAgentAction}
+        autoReviewSpecs={project.autoReviewSpecs}
       />
 
       {/* Phase indicator: shows for whichever agent is active.
@@ -206,7 +207,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <PhaseIndicator
           agentType="loop"
           phase={loopState.phase}
-          title={`Iteration ${loopState.currentIteration}`}
+          title={
+            loopState.currentIteration > 0
+              ? `Iteration ${loopState.currentIteration}`
+              : loopState.phase === "pre_loop_reviewing"
+                ? "Pre-loop review"
+                : undefined
+          }
           startedAt={
             loopState.iterations[loopState.iterations.length - 1]?.startedAt ||
             loopState.startedAt
@@ -214,6 +221,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           completedAt={
             loopState.iterations[loopState.iterations.length - 1]?.completedAt
           }
+          autoReviewSpecs={project.autoReviewSpecs}
+          autoDocumenter={project.autoDocumenter}
         />
       )}
       {isReviewActive && reviewState && (

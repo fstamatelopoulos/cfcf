@@ -183,6 +183,55 @@ export function registerInitCommand(program: Command): void {
       );
       config.pauseEvery = parseInt(pauseEvery, 10) || DEFAULT_PAUSE_EVERY;
 
+      // Reflection safeguard (item 5.6)
+      const safeguard = await prompt(
+        "Force reflection after N consecutive judge opt-outs",
+        String(config.reflectSafeguardAfter ?? 3),
+      );
+      const safeguardN = parseInt(safeguard, 10);
+      config.reflectSafeguardAfter = Number.isFinite(safeguardN) && safeguardN >= 1 ? safeguardN : 3;
+
+      // Pre-loop review + post-success documenter (item 5.1)
+      console.log();
+      console.log("Pre-loop Review and Post-SUCCESS Documenter");
+      console.log("-------------------------------------------");
+      console.log("autoReviewSpecs: when 'yes', Start Loop first runs the Solution");
+      console.log("  Architect; if readiness is unacceptable the loop pauses so you");
+      console.log("  can refine the Problem Pack. When 'no', Review remains an");
+      console.log("  optional user-invoked step (the 'Review' button / cfcf review).");
+      const autoRev = await prompt(
+        "autoReviewSpecs -- run Solution Architect before every loop? (yes/no)",
+        config.autoReviewSpecs ? "yes" : "no",
+      );
+      config.autoReviewSpecs = autoRev.toLowerCase() === "yes" || autoRev.toLowerCase() === "y";
+
+      if (config.autoReviewSpecs) {
+        console.log();
+        console.log("readinessGate: how strict is the pre-loop block?");
+        console.log("  never: review informational; loop always proceeds");
+        console.log("  blocked (default): stop only on BLOCKED; proceed on NEEDS_REFINEMENT with warning");
+        console.log("  needs_refinement_or_blocked: strictest; stop on anything but READY");
+        const gate = await prompt(
+          "readinessGate (never | blocked | needs_refinement_or_blocked)",
+          config.readinessGate ?? "blocked",
+        );
+        if (gate === "never" || gate === "blocked" || gate === "needs_refinement_or_blocked") {
+          config.readinessGate = gate;
+        } else {
+          console.log(`  (unrecognised value, keeping "${config.readinessGate ?? "blocked"}")`);
+        }
+      }
+
+      console.log();
+      console.log("autoDocumenter: when 'yes', the loop automatically runs the");
+      console.log("  Documenter after judging SUCCESS and before the terminal state.");
+      console.log("  When 'no', the loop skips that phase; run 'cfcf document' manually.");
+      const autoDoc = await prompt(
+        "autoDocumenter -- run Documenter on SUCCESS? (yes/no)",
+        (config.autoDocumenter ?? true) ? "yes" : "no",
+      );
+      config.autoDocumenter = autoDoc.toLowerCase() === "yes" || autoDoc.toLowerCase() === "y";
+
       // Notifications
       console.log();
       console.log("Notifications");

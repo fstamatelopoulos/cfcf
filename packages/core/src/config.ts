@@ -114,6 +114,9 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     documenterAgent: { adapter: documenterAdapter },
     reflectionAgent: { adapter: architectAdapter }, // same preference as architect
     reflectSafeguardAfter: 3,
+    autoReviewSpecs: false,
+    autoDocumenter: true,
+    readinessGate: "blocked",
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
@@ -152,5 +155,19 @@ function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (typeof config.reflectSafeguardAfter !== "number" || config.reflectSafeguardAfter < 1) {
     config.reflectSafeguardAfter = 3;
   }
+  // item 5.1 backfills -- pre-5.1 configs don't have these keys.
+  if (typeof config.autoReviewSpecs !== "boolean") {
+    config.autoReviewSpecs = false;
+  }
+  if (typeof config.autoDocumenter !== "boolean") {
+    config.autoDocumenter = true;
+  }
+  if (!isValidReadinessGate(config.readinessGate)) {
+    config.readinessGate = "blocked";
+  }
   return config;
+}
+
+function isValidReadinessGate(value: unknown): value is CfcfGlobalConfig["readinessGate"] {
+  return value === "never" || value === "blocked" || value === "needs_refinement_or_blocked";
 }

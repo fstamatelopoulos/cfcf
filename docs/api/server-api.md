@@ -120,6 +120,9 @@ Returns the current global configuration.
   "documenterAgent": { "adapter": "claude-code" },
   "reflectionAgent": { "adapter": "claude-code", "model": "opus" },
   "reflectSafeguardAfter": 3,
+  "autoReviewSpecs": false,
+  "autoDocumenter": true,
+  "readinessGate": "blocked",
   "maxIterations": 10,
   "pauseEvery": 0,
   "availableAgents": ["claude-code", "codex"],
@@ -637,15 +640,20 @@ the loop (see below) rather than as a standalone endpoint. The loop's
 
 ### POST /api/projects/:id/loop/start
 
-Start the full iteration loop: dev → judge → reflect (conditional) → decide → repeat.
+Start the full iteration loop: `pre_loop_reviewing` (conditional, item 5.1) → dev → judge → reflect (conditional) → decide → repeat.
 
 **Request body (optional):**
 
 ```json
 {
-  "problemPackPath": "/path/to/custom/problem-pack"
+  "problemPackPath": "/path/to/custom/problem-pack",
+  "autoReviewSpecs": true,
+  "autoDocumenter": false,
+  "readinessGate": "blocked"
 }
 ```
+
+The three 5.1 keys are optional per-run overrides. When omitted they fall back to the project config (then the global config, then the hard default). Overrides are persisted on `loop-state.json` so the behaviour is stable across pause/resume cycles.
 
 **Response:** `202 Accepted`
 
@@ -692,6 +700,7 @@ Get the full loop state including iteration history.
 | Phase | Description |
 |-------|-------------|
 | `idle` | Loop initialized, not yet running |
+| `pre_loop_reviewing` | Solution Architect running as a pre-loop phase (item 5.1, when `autoReviewSpecs=true`) |
 | `preparing` | Assembling context for next iteration (cf²) |
 | `dev_executing` | Dev agent is running |
 | `judging` | Judge agent is running |

@@ -27,10 +27,19 @@ export interface ProjectConfig {
   judgeAgent: AgentConfig;
   architectAgent: AgentConfig;
   documenterAgent: AgentConfig;
+  reflectionAgent?: AgentConfig;
+  reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;
   onStalled: "continue" | "stop" | "alert";
   mergeStrategy: "auto" | "pr";
+  cleanupMergedBranches?: boolean;
+  /** item 5.1 */
+  autoReviewSpecs?: boolean;
+  /** item 5.1 */
+  autoDocumenter?: boolean;
+  /** item 5.1 */
+  readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
   processTemplate: string;
   currentIteration: number;
   status?: ProjectStatus;
@@ -40,6 +49,7 @@ export interface ProjectConfig {
 // Keep in sync with packages/core/src/iteration-loop.ts
 export type LoopPhase =
   | "idle"
+  | "pre_loop_reviewing"
   | "preparing"
   | "dev_executing"
   | "judging"
