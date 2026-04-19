@@ -6,13 +6,16 @@ import { useElapsed } from "../hooks/useElapsed";
  * Each agent type has its own sequence of phases.
  */
 
+// Labels distinguish deterministic harness steps (cf²) from LLM agent steps
+// (agent) so the user can see at a glance which phases are cfcf's plumbing
+// vs. an actual agent invocation.
 const loopPhases: { key: LoopPhase; label: string }[] = [
-  { key: "preparing", label: "Prepare" },
-  { key: "dev_executing", label: "Dev" },
-  { key: "judging", label: "Judge" },
-  { key: "reflecting", label: "Reflect" },
-  { key: "deciding", label: "Decide" },
-  { key: "documenting", label: "Document" },
+  { key: "preparing", label: "Prepare (cf²)" },
+  { key: "dev_executing", label: "Dev (agent)" },
+  { key: "judging", label: "Judge (agent)" },
+  { key: "reflecting", label: "Reflect (agent)" },
+  { key: "deciding", label: "Decide (cf²)" },
+  { key: "documenting", label: "Document (agent)" },
 ];
 
 const reviewPhases: { key: string; label: string }[] = [
