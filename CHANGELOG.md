@@ -56,7 +56,7 @@ Iteration 5 loop-quality phase. Ships item **5.6 Tier 3 Strategic Reflection + i
 - **`makeDecision` accepts reflection signals.** Reflection's `recommend_stop` takes precedence over the judge's determination (research doc Q6): when reflection flags the loop as fundamentally stuck, cfcf pauses for the user even if the judge said PROGRESS. `max_iterations` and dev `user_input_needed` still short-circuit first.
 - **New `reflecting` phase** in `LoopPhase`. Iteration flow: `preparing → dev_executing → judging → reflecting (conditional) → deciding → documenting (on success)`.
 - **Decision-log size warning.** Once iteration count crosses 50, cfcf fires a single informational notification per loop run. No auto-trim — the user owns the log.
-- **Docs:** `docs/plan.md` item 5.6 marked ✅; `docs/design/technical-design.md` and `docs/design/agent-process-and-context.md` updated; `docs/research/reflection-role-and-iterative-planning.md` §10 stamped "Shipped 2026-04-18".
+- **Docs:** full markdown sweep aligning every user + design + API doc with the reflection role and 0.7.0 features — `workflow.md`, `cli-usage.md`, top-level `README.md`, `CLAUDE.md`, `docs/README.md`, `docs/api/server-api.md`, `docs/design/technical-design.md`, `docs/design/agent-process-and-context.md`, `docs/design/cfcf-requirements-vision.md`. `docs/plan.md` item 5.6 marked ✅; `docs/research/reflection-role-and-iterative-planning.md` §10 stamped "Shipped 2026-04-18".
 
 ### Fixed
 - **`iteration-history.md` loop-restart bug.** The file is now rebuilt each iteration from the committed `cfcf-docs/iteration-logs/iteration-*.md` files instead of relying on the in-memory `LoopState.iterations`, so it survives `cfcf stop` / restart cycles.
