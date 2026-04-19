@@ -878,6 +878,25 @@ async function runJudgeAndDecide(
   // Archive judge assessment
   await archiveJudgeAssessment(project.repoPath, iterationNum);
 
+  // Flip the iteration's history event to `completed` NOW, before
+  // reflection starts. The dev and judge agents have both exited and
+  // their signals are persisted -- from the user's point of view the
+  // iteration is done; reflection is its own row in the history. Leaving
+  // the iteration marked `running` across the reflection phase made the
+  // History tab look stuck. Merge status is updated separately in the
+  // DECIDE block after auto-merge succeeds.
+  const iterCompletedAt = new Date().toISOString();
+  await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+    status: "completed",
+    completedAt: iterCompletedAt,
+    devExitCode: iterRecord.devExitCode,
+    judgeExitCode: iterRecord.judgeExitCode,
+    judgeDetermination: judgeSignals?.determination,
+    judgeQuality: judgeSignals?.quality_score,
+    devSignals: iterRecord.devSignals,
+    judgeSignals: judgeSignals ?? undefined,
+  } as Partial<import("./project-history.js").IterationHistoryEvent>);
+
   // --- REFLECT (item 5.6) ---
   // Runs after the judge commits and before DECIDE. Decides whether to
   // run the reflection role based on judge's opt-out signal + safeguard
@@ -932,23 +951,10 @@ async function runJudgeAndDecide(
     }
   }
 
-  iterRecord.completedAt = new Date().toISOString();
-
-  // Update history event for this iteration. Persist the full parsed
-  // dev + judge signals inline so the web History tab can expand the
-  // row to show tests, quality, concerns, anomaly type, reflection
-  // opt-out, etc., even after the *-signals.json files on disk get
-  // overwritten next iteration.
-  await updateHistoryEvent(project.id, iterRecord.historyEventId, {
-    status: "completed",
-    completedAt: iterRecord.completedAt,
-    devExitCode: iterRecord.devExitCode,
-    judgeExitCode: iterRecord.judgeExitCode,
-    judgeDetermination: judgeSignals?.determination,
-    judgeQuality: judgeSignals?.quality_score,
-    devSignals: iterRecord.devSignals,
-    judgeSignals: judgeSignals ?? undefined,
-  } as Partial<import("./project-history.js").IterationHistoryEvent>);
+  // Mirror the history event's completion time on the in-memory record.
+  // (The history event itself was already marked completed above, before
+  // reflection ran, so the user-visible row flipped promptly.)
+  iterRecord.completedAt = iterCompletedAt;
 
   // --- Decision-log size warning (item 5.6 U4) ---
   // Emit a notification once per loop run when the iteration counter
