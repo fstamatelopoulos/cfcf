@@ -29,6 +29,9 @@ Ships plan item **5.9**: the read-only `#/server` page becomes a full editable g
 - `GlobalConfig` interface on the web client widened to reflect the editable surface (`autoReviewSpecs`, `autoDocumenter`, `readinessGate`, typed `notifications`).
 - Docs refreshed: `docs/guides/workflow.md` mentions the new Settings link; `docs/guides/cli-usage.md` points to the editable web UI as the wire-compatible mirror of `cfcf config edit`; `docs/api/server-api.md` documents `PUT /api/config` with sample body, response, and error matrix.
 
+### Fixed
+- **Web project detail's Config tab was missing several fields** (mirror of the `cfcf project show` gap fixed in 0.7.1). `ConfigDisplay` now renders `status`, `reflectionAgent`, `reflectSafeguardAfter`, `cleanupMergedBranches`, and all three 5.1 flags (`autoReviewSpecs`, `autoDocumenter`, `readinessGate`), plus `processTemplate`. Still read-only -- the editable version lands in plan item 6.14.
+
 ## [0.7.2] -- 2026-04-20
 
 Small but meaningful follow-up pass after first real-world autoReviewSpecs testing: one regression fix surfaced mid-test, one UX consistency improvement, plus a UX protection against a gotcha the user hit.
