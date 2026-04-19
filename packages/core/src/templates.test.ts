@@ -38,11 +38,12 @@ afterEach(async () => {
 describe("listTemplates", () => {
   test("exposes the full set of embedded templates", () => {
     const names = listTemplates();
-    expect(names.length).toBe(13);
+    expect(names.length).toBe(14);
     // Spot-check a few critical names
     expect(names).toContain("process.md");
     expect(names).toContain("cfcf-architect-instructions.md");
     expect(names).toContain("cfcf-iteration-signals.json");
+    expect(names).toContain("iteration-log.md");
   });
 });
 

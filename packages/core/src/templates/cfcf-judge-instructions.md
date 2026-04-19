@@ -93,6 +93,26 @@ Write a JSON file with this exact structure:
 - `no_changes`: Agent made no meaningful code changes
 - `regression`: Agent broke previously working functionality
 
+## Appending to decision-log.md
+
+You MAY append entries to `cfcf-docs/decision-log.md` when you notice a
+tactical pattern the project benefits from remembering. Use the tagged
+format (details in the header of that file):
+
+```markdown
+## <ISO 8601 UTC>  [role: judge]  [iter: {{ITERATION}}]  [category: observation]
+
+<one paragraph: what you noticed and why it matters for future iterations>
+```
+
+Typical judge categories: `observation` (a pattern in this iteration) or
+`risk` (a concern not covered by tests). Do NOT write `strategy` entries
+here -- cross-iteration strategy shifts are the reflection role's job. Do
+NOT write `decision` entries -- you do not make implementation choices.
+
+Appending is optional: skip it unless there's something concrete worth
+recording.
+
 ## Guidelines
 
 - Be honest and specific in your assessment

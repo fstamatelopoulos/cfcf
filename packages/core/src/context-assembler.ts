@@ -82,8 +82,17 @@ export async function writeContextToRepo(
 
   // --- Dynamic files (cfcf regenerates these each iteration) ---
 
-  // Iteration history
-  const historyContent = ctx.iterationHistory || "# Iteration History\n\nNo previous iterations.\n";
+  // Iteration history is rebuilt from the committed iteration-log files
+  // each iteration. Those files live in cfcf-docs/iteration-logs/ and are
+  // written by the dev agent at the end of each iteration (item 5.6 PR 1).
+  // If no iteration-log files exist yet (fresh project, iteration 1, or
+  // a pre-5.6 project that never wrote them), we fall back to the caller-
+  // supplied `ctx.iterationHistory` for backwards compatibility.
+  const rebuilt = await rebuildIterationHistoryFromLogs(repoPath);
+  const historyContent =
+    rebuilt ??
+    ctx.iterationHistory ??
+    "# Iteration History\n\nNo previous iterations.\n";
   await writeFile(join(cfcfDocsDir, "iteration-history.md"), historyContent, "utf-8");
 
   // Judge assessment from previous iteration
@@ -177,7 +186,8 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("**Must read (Tier 2):**");
   lines.push("- cfcf-docs/plan.md -- current implementation plan");
   lines.push("- cfcf-docs/iteration-history.md -- compressed previous iteration summaries");
-  lines.push("- cfcf-docs/decision-log.md -- past decisions and lessons");
+  lines.push("- cfcf-docs/iteration-logs/ -- curated per-iteration changelogs (more detail than history)");
+  lines.push("- cfcf-docs/decision-log.md -- tagged decisions and lessons from all roles (read the tail)");
   lines.push("- cfcf-docs/judge-assessment.md -- latest judge feedback");
   lines.push("- cfcf-docs/user-feedback.md -- user direction (if any)");
   lines.push("");
@@ -200,15 +210,87 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("");
   lines.push("Before exiting, you MUST:");
   lines.push("1. Update cfcf-docs/plan.md with your progress");
-  lines.push("2. Append to cfcf-docs/decision-log.md");
-  lines.push("3. Fill in cfcf-docs/iteration-handoff.md");
-  lines.push("4. Fill in cfcf-docs/cfcf-iteration-signals.json with structured data");
-  lines.push("5. Update project docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
-  lines.push("6. Commit your work frequently with meaningful messages");
+  lines.push(`2. Write cfcf-docs/iteration-logs/iteration-${ctx.iteration}.md (backward-looking changelog of this iteration -- see process.md "Iteration Log Format")`);
+  lines.push("3. Append tagged entries to cfcf-docs/decision-log.md when you make non-obvious decisions or learn lessons (format: `## <ISO-UTC>  [role: dev]  [iter: N]  [category: decision|lesson]`)");
+  lines.push("4. Fill in cfcf-docs/iteration-handoff.md (forward-looking: what's next, open questions, blockers)");
+  lines.push("5. Fill in cfcf-docs/cfcf-iteration-signals.json with structured data");
+  lines.push("6. Update project docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
+  lines.push("7. Commit your work frequently with meaningful messages");
   lines.push("");
   lines.push("See cfcf-docs/process.md for the full process definition.");
 
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Rebuild `iteration-history.md` content from the per-iteration log files
+ * under `cfcf-docs/iteration-logs/`.
+ *
+ * Each `iteration-N.md` is a small, curated changelog written by the dev
+ * agent at the end of iteration N (see process.md "Iteration Log Format").
+ * We extract the `## Summary` body of each and concatenate newest-first.
+ *
+ * Returns `null` when no iteration-log files are found (fresh project or
+ * pre-5.6 project). In that case the caller falls back to the legacy
+ * in-memory history content.
+ */
+export async function rebuildIterationHistoryFromLogs(
+  repoPath: string,
+): Promise<string | null> {
+  const logsDir = join(repoPath, "cfcf-docs", "iteration-logs");
+  let entries: string[];
+  try {
+    entries = await readdir(logsDir);
+  } catch {
+    return null;
+  }
+
+  const logFiles: { iter: number; file: string }[] = [];
+  for (const name of entries) {
+    const m = /^iteration-(\d+)\.md$/.exec(name);
+    if (!m) continue;
+    logFiles.push({ iter: parseInt(m[1], 10), file: name });
+  }
+  if (logFiles.length === 0) return null;
+
+  // Newest first
+  logFiles.sort((a, b) => b.iter - a.iter);
+
+  const lines: string[] = ["# Iteration History", ""];
+  for (const { iter, file } of logFiles) {
+    const content = await readFile(join(logsDir, file), "utf-8");
+    const title = extractTitle(content) ?? "";
+    const summary = extractSummary(content) ?? "(no summary section)";
+    lines.push(`## Iteration ${iter}${title ? ` -- ${title}` : ""}`);
+    lines.push("");
+    lines.push(summary.trim());
+    lines.push("");
+    lines.push(`[full log: cfcf-docs/iteration-logs/${file}]`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Extract the short title from an iteration-log's `# Iteration N -- Title`
+ * first heading. Returns null if the heading is missing or malformed.
+ */
+function extractTitle(content: string): string | null {
+  const m = /^#\s*Iteration\s+\d+\s*(?:--|\u2014|-)\s*(.+)$/m.exec(content);
+  if (!m) return null;
+  return m[1].trim();
+}
+
+/**
+ * Extract the body of the `## Summary` section (up to the next level-2
+ * heading). Returns null if absent.
+ */
+function extractSummary(content: string): string | null {
+  const m = /^##\s+Summary\s*\n+([\s\S]*?)(?=\n##\s|\n#\s|$)/m.exec(content);
+  if (!m) return null;
+  // Strip HTML/MD comments commonly used as placeholder hints.
+  const body = m[1].replace(/<!--[\s\S]*?-->/g, "").trim();
+  return body.length > 0 ? body : null;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   parseHandoffDocument,
   parseSignalFile,
   generateIterationSummary,
+  rebuildIterationHistoryFromLogs,
 } from "./context-assembler.js";
 import type { ProblemPack } from "./problem-pack.js";
 import type { IterationContext } from "./context-assembler.js";
@@ -283,6 +284,111 @@ describe("context-assembler", () => {
       const handoff = "# Handoff\n\n## Summary\nBuilt the auth module.\n\n## Changes Made\n...";
       const summary = generateIterationSummary(1, handoff, null, 0);
       expect(summary).toContain("Built the auth module");
+    });
+  });
+
+  describe("rebuildIterationHistoryFromLogs", () => {
+    it("returns null when iteration-logs/ is missing", async () => {
+      expect(await rebuildIterationHistoryFromLogs(tempDir)).toBeNull();
+    });
+
+    it("returns null when iteration-logs/ is empty", async () => {
+      const { mkdir } = await import("fs/promises");
+      await mkdir(join(tempDir, "cfcf-docs", "iteration-logs"), { recursive: true });
+      expect(await rebuildIterationHistoryFromLogs(tempDir)).toBeNull();
+    });
+
+    it("concatenates summaries newest-first", async () => {
+      const { mkdir, writeFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(
+        join(logsDir, "iteration-1.md"),
+        "# Iteration 1 -- Foundation\n\n## Summary\nScaffolded the project.\n\n## Changes\n- foo\n",
+        "utf-8",
+      );
+      await writeFile(
+        join(logsDir, "iteration-2.md"),
+        "# Iteration 2 -- Core\n\n## Summary\nAdded core features.\n\n## Changes\n- bar\n",
+        "utf-8",
+      );
+      const content = await rebuildIterationHistoryFromLogs(tempDir);
+      expect(content).not.toBeNull();
+      // Newest first
+      const idxTwo = content!.indexOf("Iteration 2");
+      const idxOne = content!.indexOf("Iteration 1");
+      expect(idxTwo).toBeGreaterThanOrEqual(0);
+      expect(idxOne).toBeGreaterThan(idxTwo);
+      expect(content).toContain("Foundation");
+      expect(content).toContain("Core");
+      expect(content).toContain("Scaffolded the project.");
+      expect(content).toContain("Added core features.");
+      expect(content).toContain("[full log: cfcf-docs/iteration-logs/iteration-2.md]");
+    });
+
+    it("survives missing Summary section", async () => {
+      const { mkdir, writeFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(
+        join(logsDir, "iteration-3.md"),
+        "# Iteration 3 -- Experiment\n\nNo summary heading here.\n",
+        "utf-8",
+      );
+      const content = await rebuildIterationHistoryFromLogs(tempDir);
+      expect(content).toContain("Iteration 3");
+      expect(content).toContain("(no summary section)");
+    });
+
+    it("skips non-matching files in iteration-logs/", async () => {
+      const { mkdir, writeFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(join(logsDir, "README.md"), "# Not an iteration log", "utf-8");
+      await writeFile(join(logsDir, "iteration-1.md"), "# Iteration 1\n\n## Summary\nOk.\n", "utf-8");
+      const content = await rebuildIterationHistoryFromLogs(tempDir);
+      expect(content).toContain("Iteration 1");
+      expect(content).not.toContain("Not an iteration log");
+    });
+
+    it("is used by writeContextToRepo when iteration-logs exist", async () => {
+      const { mkdir, writeFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(
+        join(logsDir, "iteration-1.md"),
+        "# Iteration 1 -- Foo\n\n## Summary\nRebuild-source content.\n",
+        "utf-8",
+      );
+      await writeContextToRepo(tempDir, makeCtx({
+        iteration: 2,
+        iterationHistory: "# Legacy history (should be ignored)\n",
+      }));
+      const written = await readFile(join(tempDir, "cfcf-docs", "iteration-history.md"), "utf-8");
+      expect(written).toContain("Rebuild-source content.");
+      expect(written).not.toContain("Legacy history");
+    });
+
+    it("falls back to ctx.iterationHistory when iteration-logs empty", async () => {
+      await writeContextToRepo(tempDir, makeCtx({
+        iteration: 2,
+        iterationHistory: "# Fallback history\nUsed because no logs.\n",
+      }));
+      const written = await readFile(join(tempDir, "cfcf-docs", "iteration-history.md"), "utf-8");
+      expect(written).toContain("Fallback history");
+    });
+  });
+
+  describe("generateInstructionContent -- iteration-log artifact", () => {
+    it("instructs the dev agent to write iteration-logs/iteration-N.md", () => {
+      const content = generateInstructionContent(makeCtx({ iteration: 7 }));
+      expect(content).toContain("cfcf-docs/iteration-logs/iteration-7.md");
+    });
+
+    it("mentions the tagged decision-log format", () => {
+      const content = generateInstructionContent(makeCtx());
+      expect(content).toMatch(/\[role: dev\]/);
+      expect(content).toMatch(/\[category: decision\|lesson\]/);
     });
   });
 });
