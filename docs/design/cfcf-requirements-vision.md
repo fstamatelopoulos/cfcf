@@ -105,16 +105,17 @@ The deterministic orchestration layer. Responsibilities:
 
 ### Agent Roles
 
-cf² manages four distinct agent roles, each independently configurable (agent adapter + model):
+cf² manages five distinct agent roles, each independently configurable (agent adapter + model):
 
 | Role | Purpose | When invoked |
 |------|---------|-------------|
-| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. | User-invoked (`cfcf review`), optional, can run multiple times |
-| **Dev Agent** | Reads context, writes code, runs tests, produces handoff + signals. | Each iteration |
-| **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY. | After each iteration |
+| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. Re-review-aware: on a project with completed iterations, the architect appends new pending iterations non-destructively when new requirements appear. | User-invoked (`cfcf review`), optional, can run multiple times |
+| **Dev Agent** | Reads context, writes code, runs tests, produces handoff + iteration-log + signals. | Each iteration |
+| **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY, opts in/out of reflection via the `reflection_needed` signal. | After each iteration |
+| **Reflection** | Reads the full cross-iteration history (decision log, per-iteration changelogs, prior reflection analyses, compact git log of iteration branches, tail of the latest dev log), classifies iteration health, and may non-destructively rewrite pending plan items. The only role allowed to edit a plan that has completed work. | After each judge, unless the judge opts out and `reflectSafeguardAfter` is not yet hit. Also user-invoked ad-hoc via `cfcf reflect`. |
 | **Documenter** | Produces polished final project documentation (architecture, API reference, setup guide). | Auto post-SUCCESS, or user-invoked (`cfcf document`) |
 
-Cross-agent review is encouraged: e.g., Codex for dev, Claude Code for judge and architect, Claude with Opus for documenter. Different agents catch different types of issues.
+Cross-agent review is encouraged: e.g., Codex for dev, Claude Code for judge and architect, Claude Opus for reflection and documenter. Different agents catch different types of issues. Reflection has the broadest context of any role, so a strong model is recommended there.
 
 Mission Control's control flow decisions are deterministic. All branching is based on test pass/fail status, iteration count vs. configured maximum, explicit rules (e.g., "if 3 consecutive failures with same error, stop and report"), and the N-iteration pause configuration.
 
