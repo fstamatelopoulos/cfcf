@@ -598,6 +598,7 @@ export async function runReflectionSync(
       signals: signals ?? undefined,
       iterationHealth: signals?.iteration_health,
       planModified: planAccepted && signals?.plan_modified === true,
+      planRejectionReason,
     } as Partial<import("./project-history.js").ReflectionHistoryEvent>);
 
     return {

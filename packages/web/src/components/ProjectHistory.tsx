@@ -9,6 +9,8 @@ import type {
 } from "../types";
 import type { LogTarget } from "./LogViewer";
 import { ArchitectReview } from "./ArchitectReview";
+import { JudgeDetail } from "./JudgeDetail";
+import { ReflectionDetail } from "./ReflectionDetail";
 import { formatDurationOrRunning } from "../utils/time";
 
 const determinationColor: Record<string, string> = {
@@ -120,8 +122,16 @@ function HistoryRow({
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
 
   const reviewEvent = event.type === "review" ? (event as ReviewHistoryEvent) : null;
+  const iterationEvent = event.type === "iteration" ? (event as IterationHistoryEvent) : null;
+  const reflectionEvent = event.type === "reflection" ? (event as ReflectionHistoryEvent) : null;
+
   const hasReviewDetail = !!reviewEvent?.signals;
+  const hasIterationDetail = !!(iterationEvent?.judgeSignals || iterationEvent?.devSignals);
+  const hasReflectionDetail = !!reflectionEvent; // always expandable once it exists
+  const canExpand = hasReviewDetail || hasIterationDetail || hasReflectionDetail;
+
   const [expanded, setExpanded] = useState(false);
+  const toggle = () => setExpanded((v) => !v);
 
   const readinessCell =
     reviewEvent?.readiness && (
@@ -132,7 +142,7 @@ function HistoryRow({
           <button
             type="button"
             className="project-history__readiness-pill"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={toggle}
             title="Click to view gaps, suggestions, and risks"
           >
             {reviewEvent.readiness} {expanded ? "▾" : "▸"}
@@ -154,28 +164,53 @@ function HistoryRow({
         </td>
         <td>
           {readinessCell}
-          {event.type === "iteration" && (event as IterationHistoryEvent).judgeDetermination && (
-            <span
-              style={{
-                color:
-                  determinationColor[(event as IterationHistoryEvent).judgeDetermination!] ||
-                  "inherit",
-              }}
-            >
-              {(event as IterationHistoryEvent).judgeDetermination}
-              {(event as IterationHistoryEvent).judgeQuality !== undefined && (
-                <> ({(event as IterationHistoryEvent).judgeQuality}/10)</>
-              )}
-            </span>
+          {iterationEvent?.judgeDetermination && (
+            hasIterationDetail ? (
+              <button
+                type="button"
+                className="project-history__readiness-pill"
+                onClick={toggle}
+                title="Click to view judge + dev signals"
+                style={{
+                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
+                }}
+              >
+                {iterationEvent.judgeDetermination}
+                {iterationEvent.judgeQuality !== undefined && (
+                  <> ({iterationEvent.judgeQuality}/10)</>
+                )}
+                {" "}{expanded ? "▾" : "▸"}
+              </button>
+            ) : (
+              <span
+                style={{
+                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
+                }}
+              >
+                {iterationEvent.judgeDetermination}
+                {iterationEvent.judgeQuality !== undefined && (
+                  <> ({iterationEvent.judgeQuality}/10)</>
+                )}
+              </span>
+            )
           )}
-          {event.type === "iteration" && (event as IterationHistoryEvent).merged && (
+          {iterationEvent?.merged && (
             <span className="project-history__merged"> ✓ merged</span>
           )}
           {event.type === "document" && event.status === "completed" && (
             <DocumentResult event={event as DocumentHistoryEvent} />
           )}
-          {event.type === "reflection" && (
-            <ReflectionResult event={event as ReflectionHistoryEvent} />
+          {reflectionEvent && (
+            <button
+              type="button"
+              className="project-history__readiness-pill"
+              onClick={toggle}
+              title="Click to view reflection details"
+              style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+            >
+              <ReflectionResult event={reflectionEvent} />
+              <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
+            </button>
           )}
         </td>
         <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
@@ -230,10 +265,21 @@ function HistoryRow({
           </td>
         </tr>
       )}
-      {expanded && hasReviewDetail && reviewEvent?.signals && (
+      {expanded && canExpand && (
         <tr className="project-history__detail-row">
           <td colSpan={7}>
-            <ArchitectReview signals={reviewEvent.signals} compact />
+            {hasReviewDetail && reviewEvent?.signals && (
+              <ArchitectReview signals={reviewEvent.signals} compact />
+            )}
+            {hasIterationDetail && iterationEvent && (
+              <JudgeDetail
+                judge={iterationEvent.judgeSignals}
+                dev={iterationEvent.devSignals}
+              />
+            )}
+            {hasReflectionDetail && reflectionEvent && (
+              <ReflectionDetail event={reflectionEvent} />
+            )}
           </td>
         </tr>
       )}

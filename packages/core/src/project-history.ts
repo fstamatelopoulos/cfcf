@@ -14,7 +14,7 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { getProjectDir } from "./projects.js";
-import type { ArchitectSignals, ReflectionSignals, IterationHealth } from "./types.js";
+import type { ArchitectSignals, ReflectionSignals, IterationHealth, JudgeSignals, DevSignals } from "./types.js";
 
 const HISTORY_FILENAME = "history.json";
 
@@ -70,6 +70,11 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
   judgeDetermination?: string;
   judgeQuality?: number;
   merged?: boolean;
+  /** Full parsed dev signals, persisted inline so the History tab can expand
+   *  even after `cfcf-iteration-signals.json` is overwritten next iteration. */
+  devSignals?: DevSignals;
+  /** Full parsed judge signals, same rationale as devSignals. */
+  judgeSignals?: JudgeSignals;
 }
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {
@@ -97,6 +102,13 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   iterationHealth?: IterationHealth;
   /** Whether the reflection agent rewrote the pending plan */
   planModified?: boolean;
+  /**
+   * When the reflection agent's plan rewrite was rejected by the
+   * non-destructive validator, this captures the reason (e.g. "completed
+   * item removed: …"). The plan.md on disk is already reverted to the
+   * prior version at this point.
+   */
+  planRejectionReason?: string;
   /** Exit code of the reflection process */
   exitCode?: number;
 }

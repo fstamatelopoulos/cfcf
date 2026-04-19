@@ -60,6 +60,72 @@ export function createApp() {
     });
   });
 
+  // --- Activity (cross-project) ---
+  //
+  // Returns a compact list of currently-running agent runs across all
+  // projects. Drives the blue pulsing dot + phase label in the web header
+  // so the user can see "something is running" at a glance from any page.
+  //
+  // Implementation: read each project's history.json + loop-state.json.
+  // History events with status="running" are the source of truth for
+  // review / document / reflection. For loop iterations we also pick up
+  // the current phase from loop-state.json (which has finer-grained
+  // phase info -- preparing/dev_executing/judging/reflecting/etc.).
+  app.get("/api/activity", async (c) => {
+    const projects = await listProjects();
+    const items: Array<{
+      projectId: string;
+      projectName: string;
+      type: "iteration" | "review" | "document" | "reflection";
+      phase?: string; // LoopPhase when type=iteration
+      iteration?: number;
+      startedAt: string;
+    }> = [];
+    for (const p of projects) {
+      const history = await readHistory(p.id);
+      const running = history.filter((e) => e.status === "running");
+      // Loop-state gives a finer-grained phase for the current iteration.
+      const loopState = await getLoopState(p.id);
+      const activeLoopPhases = [
+        "preparing", "dev_executing", "judging",
+        "reflecting", "deciding", "documenting",
+      ];
+      const loopActive = loopState && activeLoopPhases.includes(loopState.phase);
+
+      // If the loop is active, emit a single item reflecting its current phase
+      // (more informative than the raw "running" iteration event, which
+      // stays `running` across dev/judge/reflect phases).
+      if (loopActive) {
+        items.push({
+          projectId: p.id,
+          projectName: p.name,
+          type: "iteration",
+          phase: loopState.phase,
+          iteration: loopState.currentIteration,
+          startedAt: loopState.startedAt,
+        });
+        continue; // skip raw history "running" entries when loop state is authoritative
+      }
+
+      // Otherwise fall back to whatever's running in history (review,
+      // document, ad-hoc reflection, or an iteration stuck at "running"
+      // after a crash that we haven't cleaned up yet).
+      for (const e of running) {
+        items.push({
+          projectId: p.id,
+          projectName: p.name,
+          type: e.type as "iteration" | "review" | "document" | "reflection",
+          iteration:
+            e.type === "iteration" || e.type === "reflection"
+              ? (e as { iteration?: number }).iteration
+              : undefined,
+          startedAt: e.startedAt,
+        });
+      }
+    }
+    return c.json({ active: items });
+  });
+
   app.get("/api/status", async (c) => {
     const hasConfig = await configExists();
     const config = hasConfig ? await readConfig() : null;

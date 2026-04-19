@@ -934,7 +934,11 @@ async function runJudgeAndDecide(
 
   iterRecord.completedAt = new Date().toISOString();
 
-  // Update history event for this iteration
+  // Update history event for this iteration. Persist the full parsed
+  // dev + judge signals inline so the web History tab can expand the
+  // row to show tests, quality, concerns, anomaly type, reflection
+  // opt-out, etc., even after the *-signals.json files on disk get
+  // overwritten next iteration.
   await updateHistoryEvent(project.id, iterRecord.historyEventId, {
     status: "completed",
     completedAt: iterRecord.completedAt,
@@ -942,6 +946,8 @@ async function runJudgeAndDecide(
     judgeExitCode: iterRecord.judgeExitCode,
     judgeDetermination: judgeSignals?.determination,
     judgeQuality: judgeSignals?.quality_score,
+    devSignals: iterRecord.devSignals,
+    judgeSignals: judgeSignals ?? undefined,
   } as Partial<import("./project-history.js").IterationHistoryEvent>);
 
   // --- Decision-log size warning (item 5.6 U4) ---

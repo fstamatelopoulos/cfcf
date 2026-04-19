@@ -33,7 +33,7 @@ const tabs = [
   { key: "config", label: "Config" },
 ];
 
-const LOOP_ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "deciding", "documenting"];
+const LOOP_ACTIVE_PHASES = ["preparing", "dev_executing", "judging", "reflecting", "deciding", "documenting"];
 const REVIEW_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
 const DOCUMENT_ACTIVE_STATUSES = ["preparing", "executing"];
 
