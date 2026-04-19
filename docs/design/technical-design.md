@@ -184,11 +184,20 @@ interface AgentConfig {
   flags?: string[];                // Additional CLI flags
 }
 
-// Four agent roles, each independently configurable:
+// Five agent roles, each independently configurable:
 // - devAgent: writes code, runs tests (e.g., codex)
-// - judgeAgent: reviews iterations (e.g., claude-code)
-// - architectAgent: reviews Problem Pack pre-iteration (e.g., claude-code with opus)
+// - judgeAgent: reviews iterations + opts in/out of reflection (e.g., claude-code)
+// - architectAgent: reviews Problem Pack pre-iteration; also runs re-review
+//                   mode on an existing project to append new iterations
+//                   non-destructively (e.g., claude-code with opus)
+// - reflectionAgent: cross-iteration strategic review after every iteration
+//                    (unless judge opts out + safeguard not yet hit);
+//                    may non-destructively rewrite pending plan items
 // - documenterAgent: produces final polished docs post-SUCCESS (e.g., claude-code)
+//
+// Loop-level config:
+// - reflectSafeguardAfter: default 3; max consecutive judge opt-outs before
+//                          cfcf forces reflection regardless.
 ```
 
 ### 4.3 Process Manager

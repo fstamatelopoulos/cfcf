@@ -8,11 +8,11 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-Early development. Iteration 5 in progress.
+Early development. Iteration 5 largely complete; iteration 6 on deck.
 
-- **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence
-- **Iteration 4 (v0.4.0, shipped)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications, architect-review UI, live elapsed-timer, one-phase-per-iteration discipline
-- **Iteration 5 (current, distribution phase on `iteration-5/distribution`)** — single-binary self-hosting (no Bun runtime needed), embedded templates + web bundle with local override layer, `cleanupMergedBranches` flag. **Designing next:** Tier 3 Reflection role with non-destructive plan editing — see [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md)
+- **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence.
+- **Iteration 4 (v0.4.0, shipped)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications, architect-review UI, live elapsed-timer, one-phase-per-iteration discipline.
+- **Iteration 5 (v0.5.0 – v0.7.0, shipped)** — single-binary self-hosting (no Bun runtime needed), embedded templates + web bundle with local override layer, `cleanupMergedBranches` flag. **Tier 3 Strategic Reflection role** (item 5.6) with non-destructive plan editing, three-commit-per-iteration discipline, multi-role decision log, per-iteration changelog artifact, `cfcf reflect` CLI, architect re-review mode, sentinel-based `CLAUDE.md` / `AGENTS.md` preservation, richer web History + cross-project activity indicator + read-only server/config page. Design: [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md).
 
 cfcf can be driven from the CLI or from the web GUI served by the same Hono server. See `docs/plan.md` for the full roadmap and current status table.
 
@@ -128,10 +128,26 @@ cfcf/
     api/                          # API reference
       server-api.md
     guides/                       # User guides
-      cli-usage.md
+      workflow.md                 # Full user workflow (main user guide)
+      cli-usage.md                # CLI command reference
+    research/                     # Designs in flight or historical
+      reflection-role-and-iterative-planning.md
   CLAUDE.md             # AI agent context (for Claude Code, Codex, etc.)
   CHANGELOG.md          # Release notes (follows Keep a Changelog)
 ```
+
+### Five Agent Roles
+
+cfcf uses five independently configurable agent roles -- each role can use
+a different adapter and model:
+
+| Role | Purpose |
+|------|---------|
+| Solution Architect | Reviews Problem Pack, produces / extends `plan.md` |
+| Dev agent | Writes code, runs tests, authors per-iteration changelog |
+| Judge agent | Per-iteration assessment + `reflection_needed` opt-out signal |
+| Reflection agent | Cross-iteration strategic review, non-destructive plan edits |
+| Documenter | Polished final docs after SUCCESS |
 
 ## Architecture at a Glance
 
@@ -142,12 +158,13 @@ User (CLI / Web GUI)
 cfcf Server (Hono on Bun, serves API + static web GUI)
     |
     +-- Project Manager           (config, state)
-    +-- Iteration Controller      (loop: prepare -> dev -> judge -> decide -> documenting)
-    +-- Review / Document Runners (architect + documenter)
+    +-- Iteration Controller      (loop: prepare -> dev -> judge -> reflect? -> decide -> documenting)
+    +-- Runners                   (architect [first-run or re-review], judge, reflection, documenter)
     +-- Process Manager           (spawn agents, capture logs)
     +-- Active Processes Registry (track + kill on shutdown)
-    +-- Context Assembler         (build CLAUDE.md + cfcf-docs/)
-    +-- Project History           (persistent audit trail of all agent runs)
+    +-- Context Assembler         (merge sentinel block into CLAUDE.md/AGENTS.md, build cfcf-docs/)
+    +-- Plan Validator            (non-destructive rewrite check for architect + reflection)
+    +-- Project History           (persistent audit trail: review / iteration / reflection / document)
     +-- Notifications Dispatcher  (terminal bell / macOS / Linux / log)
     +-- Memory Layer              (file-based, in repo + ~/.cfcf/ for logs)
     |
@@ -156,15 +173,16 @@ Agent Processes (Claude Code, Codex, etc.)
     running in user's local dev environment
 ```
 
-## How It Works (When Complete)
+## How It Works
 
-1. You define your problem in Markdown files (problem.md, success.md, test scenarios)
-2. (Recommended) The Solution Architect reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.)
-3. cfcf creates a feature branch and assembles context for the AI agent (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex -- regenerated each iteration)
-4. The dev agent reads context and executes **one phase per iteration**: picks up the next pending chunk from `cfcf-docs/plan.md`, does just that, marks it `[x]` with a brief note, and exits. Each iteration is a fresh agent process -- no session continuity -- so the plan is the checkpoint between runs.
-5. A separate judge agent reviews the work and provides structured feedback
-6. cfcf merges to main (or creates a PR) and starts the next iteration -- a brand new agent process that reads the updated plan and picks up from there
-7. Repeat until success criteria are met or iteration limits are reached
+1. You define your problem in Markdown files (problem.md, success.md, optional constraints / hints / context).
+2. (Recommended) The **Solution Architect** reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.). On re-review (a project with prior iterations) the architect appends new iterations non-destructively when new requirements appear.
+3. cfcf creates a feature branch and assembles context for the AI agent. The cfcf-owned block is written between sentinel markers in `CLAUDE.md` (Claude Code) or `AGENTS.md` (Codex); any user-authored content outside the markers is preserved across iterations.
+4. The **dev agent** reads context and executes **one phase per iteration**: picks up the next pending chunk from `cfcf-docs/plan.md`, does just that, marks it `[x]` with a brief note, writes a per-iteration changelog under `cfcf-docs/iteration-logs/`, and exits.
+5. The **judge agent** reviews the iteration and produces structured feedback (determination, quality score, tests, concerns, reflection opt-out).
+6. The **reflection agent** reads the full cross-iteration history and may non-destructively rewrite pending plan items (completed work is protected; destructive rewrites are auto-reverted). Reflection runs after every iteration unless the judge explicitly opts out; even then cfcf forces reflection after `reflectSafeguardAfter` consecutive opt-outs (default 3). Reflection can set `recommend_stop` to pause the loop for the user.
+7. Each iteration produces up to three separate commits (dev / judge / reflect). cfcf merges the feature branch to main (auto-merge mode) and starts the next iteration -- a brand new agent process that reads the updated plan and picks up from there.
+8. Repeat until success criteria are met, reflection recommends stopping, or iteration limits are reached. On success, the **documenter** produces polished `docs/` before the loop ends.
 
 ## Configuration
 

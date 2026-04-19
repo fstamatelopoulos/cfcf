@@ -11,45 +11,65 @@ cfcf can be driven from either the **CLI** or the **web GUI** (served by the sam
 ## Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     USER DOES THIS                          │
-│                                                             │
-│  1. Start server (once)                                     │
-│  2. Create repo + init project                              │
-│  3. Populate Problem Pack (problem, success criteria, etc.) │
-│  4. (Recommended) Consult Solution Architect for feedback   │
-│     └─ iterate on Problem Pack until satisfied              │
-│  5. Launch the iterative development process                │
-│     └─ review & provide feedback at pause cadence           │
+┌──────────────────────────────────────────────────────────────┐
+│                     USER DOES THIS                           │
+│                                                              │
+│  1. Start server (once)                                      │
+│  2. Create repo + init project                               │
+│  3. Populate Problem Pack (problem, success criteria, etc.)  │
+│  4. (Recommended) Consult Solution Architect for feedback    │
+│     └─ iterate on Problem Pack until satisfied               │
+│  5. Launch the iterative development process                 │
+│     └─ review & provide feedback at pause cadence            │
+│  6. (Optional) Re-consult the Architect or run ad-hoc        │
+│     Reflection if you want to extend a finished project      │
 └──────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                     cf² HANDLES THIS                         │
 │                                                              │
-│  • Assemble context (CLAUDE.md + cfcf-docs/)                 │
-│  • Launch dev agent on feature branch                        │
-│  • Capture logs, parse handoff + signals                     │
-│  • Launch judge agent, parse assessment                      │
-│  • Decide: continue / pause / stop                           │
-│  • On SUCCESS: run documenter to produce final docs          │
-│  • Alert user when input is needed                           │
-│  • Monitor + report progress via CLI                         │
+│  Each iteration:                                             │
+│   • Assemble context (CLAUDE.md/AGENTS.md + cfcf-docs/)      │
+│   • Launch dev agent on feature branch                       │
+│   • Capture logs, parse handoff + signals                    │
+│   • Launch judge agent, parse assessment                     │
+│   • Launch reflection agent (unless judge opts out)          │
+│   • Decide: continue / pause / stop                          │
+│   • Produce three separate commits (dev / judge / reflect)   │
+│   • On SUCCESS: run documenter to produce final docs         │
+│   • Alert user when input is needed                          │
+│  Cross-iteration plumbing:                                   │
+│   • Preserve user's content in CLAUDE.md/AGENTS.md           │
+│     (sentinel-delimited cfcf block)                          │
+│   • Rebuild iteration-history.md from per-iteration logs     │
+│   • Non-destructively protect completed plan items           │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Four Agent Roles
+### Five Agent Roles
 
-cf² uses four independently configurable agent roles:
+cf² uses five independently configurable agent roles:
 
 | Role | Purpose | When it runs |
 |------|---------|-------------|
-| **Dev agent** | Writes code, runs tests | Each iteration |
-| **Judge agent** | Reviews dev work, determines progress | After each dev iteration |
-| **Solution Architect** | Reviews Problem Pack, creates plan outline + doc stubs | User-invoked (`cfcf review`) |
-| **Documenter** | Produces polished final documentation | Auto post-SUCCESS, or `cfcf document` |
+| **Solution Architect** | Reviews Problem Pack, produces initial plan + doc stubs. On re-review: extends the plan non-destructively when new requirements appear. | User-invoked (`cfcf review`) |
+| **Dev agent** | Writes code, runs tests, produces handoff + iteration-log | Each iteration |
+| **Judge agent** | Reviews dev work, determines progress, may opt out of reflection | After each dev iteration |
+| **Reflection agent** | Reads the full cross-iteration history, classifies iteration health, may rewrite pending plan items non-destructively | After the judge on every iteration, unless the judge explicitly opts out |
+| **Documenter** | Produces polished final documentation | Auto post-SUCCESS, or `cfcf document` on demand |
 
-Each role can use a different agent and model (e.g., Codex for dev, Claude Code for judge).
+Each role can use a different agent and model. Reflection is the strongest-context role -- the project's full history is its input -- so the recommended default is the most capable model available (Claude Opus, GPT-5, etc.). You can configure each role separately in `cfcf init` or via `cfcf config edit`.
+
+### Three Tiers of Evaluation
+
+cf² evaluates every iteration at three levels:
+
+1. **Mechanical** -- tests, type-checks, linters. The dev agent runs them and the judge verifies them.
+2. **Per-iteration judgment** -- the Judge assesses the latest iteration only: did it make meaningful progress? Any anomalies? Is the code quality acceptable?
+3. **Strategic reflection** -- the Reflection agent reads the *entire* project history (all iteration logs, all prior judge assessments, the decision log, the git log of iteration branches, the tail of the most recent dev log) and classifies trajectory: `converging | stable | stalled | diverging | inconclusive`. Reflection can non-destructively rewrite the *pending* portion of `cfcf-docs/plan.md` when the evidence warrants a strategic shift, or flag `recommend_stop` to pause the loop for you.
+
+Reflection is the only role allowed to edit a plan that already has completed work.
 
 ---
 
@@ -65,7 +85,7 @@ cfcf server status
 cfcf server start
 ```
 
-The server runs in the background. You can stop it anytime with `cfcf server stop`.
+The server runs in the background. You can stop it anytime with `cfcf server stop`. The web GUI is reachable at `http://localhost:7233`. A read-only server + config page is available at `http://localhost:7233/#/server` and linked from the Dashboard.
 
 ---
 
@@ -77,7 +97,7 @@ Run once after installing cf²:
 cfcf init
 ```
 
-This detects installed AI agents (Claude Code, Codex), asks for configuration defaults for all four roles (dev, judge, architect, documenter), explains the permission flags, and saves the config. The configuration can be changed later with:
+This detects installed AI agents (Claude Code, Codex), asks for configuration defaults for all five roles (dev, judge, architect, documenter, reflection), asks for `reflectSafeguardAfter` (how many consecutive judge opt-outs before cfcf forces reflection -- default 3), explains the permission flags, and saves the config. The configuration can be changed later with:
 
 ```bash
 cfcf config edit    # or: cfcf init --force
@@ -104,6 +124,8 @@ git add -A && git commit -m "init"
 cd /path/to/existing/project
 # Ensure there's at least one commit
 ```
+
+cfcf will **preserve any existing `CLAUDE.md` / `AGENTS.md`** in the repo. Iteration-specific instructions are inserted between sentinel markers (`<!-- cfcf:begin --> ... <!-- cfcf:end -->`); your own content outside the markers is never touched. See "CLAUDE.md / AGENTS.md" below.
 
 ### 3b. Register with cf²
 
@@ -190,8 +212,20 @@ cfcf review --project my-project
 The Solution Architect reads your Problem Pack and produces:
 - **`cfcf-docs/architect-review.md`** -- readiness assessment, gaps, ambiguities, security considerations, risk factors, recommendations
 - **`cfcf-docs/plan.md`** -- initial implementation plan outline for the dev agent to build on
-- **`docs/architecture.md`**, **`docs/api-reference.md`**, **`docs/setup-guide.md`** -- initial documentation stubs
+- **`docs/architecture.md`**, **`docs/api-reference.md`**, **`docs/setup-guide.md`** -- initial documentation stubs (first-run only)
 - **`cfcf-docs/cfcf-architect-signals.json`** -- structured readiness signal (READY / NEEDS_REFINEMENT / BLOCKED)
+
+### The architect has two modes
+
+**First-run mode.** `cfcf-docs/plan.md` doesn't exist (or has no completed items yet). The architect scaffolds a fresh plan from the Problem Pack.
+
+**Re-review mode.** `cfcf-docs/plan.md` already has completed items (`[x]`) -- i.e. previous iterations have shipped. The architect:
+- Reads the full history first (iteration logs, decision log, reflection reviews) to understand what was already delivered.
+- Compares to the current Problem Pack. If new requirements appeared (e.g. you added a new section to `problem.md`), the architect **appends** new pending iterations to `plan.md` rather than rewriting it.
+- If the current plan still covers the Problem Pack, the architect leaves `plan.md` untouched and says so in `architect-review.md`.
+- Never deletes completed items or iteration headers. cfcf enforces this: any destructive rewrite is auto-reverted and logged.
+
+This means you can safely re-run `cfcf review` mid-project or after a finished loop when you've added new requirements -- the architect won't erase the audit trail.
 
 ### The user's iterative refinement loop:
 
@@ -219,49 +253,96 @@ When you feel the Problem Pack adequately describes the problem, launch the dark
 cfcf run --project my-project
 ```
 
-**This is the last user action until cf² needs input.** From this point, cf² manages everything autonomously:
+**This is the last user action until cf² needs input.** From this point, cf² manages everything autonomously.
 
-### What cf² does automatically (each iteration):
+### Per-iteration flow (what cf² does automatically)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ ITERATION LOOP (cf² manages this autonomously)                    │
-│                                                                   │
-│  1. Assemble context (CLAUDE.md / AGENTS.md + cfcf-docs/)         │
-│  2. Create git feature branch: cfcf/iteration-N                   │
-│  3. Launch dev agent (e.g., Codex) as a FRESH process             │
-│  4. Agent works: reads context, picks up next pending chunk from  │
-│     cfcf-docs/plan.md, codes, tests                               │
-│  5. Agent updates project docs (architecture, API ref, setup)     │
-│  6. Agent updates cfcf-docs/plan.md (marks [x] + notes) and       │
-│     produces handoff doc + signal file                            │
-│  7. cf² captures logs, commits all changes                        │
-│  8. Launch judge agent (e.g., Claude Code)                        │
-│  9. Judge reviews: determines SUCCESS/PROGRESS/STALLED/ANOMALY    │
-│  10. cf² decides next action:                                     │
-│      ├─ SUCCESS → run documenter → merge → push → done            │
-│      ├─ PROGRESS → continue to next iteration                     │
-│      ├─ STALLED → alert user, wait for input                      │
-│      ├─ ANOMALY → alert user, wait for input                      │
-│      ├─ User input needed → alert user with questions, wait       │
-│      └─ Pause cadence reached → alert user, wait for feedback     │
-│                                                                   │
-│  Loop continues until: success, max iterations, or user stops     │
+│ ITERATION N                                                      │
+│                                                                  │
+│  PREPARE (cf²)       Assemble context -- merge cfcf block into   │
+│                      CLAUDE.md/AGENTS.md, rebuild                │
+│                      iteration-history.md from iteration-logs,   │
+│                      create branch cfcf/iteration-N              │
+│                                                                  │
+│  DEV (agent)         Fresh agent process; reads plan.md,         │
+│                      executes the next pending chunk, updates    │
+│                      plan.md with [x] + notes, writes            │
+│                      iteration-logs/iteration-N.md,              │
+│                      iteration-handoff.md, iteration signals     │
+│                      → commit: "cfcf iteration N dev (<adapter>)"│
+│                                                                  │
+│  JUDGE (agent)       Fresh agent process; assesses this          │
+│                      iteration; writes judge-assessment.md       │
+│                      + signals (determination, quality score,    │
+│                      tests, concerns, reflection_needed opt-out) │
+│                      → commit: "cfcf iteration N judge (...)"    │
+│                                                                  │
+│  REFLECT (agent,     Conditional. Runs unless the judge set      │
+│  conditional)        reflection_needed:false AND we're still     │
+│                      under the reflectSafeguardAfter ceiling.    │
+│                      Reads FULL history. Writes                  │
+│                      reflection-analysis.md + signals. May       │
+│                      rewrite pending plan items non-             │
+│                      destructively (completed items are          │
+│                      protected; destructive rewrites are auto-   │
+│                      reverted). May flag recommend_stop.         │
+│                      → commit: "cfcf iteration N reflect         │
+│                         (<health>): <key_observation>"           │
+│                                                                  │
+│  DECIDE (cf²)        Read all signals. Decision engine picks:    │
+│                        SUCCESS  → run documenter, merge, push    │
+│                        PROGRESS → continue to next iteration     │
+│                        STALLED  → apply onStalled policy         │
+│                        ANOMALY  → pause, alert user              │
+│                        reflection.recommend_stop → pause         │
+│                          (takes precedence over judge)           │
+│                        pause cadence reached → pause, alert      │
+│                      Auto-merge the branch to main if configured │
+│                                                                  │
+│  DOCUMENT (agent)    Only on SUCCESS. Produces polished          │
+│                      docs/ (architecture, api-reference,         │
+│                      setup-guide, README).                       │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+Each iteration produces **up to three separate commits** (dev / judge / reflect) on the feature branch, so `git log --oneline cfcf/iteration-N` reads as a clean per-iteration story.
+
 ### One phase per iteration, one clean session per phase
 
-Every iteration is a **separate, clean agent process** -- no session continuity, no memory carried over between iterations except files on disk. cf² enforces and leverages this:
+Every agent invocation is a **separate, clean process** -- no session continuity, no memory carried over except files on disk. cf² enforces and leverages this:
 
 - The Solution Architect's `cfcf-docs/plan.md` maps phases to concrete iterations (`## Iteration 1 -- Foundation`, `## Iteration 2 -- Core features`, ...).
-- Each iteration's generated `CLAUDE.md` (for Claude Code) or `AGENTS.md` (for Codex) includes an **Iteration Scope** section instructing the agent to execute only the **next pending chunk** from the plan.
-- Before exiting, the agent marks completed items `[x]` in `plan.md` with a short note of what it actually did. The next iteration -- a brand new agent process -- picks up from there by reading `plan.md` first.
-- This is what makes the judge's per-iteration assessment meaningful, lets you pause/resume between iterations, and prevents an unattended run from trying to finish the entire project in one 20-minute session (which typically produces shallow work).
+- Each iteration's generated `CLAUDE.md` (for Claude Code) or `AGENTS.md` (for Codex) includes an **Iteration Scope** section instructing the dev agent to execute only the **next pending chunk** from the plan.
+- Before exiting, the dev agent marks completed items `[x]` in `plan.md` with a short note and writes a per-iteration changelog at `cfcf-docs/iteration-logs/iteration-N.md`. cf² uses those log files to rebuild `iteration-history.md` before the next iteration, so history survives server restarts.
+- The next iteration -- a brand new agent process -- picks up from there.
 
 You do not have to configure this -- it is baked into the dev-agent prompt generated for every iteration.
 
-### The CLI shows real-time progress:
+### `CLAUDE.md` / `AGENTS.md` (sentinel-based merge, v0.7.0+)
+
+cf² regenerates a block of iteration-specific context for the dev agent every iteration. To avoid destroying user-authored content, it uses sentinel markers:
+
+```
+<!-- cfcf:begin -->
+# cfcf Iteration N Instructions
+…generated each iteration…
+<!-- cfcf:end -->
+
+# My project notes
+…your own content, never touched by cfcf…
+```
+
+Rules:
+- File doesn't exist → cfcf creates it with the marked block only.
+- File exists *without* markers → cfcf prepends the marked block, preserves your content below untouched.
+- File exists *with* markers → cfcf updates only the content between markers. Your content outside is inviolate, byte-for-byte.
+- You removed the markers by hand → cfcf falls back to the "prepend" branch on the next iteration (no data loss, just re-inserts the sentinel section).
+
+**Rule of thumb:** Anything between the sentinel markers is cfcf-owned and will be overwritten. Anything outside is yours.
+
+### The CLI shows real-time progress
 
 ```
 Project:  my-project
@@ -273,12 +354,12 @@ Will pause for review every 3 iterations
 preparing [iteration 1]
 dev_executing [iteration 1] 3m 22s
 judging [iteration 1] 1m 05s
+reflecting [iteration 1] 55s
 preparing [iteration 2]
 dev_executing [iteration 2] 2m 48s
 judging [iteration 2] 58s
-preparing [iteration 3]
-dev_executing [iteration 3] 1m 30s
-judging [iteration 3] 45s
+reflecting [iteration 2] 1m 10s
+…
 
 paused [iteration 3]
 
@@ -287,9 +368,16 @@ Project:    my-project
 Iteration:  3/10
 Reason:     cadence
 Last judge: PROGRESS (quality: 8/10)
+Last reflect: stable · "Auth layer is coming together cleanly."
 ```
 
-### Monitoring (anytime during execution):
+### The web GUI shows even more
+
+- A pulsing blue dot + phase label (e.g. `my-project: reflect #3`) appears in the top bar whenever *any* agent is running anywhere.
+- The History tab shows each iteration plus a separate row per reflection run. Clicking a row expands it to show the full parsed signals (determination, quality, test counts, key concerns, reflection opt-out, iteration health, plan-modified vs rejected-with-reason, etc.).
+- The PhaseIndicator component labels each step with `(cf²)` or `(agent)` so you can tell at a glance which phases are deterministic plumbing vs LLM invocations.
+
+### Monitoring (anytime during execution)
 
 ```bash
 # Quick status
@@ -297,21 +385,31 @@ cfcf status --project my-project
 
 # Watch the current iteration's live log
 tail -f ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
+tail -f ~/.cfcf/logs/<project-id>/reflection-NNN.log
 
 # Check the latest judge assessment
 cat cfcf-docs/judge-assessment.md
 
-# View iteration history
+# Check the latest reflection analysis
+cat cfcf-docs/reflection-analysis.md
+
+# View iteration history (rebuilt from iteration-logs each iteration)
 cat cfcf-docs/iteration-history.md
+
+# Browse per-iteration changelogs
+ls cfcf-docs/iteration-logs/
+
+# Read the cross-role decision log
+cat cfcf-docs/decision-log.md
 ```
 
 ### Notifications
 
-When running unattended, cf² can notify you via terminal bell + native macOS/Linux
-notifications when a loop pauses, completes, or an agent fails. Configured during
-`cfcf init`. See `docs/guides/cli-usage.md` under "Notifications" for details.
+When running unattended, cf² can notify you via terminal bell + native macOS/Linux notifications when a loop pauses, completes, or an agent fails. Configured during `cfcf init`. See `docs/guides/cli-usage.md` under "Notifications" for details.
 
-### When cf² involves the user:
+When the decision log grows past 50 iterations, cf² fires a single informational notification suggesting you consider archiving it. No auto-trim -- the log is yours.
+
+### When cf² involves the user
 
 | Situation | What happens |
 |-----------|-------------|
@@ -319,14 +417,16 @@ notifications when a loop pauses, completes, or an agent fails. Configured durin
 | **Agent has questions** | Dev agent flagged `user_input_needed` in signal file. cf² presents the questions. |
 | **Judge flags anomaly** | Token exhaustion, circling, regression detected. cf² alerts user. |
 | **Judge says STALLED** | No progress for N consecutive iterations. cf² alerts user. |
+| **Reflection flags `recommend_stop`** | Reflection believes the loop is fundamentally stuck. cf² pauses and alerts the user. This takes precedence over a judge `PROGRESS` vote. |
 | **Success** | All criteria met. cf² runs documenter, merges to main, pushes, notifies user. |
 | **Max iterations reached** | cf² stops and reports final state. |
 
-### User actions at pause points:
+### User actions at pause points
 
 ```bash
 # Review
 cat cfcf-docs/judge-assessment.md
+cat cfcf-docs/reflection-analysis.md
 cat cfcf-docs/plan.md
 
 # Resume (optionally with feedback for the next iteration)
@@ -339,7 +439,25 @@ cfcf stop --project my-project
 
 ---
 
-## Step 7: Documentation (Automatic + On-Demand)
+## Step 7: Reflection On Demand (Optional)
+
+Outside the iteration loop, you can invoke the Reflection role manually:
+
+```bash
+cfcf reflect --project my-project
+cfcf reflect --project my-project --prompt "focus on the auth-layer drift"
+```
+
+This is useful when you:
+- Want a strategic health-check on a long-running project without running another iteration.
+- Added new requirements and want reflection to suggest plan changes before kicking off the next loop.
+- Want to see whether the reflection agent would recommend stopping (its `recommend_stop` signal).
+
+Ad-hoc reflection does NOT modify `loop-state.json` and does NOT write an `iteration-log` (no iteration happened). It DOES write `reflection-analysis.md`, update `cfcf-reflection-signals.json`, and append a `decision-log.md` entry so the strategic note survives for the next loop.
+
+---
+
+## Step 8: Documentation (Automatic + On-Demand)
 
 ### Automatic (post-SUCCESS)
 
@@ -364,14 +482,14 @@ This is useful for regenerating docs after manual code changes, or if you want t
 
 ---
 
-## Step 8: Inspect Results
+## Step 9: Inspect Results
 
 After the process completes (success, max iterations, or user stop):
 
 ```bash
-# See the code changes across all iterations
+# See the per-iteration commits -- dev / judge / reflect appear as a three-commit story
 cd /path/to/my-project
-git log --oneline --all | grep cfcf
+git log --oneline --all | grep "cfcf iteration"
 
 # Read the final handoff
 cat cfcf-docs/iteration-handoff.md
@@ -379,10 +497,20 @@ cat cfcf-docs/iteration-handoff.md
 # Read the judge's final assessment
 cat cfcf-docs/judge-assessment.md
 
-# Review the full iteration history
+# Read the latest reflection analysis
+cat cfcf-docs/reflection-analysis.md
+
+# Review the full iteration history (rebuilt from iteration-logs)
 cat cfcf-docs/iteration-history.md
 
-# Check the decision log
+# Browse per-iteration changelogs
+ls cfcf-docs/iteration-logs/
+cat cfcf-docs/iteration-logs/iteration-3.md
+
+# Browse archived reflection analyses
+ls cfcf-docs/reflection-reviews/
+
+# Check the cross-role decision log
 cat cfcf-docs/decision-log.md
 
 # Read the generated documentation
@@ -391,7 +519,27 @@ cat docs/setup-guide.md
 
 # View any iteration's full agent log
 cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
+cat ~/.cfcf/logs/<project-id>/reflection-NNN.log
 ```
+
+---
+
+## Extending a Finished Project
+
+cf² is designed for the "add more work later" case. The flow for extending a successful project:
+
+```
+1. Edit problem-pack/problem.md + success.md with the new requirements.
+2. cfcf review --project my-project
+   → architect enters re-review mode, reads the full history, appends
+     new pending iterations to plan.md (or says "plan is still valid")
+3. (Optional) cfcf reflect --project my-project
+   → ad-hoc reflection confirms health + notes any strategic concerns
+4. cfcf run --project my-project
+   → loop picks up the next pending iteration in the appended plan
+```
+
+Because the non-destructive rules are applied to both architect re-review *and* reflection-during-loop, completed work from prior iterations is never lost.
 
 ---
 
@@ -409,10 +557,11 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 | Write `hints.md` | Before launching or between iterations | Optional |
 | Write `style-guide.md` | Before launching iterations | Optional |
 | Add `context/*.md` files | Before launching iterations | Optional (recommended for existing repos) |
-| Run `cfcf review` (Solution Architect) | Before launching iterations | Optional (recommended) |
+| Run `cfcf review` (Solution Architect) | Before launching iterations, or to re-review after adding requirements | Optional (recommended) |
 | Launch `cfcf run` | When Problem Pack is ready | Yes (once per development cycle) |
 | Review results at pause points | When cf² pauses and asks | Recommended |
 | Provide feedback at pause points | When cf² pauses and asks | Optional but valuable |
+| Run `cfcf reflect` | Ad-hoc strategic health-check, or between extending-loop invocations | Optional |
 
 ---
 
@@ -421,18 +570,24 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 | Task | When |
 |------|------|
 | Scaffold `problem-pack/` templates | On `cfcf project init` |
-| Solution Architect review | On `cfcf review` (user-triggered, advisory) |
-| Assemble context (CLAUDE.md + cfcf-docs/) | Before each iteration |
+| Solution Architect review (first-run or re-review) | On `cfcf review` (user-triggered, advisory) |
+| Assemble context (sentinel-merged CLAUDE.md/AGENTS.md + cfcf-docs/) | Before each iteration |
+| Preserve user content in CLAUDE.md/AGENTS.md outside sentinel markers | Every iteration |
+| Rebuild `iteration-history.md` from committed iteration-logs | Before each iteration |
 | Create git feature branches | Before each iteration |
 | Launch dev agent with proper flags | Each iteration |
 | Capture and store agent logs | During each iteration |
 | Parse handoff document + signal file | After each iteration |
 | Launch judge agent | After each iteration |
+| Launch reflection agent (unless judge opts out and safeguard not hit) | After each judge |
+| Non-destructively validate plan rewrites by reflection or architect | Each time plan.md changes |
+| Produce three separate commits per iteration (dev / judge / reflect) | Each iteration |
 | Determine next action (continue/stop/alert) | After each iteration |
 | Merge to main on iteration completion | After each iteration (auto-merge mode) |
-| Archive judge assessments | After each iteration |
+| Archive judge assessments + reflection analyses | After each iteration |
+| Emit pulsing activity indicator in web UI | Whenever any agent is running anywhere |
 | Alert user when input is needed | When detected |
-| Compress iteration history | Before each iteration |
+| Warn when decision log crosses 50 entries | Once per loop run |
 | Run documenter on SUCCESS | After judge says SUCCESS |
 | Persist loop state to disk | On every phase transition |
 | Monitor and report progress via CLI | Continuously during execution |
@@ -444,7 +599,7 @@ cat ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
 ```bash
 # One-time setup
 cfcf server start                                  # Start server
-cfcf init                                          # First-run config (4 agent roles)
+cfcf init                                          # First-run config (five agent roles)
 
 # Per-project setup
 cfcf project init --repo <path> --name <name>      # Register project
@@ -452,6 +607,7 @@ cfcf project init --repo <path> --name <name>      # Register project
 
 # Solution Architect review (optional, recommended)
 cfcf review --project <name>                       # Get feedback + plan outline
+                                                    # (re-review-aware on existing projects)
 # Read cfcf-docs/architect-review.md               # Review suggestions
 # Refine problem-pack/ files, repeat if desired
 
@@ -460,12 +616,17 @@ cfcf run --project <name>                          # cf² takes over
 
 # Monitor (while running)
 cfcf status --project <name>                       # Current state
-tail -f ~/.cfcf/logs/<id>/iteration-NNN-dev.log    # Live agent output
+tail -f ~/.cfcf/logs/<id>/iteration-NNN-dev.log    # Live dev output
+tail -f ~/.cfcf/logs/<id>/reflection-NNN.log      # Live reflection output
 
 # At pause points
 cfcf resume --project <name>                       # Continue after review
 cfcf resume --project <name> --feedback "..."      # Continue with direction
 cfcf stop --project <name>                         # Stop the process
+
+# Strategic health-check (ad-hoc, no iteration)
+cfcf reflect --project <name>
+cfcf reflect --project <name> --prompt "focus on X"
 
 # Documentation (on-demand, also runs auto post-SUCCESS)
 cfcf document --project <name>                     # Generate polished docs

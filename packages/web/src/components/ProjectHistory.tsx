@@ -164,36 +164,45 @@ function HistoryRow({
         </td>
         <td>
           {readinessCell}
-          {iterationEvent?.judgeDetermination && (
-            hasIterationDetail ? (
+          {iterationEvent?.judgeDetermination && (() => {
+            // Summarise judge result: quality + (when available) test counts.
+            // E.g. "PROGRESS (8/10 · 5/5)". Tests come from judge signals if
+            // persisted, otherwise dev signals as a fallback.
+            const j = iterationEvent.judgeSignals;
+            const d = iterationEvent.devSignals;
+            const passed = j?.tests_passed ?? d?.tests_passed;
+            const total = j?.tests_total ?? d?.tests_total;
+            const hasQ = iterationEvent.judgeQuality !== undefined;
+            const hasTests = passed !== undefined && total !== undefined;
+            const summary = (
+              <>
+                {iterationEvent.judgeDetermination}
+                {(hasQ || hasTests) && (
+                  <>
+                    {" "}(
+                    {hasQ && <>{iterationEvent.judgeQuality}/10</>}
+                    {hasQ && hasTests && " · "}
+                    {hasTests && <>{passed}/{total}</>}
+                    )
+                  </>
+                )}
+              </>
+            );
+            const color = determinationColor[iterationEvent.judgeDetermination] || "inherit";
+            return hasIterationDetail ? (
               <button
                 type="button"
                 className="project-history__readiness-pill"
                 onClick={toggle}
                 title="Click to view judge + dev signals"
-                style={{
-                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
-                }}
+                style={{ color }}
               >
-                {iterationEvent.judgeDetermination}
-                {iterationEvent.judgeQuality !== undefined && (
-                  <> ({iterationEvent.judgeQuality}/10)</>
-                )}
-                {" "}{expanded ? "▾" : "▸"}
+                {summary} {expanded ? "▾" : "▸"}
               </button>
             ) : (
-              <span
-                style={{
-                  color: determinationColor[iterationEvent.judgeDetermination] || "inherit",
-                }}
-              >
-                {iterationEvent.judgeDetermination}
-                {iterationEvent.judgeQuality !== undefined && (
-                  <> ({iterationEvent.judgeQuality}/10)</>
-                )}
-              </span>
-            )
-          )}
+              <span style={{ color }}>{summary}</span>
+            );
+          })()}
           {iterationEvent?.merged && (
             <span className="project-history__merged"> ✓ merged</span>
           )}
@@ -275,6 +284,7 @@ function HistoryRow({
               <JudgeDetail
                 judge={iterationEvent.judgeSignals}
                 dev={iterationEvent.devSignals}
+                meta={{ branch: iterationEvent.branch }}
               />
             )}
             {hasReflectionDetail && reflectionEvent && (

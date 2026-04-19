@@ -60,6 +60,47 @@ Detailed server status including configuration state.
 | `configured` | boolean | Whether `cfcf init` has been run |
 | `availableAgents` | string[] | Agent adapters detected during init (empty if not configured) |
 
+### GET /api/activity
+
+Returns a cross-project list of agent runs that are currently in flight.
+Used by the web header to drive the pulsing blue activity indicator and
+the "project: phase" label. Added in v0.6.0.
+
+**Response:** `200 OK`
+
+```json
+{
+  "active": [
+    {
+      "projectId": "calc-849371",
+      "projectName": "calc",
+      "type": "iteration",
+      "phase": "reflecting",
+      "iteration": 3,
+      "startedAt": "2026-04-19T01:43:32.931Z"
+    },
+    {
+      "projectId": "other-xyz",
+      "projectName": "other",
+      "type": "review",
+      "startedAt": "2026-04-19T01:44:10.000Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `projectId` / `projectName` | string | Project that owns the run |
+| `type` | `"iteration" \| "review" \| "document" \| "reflection"` | Kind of run |
+| `phase` | `LoopPhase` | Only for `type: "iteration"` — current phase (preparing, dev_executing, judging, reflecting, deciding, documenting) |
+| `iteration` | number | Iteration number when applicable |
+| `startedAt` | ISO string | When the run started |
+
+Loop-state has priority over raw history.json events: if a project has an
+active loop, we emit a single entry for it (with the finer-grained
+`phase`) instead of the raw iteration / reflection "running" history rows.
+
 ---
 
 ## Configuration
@@ -77,6 +118,8 @@ Returns the current global configuration.
   "judgeAgent": { "adapter": "codex" },
   "architectAgent": { "adapter": "claude-code" },
   "documenterAgent": { "adapter": "claude-code" },
+  "reflectionAgent": { "adapter": "claude-code", "model": "opus" },
+  "reflectSafeguardAfter": 3,
   "maxIterations": 10,
   "pauseEvery": 0,
   "availableAgents": ["claude-code", "codex"],
@@ -363,7 +406,29 @@ Returns the project's history events array. Each event represents an agent invoc
     "judgeExitCode": 0,
     "judgeDetermination": "PROGRESS",
     "judgeQuality": 7,
-    "merged": true
+    "merged": true,
+    "devSignals": { "agent": "codex", "status": "completed", "self_assessment": "high", "tests_run": true, "tests_passed": 5, "tests_total": 5 },
+    "judgeSignals": { "determination": "PROGRESS", "quality_score": 7, "tests_verified": true, "tests_passed": 5, "tests_total": 5, "should_continue": true, "reflection_needed": false }
+  },
+  {
+    "id": "d4e5f67890123456",
+    "type": "reflection",
+    "status": "completed",
+    "startedAt": "2026-04-16T10:30:05.000Z",
+    "completedAt": "2026-04-16T10:31:20.000Z",
+    "logFile": "reflection-001.log",
+    "agent": "claude-code",
+    "iteration": 1,
+    "trigger": "loop",
+    "signals": {
+      "iteration": 1,
+      "plan_modified": false,
+      "iteration_health": "stable",
+      "key_observation": "First iteration delivered a clean base; no strategic shift needed.",
+      "recommend_stop": false
+    },
+    "iterationHealth": "stable",
+    "planModified": false
   },
   {
     "id": "c3d4e5f678901234",
@@ -378,6 +443,15 @@ Returns the project's history events array. Each event represents an agent invoc
 ```
 
 Events are returned in insertion order (chronological). Clients should sort if a different order is needed.
+
+**Event types:**
+
+| `type` | Emitted by | Relevant fields |
+|--------|-----------|-----------------|
+| `review` | Solution Architect run | `readiness`, `signals` (parsed `ArchitectSignals`) |
+| `iteration` | Iteration loop | `iteration`, `branch`, `devLogFile`, `judgeLogFile`, `devExitCode`, `judgeExitCode`, `judgeDetermination`, `judgeQuality`, `merged`, `devSignals`, `judgeSignals` |
+| `reflection` | Reflection runner (loop or ad-hoc) | `iteration`, `trigger` (`"loop"` or `"manual"`), `signals`, `iterationHealth`, `planModified`, `planRejectionReason` (when applicable) |
+| `document` | Documenter run | `docsFileCount`, `committed`, `exitCode` |
 
 ---
 
@@ -502,11 +576,68 @@ Get the status of a documenter run.
 
 ---
 
+## Reflection (ad-hoc)
+
+### POST /api/projects/:id/reflect
+
+Run the Reflection agent ad-hoc against the current state. Does NOT
+modify `loop-state.json` and does NOT write an `iteration-log` (no
+iteration happened). Added in v0.6.0.
+
+**Request body (optional):**
+
+```json
+{
+  "prompt": "focus on the auth-layer drift"
+}
+```
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "projectId": "calc-849371",
+  "status": "preparing",
+  "logFile": "/Users/you/.cfcf/logs/calc-849371/reflection-002.log",
+  "message": "Reflection started. Poll GET /api/projects/:id/reflect/status for progress."
+}
+```
+
+### GET /api/projects/:id/reflect/status
+
+Returns the current reflection run state (including parsed signals once
+available).
+
+**Response:** `200 OK` — `ReflectState` object with `status` in
+`preparing | executing | collecting | completed | failed`, plus the parsed
+`ReflectionSignals` when complete (`iteration_health`, `plan_modified`,
+`key_observation`, `recommend_stop`).
+
+### POST /api/projects/:id/reflect/stop
+
+Kill a running reflection and mark it failed.
+
+**Response:** `200 OK`
+
+```json
+{
+  "projectId": "calc-849371",
+  "status": "failed",
+  "message": "Reflection stopped."
+}
+```
+
+Inside the iteration loop, reflection runs as a deterministic phase of
+the loop (see below) rather than as a standalone endpoint. The loop's
+`loop-state.json` carries `phase: "reflecting"` while it runs.
+
+---
+
 ## Iteration Loop (Dark Factory)
 
 ### POST /api/projects/:id/loop/start
 
-Start the full iteration loop: dev → judge → decide → repeat.
+Start the full iteration loop: dev → judge → reflect (conditional) → decide → repeat.
 
 **Request body (optional):**
 
@@ -561,10 +692,11 @@ Get the full loop state including iteration history.
 | Phase | Description |
 |-------|-------------|
 | `idle` | Loop initialized, not yet running |
-| `preparing` | Assembling context for next iteration |
+| `preparing` | Assembling context for next iteration (cf²) |
 | `dev_executing` | Dev agent is running |
 | `judging` | Judge agent is running |
-| `deciding` | Evaluating judge signals |
+| `reflecting` | Reflection agent is running (cross-iteration strategic review; conditional) |
+| `deciding` | Evaluating judge + reflection signals (cf²) |
 | `documenting` | Judge said SUCCESS; documenter is producing final docs before terminal state |
 | `paused` | Waiting for user input or review |
 | `completed` | Loop finished (success, failure, or max iterations) |

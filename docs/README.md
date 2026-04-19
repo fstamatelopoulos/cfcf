@@ -16,9 +16,12 @@ docs/
   api/                  API reference (grows with every endpoint)
     server-api.md       Server REST API endpoints
 
-  research/             Ideas, brainstorms, explorations (not yet in the plan)
+  research/             Ideas, brainstorms, explorations
+    reflection-role-and-iterative-planning.md   Item 5.6 design (shipped in v0.6.0 + v0.7.0)
 
-  guides/               User-facing how-tos (future)
+  guides/               User-facing how-tos
+    workflow.md         Full user workflow walkthrough (the main user guide)
+    cli-usage.md        CLI command reference
 ```
 
 ## What Goes Where

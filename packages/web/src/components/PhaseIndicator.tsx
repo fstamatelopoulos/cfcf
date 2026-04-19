@@ -6,24 +6,30 @@ import { useElapsed } from "../hooks/useElapsed";
  * Each agent type has its own sequence of phases.
  */
 
+// Labels distinguish deterministic harness steps (cf²) from LLM agent steps
+// (agent) so the user can see at a glance which phases are cfcf's plumbing
+// vs. an actual agent invocation.
 const loopPhases: { key: LoopPhase; label: string }[] = [
-  { key: "preparing", label: "Prepare" },
-  { key: "dev_executing", label: "Dev" },
-  { key: "judging", label: "Judge" },
-  { key: "reflecting", label: "Reflect" },
-  { key: "deciding", label: "Decide" },
-  { key: "documenting", label: "Document" },
+  { key: "preparing", label: "Prepare (cf²)" },
+  { key: "dev_executing", label: "Dev (agent)" },
+  { key: "judging", label: "Judge (agent)" },
+  { key: "reflecting", label: "Reflect (agent)" },
+  { key: "deciding", label: "Decide (cf²)" },
+  { key: "documenting", label: "Document (agent)" },
 ];
 
+// Review + document runs follow the same cf²/agent split as the loop:
+// "Prepare" is cfcf writing instructions + resetting signals, "Execute"
+// is the agent process running, "Collect" is cfcf parsing signals back.
 const reviewPhases: { key: string; label: string }[] = [
-  { key: "preparing", label: "Prepare" },
-  { key: "executing", label: "Executing" },
-  { key: "collecting", label: "Collecting" },
+  { key: "preparing", label: "Prepare (cf²)" },
+  { key: "executing", label: "Execute (agent)" },
+  { key: "collecting", label: "Collect (cf²)" },
 ];
 
 const documentPhases: { key: string; label: string }[] = [
-  { key: "preparing", label: "Prepare" },
-  { key: "executing", label: "Executing" },
+  { key: "preparing", label: "Prepare (cf²)" },
+  { key: "executing", label: "Execute (agent)" },
 ];
 
 const terminalStates = new Set(["completed", "failed", "stopped", "paused"]);

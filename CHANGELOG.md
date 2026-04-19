@@ -9,6 +9,30 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.0] -- 2026-04-18
+
+Post-0.6.0 hardening and UX refinement pass driven by first real-world testing of the Reflection role against an existing repo ("cfcf-calc"). Two small features (architect re-review, CLAUDE.md sentinel merge), a behavior-changing bug fix (iteration-row status during reflection), and a pass of UI polish on the History tab.
+
+### Added
+
+- **Architect re-review mode.** When `cfcf review` is invoked on a project whose `cfcf-docs/plan.md` already has completed items (`[x]`), cfcf now treats it as a re-review rather than a first-run scaffold. `architect-runner` snapshots `plan.md`, sends a re-review prompt that tells the agent to read the full history (iteration logs, decision log, reflection reviews), and enforces the same non-destructive rule the reflection role uses -- any rewrite that removes a completed item or an iteration header is automatically reverted. Template [cfcf-architect-instructions.md](packages/core/src/templates/cfcf-architect-instructions.md) gains a "Two modes" section documenting first-run vs. re-review, with explicit "append new iterations" / "leave plan untouched and say so" / "skip scaffolding docs/*.md" rules.
+- **Sentinel-based `CLAUDE.md` / `AGENTS.md` merge.** cfcf no longer overwrites the dev agent's instruction file unconditionally. The file is now carved into a cfcf-owned section delimited by `<!-- cfcf:begin --> ... <!-- cfcf:end -->` markers; anything outside those markers (user notes, team conventions, skills the user added) is preserved across iterations. First-run: if the file exists without markers, cfcf prepends the sentinel block and keeps user content below. Subsequent runs: only the content between markers is refreshed. Markers missing after a user edit: cfcf falls back to the "prepend" branch on the next iteration. Idempotent when inputs are unchanged.
+- **Shared `plan-validation.ts` module.** `validatePlanRewrite`, `extractCompletedItems`, `extractIterationHeaders`, `planHasCompletedItems` extracted from `reflection-runner.ts` so both the Reflection role and the Architect re-review path use one implementation (backward compatible: `reflection-runner` still re-exports `validatePlanRewrite`).
+- **PhaseIndicator labels distinguish harness vs agent steps.** Across all three workflows -- loop, review, document -- phase labels now read `Prepare (cf²)` / `Dev (agent)` / `Judge (agent)` / `Reflect (agent)` / `Decide (cf²)` / `Document (agent)` (for loop) and `Prepare (cf²)` / `Execute (agent)` / `Collect (cf²)` (for review + document). Makes it obvious at a glance which phases are cfcf plumbing vs LLM invocations.
+- **Richer expanded History rows.**
+  - Collapsed judge pill now includes test counts alongside quality, e.g. `PROGRESS (8/10 · 5/5) ▸`.
+  - Expanded panel now surfaces judge `user_input_needed` (warning-styled auto-open section when true), `should_continue`, and the iteration's branch name in a "Decision flags" footer.
+  - `planRejectionReason` (new on `ReflectionHistoryEvent`) is shown in the expanded reflection detail when the non-destructive validator reverts a plan rewrite -- you can see *why* it was rejected.
+  - Happy-path dev self-assessment collapses to a single muted inline line (`Dev self-reported high quality · status: completed · no blockers, no user input needed.`) instead of a click-to-expand with an effectively-empty body.
+
+### Changed
+
+- **Iteration history row flips to `completed` as soon as the judge commits**, not after reflection finishes. Reflection has its own row in the History tab; making the iteration wait for it made the tab look stuck for the duration of the reflection phase. `devSignals` / `judgeSignals` / exit codes / determination are all persisted in this earlier update; the separate `merged` flip in the DECIDE block is unchanged.
+
+### Fixed
+
+- (Retroactive -- also in the 0.6.0 polish commit [db9ceff](https://github.com/fstamatelopoulos/cfcf/commit/db9ceff) that merged as part of PR #6) `LoopPhase` in the web types and the `LOOP_ACTIVE_PHASES` constant in `ProjectDetail.tsx` didn't include `reflecting`, so the UI showed "Decide" during the reflection phase and the history polling dropped from 3s back to 10s. Both fixed in 0.6.0.
+
 ## [0.6.0] -- 2026-04-18
 
 Iteration 5 loop-quality phase. Ships item **5.6 Tier 3 Strategic Reflection + iterative planning** end-to-end. cfcf now has a fifth role — **Reflection** — that runs after the judge on every iteration (unless the judge opts out), reviews the full cross-iteration history, and may non-destructively rewrite the pending part of `plan.md`. Full design: [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md).
@@ -23,12 +47,16 @@ Iteration 5 loop-quality phase. Ships item **5.6 Tier 3 Strategic Reflection + i
 - **New config fields.** `reflectionAgent` and `reflectSafeguardAfter` on both `CfcfGlobalConfig` and `ProjectConfig`. Existing configs are backfilled on read (reflection defaults to the architect agent's adapter, safeguard defaults to 3).
 - **Web UI: reflection row in History tab.** Color-coded `iteration_health` (converging=green, stable=blue, stalled=yellow, diverging=red, inconclusive=grey), `✎ plan edited` badge when `plan_modified`, `! stop` badge when `recommend_stop`, and `key_observation` underneath.
 - **New templates.** `cfcf-reflection-instructions.md`, `cfcf-reflection-signals.json`, `iteration-log.md` (format reference for the dev agent).
+- **Expandable judge + reflection detail rows** (`JudgeDetail.tsx` + `ReflectionDetail.tsx`), mirroring the `ArchitectReview` expansion pattern. Iteration rows expand to show dev + judge signals together (quality, tests, concern, blockers, reflection opt-out); reflection rows expand to show health rationale + plan-modified / rejected state + `recommend_stop` banner.
+- **Full parsed `devSignals` + `judgeSignals` persisted inline on iteration history events**, so rows stay expandable even after the on-disk signal files are overwritten next iteration.
+- **Cross-project activity endpoint + pulsing top-bar indicator.** New `GET /api/activity` returns currently-running agent runs across all projects (reads each project's `history.json` + `loop-state.json`; loop state has priority for finer-grained phase info). Header polls /activity (3s active, 10s idle) and shows a pulsing blue dot + label (`project-name: reflect #3` or `N agents running`) whenever anything is in flight.
+- **Read-only server + config page.** New route `#/server` rendered via `ServerInfo.tsx`: server status (version, port, PID, uptime, available agents, configured) and global config defaults (per-role agent + model, max iterations, pause cadence, `reflectSafeguardAfter`, `cleanupMergedBranches`). Linked from a new `server & config →` button on the Dashboard header.
 
 ### Changed
 - **`makeDecision` accepts reflection signals.** Reflection's `recommend_stop` takes precedence over the judge's determination (research doc Q6): when reflection flags the loop as fundamentally stuck, cfcf pauses for the user even if the judge said PROGRESS. `max_iterations` and dev `user_input_needed` still short-circuit first.
 - **New `reflecting` phase** in `LoopPhase`. Iteration flow: `preparing → dev_executing → judging → reflecting (conditional) → deciding → documenting (on success)`.
 - **Decision-log size warning.** Once iteration count crosses 50, cfcf fires a single informational notification per loop run. No auto-trim — the user owns the log.
-- **Docs:** `docs/plan.md` item 5.6 marked ✅; `docs/design/technical-design.md` and `docs/design/agent-process-and-context.md` updated; `docs/research/reflection-role-and-iterative-planning.md` §10 stamped "Shipped 2026-04-18".
+- **Docs:** full markdown sweep aligning every user + design + API doc with the reflection role and 0.7.0 features — `workflow.md`, `cli-usage.md`, top-level `README.md`, `CLAUDE.md`, `docs/README.md`, `docs/api/server-api.md`, `docs/design/technical-design.md`, `docs/design/agent-process-and-context.md`, `docs/design/cfcf-requirements-vision.md`. `docs/plan.md` item 5.6 marked ✅; `docs/research/reflection-role-and-iterative-planning.md` §10 stamped "Shipped 2026-04-18".
 
 ### Fixed
 - **`iteration-history.md` loop-restart bug.** The file is now rebuilt each iteration from the committed `cfcf-docs/iteration-logs/iteration-*.md` files instead of relying on the in-memory `LoopState.iterations`, so it survives `cfcf stop` / restart cycles.

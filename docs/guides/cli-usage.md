@@ -25,11 +25,11 @@ cfcf init
 What it does:
 1. Scans for installed agents (Claude Code, Codex CLI) and reports what it finds
 2. Verifies git is available
-3. Asks you to choose agents for all four roles (dev, judge, architect, documenter)
-4. Asks for model selection per role (optional)
-5. Asks for default iteration limits (max iterations, pause cadence)
-5. Explains the permission flags agents will run with (`--dangerously-skip-permissions` for Claude Code, `-a never -s danger-full-access` for Codex)
-6. Saves everything to the config file
+3. Asks you to choose agents for all five roles (dev, judge, architect, documenter, reflection)
+4. Asks for model selection per role (optional; reflection defaults to the strongest available model)
+5. Asks for default iteration limits (max iterations, pause cadence) and the reflection safeguard ceiling (`reflectSafeguardAfter`, default `3` -- the maximum consecutive iterations the judge may skip reflection before cfcf forces it)
+6. Explains the permission flags agents will run with (`--dangerously-skip-permissions` for Claude Code, `-a never -s danger-full-access` for Codex)
+7. Saves everything to the config file
 
 To re-run setup (e.g., after installing a new agent):
 
@@ -70,7 +70,7 @@ cfcf server status
 
 Output:
 ```
-cfcf server v0.0.0
+cfcf server v0.7.0
   Status:     running
   Port:       7233
   PID:        12345
@@ -78,6 +78,9 @@ cfcf server v0.0.0
   Configured: yes
   Agents:     claude-code, codex
 ```
+
+The same information (plus the full global config) is available in the
+web GUI at `http://localhost:7233/#/server`.
 
 ---
 
@@ -94,11 +97,15 @@ cfcf config show
 Output:
 ```
 Config file: /Users/you/Library/Application Support/cfcf/config.json
-Dev agent:       claude-code
-Judge agent:     codex
-Max iterations:  10
-Pause every:     never
-Permissions:     acknowledged
+Dev agent:        claude-code
+Judge agent:      codex
+Architect agent:  claude-code
+Documenter agent: claude-code
+Reflection agent: claude-code (model: opus)
+Max iterations:   10
+Pause every:      never
+Reflect safeguard: force after 3 consecutive judge opt-outs
+Permissions:      acknowledged
 Available agents: claude-code, codex
 ```
 
@@ -193,8 +200,19 @@ What the architect does:
 3. Identifies gaps and ambiguities that would cause an engineer to ask questions
 4. Runs an initial security assessment
 5. Outlines solution options and trade-offs
-6. **Produces an initial implementation plan** (`cfcf-docs/plan.md`) for the dev agent to build on
+6. **Produces an implementation plan** (`cfcf-docs/plan.md`) for the dev agent to build on
 7. Writes a readiness assessment: READY / NEEDS_REFINEMENT / BLOCKED
+
+### First-run vs re-review mode (v0.7.0+)
+
+The architect automatically detects which mode to use:
+
+- **First-run mode:** `cfcf-docs/plan.md` is absent or has no completed items. The architect produces a fresh plan from scratch and scaffolds the initial `docs/` stubs.
+- **Re-review mode:** `cfcf-docs/plan.md` already has completed `[x]` items. The architect reads the full prior history (iteration logs, decision log, reflection reviews), compares to the current Problem Pack, and either:
+  - **Appends** new pending iterations when new requirements are detected (completed items never touched), or
+  - Leaves `plan.md` alone and says so in `architect-review.md` when the existing plan still covers the pack.
+
+  cf² enforces the non-destructive rule: if the architect's rewrite removes a completed item or an iteration header, `plan.md` is auto-reverted to the pre-spawn snapshot and a warning is logged. Re-review also skips re-scaffolding `docs/*.md` (already maintained by dev + documenter).
 
 Typical flow:
 ```bash
@@ -310,6 +328,43 @@ The documenter reads the entire codebase and produces:
 
 Re-run anytime to regenerate documentation after changes.
 
+### `cfcf reflect`
+
+Run the Reflection agent ad-hoc against the current state of a project.
+Outside the iteration loop; does NOT modify `loop-state.json` and does
+NOT write an `iteration-log` (no iteration happened). Useful for a
+strategic health-check between loop runs, or after editing the Problem
+Pack and before kicking off the next `cfcf run`.
+
+```bash
+cfcf reflect --project my-project
+cfcf reflect --project my-project --prompt "focus on the auth-layer drift"
+```
+
+What the reflection agent does:
+1. Reads the full cross-iteration history: `decision-log.md`, all
+   `iteration-logs/iteration-*.md`, all prior `iteration-reviews/*.md`,
+   any prior `reflection-reviews/*.md`, a compact per-iteration-branch
+   git log assembled by cfcf, and the tail (~500 lines) of the most
+   recent dev log.
+2. Classifies iteration health (`converging | stable | stalled | diverging | inconclusive`) with reasoning.
+3. Optionally rewrites the **pending** portion of `cfcf-docs/plan.md`.
+   Completed items and iteration headers are protected: any destructive
+   rewrite is auto-reverted and logged.
+4. May set `recommend_stop: true` to escalate to the user -- during a
+   loop this pauses it; ad-hoc it just shows up in `architect-review`-style
+   output.
+5. Appends a `decision-log.md` entry (category `strategy`) summarising
+   what changed and why.
+
+Results:
+- `cfcf-docs/reflection-analysis.md` -- human-readable cross-iteration analysis
+- `cfcf-docs/cfcf-reflection-signals.json` -- parsed signals for cfcf + UI
+- Optional: non-destructive edits to `cfcf-docs/plan.md`
+- Entry in `cfcf-docs/decision-log.md`
+
+Web parity: `POST /api/projects/:id/reflect` (see `docs/api/server-api.md`).
+
 ### `cfcf stop`
 
 Stop a running or paused iteration loop.
@@ -357,13 +412,14 @@ Agent output logs are stored separately (they can be large):
     my-project-a1b2c3/
       iteration-001-dev.log       # Dev agent log per iteration
       iteration-001-judge.log     # Judge agent log per iteration
+      reflection-001.log          # Nth reflection run (loop or ad-hoc)
       architect-001.log           # Nth architect review
       documenter-001.log          # Nth documenter run
       notifications.log           # JSON Lines audit trail of notifications
 ```
 
-Each architect/documenter invocation gets its own sequence-numbered log
-so re-running preserves history.
+Each architect / documenter / reflection invocation gets its own
+sequence-numbered log so re-running preserves history.
 
 Override with `CFCF_LOGS_DIR` environment variable.
 
@@ -450,13 +506,19 @@ cfcf project init --repo /path/to/repo --name my-app
 cfcf review --project my-app                       # Architect identifies gaps
 # Read cfcf-docs/architect-review.md, refine problem-pack/
 cfcf review --project my-app                       # Re-review after refinements
+                                                    # (re-review-aware on existing projects)
 
 # Start the dark factory loop
 cfcf run --project my-app
-# cfcf runs: dev agent → judge → decide → repeat
+# cfcf runs: dev → judge → reflect (unless judge opts out) → decide → repeat
+# Three separate commits per iteration: dev / judge / reflect
 # On SUCCESS: documenter runs automatically to produce final docs
 # On pause: review and provide feedback
 cfcf resume --project my-app --feedback "Focus on X"
+
+# Ad-hoc strategic health-check (no iteration)
+cfcf reflect --project my-app
+cfcf reflect --project my-app --prompt "focus on auth-layer drift"
 
 # Monitor progress anytime
 cfcf status --project my-app

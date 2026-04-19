@@ -8,24 +8,27 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 
 ## Architecture Overview
 
-- **Monorepo** with Bun workspaces: `packages/core`, `packages/server`, `packages/cli`
+- **Monorepo** with Bun workspaces: `packages/core`, `packages/server`, `packages/cli`, `packages/web`
 - **TypeScript** throughout, **Bun** as runtime and toolchain
-- **Hono** HTTP server as the backbone (manages projects, iterations, agent processes)
+- **Hono** HTTP server as the backbone (manages projects, iterations, agent processes); React+Vite web GUI served from the same process (embedded into the compiled binary at build time)
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
-- **Four agent roles**: dev agent (writes code), judge (reviews iterations), architect (reviews Problem Pack), documenter (produces final docs)
-- **Async execution**: iterate endpoint returns 202, CLI polls for status
+- **Five agent roles**: dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack), reflection (cross-iteration strategic review), documenter (produces final docs). Each role independently configurable (adapter + model).
+- **Three commits per iteration** when reflection runs: `cfcf iteration N dev (...)`, `cfcf iteration N judge (...)`, `cfcf iteration N reflect (<health>): <key_observation>`.
+- **Async execution**: iterate endpoint returns 202, CLI polls for status.
 
 ## Key Design Principles
 
 1. **Deterministic control, non-deterministic workers.** The orchestration loop is predictable code. LLMs do creative work inside agent processes. cfcf does plumbing.
 2. **Agent-agnostic.** Two adapters today (Claude Code, Codex). The `AgentAdapter` interface in `packages/core/src/types.ts` is the contract. No agent-specific code in core.
-3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<project>/` (too large, potentially contain PII/secrets). Agent-authored changelogs (one per iteration, designed as part of item 5.6) live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` — these are small, human-curated, safe to commit. No external database.
-4. **Signal files for machine-readable communication.** `cfcf-iteration-signals.json` and `cfcf-judge-signals.json` complement human-readable Markdown docs.
-5. **Tests are mandatory.** Every component must have unit tests. Integration and API tests for server endpoints. Bun test runner. Aim for a solid regression suite.
-6. **Fire-and-forget agent execution.** Each iteration spawns a fresh agent process. No session continuity. Context comes from files. Because each iteration is a clean session, the dev agent is prompted (via the generated `CLAUDE.md` / `AGENTS.md`) to execute **one phase per iteration**: read `cfcf-docs/plan.md`, pick the next pending chunk, do just that, mark `[x]` with a short note, and exit. The next iteration's brand-new process picks up from the updated plan. This discipline is injected by `context-assembler.generateInstructionContent()` on every run -- not just via the static `process.md` template -- so it reaches existing projects whose `process.md` was copied before the change, and so it applies to both Claude Code (`CLAUDE.md`) and Codex (`AGENTS.md`) adapters.
-7. **Human on the loop, not in it.** User launches once, cfcf takes over. User involved only at pause cadence or when agents request input.
+3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<project>/` (too large, potentially contain PII/secrets). Agent-authored per-iteration changelogs live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` -- these are small, human-curated, safe to commit. `iteration-history.md` is rebuilt from those logs each iteration so it survives server restarts. No external database.
+4. **Signal files for machine-readable communication.** `cfcf-iteration-signals.json`, `cfcf-judge-signals.json`, `cfcf-architect-signals.json`, `cfcf-reflection-signals.json` complement human-readable Markdown docs.
+5. **Non-destructive plan rewrites.** Both the architect (re-review mode) and the reflection agent may rewrite `cfcf-docs/plan.md`, but cfcf validates each rewrite: completed items (`[x]`) and iteration-header numbers must survive. Destructive rewrites are auto-reverted to the pre-spawn snapshot. Logic lives in `packages/core/src/plan-validation.ts`.
+6. **Sentinel-based user-content preservation.** cfcf regenerates iteration-specific instructions for the dev agent every iteration, but only inside the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` block in `CLAUDE.md` / `AGENTS.md`. User content outside the markers is preserved byte-for-byte across iterations.
+7. **Tests are mandatory.** Every component must have unit tests. Integration and API tests for server endpoints. Bun test runner. Aim for a solid regression suite.
+8. **Fire-and-forget agent execution.** Each iteration spawns a fresh agent process. No session continuity. Context comes from files. Because each iteration is a clean session, the dev agent is prompted (via the generated `CLAUDE.md` / `AGENTS.md`) to execute **one phase per iteration**: read `cfcf-docs/plan.md`, pick the next pending chunk, do just that, mark `[x]` with a short note, write `iteration-logs/iteration-N.md`, and exit. The next iteration's brand-new process picks up from the updated plan. This discipline is injected by `context-assembler.generateInstructionContent()` on every run.
+9. **Human on the loop, not in it.** User launches once, cfcf takes over. User involved only at pause cadence, when agents request input, or when reflection flags `recommend_stop`.
 
 ## Development Commands
 
@@ -52,13 +55,21 @@ packages/
     log-storage.ts       # Log file path helpers
     pid-file.ts          # Server PID file management
     problem-pack.ts      # Read/validate Problem Pack directories
-    context-assembler.ts # Generate CLAUDE.md + cfcf-docs/, parse handoff/signals
+    context-assembler.ts # Generate cfcf-docs/, rebuild iteration-history.md,
+                         #   sentinel-merge CLAUDE.md/AGENTS.md, parse handoff/signals
+    plan-validation.ts   # Shared non-destructive plan.md rewrite validator
+                         #   (used by architect re-review + reflection)
     judge-runner.ts      # Judge agent: spawn, parse signals/assessment, archive
-    architect-runner.ts  # Solution Architect: spawn, parse signals/review
+    architect-runner.ts  # Solution Architect: spawn (first-run or re-review),
+                         #   snapshot+revert plan.md on destructive rewrite
     documenter-runner.ts # Documenter: spawn post-SUCCESS, produce final docs
+    reflection-runner.ts # Reflection: cross-iteration strategic review, sync
+                         #   entry for loop + async entry for `cfcf reflect`
     iteration-loop.ts    # Main iteration loop controller + decision engine
+                         #   (preparing -> dev -> judging -> reflecting? -> deciding)
+    project-history.ts   # history.json: review / iteration / reflection / document events
     adapters/            # Agent adapter implementations (claude-code, codex)
-    templates/           # cfcf-docs/ file templates (process.md, handoff, signals, etc.)
+    templates/           # cfcf-docs/ file templates (16 entries incl. reflection + iteration-log)
   server/src/
     app.ts               # Route definitions (testable without binding to port)
     start.ts             # Server lifecycle (start/stop, PID file)
@@ -66,7 +77,7 @@ packages/
   cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
-      init.ts            # First-run interactive setup
+      init.ts            # First-run interactive setup (asks for all 5 roles + reflectSafeguardAfter)
       server.ts          # Server start/stop/status
       project.ts         # Project init/list/show/delete
       config.ts          # Global config show/edit
@@ -75,7 +86,14 @@ packages/
       resume.ts          # Resume a paused loop (cfcf resume)
       stop.ts            # Stop a running loop (cfcf stop)
       document.ts        # Generate final docs (cfcf document)
+      reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
+  web/src/
+    App.tsx              # Root router (dashboard / project / server)
+    pages/               # Dashboard, ProjectDetail, ServerInfo
+    components/          # Header, PhaseIndicator, ProjectHistory,
+                         #   ArchitectReview, JudgeDetail, ReflectionDetail, …
+    api.ts               # Client for all /api/* endpoints incl. /activity + /reflect
 problem-packs/           # Example Problem Pack definitions
 docs/                    # Design docs, API reference, guides
 ```
@@ -93,8 +111,9 @@ docs/                    # Design docs, API reference, guides
 - Config env overrides: `CFCF_PORT`, `CFCF_CONFIG_DIR`, `CFCF_LOGS_DIR`
 - Adapter names are kebab-case: `claude-code`, `codex`
 - All decisions logged in `docs/plan.md` decision log and `docs/decisions-log.md`
-- Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-3/loop-judge-architect`)
-- Four agent roles: dev, judge, architect, documenter -- each independently configurable (agent + model)
+- Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-5/reflection-pr1`)
+- Five agent roles: dev, judge, architect, reflection, documenter -- each independently configurable (agent + model)
+- Reflection defaults to the architect agent's adapter when unset; `reflectSafeguardAfter` defaults to `3` consecutive judge opt-outs
 
 ## What NOT to Do
 
@@ -102,6 +121,8 @@ docs/                    # Design docs, API reference, guides
 - Do not add Docker/container dependencies (agents run as local processes)
 - Do not store secrets or API keys in config files or logs
 - Do not modify files marked read-only in `cfcf-docs/` (process.md, problem.md, success.md, constraints.md)
+- Do not bypass the `plan-validation` rules -- completed items and iteration headers in `plan.md` must survive any rewrite by architect/reflection
+- Do not bypass the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` sentinel merge -- user content outside those markers in `CLAUDE.md` / `AGENTS.md` is inviolate
 - Do not break the test suite. Run `bun run test` before committing code changes.
 
 ## Documentation

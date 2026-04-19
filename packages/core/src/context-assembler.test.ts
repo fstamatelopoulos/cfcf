@@ -9,6 +9,10 @@ import {
   parseSignalFile,
   generateIterationSummary,
   rebuildIterationHistoryFromLogs,
+  mergeInstructionFile,
+  writeInstructionFile,
+  CFCF_INSTRUCTION_BEGIN,
+  CFCF_INSTRUCTION_END,
 } from "./context-assembler.js";
 import type { ProblemPack } from "./problem-pack.js";
 import type { IterationContext } from "./context-assembler.js";
@@ -376,6 +380,86 @@ describe("context-assembler", () => {
       }));
       const written = await readFile(join(tempDir, "cfcf-docs", "iteration-history.md"), "utf-8");
       expect(written).toContain("Fallback history");
+    });
+  });
+
+  describe("mergeInstructionFile (sentinel-based CLAUDE.md merge)", () => {
+    const body = "# cfcf Iteration 1 Instructions\nblah blah\n";
+
+    it("wraps the body when the file doesn't exist", () => {
+      const out = mergeInstructionFile(null, body);
+      expect(out).toContain(CFCF_INSTRUCTION_BEGIN);
+      expect(out).toContain(CFCF_INSTRUCTION_END);
+      expect(out).toContain("cfcf Iteration 1 Instructions");
+      expect(out.split("\n")[0]).toBe(CFCF_INSTRUCTION_BEGIN);
+    });
+
+    it("prepends the cfcf block when file exists without markers", () => {
+      const userContent = "# My notes\n\nTeam conventions go here.\n";
+      const out = mergeInstructionFile(userContent, body);
+      // cfcf block comes first, user content preserved verbatim after it
+      expect(out.startsWith(CFCF_INSTRUCTION_BEGIN)).toBe(true);
+      expect(out).toContain("Team conventions go here.");
+      expect(out.indexOf(CFCF_INSTRUCTION_END)).toBeLessThan(out.indexOf("Team conventions"));
+    });
+
+    it("replaces only the cfcf block when markers exist; user content untouched", () => {
+      const existing =
+        `${CFCF_INSTRUCTION_BEGIN}\n# cfcf Iteration 1 Instructions\nstale content\n${CFCF_INSTRUCTION_END}\n\n# My notes\n\nTeam conventions go here.\n`;
+      const newBody = "# cfcf Iteration 2 Instructions\nfresh content\n";
+      const out = mergeInstructionFile(existing, newBody);
+      expect(out).toContain("fresh content");
+      expect(out).not.toContain("stale content");
+      // User content is still there, byte-for-byte
+      expect(out).toContain("# My notes\n\nTeam conventions go here.\n");
+      // Only one pair of markers
+      expect(out.match(new RegExp(CFCF_INSTRUCTION_BEGIN, "g"))!.length).toBe(1);
+      expect(out.match(new RegExp(CFCF_INSTRUCTION_END, "g"))!.length).toBe(1);
+    });
+
+    it("preserves user content that was above the marker block", () => {
+      const existing =
+        `# My project\n\n${CFCF_INSTRUCTION_BEGIN}\nold cfcf\n${CFCF_INSTRUCTION_END}\nuser notes after\n`;
+      const out = mergeInstructionFile(existing, "new cfcf");
+      expect(out.startsWith("# My project\n\n")).toBe(true);
+      expect(out).toContain("new cfcf");
+      expect(out).toContain("user notes after");
+      expect(out).not.toContain("old cfcf");
+    });
+
+    it("falls back to prepend when markers are missing after a user edit", () => {
+      const existing = "# cfcf Iteration 1 Instructions (hand-stripped)\nuser removed markers\n";
+      const out = mergeInstructionFile(existing, "fresh\n");
+      expect(out.startsWith(CFCF_INSTRUCTION_BEGIN)).toBe(true);
+      expect(out).toContain("user removed markers");
+      expect(out).toContain("fresh");
+    });
+
+    it("is idempotent across iterations with no user changes", () => {
+      const a = mergeInstructionFile(null, "iter 1 body\n");
+      const b = mergeInstructionFile(a, "iter 2 body\n");
+      const c = mergeInstructionFile(b, "iter 2 body\n");
+      expect(b).toBe(c);
+    });
+  });
+
+  describe("writeInstructionFile", () => {
+    it("roundtrips through the filesystem and preserves user content", async () => {
+      const { writeFile: wf, readFile: rf } = await import("fs/promises");
+      const filename = "CLAUDE.md";
+      const userContent = "# User project notes\n\nImportant stuff.\n";
+      await wf(join(tempDir, filename), userContent, "utf-8");
+
+      await writeInstructionFile(tempDir, filename, "first iteration body\n");
+      const first = await rf(join(tempDir, filename), "utf-8");
+      expect(first).toContain("first iteration body");
+      expect(first).toContain("Important stuff");
+
+      await writeInstructionFile(tempDir, filename, "second iteration body\n");
+      const second = await rf(join(tempDir, filename), "utf-8");
+      expect(second).toContain("second iteration body");
+      expect(second).not.toContain("first iteration body");
+      expect(second).toContain("Important stuff");
     });
   });
 

@@ -1,5 +1,9 @@
 import type { JudgeSignalsWeb, DevSignalsWeb } from "../types";
 
+export interface JudgeDetailMeta {
+  branch?: string;
+}
+
 const determinationMeta: Record<
   string,
   { color: string; guidance: string }
@@ -39,9 +43,11 @@ function fmtTests(
 export function JudgeDetail({
   judge,
   dev,
+  meta,
 }: {
   judge: JudgeSignalsWeb | undefined;
   dev: DevSignalsWeb | undefined;
+  meta?: JudgeDetailMeta;
 }) {
   if (!judge && !dev) {
     return (
@@ -53,14 +59,14 @@ export function JudgeDetail({
     );
   }
 
-  const meta = judge ? determinationMeta[judge.determination] : null;
+  const dm = judge ? determinationMeta[judge.determination] : null;
 
   return (
     <div className="architect-review architect-review--compact">
       {judge && (
         <>
           <div className="architect-review__header">
-            <span className="architect-review__readiness" style={{ color: meta?.color }}>
+            <span className="architect-review__readiness" style={{ color: dm?.color }}>
               {judge.determination}
               <span style={{ color: "var(--color-text-muted)", fontWeight: "normal" }}>
                 {" · "}quality {judge.quality_score}/10
@@ -73,12 +79,12 @@ export function JudgeDetail({
             )}
           </div>
 
-          {meta?.guidance && (
+          {dm?.guidance && (
             <div
               className="architect-review__guidance"
-              style={{ borderLeftColor: meta.color }}
+              style={{ borderLeftColor: dm.color }}
             >
-              {meta.guidance}
+              {dm.guidance}
             </div>
           )}
 
@@ -101,6 +107,24 @@ export function JudgeDetail({
             </details>
           )}
 
+          {judge.user_input_needed && (
+            <details
+              className="architect-review__section"
+              open
+              style={{ borderLeftColor: "var(--color-warning)" }}
+            >
+              <summary
+                className="architect-review__summary"
+                style={{ color: "var(--color-warning)" }}
+              >
+                Judge requests user input
+              </summary>
+              <p className="architect-review__approach">
+                {judge.key_concern ?? "No specific question supplied."}
+              </p>
+            </details>
+          )}
+
           <details className="architect-review__section">
             <summary className="architect-review__summary">Reflection opt-out signal</summary>
             <ul className="architect-review__list">
@@ -119,43 +143,78 @@ export function JudgeDetail({
               )}
             </ul>
           </details>
+
+          {/* should_continue diverges from determination only on edge cases
+              (e.g. STALLED + onStalled policy = continue). Show it in a
+              footnote-style section for transparency -- collapsed by default. */}
+          <details className="architect-review__section">
+            <summary className="architect-review__summary">Decision flags</summary>
+            <ul className="architect-review__list">
+              <li>
+                <code>should_continue</code>:{" "}
+                {judge.should_continue ? "true" : "false"}
+              </li>
+              {meta?.branch && (
+                <li>
+                  <code>branch</code>: <code>{meta.branch}</code>
+                </li>
+              )}
+            </ul>
+          </details>
         </>
       )}
 
-      {dev && (
-        <details className="architect-review__section">
-          <summary className="architect-review__summary">
-            Dev self-assessment ({dev.self_assessment}, status: {dev.status})
-          </summary>
-          <ul className="architect-review__list">
-            {dev.blockers && dev.blockers.length > 0 && (
-              <li>
-                <strong>Blockers:</strong>
-                <ul>
-                  {dev.blockers.map((b, i) => (
-                    <li key={i}>{b}</li>
-                  ))}
-                </ul>
-              </li>
-            )}
-            {dev.user_input_needed && (
-              <li style={{ color: "var(--color-warning)" }}>
-                user_input_needed: true
-                {dev.questions && dev.questions.length > 0 && (
+      {dev && (() => {
+        const hasBlockers = dev.blockers && dev.blockers.length > 0;
+        const needsInput = dev.user_input_needed;
+        // Happy path -- no blockers, no user input needed: the section's
+        // title already tells the whole story, so skip rendering entirely
+        // rather than repeat "No blockers, no user input needed." as a body.
+        const isHappy = !hasBlockers && !needsInput;
+        if (isHappy) {
+          return (
+            <div
+              className="architect-review__section"
+              style={{ color: "var(--color-text-muted)", fontSize: "0.85rem" }}
+            >
+              Dev self-reported <strong>{dev.self_assessment}</strong> quality ·
+              status: <strong>{dev.status}</strong> · no blockers, no user input
+              needed.
+            </div>
+          );
+        }
+        return (
+          <details className="architect-review__section" open={needsInput}>
+            <summary className="architect-review__summary">
+              Dev self-assessment ({dev.self_assessment}, status: {dev.status})
+            </summary>
+            <ul className="architect-review__list">
+              {hasBlockers && (
+                <li>
+                  <strong>Blockers:</strong>
                   <ul>
-                    {dev.questions.map((q, i) => (
-                      <li key={i}>{q}</li>
+                    {dev.blockers!.map((b, i) => (
+                      <li key={i}>{b}</li>
                     ))}
                   </ul>
-                )}
-              </li>
-            )}
-            {(!dev.blockers || dev.blockers.length === 0) && !dev.user_input_needed && (
-              <li>No blockers, no user input needed.</li>
-            )}
-          </ul>
-        </details>
-      )}
+                </li>
+              )}
+              {needsInput && (
+                <li style={{ color: "var(--color-warning)" }}>
+                  user_input_needed: true
+                  {dev.questions && dev.questions.length > 0 && (
+                    <ul>
+                      {dev.questions.map((q, i) => (
+                        <li key={i}>{q}</li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              )}
+            </ul>
+          </details>
+        );
+      })()}
     </div>
   );
 }
