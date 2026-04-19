@@ -351,6 +351,29 @@ cfcf run --project my-project
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+### The pre-loop review cycle (when `autoReviewSpecs=true`)
+
+This deserves its own walkthrough -- it's a tight user-in-the-loop pattern for getting the Problem Pack right before burning iterations.
+
+**Branching.** Pre-loop review runs on the **current branch** (typically `main`). No iteration branch is created yet. Review artifacts -- `architect-review.md`, `plan.md`, `cfcf-architect-signals.json`, the `docs/*.md` stubs, and `user-feedback.md` -- all commit to `main` as a single `cfcf pre-loop review (<readiness>)` commit. Iteration branches come later, after the readiness gate accepts the review.
+
+**The gate cycle.**
+
+1. Start Loop (web UI) or `cfcf run` (CLI) → cfcf runs the architect as the first phase. Web UI shows `Review (agent)` lit up in the PhaseIndicator.
+2. Architect writes its output and exits. cfcf reads the readiness signal.
+3. **If `readinessGate` accepts** (default `"blocked"` means accept anything but `BLOCKED`): cfcf proceeds to iteration 1. The iteration branch `cfcf/iteration-1` is created from `main` and inherits the architect's artifacts + `user-feedback.md`.
+4. **If `readinessGate` rejects**: cfcf pauses the loop with `pauseReason: "anomaly"` and the architect's gaps populated as `pendingQuestions`. The web UI shows the FeedbackForm; the CLI prints the questions via `cfcf status` and offers `cfcf resume`. The PhaseIndicator stays at `Review (agent) -- PAUSED`.
+5. **User refines and resumes.** Two paths, composable:
+    - **Edit the source.** Open `problem-pack/problem.md` and/or `problem-pack/success.md` in your editor and tighten the spec based on the architect's listed gaps. (Remember: `cfcf-docs/problem.md` is a generated copy -- see the "Files you edit vs. files cfcf regenerates" section above.)
+    - **Provide guidance.** Type a clarifying answer into the FeedbackForm (web) or pass it via `cfcf resume --feedback "..."` (CLI). The text is written to `cfcf-docs/user-feedback.md` on main before the next architect spawn, so the architect sees it too. This is especially useful when the gap is small and doesn't warrant reopening the Problem Pack.
+    - Either / both / neither + Resume -- all valid. A Resume with no changes and no feedback re-runs the architect against the same source; useful if you suspect the previous spawn was a one-off stumble.
+6. cfcf re-runs the architect (same `pre_loop_reviewing` phase, new `architect-NNN.log` sequence). Back to step 2.
+7. Eventually the gate accepts and the loop moves on. `state.userFeedback` carries through to iteration 1's `user-feedback.md` so the dev agent reads it too; it clears automatically after iteration 1's DECIDE phase.
+
+**History-tab label.** Pre-loop reviews appear in the History tab as **"Pre-loop review"** (loop-triggered). Manual `cfcf review` runs stay labeled **"Review"**. Both share the same `ArchitectReview` expanded-row detail -- only the top-line label distinguishes them.
+
+**Stopping vs resuming.** If the pre-loop gate never accepts and you want to bail out entirely (rewrite the problem pack wholesale, change strategy), `cfcf stop --project <name>` ends the loop in a clean terminal state. The pre-loop review commit on main is preserved (useful for audit); you can start a fresh loop later.
+
 ### Behaviour flags: `autoReviewSpecs`, `autoDocumenter`, `readinessGate` (item 5.1)
 
 Three settings shape whether Review runs inside the loop and whether the Documenter auto-runs on SUCCESS. Each is available at three tiers with the standard priority order: **per-run CLI flag → project config → global config → hard default**.

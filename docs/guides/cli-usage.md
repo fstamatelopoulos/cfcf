@@ -233,31 +233,32 @@ cfcf run --project my-project        # Start unattended development
 
 ### `cfcf run` -- Dark Factory Loop
 
-Start the full iteration loop: dev → judge → decide → repeat. This is the primary workflow.
+Start the full iteration loop. Each iteration runs `dev → judge → reflect (conditional) → decide` and produces up to three separate commits; when `autoReviewSpecs=true` a leading pre-loop `review` phase runs on main and gates the loop on the architect's readiness signal; when the judge determines SUCCESS, `documenter` runs (unless `autoDocumenter=false`). This is the primary workflow.
 
 ```bash
 cfcf run --project my-project
 ```
 
 What happens:
-1. Starts the iteration loop asynchronously
-2. For each iteration:
-   a. Reads the Problem Pack and assembles context (CLAUDE.md + cfcf-docs/)
-   b. Creates a git feature branch: `cfcf/iteration-N`
-   c. Launches the dev agent with assembled context
-   d. Commits dev work to the feature branch
-   e. Launches the judge agent to evaluate the iteration
-   f. Commits judge assessment, archives to iteration-reviews/
-   g. Decision engine evaluates judge signals:
-      - SUCCESS → stop, push to remote
-      - PROGRESS → continue to next iteration
-      - STALLED → apply onStalled policy (continue/stop/alert)
-      - ANOMALY → pause and alert user
-   h. If pause cadence reached → pause and wait for user review
-   i. If auto-merge enabled → merge branch to main
-3. The CLI polls for status, showing phase transitions in real-time
-4. On pause: shows questions and hints for `cfcf resume`
-5. On completion: shows iteration history and outcome
+1. Starts the iteration loop asynchronously.
+2. **Pre-loop review (conditional, `autoReviewSpecs=true`).** Runs on `main`. Solution Architect reviews the Problem Pack, commits `architect-review.md` + `plan.md` + signals + doc stubs as `cfcf pre-loop review (<readiness>)`. If the `readinessGate` rejects, the loop pauses with the architect's gaps as `pendingQuestions`; on Resume the architect re-runs (see `cfcf resume` below). If the gate accepts, the loop enters iteration 1 branched off `main`.
+3. For each iteration:
+   a. Reads the Problem Pack, rebuilds `iteration-history.md` from committed iteration-logs, assembles context (`cfcf-docs/` + sentinel-merged CLAUDE.md/AGENTS.md).
+   b. Creates a git feature branch: `cfcf/iteration-N`.
+   c. Launches the **dev agent** with the assembled context. Commits as `cfcf iteration N dev (<adapter>)`.
+   d. Launches the **judge agent** to evaluate the iteration. Archives the assessment. Commits as `cfcf iteration N judge (<adapter>)`.
+   e. Launches the **reflection agent** (conditional -- runs unless the judge set `reflection_needed: false` AND the `reflectSafeguardAfter` ceiling hasn't been hit). Non-destructively rewrites pending plan items when the evidence warrants. Commits as `cfcf iteration N reflect (<health>): <key_observation>`.
+   f. Decision engine evaluates judge + reflection signals:
+      - SUCCESS → run Documenter (unless `autoDocumenter=false`), merge, push to remote, stop.
+      - PROGRESS → continue to next iteration.
+      - STALLED → apply `onStalled` policy (continue / stop / alert).
+      - ANOMALY → pause and alert user.
+      - Reflection `recommend_stop: true` → pause (takes precedence over a judge `continue`).
+   g. If pause cadence reached → pause and wait for user review.
+   h. If auto-merge enabled → merge the iteration branch to `main`.
+4. The CLI polls for status, showing phase transitions in real-time.
+5. On pause: shows questions and hints for `cfcf resume`.
+6. On completion: shows iteration history and outcome.
 
 Options:
 - `--project <name>` (required) -- project name or ID
@@ -310,16 +311,30 @@ These files are tracked in git. See `docs/design/agent-process-and-context.md` f
 ### `cfcf resume`
 
 Resume a paused iteration loop. The loop pauses when:
-- Pause cadence is reached (every N iterations)
-- The dev agent or judge signals `user_input_needed`
-- The judge detects an anomaly (token exhaustion, circling, etc.)
+- Pause cadence is reached (every N iterations).
+- The dev agent or judge signals `user_input_needed`.
+- The judge detects an anomaly (token exhaustion, circling, etc.).
+- The reflection agent sets `recommend_stop: true`.
+- **The pre-loop Solution Architect's readiness signal fails the `readinessGate`** (when `autoReviewSpecs=true`). In this case the loop hasn't yet entered iteration 1 -- it paused before the first iteration branch was created.
 
 ```bash
 cfcf resume --project my-project
 cfcf resume --project my-project --feedback "Focus on error handling in the API layer"
 ```
 
-The optional `--feedback` text is injected into the next iteration's context as user direction.
+The optional `--feedback` text is written to `cfcf-docs/user-feedback.md` and read by the next agent spawn. Two distinct code paths use this, both via the same flag:
+
+| Pause reason | Who reads the feedback |
+|---|---|
+| Pre-loop review blocked | The architect on the next pre-loop spawn (re-review mode if applicable). |
+| Any in-loop pause (cadence, anomaly, stalled, dev/judge user_input_needed, reflection recommend_stop) | The dev agent at the start of the next iteration; carried through to that iteration's `cfcf-docs/user-feedback.md`. |
+
+In both cases cfcf clears `state.userFeedback` once the consuming agent has been spawned, so later iterations don't silently inherit stale guidance.
+
+**Pre-loop review resume tips:**
+- Fastest path: edit `problem-pack/problem.md` (and `success.md` if needed) to close the gaps the architect listed as `pendingQuestions`, then `cfcf resume --project <name>` with no feedback. The architect re-reads the source.
+- Faster-still path for tiny clarifications: skip the edit and pass `--feedback "..."`. The architect sees your text in `user-feedback.md` on the next spawn.
+- Status peek: `cfcf status --project <name>` prints the current `pendingQuestions` so you can see exactly what the architect asked before you type your answer.
 
 ### `cfcf document`
 
