@@ -104,6 +104,28 @@
   }
 }
 
+/* Header top-bar nav links (Projects / Settings). Sit between the
+   title and the optional activity indicator. */
+.header__nav {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+  margin-left: 0.5rem;
+}
+
+.header__nav a {
+  color: var(--color-text-muted);
+  text-decoration: none;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.header__nav a:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-border) 40%, transparent);
+}
+
 /* Header activity indicator (blue dot + short label). Sits to the right
    of the title, left of the version/status on the far right. */
 .header__activity {
