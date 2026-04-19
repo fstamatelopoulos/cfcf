@@ -9,6 +9,30 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.6.0] -- 2026-04-18
+
+Iteration 5 loop-quality phase. Ships item **5.6 Tier 3 Strategic Reflection + iterative planning** end-to-end. cfcf now has a fifth role — **Reflection** — that runs after the judge on every iteration (unless the judge opts out), reviews the full cross-iteration history, and may non-destructively rewrite the pending part of `plan.md`. Full design: [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md).
+
+### Added
+- **Reflection role (item 5.6).** New `reflection-runner.ts` (sync entry for loop + async entry for ad-hoc). Reads decision-log, per-iteration changelogs, prior reflections, a compact per-iteration-branch git log (`cfcf-docs/cfcf-reflection-context.md`), and the tail (~500 lines) of the last dev log. Produces `reflection-analysis.md` + `cfcf-reflection-signals.json` + (optionally) a rewritten `plan.md`. Non-destructive validation: completed items and iteration-header numbers must survive any plan rewrite or cfcf reverts `plan.md` to the prior version. `recommend_stop` pauses the loop (never auto-stops).
+- **`cfcf reflect` CLI.** `cfcf reflect --project <name> [--prompt "<focus hint>"]` runs the Reflection role ad-hoc against the current state. Does not mutate `loop-state.json` or write an `iteration-log`. Web parity: `POST /api/projects/:id/reflect`, `GET .../reflect/status`, `POST .../reflect/stop`.
+- **Judge opt-out signal.** `JudgeSignals` gains `reflection_needed` and `reflection_reason`. When the judge sets `reflection_needed: false`, cfcf skips reflection for that iteration, up to `reflectSafeguardAfter` consecutive skips (default 3) — on the (N+1)th, cfcf forces reflection regardless.
+- **Iteration-log artifact.** The dev agent now writes `cfcf-docs/iteration-logs/iteration-N.md` at the end of each iteration (backward-looking changelog of changes, tests, commits, plan items closed). Complements `iteration-handoff.md` (forward-looking). cfcf rebuilds `iteration-history.md` from these files each iteration, so history survives loop restarts.
+- **Decision-log multi-role charter.** `decision-log.md` is now the shared append-only journal for dev, judge, architect, reflection, and user. Entries use the tagged format `## <ISO-UTC>  [role: X]  [iter: N]  [category: decision|lesson|observation|strategy|risk|resolved-question]`. All four role-instruction templates updated with per-role appending guidance.
+- **Three-commit discipline per iteration.** Each iteration now produces up to three commits: `cfcf iteration N dev (<adapter>)`, `cfcf iteration N judge (<adapter>)`, and (when reflection ran) `cfcf iteration N reflect (<health>): <key_observation>`.
+- **New config fields.** `reflectionAgent` and `reflectSafeguardAfter` on both `CfcfGlobalConfig` and `ProjectConfig`. Existing configs are backfilled on read (reflection defaults to the architect agent's adapter, safeguard defaults to 3).
+- **Web UI: reflection row in History tab.** Color-coded `iteration_health` (converging=green, stable=blue, stalled=yellow, diverging=red, inconclusive=grey), `✎ plan edited` badge when `plan_modified`, `! stop` badge when `recommend_stop`, and `key_observation` underneath.
+- **New templates.** `cfcf-reflection-instructions.md`, `cfcf-reflection-signals.json`, `iteration-log.md` (format reference for the dev agent).
+
+### Changed
+- **`makeDecision` accepts reflection signals.** Reflection's `recommend_stop` takes precedence over the judge's determination (research doc Q6): when reflection flags the loop as fundamentally stuck, cfcf pauses for the user even if the judge said PROGRESS. `max_iterations` and dev `user_input_needed` still short-circuit first.
+- **New `reflecting` phase** in `LoopPhase`. Iteration flow: `preparing → dev_executing → judging → reflecting (conditional) → deciding → documenting (on success)`.
+- **Decision-log size warning.** Once iteration count crosses 50, cfcf fires a single informational notification per loop run. No auto-trim — the user owns the log.
+- **Docs:** `docs/plan.md` item 5.6 marked ✅; `docs/design/technical-design.md` and `docs/design/agent-process-and-context.md` updated; `docs/research/reflection-role-and-iterative-planning.md` §10 stamped "Shipped 2026-04-18".
+
+### Fixed
+- **`iteration-history.md` loop-restart bug.** The file is now rebuilt each iteration from the committed `cfcf-docs/iteration-logs/iteration-*.md` files instead of relying on the in-memory `LoopState.iterations`, so it survives `cfcf stop` / restart cycles.
+
 ## [0.5.0] -- 2026-04-18
 
 Iteration 5 distribution phase. Single self-contained `cfcf-binary` with no Bun runtime, no repo checkout, and no external assets on the user's disk. Finalized design for the upcoming Reflection role (item 5.6) now lives under `docs/research/`.
