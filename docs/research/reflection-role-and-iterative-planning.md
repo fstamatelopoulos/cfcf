@@ -502,6 +502,14 @@ Runs the same reflection runner as the loop-triggered path, but independent of a
 
 ## 10. Implementation ordering
 
+**Shipped end-to-end on 2026-04-18** on branch `iteration-5/reflection-pr1`
+as three sequential commits (tags `v5.6-pr1`, `v5.6-pr2`, `v5.6-pr3`).
+See the commit messages for the final line-level scope. The breakdown
+below is the plan-of-record; it held up during implementation with only
+minor additions (decision-log size warning got merged into PR 3 rather
+than PR 1, web History-tab reflection row landed in PR 3 alongside the
+loop wiring so that reflection events actually appear).
+
 Three PRs, ordered by dependency. Each is self-contained and mergeable.
 
 ### PR 1 — iteration-log artifacts + decision-log expanded charter + metadata format
