@@ -97,7 +97,49 @@ describe("context-assembler", () => {
       await writeContextToRepo(tempDir, ctx);
 
       const constraints = await readFile(join(tempDir, "cfcf-docs", "constraints.md"), "utf-8");
-      expect(constraints).toBe("No globals");
+      // User content preserved; a generated-copy banner is prepended (see
+      // withGeneratedBanner in context-assembler).
+      expect(constraints).toContain("No globals");
+      expect(constraints).toContain("generated from problem-pack/constraints.md");
+    });
+
+    it("prepends a generated-copy banner to every problem-pack-sourced file", async () => {
+      const ctx = makeCtx({
+        problemPack: makePack({
+          constraints: "no globals",
+          hints: "use TS",
+          styleGuide: "2 spaces",
+          context: [{ filename: "api.md", content: "api docs" }],
+        }),
+      });
+      await writeContextToRepo(tempDir, ctx);
+
+      const cases: [string, string][] = [
+        [join("cfcf-docs", "problem.md"), "problem-pack/problem.md"],
+        [join("cfcf-docs", "success.md"), "problem-pack/success.md"],
+        [join("cfcf-docs", "constraints.md"), "problem-pack/constraints.md"],
+        [join("cfcf-docs", "hints.md"), "problem-pack/hints.md"],
+        [join("cfcf-docs", "style-guide.md"), "problem-pack/style-guide.md"],
+        [join("cfcf-docs", "context", "api.md"), "problem-pack/context/api.md"],
+      ];
+      for (const [path, source] of cases) {
+        const body = await readFile(join(tempDir, path), "utf-8");
+        // Banner is at the top
+        expect(body.startsWith("<!--")).toBe(true);
+        expect(body).toContain(`generated from ${source}`);
+        expect(body).toContain("DO NOT EDIT HERE");
+        expect(body).toContain(`Edit the source at\n  ${source}`);
+      }
+    });
+
+    it("banner is not stacked when the source already has one", async () => {
+      // If the Problem Pack source is itself banner-wrapped (pathological,
+      // but possible if the user copy-pasted from cfcf-docs/), the same
+      // banner should not be prepended twice.
+      const { withGeneratedBanner } = await import("./context-assembler.js");
+      const once = withGeneratedBanner("problem-pack/problem.md", "hello");
+      const twice = withGeneratedBanner("problem-pack/problem.md", once);
+      expect(twice).toBe(once);
     });
 
     it("does not overwrite agent-editable files on second call", async () => {

@@ -139,6 +139,33 @@ This creates:
 
 ---
 
+## Files you edit vs. files cfcf regenerates
+
+Before you start writing the Problem Pack, it helps to know which files in the repo you own and which cfcf treats as generated copies.
+
+| Directory | Role | Edit here? |
+|---|---|---|
+| `problem-pack/` | **User-owned source of truth.** `problem.md`, `success.md`, and the optional `constraints.md` / `hints.md` / `style-guide.md` / `context/*` live here. | ✅ Yes -- this is where you describe the problem. |
+| `cfcf-docs/problem.md` and friends | **Generated copies.** cfcf copies from `problem-pack/` into `cfcf-docs/` at the start of every run (iteration, pre-loop review, architect review) so agents have a single `cfcf-docs/` surface to read. | ❌ No -- cfcf overwrites these on every run. Every generated copy also carries a banner at the top saying so. |
+| `cfcf-docs/plan.md` | Agent-maintained -- dev agent + reflection role + architect re-review mode edit it through cfcf's controlled path. | Read-only for you, except when the loop is paused and you want to manually hand-edit before resuming. |
+| `cfcf-docs/iteration-logs/iteration-N.md` | Written by the dev agent at the end of each iteration. cfcf rebuilds `iteration-history.md` from these. | Read-only. |
+| `cfcf-docs/decision-log.md` | Multi-role append-only journal (dev, judge, architect, reflection, user all append tagged entries). | You may append entries (use the `[role: user]` tag). |
+| `cfcf-docs/*-signals.json` | Machine-readable signal files. Reset before each agent spawn, read by cfcf after. | Don't edit by hand. |
+| `CLAUDE.md` / `AGENTS.md` (at the repo root) | The cfcf-generated block lives between `<!-- cfcf:begin -->` and `<!-- cfcf:end -->`. Anything outside those markers is yours and cfcf never touches it. | Edit OUTSIDE the sentinel block (above or below). Never edit inside -- those lines get rewritten every iteration. |
+
+**Rule of thumb:** if you want a change to persist across runs, edit a file in `problem-pack/` or outside the sentinels in `CLAUDE.md`/`AGENTS.md`. Never edit a file in `cfcf-docs/` unless you are appending to `decision-log.md`.
+
+cfcf prepends a comment banner to every generated copy under `cfcf-docs/` so this is visible in the file itself:
+
+```markdown
+<!--
+  cfcf: this file is generated from problem-pack/problem.md and is overwritten
+  on every run (pre-loop review, iteration, or architect review).
+  DO NOT EDIT HERE -- your changes will be lost. Edit the source at
+  problem-pack/problem.md instead.
+-->
+```
+
 ## Step 4: Populate the Problem Pack (User's Most Important Step)
 
 **This is where the user defines what the AI agent should build.** cf² scaffolds templates, but the user MUST replace the template content with real problem definitions. Without this, the agent has no direction.

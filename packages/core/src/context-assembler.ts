@@ -15,6 +15,39 @@ import { writeTemplate, writeTemplateIfMissing } from "./templates.js";
 // Templates are now resolved via `getTemplate()` from templates.ts (embedded
 // at build time with optional per-repo / per-user filesystem overrides).
 
+/**
+ * Banner prepended to every `cfcf-docs/` file that is a generated copy
+ * of a user-authored source file (Problem Pack). Makes it explicit that
+ * the file in `cfcf-docs/` is NOT the source of truth -- editing there
+ * is clobbered on the next run. Uses an HTML comment so it renders
+ * invisibly in markdown viewers while still being visible in editors.
+ */
+export function generatedBanner(sourcePath: string): string {
+  return (
+    `<!--\n` +
+    `  cfcf: this file is generated from ${sourcePath} and is overwritten\n` +
+    `  on every run (pre-loop review, iteration, or architect review).\n` +
+    `  DO NOT EDIT HERE -- your changes will be lost. Edit the source at\n` +
+    `  ${sourcePath} instead.\n` +
+    `-->\n`
+  );
+}
+
+/**
+ * Prepend the generated-copy banner to user-authored content. Idempotent:
+ * if the content already starts with a banner pointing at the same source
+ * (e.g. the caller re-ran and the Problem Pack source was already a
+ * banner-wrapped file for some reason), we don't stack banners.
+ */
+export function withGeneratedBanner(sourcePath: string, content: string): string {
+  const banner = generatedBanner(sourcePath);
+  // Avoid stacking -- if the content already leads with THIS banner,
+  // don't double-prepend. (Normal case: source content is plain user
+  // markdown; banner is added fresh every time.)
+  if (content.startsWith(banner)) return content;
+  return banner + content;
+}
+
 export interface IterationContext {
   /** Current iteration number */
   iteration: number;
@@ -49,24 +82,54 @@ export async function writeContextToRepo(
   await mkdir(join(cfcfDocsDir, "iteration-reviews"), { recursive: true });
   await mkdir(join(cfcfDocsDir, "iteration-logs"), { recursive: true });
 
-  // --- Static files (from Problem Pack, written once or updated if changed) ---
+  // --- Static files (from Problem Pack, regenerated every run) ---
+  //
+  // Each file under `cfcf-docs/` that mirrors a Problem Pack file gets a
+  // `<!-- cfcf: generated ... -->` banner prepended so the user knows
+  // this is a *copy* and editing it here will be clobbered on the next
+  // run. The source of truth is under `<repo>/problem-pack/`. See
+  // `docs/guides/workflow.md` ("Files you edit vs. files cfcf generates").
 
-  await writeFile(join(cfcfDocsDir, "problem.md"), ctx.problemPack.problem, "utf-8");
-  await writeFile(join(cfcfDocsDir, "success.md"), ctx.problemPack.success, "utf-8");
+  await writeFile(
+    join(cfcfDocsDir, "problem.md"),
+    withGeneratedBanner("problem-pack/problem.md", ctx.problemPack.problem),
+    "utf-8",
+  );
+  await writeFile(
+    join(cfcfDocsDir, "success.md"),
+    withGeneratedBanner("problem-pack/success.md", ctx.problemPack.success),
+    "utf-8",
+  );
 
   if (ctx.problemPack.constraints) {
-    await writeFile(join(cfcfDocsDir, "constraints.md"), ctx.problemPack.constraints, "utf-8");
+    await writeFile(
+      join(cfcfDocsDir, "constraints.md"),
+      withGeneratedBanner("problem-pack/constraints.md", ctx.problemPack.constraints),
+      "utf-8",
+    );
   }
   if (ctx.problemPack.hints) {
-    await writeFile(join(cfcfDocsDir, "hints.md"), ctx.problemPack.hints, "utf-8");
+    await writeFile(
+      join(cfcfDocsDir, "hints.md"),
+      withGeneratedBanner("problem-pack/hints.md", ctx.problemPack.hints),
+      "utf-8",
+    );
   }
   if (ctx.problemPack.styleGuide) {
-    await writeFile(join(cfcfDocsDir, "style-guide.md"), ctx.problemPack.styleGuide, "utf-8");
+    await writeFile(
+      join(cfcfDocsDir, "style-guide.md"),
+      withGeneratedBanner("problem-pack/style-guide.md", ctx.problemPack.styleGuide),
+      "utf-8",
+    );
   }
 
   // Copy context files
   for (const ctxFile of ctx.problemPack.context) {
-    await writeFile(join(cfcfDocsDir, "context", ctxFile.filename), ctxFile.content, "utf-8");
+    await writeFile(
+      join(cfcfDocsDir, "context", ctxFile.filename),
+      withGeneratedBanner(`problem-pack/context/${ctxFile.filename}`, ctxFile.content),
+      "utf-8",
+    );
   }
 
   // --- Template files (written on first iteration only, agent updates them) ---
