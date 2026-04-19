@@ -128,7 +128,15 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
 /**
  * Validate a config object. Returns the config if valid, throws if not.
  */
-function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
+/**
+ * Validate a config object. Throws on fields that are genuinely required
+ * (`version`, `devAgent.adapter`, `judgeAgent.adapter`); backfills the rest
+ * with sensible defaults so older configs continue to work after upgrade.
+ *
+ * Exported so the server's `PUT /api/config` endpoint (item 5.9) can
+ * reuse the same rules as `readConfig` when accepting user edits.
+ */
+export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (!config.version || typeof config.version !== "number") {
     throw new Error("Invalid config: missing or invalid 'version' field");
   }

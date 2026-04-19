@@ -9,6 +9,7 @@ import type {
   DocumentState,
   HealthResponse,
   HistoryEvent,
+  NotificationConfig,
 } from "./types";
 
 class ApiError extends Error {
@@ -71,11 +72,28 @@ export interface GlobalConfig {
   availableAgents: string[];
   permissionsAcknowledged: boolean;
   cleanupMergedBranches?: boolean;
-  notifications?: unknown;
+  autoReviewSpecs?: boolean;
+  autoDocumenter?: boolean;
+  readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
+  notifications?: NotificationConfig;
 }
 
 export function fetchGlobalConfig(): Promise<GlobalConfig> {
   return request<GlobalConfig>("/api/config");
+}
+
+/**
+ * Save edits to the global config. Accepts a partial patch; server merges
+ * onto the existing config, preserves server-owned fields (version,
+ * permissionsAcknowledged, availableAgents), validates, and returns the
+ * saved config. Added in v0.7.3 (item 5.9).
+ */
+export function saveGlobalConfig(patch: Partial<GlobalConfig>): Promise<GlobalConfig> {
+  return request<GlobalConfig>("/api/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 }
 
 // --- Projects ---

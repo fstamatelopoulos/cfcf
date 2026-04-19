@@ -85,7 +85,7 @@ cfcf server status
 cfcf server start
 ```
 
-The server runs in the background. You can stop it anytime with `cfcf server stop`. The web GUI is reachable at `http://localhost:7233`. A read-only server + config page is available at `http://localhost:7233/#/server` and linked from the Dashboard.
+The server runs in the background. You can stop it anytime with `cfcf server stop`. The web GUI is reachable at `http://localhost:7233`. The top bar has **Projects** + **Settings** links. The Settings page (`/#/server`) is a full editor for the global config -- same keys as `cfcf config edit` on the CLI, same endpoint (`PUT /api/config`). Per-project overrides live in each project's Config tab (read-only today; becomes editable in plan item 6.14).
 
 ---
 

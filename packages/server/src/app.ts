@@ -10,7 +10,8 @@ import { streamSSE } from "hono/streaming";
 import { loadAsset, loadIndex } from "./web-assets.js";
 import { cors } from "hono/cors";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
-import { configExists, readConfig } from "@cfcf/core";
+import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/core";
+import type { CfcfGlobalConfig } from "@cfcf/core";
 import {
   createProject,
   listProjects,
@@ -152,6 +153,57 @@ export function createApp() {
       );
     }
     return c.json(config);
+  });
+
+  // Edit the global config (item 5.9). Accepts a full `CfcfGlobalConfig`
+  // body or a partial patch; we merge the patch onto the existing config
+  // before validation so the client can send only the fields it changed.
+  // `permissionsAcknowledged` and `availableAgents` are server-owned and
+  // are NOT overridable via this endpoint -- they're preserved from the
+  // current config. Returns the saved config so the client can refresh.
+  app.put("/api/config", async (c) => {
+    const existing = await readConfig();
+    if (!existing) {
+      return c.json(
+        { error: "Not configured. Run 'cfcf init' to set up before editing." },
+        404,
+      );
+    }
+    let patch: Partial<CfcfGlobalConfig>;
+    try {
+      patch = await c.req.json<Partial<CfcfGlobalConfig>>();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    // Preserve server-owned fields regardless of what the client sent
+    const merged: CfcfGlobalConfig = {
+      ...existing,
+      ...patch,
+      version: existing.version,
+      permissionsAcknowledged: existing.permissionsAcknowledged,
+      availableAgents: existing.availableAgents,
+    };
+    let validated: CfcfGlobalConfig;
+    try {
+      validated = validateConfig(merged);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+    // Extra guards beyond validateConfig's backfill-friendly rules
+    if (typeof validated.maxIterations !== "number" || validated.maxIterations < 1) {
+      return c.json({ error: "maxIterations must be a positive integer" }, 400);
+    }
+    if (typeof validated.pauseEvery !== "number" || validated.pauseEvery < 0) {
+      return c.json({ error: "pauseEvery must be zero or a positive integer" }, 400);
+    }
+    try {
+      await writeConfig(validated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: `Failed to write config: ${message}` }, 500);
+    }
+    return c.json(validated);
   });
 
   // --- Projects ---

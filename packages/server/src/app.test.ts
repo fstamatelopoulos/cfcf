@@ -39,7 +39,7 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBe("ok");
-      expect(body.version).toBe("0.7.2");
+      expect(body.version).toBe("0.7.3");
     });
   });
 
@@ -72,6 +72,105 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.devAgent.adapter).toBe("claude-code");
+    });
+  });
+
+  // --- PUT /api/config (item 5.9) ---
+
+  describe("PUT /api/config", () => {
+    it("returns 404 when not configured", async () => {
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxIterations: 5 }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("accepts a partial patch and returns the merged config", async () => {
+      await writeConfig(createDefaultConfig(["claude-code", "codex"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maxIterations: 20,
+          autoReviewSpecs: true,
+          readinessGate: "needs_refinement_or_blocked",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.maxIterations).toBe(20);
+      expect(body.autoReviewSpecs).toBe(true);
+      expect(body.readinessGate).toBe("needs_refinement_or_blocked");
+      // Untouched fields preserved
+      expect(body.devAgent.adapter).toBe("claude-code");
+      expect(body.autoDocumenter).toBe(true);
+    });
+
+    it("preserves server-owned fields even when client tries to set them", async () => {
+      await writeConfig(createDefaultConfig(["claude-code"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          permissionsAcknowledged: false, // client is lying
+          availableAgents: ["malicious-agent"],
+          version: 99,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Server kept its own values
+      expect(body.version).toBe(1);
+      expect(body.availableAgents).toEqual(["claude-code"]);
+    });
+
+    it("rejects invalid JSON", async () => {
+      await writeConfig(createDefaultConfig(["claude-code"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "not json",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/invalid json/i);
+    });
+
+    it("rejects maxIterations < 1", async () => {
+      await writeConfig(createDefaultConfig(["claude-code"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxIterations: 0 }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/maxIterations/);
+    });
+
+    it("rejects pauseEvery < 0", async () => {
+      await writeConfig(createDefaultConfig(["claude-code"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pauseEvery: -1 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("backfills readinessGate when an invalid value is provided", async () => {
+      await writeConfig(createDefaultConfig(["claude-code"]));
+      const res = await app.request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ readinessGate: "bogus" }),
+      });
+      // validateConfig backfills unknown gate values to "blocked"
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.readinessGate).toBe("blocked");
     });
   });
 

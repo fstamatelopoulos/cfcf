@@ -9,6 +9,26 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.3] -- 2026-04-20
+
+Ships plan item **5.9**: the read-only `#/server` page becomes a full editable global-settings form in the web UI, wire-compatible with `cfcf config edit` on the CLI.
+
+### Added
+- **`PUT /api/config` endpoint.** Accepts a full `CfcfGlobalConfig` body or a partial patch; merges onto the current config, preserves server-owned fields (`version`, `permissionsAcknowledged`, `availableAgents`), validates through the same `validateConfig` used by `readConfig`, and writes the result. Returns the saved config. Explicit 400 on `maxIterations < 1`, `pauseEvery < 0`, invalid JSON, or required-field violations. Bounded fields with invalid values (e.g. an unknown `readinessGate`) are silently backfilled to their defaults — same behaviour as `readConfig`. +7 tests in `app.test.ts`.
+- **Top-bar nav:** `Projects` + `Settings` links added to the web Header next to the logo. Settings routes to `#/server`.
+- **Editable global-settings page.** Promotes `ServerInfo` from read-only into a four-section form:
+  - **Agent roles** — five roles (dev, judge, architect, documenter, reflection), each with an adapter dropdown (constrained to `availableAgents`) and an optional model text input.
+  - **Iteration defaults** — `maxIterations`, `pauseEvery`, `reflectSafeguardAfter`.
+  - **Behaviour flags (item 5.1)** — `autoReviewSpecs`, `autoDocumenter`, `cleanupMergedBranches` as checkboxes. `readinessGate` appears as a 3-option dropdown only when `autoReviewSpecs` is on.
+  - **Notifications** — master `enabled` toggle + a 3 events × 4 channels matrix of checkboxes.
+  - Save / Cancel buttons; dirty indicator; success confirmation. Server-owned read-only rows (version, port, PID, uptime, available agents) stay at the top.
+- **Explicit scope banner on the Settings page:** "This edits the global defaults. Per-project overrides live in each project's Config tab, which is read-only today and becomes editable in plan item 6.14."
+- Exposed `validateConfig` from `@cfcf/core` so the server's PUT handler can reuse the same validation/backfill rules as the client-side read path.
+
+### Changed
+- `GlobalConfig` interface on the web client widened to reflect the editable surface (`autoReviewSpecs`, `autoDocumenter`, `readinessGate`, typed `notifications`).
+- Docs refreshed: `docs/guides/workflow.md` mentions the new Settings link; `docs/guides/cli-usage.md` points to the editable web UI as the wire-compatible mirror of `cfcf config edit`; `docs/api/server-api.md` documents `PUT /api/config` with sample body, response, and error matrix.
+
 ## [0.7.2] -- 2026-04-20
 
 Small but meaningful follow-up pass after first real-world autoReviewSpecs testing: one regression fix surfaced mid-test, one UX consistency improvement, plus a UX protection against a gotcha the user hit.

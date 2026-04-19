@@ -84,7 +84,10 @@ cfcf server v0.7.0
 ```
 
 The same information (plus the full global config) is available in the
-web GUI at `http://localhost:7233/#/server`.
+web GUI at `http://localhost:7233/#/server`. Since v0.7.3 that page is
+a full editor -- wire-compatible with `cfcf config edit` via the same
+`PUT /api/config` endpoint. Reach it from the **Settings** link in the
+top bar.
 
 ---
 

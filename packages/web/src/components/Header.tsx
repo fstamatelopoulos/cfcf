@@ -63,6 +63,26 @@ export function Header() {
         cf<sup>2</sup>
       </a>
       <span className="header__title">Cerefox Code Factory</span>
+      <nav className="header__nav">
+        <a
+          href="#/"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo("/");
+          }}
+        >
+          Projects
+        </a>
+        <a
+          href="#/server"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo("/server");
+          }}
+        >
+          Settings
+        </a>
+      </nav>
       {anyActive && (
         <span className="header__activity" title="Click to open the active project">
           <span className="status-dot status-dot--active" />

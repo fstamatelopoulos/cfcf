@@ -150,6 +150,49 @@ details on channels and events.
 }
 ```
 
+### PUT /api/config
+
+Edit the global config. Added in v0.7.3 (item 5.9). Backs the web UI's
+Settings page and is wire-compatible with `cfcf config edit` on the CLI.
+
+**Request body:** a full `CfcfGlobalConfig` object or a partial patch.
+The server merges the patch onto the current config, preserves
+server-owned fields (`version`, `permissionsAcknowledged`,
+`availableAgents` — clients cannot override these), validates, and
+writes. Missing optional fields are backfilled the same way `readConfig`
+does it.
+
+```json
+{
+  "maxIterations": 20,
+  "autoReviewSpecs": true,
+  "readinessGate": "needs_refinement_or_blocked",
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "loop.paused": ["terminal-bell", "macos", "log"],
+      "loop.completed": ["terminal-bell", "macos", "log"],
+      "agent.failed": ["log"]
+    }
+  }
+}
+```
+
+**Response:** `200 OK` — the saved, fully-validated config (identical
+shape to `GET /api/config`).
+
+**Errors:**
+
+| Status | When |
+|---|---|
+| `400` | Invalid JSON body, `maxIterations < 1`, `pauseEvery < 0`, or `validateConfig` rejected the merged result (e.g. missing `devAgent.adapter`). Error body: `{ "error": "<reason>" }`. |
+| `404` | `cfcf init` has never been run — there's no config to edit. |
+| `500` | Disk write failed. |
+
+Unknown / invalid values for bounded fields (e.g. `readinessGate` set to
+`"bogus"`) are silently backfilled to their defaults (see
+`validateConfig`'s rules); they don't produce a `400`.
+
 ---
 
 ## Projects
