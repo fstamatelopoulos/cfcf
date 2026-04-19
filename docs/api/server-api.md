@@ -262,9 +262,38 @@ Get a project by ID or name (case-insensitive name match supported).
 
 ### PUT /api/projects/:id
 
-Update project configuration fields (partial update).
+Update per-project config (partial update). Backs the web UI's project detail Config tab (item 6.14, v0.7.4) and is the same endpoint `cfcf` CLI would use for a per-project edit if one existed.
 
-**Response:** `200 OK` -- Updated project config.
+**Request body:** a full `ProjectConfig` object or a partial patch. Server merges onto the existing config, **preserves identity + runtime fields** (`id`, `name`, `repoPath`, `currentIteration`, `status`, `processTemplate`) regardless of what the client sends, validates bounded + enum fields, and writes the result. `notifications: null` is a special signal meaning "clear the per-project override, inherit global".
+
+```json
+{
+  "maxIterations": 20,
+  "pauseEvery": 3,
+  "onStalled": "alert",
+  "mergeStrategy": "auto",
+  "autoReviewSpecs": true,
+  "readinessGate": "blocked",
+  "reflectionAgent": { "adapter": "claude-code", "model": "opus" },
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "loop.paused": ["terminal-bell", "log"],
+      "loop.completed": ["terminal-bell", "log"],
+      "agent.failed": ["log"]
+    }
+  }
+}
+```
+
+**Response:** `200 OK` -- the saved, canonicalised project config (identical shape to `GET /api/projects/:id`).
+
+**Errors:**
+
+| Status | When |
+|---|---|
+| `400` | Invalid JSON body; `maxIterations < 1`; `pauseEvery < 0`; `reflectSafeguardAfter < 1`; invalid enum for `onStalled` / `mergeStrategy` / `readinessGate`; agent role object missing `adapter`. |
+| `404` | Project not found. |
 
 ---
 

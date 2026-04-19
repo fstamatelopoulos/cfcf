@@ -106,6 +106,27 @@ export function fetchProject(id: string): Promise<ProjectConfig> {
   return request<ProjectConfig>(`/api/projects/${encodeURIComponent(id)}`);
 }
 
+/**
+ * Save edits to a project's per-project config (item 6.14). Accepts a
+ * partial patch; server merges onto the existing project config,
+ * preserves identity + runtime fields (id, name, repoPath,
+ * currentIteration, status, processTemplate), validates bounded + enum
+ * fields, and writes. Returns the saved config.
+ *
+ * Sending `notifications: null` clears any per-project notification
+ * override, re-inheriting the global config.
+ */
+export function saveProject(
+  id: string,
+  patch: Partial<ProjectConfig> & { notifications?: ProjectConfig["notifications"] | null },
+): Promise<ProjectConfig> {
+  return request<ProjectConfig>(`/api/projects/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
 // --- Loop ---
 
 export function fetchLoopStatus(projectId: string): Promise<LoopState> {

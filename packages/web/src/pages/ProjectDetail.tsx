@@ -366,7 +366,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
 
         <div style={{ display: activeTab === "config" ? "block" : "none" }}>
-          <ConfigDisplay project={project} />
+          <ConfigDisplay project={project} onSaved={(p) => setProject(p)} />
         </div>
       </div>
     </div>

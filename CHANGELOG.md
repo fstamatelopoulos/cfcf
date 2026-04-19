@@ -9,6 +9,19 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.4] -- 2026-04-20
+
+Ships plan item **6.14** (pulled forward from iteration 6 since 5.9 set the editor pattern and the two pages share structure): the read-only `Config` tab on the project detail page becomes a full editable form, wire-compatible with the CLI-hit `PUT /api/projects/:id`.
+
+### Added
+- **Editable per-project config tab in the web UI.** Identity + runtime fields (id, name, repo path, status, iterations completed, process template) render read-only at the top; below that, five editable sections: Remote URL / Agent roles (5) / Iteration defaults (maxIterations, pauseEvery, reflectSafeguardAfter, onStalled, mergeStrategy) / Behaviour flags (autoReviewSpecs / autoDocumenter / readinessGate / cleanupMergedBranches) / Notifications override with an explicit "inherit global" toggle. Save / Cancel buttons track a dirty flag; success message appears briefly after save; errors surface inline.
+- **`saveProject()`** helper in `packages/web/src/api.ts`.
+- **Validation + identity-preservation on `PUT /api/projects/:id`.** The endpoint now validates bounded numeric fields (`maxIterations >= 1`, `pauseEvery >= 0`, `reflectSafeguardAfter >= 1`), enums (`onStalled`, `mergeStrategy`, `readinessGate`), and agent role objects (`adapter` required when setting an agent role). Identity + runtime fields (`id`, `name`, `repoPath`, `currentIteration`, `status`, `processTemplate`) are stripped from any incoming patch regardless of client input. Sending `notifications: null` clears the per-project override (project re-inherits the global notification settings). +12 tests in `app.test.ts` covering happy path, identity preservation, every rejection, and the null-notifications clear.
+- **Banner at the top of the Config tab:** "These override the global defaults for this project only. Global settings live in the top-bar Settings link."
+
+### Changed
+- Docs refreshed: `docs/api/server-api.md` expands the `PUT /api/projects/:id` section with the full body shape, response, and error matrix. `docs/plan.md` item 6.14 flipped ❌ → ✅.
+
 ## [0.7.3] -- 2026-04-20
 
 Ships plan item **5.9**: the read-only `#/server` page becomes a full editable global-settings form in the web UI, wire-compatible with `cfcf config edit` on the CLI.

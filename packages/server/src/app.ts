@@ -249,9 +249,117 @@ export function createApp() {
     return c.json(project);
   });
 
+  // Edit per-project config (item 6.14). Accepts a partial patch; server
+  // merges onto the existing project config, preserves identity + runtime
+  // fields regardless of client input (id, name, repoPath,
+  // currentIteration, status, processTemplate), validates bounded + enum
+  // fields, and writes. Returns the saved config.
   app.put("/api/projects/:id", async (c) => {
-    const body = await c.req.json();
-    const updated = await updateProject(c.req.param("id"), body);
+    const id = c.req.param("id");
+    const existing =
+      (await getProject(id)) ?? (await findProjectByName(id));
+    if (!existing) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+    let patch: Record<string, unknown>;
+    try {
+      patch = await c.req.json<Record<string, unknown>>();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    // Validate bounded numeric fields
+    if ("maxIterations" in patch) {
+      const n = patch.maxIterations;
+      if (typeof n !== "number" || n < 1) {
+        return c.json({ error: "maxIterations must be a positive integer" }, 400);
+      }
+    }
+    if ("pauseEvery" in patch) {
+      const n = patch.pauseEvery;
+      if (typeof n !== "number" || n < 0) {
+        return c.json({ error: "pauseEvery must be zero or a positive integer" }, 400);
+      }
+    }
+    if ("reflectSafeguardAfter" in patch) {
+      const n = patch.reflectSafeguardAfter;
+      if (typeof n !== "number" || n < 1) {
+        return c.json({ error: "reflectSafeguardAfter must be a positive integer" }, 400);
+      }
+    }
+    // Validate enums
+    if ("onStalled" in patch) {
+      const v = patch.onStalled;
+      if (v !== "continue" && v !== "stop" && v !== "alert") {
+        return c.json(
+          { error: "onStalled must be 'continue' | 'stop' | 'alert'" },
+          400,
+        );
+      }
+    }
+    if ("mergeStrategy" in patch) {
+      const v = patch.mergeStrategy;
+      if (v !== "auto" && v !== "pr") {
+        return c.json({ error: "mergeStrategy must be 'auto' | 'pr'" }, 400);
+      }
+    }
+    if ("readinessGate" in patch) {
+      const v = patch.readinessGate;
+      if (
+        v !== "never" &&
+        v !== "blocked" &&
+        v !== "needs_refinement_or_blocked"
+      ) {
+        return c.json(
+          {
+            error:
+              "readinessGate must be 'never' | 'blocked' | 'needs_refinement_or_blocked'",
+          },
+          400,
+        );
+      }
+    }
+    // Validate agent roles have an adapter field if present
+    for (const roleKey of [
+      "devAgent",
+      "judgeAgent",
+      "architectAgent",
+      "documenterAgent",
+      "reflectionAgent",
+    ]) {
+      if (roleKey in patch) {
+        const a = patch[roleKey] as { adapter?: string } | undefined;
+        if (a && (!a.adapter || typeof a.adapter !== "string")) {
+          return c.json(
+            { error: `${roleKey}.adapter is required when setting ${roleKey}` },
+            400,
+          );
+        }
+      }
+    }
+
+    // Strip identity + runtime fields from the patch -- they are
+    // server-owned. The client cannot change them via this endpoint.
+    const IMMUTABLE_FIELDS = [
+      "id",
+      "name",
+      "repoPath",
+      "currentIteration",
+      "status",
+      "processTemplate", // only "default" today; rename happens in 6.8
+    ] as const;
+    for (const f of IMMUTABLE_FIELDS) {
+      if (f in patch) delete (patch as Record<string, unknown>)[f];
+    }
+
+    // Special case: `notifications: null` means "clear the per-project
+    // override, inherit global". Drop the field so the saved config
+    // omits it.
+    if ("notifications" in patch && patch.notifications === null) {
+      (patch as Record<string, unknown>).notifications = undefined;
+    }
+
+    const updated = await updateProject(existing.id, patch);
     if (!updated) {
       return c.json({ error: "Project not found" }, 404);
     }
