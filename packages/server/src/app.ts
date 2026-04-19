@@ -37,6 +37,9 @@ import {
   startDocument,
   getDocumentState,
   stopDocument,
+  startReflection,
+  getReflectState,
+  stopReflection,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -465,6 +468,50 @@ export function createApp() {
     return c.json({ projectId: state.projectId, status: state.status, message: "Documenter stopped." });
   });
 
+  // --- Reflection (ad-hoc, item 5.6) ---
+
+  app.post("/api/projects/:id/reflect", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+    const body = await c.req.json<{ prompt?: string }>().catch(() => ({} as { prompt?: string }));
+    try {
+      const state = await startReflection(project, body);
+      return c.json({
+        projectId: state.projectId,
+        status: state.status,
+        logFile: state.logFile,
+        message: "Reflection started. Poll GET /api/projects/:id/reflect/status for progress.",
+      }, 202);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/projects/:id/reflect/status", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    const state = getReflectState(project.id);
+    if (!state) return c.json({ error: "No reflection found for this project" }, 404);
+    return c.json(state);
+  });
+
+  app.post("/api/projects/:id/reflect/stop", async (c) => {
+    const project =
+      (await getProject(c.req.param("id"))) ??
+      (await findProjectByName(c.req.param("id")));
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    const state = await stopReflection(project.id);
+    if (!state) return c.json({ error: "No reflection running for this project" }, 404);
+    return c.json({ projectId: state.projectId, status: state.status, message: "Reflection stopped." });
+  });
+
   // --- Project history ---
 
   app.get("/api/projects/:id/history", async (c) => {
@@ -522,6 +569,12 @@ export function createApp() {
         isLive = (!!docState && docState.logFileName === filename &&
           ["preparing", "executing"].includes(docState.status)) ||
           (!!loopState && loopState.phase === "documenting");
+      } else if (filename.startsWith("reflection-")) {
+        const reflectState = getReflectState(project.id);
+        const loopState = await getLoopState(project.id);
+        isLive = (!!reflectState && reflectState.logFileName === filename &&
+          ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
+          (!!loopState && loopState.phase === "reflecting");
       }
 
       let lastSize = 0;
@@ -578,6 +631,13 @@ export function createApp() {
             const stillLive = (!!docState && docState.logFileName === filename &&
               ["preparing", "executing"].includes(docState.status)) ||
               (!!loopState && loopState.phase === "documenting");
+            if (!stillLive) isLive = false;
+          } else if (filename.startsWith("reflection-")) {
+            const reflectState = getReflectState(project.id);
+            const loopState = await getLoopState(project.id);
+            const stillLive = (!!reflectState && reflectState.logFileName === filename &&
+              ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
+              (!!loopState && loopState.phase === "reflecting");
             if (!stillLive) isLive = false;
           }
 

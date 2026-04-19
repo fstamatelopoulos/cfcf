@@ -14,13 +14,13 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { getProjectDir } from "./projects.js";
-import type { ArchitectSignals } from "./types.js";
+import type { ArchitectSignals, ReflectionSignals, IterationHealth } from "./types.js";
 
 const HISTORY_FILENAME = "history.json";
 
 // --- Event types ---
 
-export type HistoryEventType = "review" | "iteration" | "document";
+export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
 
 export type HistoryEventStatus = "running" | "completed" | "failed";
 
@@ -82,7 +82,30 @@ export interface DocumentHistoryEvent extends BaseHistoryEvent {
   exitCode?: number;
 }
 
-export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;
+export interface ReflectionHistoryEvent extends BaseHistoryEvent {
+  type: "reflection";
+  /**
+   * Iteration this reflection was produced *after* (0 when manually
+   * triggered before any iteration runs or outside the loop).
+   */
+  iteration: number;
+  /** Whether this was triggered by the loop or by `cfcf reflect` / the API. */
+  trigger: "loop" | "manual";
+  /** Parsed reflection signals, persisted inline for history replay. */
+  signals?: ReflectionSignals;
+  /** Denormalized for fast UI rendering */
+  iterationHealth?: IterationHealth;
+  /** Whether the reflection agent rewrote the pending plan */
+  planModified?: boolean;
+  /** Exit code of the reflection process */
+  exitCode?: number;
+}
+
+export type HistoryEvent =
+  | ReviewHistoryEvent
+  | IterationHistoryEvent
+  | DocumentHistoryEvent
+  | ReflectionHistoryEvent;
 
 // --- Storage ---
 

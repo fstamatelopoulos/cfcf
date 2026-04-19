@@ -176,6 +176,39 @@ export async function getLog(
 }
 
 /**
+ * List all local branches (bare names, no decorations).
+ */
+export async function listBranches(repoPath: string): Promise<string[]> {
+  const result = await git(repoPath, ["branch", "--list", "--format=%(refname:short)"]);
+  if (!result.success) return [];
+  return result.output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+/**
+ * One-line log of a specific ref, capped at maxCount commits. Returns an
+ * array of `<hash> <subject>` lines (oldest-last).
+ */
+export async function logOneline(
+  repoPath: string,
+  ref: string,
+  maxCount: number = 20,
+): Promise<string[]> {
+  const result = await git(repoPath, [
+    "log",
+    `--max-count=${maxCount}`,
+    "--pretty=format:%h %ad %s",
+    "--date=short",
+    "--no-decorate",
+    ref,
+  ]);
+  if (!result.success) return [];
+  return result.output.split("\n").filter((l) => l.length > 0);
+}
+
+/**
  * Merge a branch into the current branch.
  * Uses --no-ff to always create a merge commit, preserving iteration
  * boundaries in the git history (so `git log --graph` shows each

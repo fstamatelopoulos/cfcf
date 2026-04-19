@@ -41,6 +41,8 @@ import decisionLog from "./templates/decision-log.md" with { type: "text" };
 import planTemplate from "./templates/plan.md" with { type: "text" };
 import processTemplate from "./templates/process.md" with { type: "text" };
 import iterationLog from "./templates/iteration-log.md" with { type: "text" };
+import reflectionInstructions from "./templates/cfcf-reflection-instructions.md" with { type: "text" };
+import reflectionSignals from "./templates/cfcf-reflection-signals.json" with { type: "text" };
 
 // With `resolveJsonModule: true` in tsconfig, TS types the JSON imports
 // as their parsed object shape even when we pass `with { type: "text" }`
@@ -63,6 +65,8 @@ const EMBEDDED: Record<string, string> = {
   "plan.md": planTemplate,
   "process.md": processTemplate,
   "iteration-log.md": iterationLog,
+  "cfcf-reflection-instructions.md": reflectionInstructions,
+  "cfcf-reflection-signals.json": asString(reflectionSignals),
 };
 
 // --- Public API ---

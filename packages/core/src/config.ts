@@ -112,6 +112,8 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     judgeAgent: { adapter: judgeAdapter },
     architectAgent: { adapter: architectAdapter },
     documenterAgent: { adapter: documenterAdapter },
+    reflectionAgent: { adapter: architectAdapter }, // same preference as architect
+    reflectSafeguardAfter: 3,
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
@@ -139,6 +141,16 @@ function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   }
   if (!config.documenterAgent?.adapter) {
     config.documenterAgent = { adapter: config.devAgent.adapter };
+  }
+  // Backfill reflection role (item 5.6). Default to the architect agent
+  // because reflection shares the "broad context, strong reasoning" profile.
+  if (!config.reflectionAgent?.adapter) {
+    config.reflectionAgent = {
+      adapter: config.architectAgent?.adapter ?? config.devAgent.adapter,
+    };
+  }
+  if (typeof config.reflectSafeguardAfter !== "number" || config.reflectSafeguardAfter < 1) {
+    config.reflectSafeguardAfter = 3;
   }
   return config;
 }
