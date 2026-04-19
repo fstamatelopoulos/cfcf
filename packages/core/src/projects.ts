@@ -68,6 +68,9 @@ export async function createProject(opts: {
     documenterAgent: opts.documenterAgent ?? globalConfig?.documenterAgent ?? { adapter: "claude-code" },
     reflectionAgent: globalConfig?.reflectionAgent ?? globalConfig?.architectAgent ?? { adapter: "claude-code" },
     reflectSafeguardAfter: globalConfig?.reflectSafeguardAfter ?? 3,
+    autoReviewSpecs: globalConfig?.autoReviewSpecs ?? false,
+    autoDocumenter: globalConfig?.autoDocumenter ?? true,
+    readinessGate: globalConfig?.readinessGate ?? "blocked",
     maxIterations: opts.maxIterations ?? globalConfig?.maxIterations ?? DEFAULT_MAX_ITERATIONS,
     pauseEvery: opts.pauseEvery ?? globalConfig?.pauseEvery ?? DEFAULT_PAUSE_EVERY,
     onStalled: "alert",
@@ -105,6 +108,18 @@ export async function getProject(projectId: string): Promise<ProjectConfig | nul
     }
     if (typeof parsed.reflectSafeguardAfter !== "number" || parsed.reflectSafeguardAfter < 1) {
       parsed.reflectSafeguardAfter = 3;
+    }
+    // item 5.1 backfills.
+    if (typeof parsed.autoReviewSpecs !== "boolean") {
+      parsed.autoReviewSpecs = false;
+    }
+    if (typeof parsed.autoDocumenter !== "boolean") {
+      parsed.autoDocumenter = true;
+    }
+    if (parsed.readinessGate !== "never" &&
+        parsed.readinessGate !== "blocked" &&
+        parsed.readinessGate !== "needs_refinement_or_blocked") {
+      parsed.readinessGate = "blocked";
     }
     return parsed;
   } catch {

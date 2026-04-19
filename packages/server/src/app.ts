@@ -87,7 +87,7 @@ export function createApp() {
       // Loop-state gives a finer-grained phase for the current iteration.
       const loopState = await getLoopState(p.id);
       const activeLoopPhases = [
-        "preparing", "dev_executing", "judging",
+        "pre_loop_reviewing", "preparing", "dev_executing", "judging",
         "reflecting", "deciding", "documenting",
       ];
       const loopActive = loopState && activeLoopPhases.includes(loopState.phase);
@@ -740,7 +740,15 @@ export function createApp() {
 
     const body = await c.req.json<{
       problemPackPath?: string;
-    }>().catch(() => ({} as { problemPackPath?: string }));
+      autoReviewSpecs?: boolean;
+      autoDocumenter?: boolean;
+      readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
+    }>().catch(() => ({}) as {
+      problemPackPath?: string;
+      autoReviewSpecs?: boolean;
+      autoDocumenter?: boolean;
+      readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
+    });
 
     try {
       const state = await startLoop(project, body);

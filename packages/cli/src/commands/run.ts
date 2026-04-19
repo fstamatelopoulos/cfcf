@@ -75,6 +75,14 @@ export function registerRunCommand(program: Command): void {
     )
     .requiredOption("--project <name>", "Project name or ID")
     .option("--problem-pack <path>", "Path to Problem Pack directory (default: <repo>/problem-pack)")
+    .option("--auto-review", "Per-run override: run Solution Architect before iteration 1 (item 5.1)")
+    .option("--no-auto-review", "Per-run override: skip the pre-loop Solution Architect")
+    .option("--auto-document", "Per-run override: run Documenter on SUCCESS (item 5.1)")
+    .option("--no-auto-document", "Per-run override: skip the post-SUCCESS Documenter")
+    .option(
+      "--readiness-gate <level>",
+      "Per-run override: readiness gate for auto-review ('never' | 'blocked' | 'needs_refinement_or_blocked')",
+    )
     .argument("[command...]", "Manual command to run (e.g., npm test)")
     .action(async (commandParts: string[], opts) => {
       if (!(await isServerReachable())) {
@@ -92,14 +100,43 @@ export function registerRunCommand(program: Command): void {
     });
 }
 
-async function runLoopMode(opts: { project: string; problemPack?: string }): Promise<void> {
+async function runLoopMode(opts: {
+  project: string;
+  problemPack?: string;
+  autoReview?: boolean;
+  autoDocument?: boolean;
+  readinessGate?: string;
+}): Promise<void> {
   console.log(`Project:  ${opts.project}`);
   console.log(`Mode:     dark factory (iteration loop)`);
+  if (opts.autoReview !== undefined) {
+    console.log(`Override: autoReviewSpecs = ${opts.autoReview}`);
+  }
+  if (opts.autoDocument !== undefined) {
+    console.log(`Override: autoDocumenter = ${opts.autoDocument}`);
+  }
+  if (opts.readinessGate) {
+    console.log(`Override: readinessGate = ${opts.readinessGate}`);
+  }
   console.log();
 
   const body: Record<string, unknown> = {};
   if (opts.problemPack) {
     body.problemPackPath = opts.problemPack;
+  }
+  if (opts.autoReview !== undefined) {
+    body.autoReviewSpecs = opts.autoReview;
+  }
+  if (opts.autoDocument !== undefined) {
+    body.autoDocumenter = opts.autoDocument;
+  }
+  if (opts.readinessGate) {
+    const allowed = ["never", "blocked", "needs_refinement_or_blocked"];
+    if (!allowed.includes(opts.readinessGate)) {
+      console.error(`Invalid --readiness-gate: "${opts.readinessGate}". Must be one of ${allowed.join(" | ")}`);
+      process.exit(1);
+    }
+    body.readinessGate = opts.readinessGate;
   }
 
   // Start the loop

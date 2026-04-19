@@ -18,6 +18,7 @@ export function LoopControls({
   phase,
   activeAgent,
   onAction,
+  autoReviewSpecs,
 }: {
   projectId: string;
   phase?: LoopPhase | null;
@@ -26,6 +27,12 @@ export function LoopControls({
   /** Called after an action is dispatched. The caller should switch to the
    *  Logs tab and show the log for the new run where applicable. */
   onAction: (action: AgentAction) => void;
+  /** When true (item 5.1), the standalone Review button is hidden because
+   *  Review runs as a pre-loop phase of Start Loop instead. A hint is
+   *  shown under the button row explaining this. The Document button is
+   *  kept visible regardless of `autoDocumenter` -- when auto is off, the
+   *  user still needs a way to invoke the Documenter manually. */
+  autoReviewSpecs?: boolean;
 }) {
   const [loading, setLoading] = useState<AgentAction | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,23 +60,26 @@ export function LoopControls({
   return (
     <div className="loop-controls">
       <div className="loop-controls__buttons">
-        {/* Review: while running, button becomes Stop Review (red) */}
-        {isReviewRunning ? (
-          <button
-            className="btn btn--danger"
-            disabled={loading !== null}
-            onClick={() => doAction("stopReview", () => api.stopReview(projectId))}
-          >
-            {loading === "stopReview" ? "Stopping..." : "Stop Review"}
-          </button>
-        ) : (
-          <button
-            className="btn btn--primary"
-            disabled={loading !== null || isBusy}
-            onClick={() => doAction("review", () => api.startReview(projectId))}
-          >
-            {loading === "review" ? "Starting review..." : "Review"}
-          </button>
+        {/* Review: hidden when autoReviewSpecs=true (Review becomes part of
+            Start Loop). While running, button becomes Stop Review (red). */}
+        {!autoReviewSpecs && (
+          isReviewRunning ? (
+            <button
+              className="btn btn--danger"
+              disabled={loading !== null}
+              onClick={() => doAction("stopReview", () => api.stopReview(projectId))}
+            >
+              {loading === "stopReview" ? "Stopping..." : "Stop Review"}
+            </button>
+          ) : (
+            <button
+              className="btn btn--primary"
+              disabled={loading !== null || isBusy}
+              onClick={() => doAction("review", () => api.startReview(projectId))}
+            >
+              {loading === "review" ? "Starting review..." : "Review"}
+            </button>
+          )
         )}
 
         {/* Start Loop / Stop Loop / Resume */}
@@ -129,6 +139,17 @@ export function LoopControls({
           </button>
         )}
       </div>
+      {autoReviewSpecs && (
+        <div
+          style={{
+            fontSize: "0.8rem",
+            color: "var(--color-text-muted)",
+            marginTop: "0.5rem",
+          }}
+        >
+          Review is part of the Loop (autoReviewSpecs is on). Change in Settings.
+        </div>
+      )}
       {error && <div className="loop-controls__error">{error}</div>}
     </div>
   );

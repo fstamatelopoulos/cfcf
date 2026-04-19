@@ -38,6 +38,7 @@ import * as gitManager from "./git-manager.js";
 import { nextIteration, updateProject } from "./projects.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync } from "./reflection-runner.js";
+import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForProject, makeEvent } from "./notifications/index.js";
@@ -47,6 +48,7 @@ import { randomBytes } from "crypto";
 
 export type LoopPhase =
   | "idle"
+  | "pre_loop_reviewing"
   | "preparing"
   | "dev_executing"
   | "judging"
@@ -97,6 +99,23 @@ export interface LoopState {
    * once the 50-iteration threshold is crossed. (item 5.6 U4)
    */
   decisionLogWarningFired?: boolean;
+  /**
+   * Set to true once the pre-loop Solution Architect review has run
+   * (and the readiness gate accepted the result). Prevents re-running
+   * the pre-loop review on resume after a pause. (item 5.1)
+   */
+  preLoopReviewCompleted?: boolean;
+  /**
+   * Per-run overrides for the three 5.1 config keys. When set, these
+   * take precedence over the project/global defaults for the lifetime
+   * of this loop. Persisted on loop-state.json so resume keeps the same
+   * behaviour across server restarts. (item 5.1)
+   */
+  runOverrides?: {
+    autoReviewSpecs?: boolean;
+    autoDocumenter?: boolean;
+    readinessGate?: import("./types.js").ReadinessGate;
+  };
 }
 
 export interface LoopIterationRecord {
@@ -229,6 +248,31 @@ export async function getLoopState(projectId: string): Promise<LoopState | undef
   }
 
   return undefined;
+}
+
+// --- Per-loop effective config (item 5.1) ---
+
+/**
+ * Resolve the three 5.1 config keys for this loop, respecting the
+ * priority order: per-run overrides (from `cfcf run --auto-review` etc.)
+ * → project config → hard defaults. Project config was already merged
+ * with global defaults by `getProject()`, so we don't look at global
+ * here.
+ */
+export function resolveLoopConfig(
+  project: ProjectConfig,
+  state: LoopState,
+): {
+  autoReviewSpecs: boolean;
+  autoDocumenter: boolean;
+  readinessGate: import("./types.js").ReadinessGate;
+} {
+  const o = state.runOverrides ?? {};
+  return {
+    autoReviewSpecs: o.autoReviewSpecs ?? project.autoReviewSpecs ?? false,
+    autoDocumenter: o.autoDocumenter ?? project.autoDocumenter ?? true,
+    readinessGate: o.readinessGate ?? project.readinessGate ?? "blocked",
+  };
 }
 
 // --- Reflection trigger logic (item 5.6 §2.2) ---
@@ -415,12 +459,29 @@ export function makeDecision(
  */
 export async function startLoop(
   project: ProjectConfig,
-  opts?: { problemPackPath?: string },
+  opts?: {
+    problemPackPath?: string;
+    /** Per-run overrides for the 5.1 config keys. Persisted on loop-state. */
+    autoReviewSpecs?: boolean;
+    autoDocumenter?: boolean;
+    readinessGate?: import("./types.js").ReadinessGate;
+  },
 ): Promise<LoopState> {
   const existing = await getLoopState(project.id);
   if (existing && existing.phase !== "completed" && existing.phase !== "failed" && existing.phase !== "stopped") {
     throw new Error(`Loop already active for project ${project.name} (phase: ${existing.phase})`);
   }
+
+  const runOverrides =
+    opts?.autoReviewSpecs !== undefined ||
+    opts?.autoDocumenter !== undefined ||
+    opts?.readinessGate !== undefined
+      ? {
+          autoReviewSpecs: opts?.autoReviewSpecs,
+          autoDocumenter: opts?.autoDocumenter,
+          readinessGate: opts?.readinessGate,
+        }
+      : undefined;
 
   const state: LoopState = {
     projectId: project.id,
@@ -432,6 +493,7 @@ export async function startLoop(
     startedAt: new Date().toISOString(),
     iterations: [],
     consecutiveStalled: 0,
+    runOverrides,
   };
 
   await saveLoopState(state);
@@ -578,6 +640,87 @@ async function runLoop(
   opts?: { problemPackPath?: string },
 ): Promise<void> {
   const packPath = opts?.problemPackPath || join(project.repoPath, "problem-pack");
+  const loopCfg = resolveLoopConfig(project, state);
+
+  // --- PRE-LOOP REVIEW (item 5.1 autoReviewSpecs=true) ---
+  // Runs before iteration 1, not on resume. When the readiness gate
+  // accepts the result, commit the architect's outputs to main (the
+  // current branch) -- review output is a deterministic input to the
+  // loop, not iteration work, so it does NOT live on an iteration
+  // branch. If the gate rejects, pause the loop and surface the gaps
+  // via the standard `loop.paused` notification so the user knows what
+  // to edit in the Problem Pack before retrying.
+  if (
+    loopCfg.autoReviewSpecs &&
+    !state.preLoopReviewCompleted &&
+    state.iterations.length === 0 &&
+    !isStopped(state)
+  ) {
+    state.phase = "pre_loop_reviewing";
+    await saveLoopState(state);
+
+    let reviewRes: Awaited<ReturnType<typeof runReviewSync>> | null = null;
+    let reviewError: string | undefined;
+    try {
+      reviewRes = await runReviewSync(project, { problemPackPath: packPath });
+    } catch (err) {
+      reviewError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (isStopped(state)) return;
+
+    const readiness = reviewRes?.signals?.readiness;
+    const blocked = readinessGateBlocks(readiness, loopCfg.readinessGate);
+
+    // Commit whatever the architect produced to the current branch
+    // regardless of gate outcome. The artifacts (architect-review.md,
+    // plan.md, docs/ stubs, signals) are useful to the user even when
+    // the gate blocks.
+    if (await gitManager.hasChanges(project.repoPath)) {
+      const subject = readiness
+        ? `cfcf pre-loop review (${readiness})`
+        : "cfcf pre-loop review (signals missing)";
+      await gitManager.commitAll(project.repoPath, subject);
+    }
+
+    if (blocked || reviewError) {
+      // Gate rejected -- pause the loop. User edits problem pack, then
+      // resumes, which will re-enter this block and re-review.
+      state.phase = "paused";
+      state.pauseReason = "anomaly";
+      const reason = reviewError
+        ? `Pre-loop review failed: ${reviewError}`
+        : `Pre-loop review readiness=${readiness ?? "missing"} does not satisfy gate="${loopCfg.readinessGate}". Edit the Problem Pack and resume.`;
+      const questions = reviewRes?.signals?.gaps?.slice(0, 5) ?? [];
+      state.pendingQuestions = questions.length ? questions : [reason];
+      await saveLoopState(state);
+      await updateProject(project.id, { status: "paused" });
+
+      dispatchForProject(
+        makeEvent({
+          type: "loop.paused",
+          title: "Pre-loop review blocked the loop",
+          message: `${project.name}: ${reason}`,
+          projectId: project.id,
+          projectName: project.name,
+          details: {
+            pauseReason: "anomaly",
+            kind: "pre_loop_review_blocked",
+            readiness,
+            gate: loopCfg.readinessGate,
+            gaps: questions,
+          },
+        }),
+        project.notifications,
+      );
+      return;
+    }
+
+    // Gate accepted -- mark as complete so resume after a later pause
+    // does not re-run the review. Fall through to the while loop.
+    state.preLoopReviewCompleted = true;
+    await saveLoopState(state);
+  }
 
   while (true) {
     // Check if stopped externally
@@ -1052,7 +1195,9 @@ async function runJudgeAndDecide(
 
       // On success: run documenter BEFORE marking loop as completed
       // so the UI knows the documenter is still producing output.
-      if (outcome === "success") {
+      // Skipped when `autoDocumenter=false` (item 5.1) -- user can
+      // invoke `cfcf document` manually later.
+      if (outcome === "success" && resolveLoopConfig(project, state).autoDocumenter) {
         state.phase = "documenting";
         await saveLoopState(state);
 
