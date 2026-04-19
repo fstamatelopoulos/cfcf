@@ -9,5 +9,7 @@
   "tests_total": 0,
   "should_continue": true,
   "user_input_needed": false,
-  "key_concern": null
+  "key_concern": null,
+  "reflection_needed": null,
+  "reflection_reason": null
 }

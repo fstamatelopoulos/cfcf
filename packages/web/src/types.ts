@@ -148,7 +148,22 @@ export interface HealthResponse {
 
 // --- Project history ---
 
-export type HistoryEventType = "review" | "iteration" | "document";
+export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
+
+export type IterationHealth =
+  | "converging"
+  | "stable"
+  | "stalled"
+  | "diverging"
+  | "inconclusive";
+
+export interface ReflectionSignals {
+  iteration: number;
+  plan_modified: boolean;
+  iteration_health: IterationHealth;
+  key_observation: string;
+  recommend_stop?: boolean;
+}
 export type HistoryEventStatus = "running" | "completed" | "failed";
 
 export interface BaseHistoryEvent {
@@ -200,4 +215,18 @@ export interface DocumentHistoryEvent extends BaseHistoryEvent {
   exitCode?: number;
 }
 
-export type HistoryEvent = ReviewHistoryEvent | IterationHistoryEvent | DocumentHistoryEvent;
+export interface ReflectionHistoryEvent extends BaseHistoryEvent {
+  type: "reflection";
+  iteration: number;
+  trigger: "loop" | "manual";
+  signals?: ReflectionSignals;
+  iterationHealth?: IterationHealth;
+  planModified?: boolean;
+  exitCode?: number;
+}
+
+export type HistoryEvent =
+  | ReviewHistoryEvent
+  | IterationHistoryEvent
+  | DocumentHistoryEvent
+  | ReflectionHistoryEvent;

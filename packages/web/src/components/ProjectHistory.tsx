@@ -4,6 +4,8 @@ import type {
   IterationHistoryEvent,
   ReviewHistoryEvent,
   DocumentHistoryEvent,
+  ReflectionHistoryEvent,
+  IterationHealth,
 } from "../types";
 import type { LogTarget } from "./LogViewer";
 import { ArchitectReview } from "./ArchitectReview";
@@ -20,6 +22,14 @@ const readinessColor: Record<string, string> = {
   READY: "var(--color-success)",
   NEEDS_REFINEMENT: "var(--color-warning)",
   BLOCKED: "var(--color-error)",
+};
+
+const healthColor: Record<IterationHealth, string> = {
+  converging: "var(--color-success)",
+  stable: "var(--color-info)",
+  stalled: "var(--color-warning)",
+  diverging: "var(--color-error)",
+  inconclusive: "var(--color-subtle, #888)",
 };
 
 function formatTime(iso: string): string {
@@ -103,6 +113,8 @@ function HistoryRow({
       ? `Iteration ${(event as IterationHistoryEvent).iteration}`
       : event.type === "review"
       ? "Review"
+      : event.type === "reflection"
+      ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
       : "Document";
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
@@ -161,6 +173,9 @@ function HistoryRow({
           )}
           {event.type === "document" && event.status === "completed" && (
             <DocumentResult event={event as DocumentHistoryEvent} />
+          )}
+          {event.type === "reflection" && (
+            <ReflectionResult event={event as ReflectionHistoryEvent} />
           )}
         </td>
         <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
@@ -263,4 +278,40 @@ function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
   }
 
   return <>{parts}</>;
+}
+
+function ReflectionResult({ event }: { event: ReflectionHistoryEvent }) {
+  const health = event.iterationHealth ?? event.signals?.iteration_health;
+  if (!health && !event.signals) {
+    return (
+      <span style={{ color: "var(--color-text-muted)" }}>
+        {event.exitCode === 0 ? "✓" : "—"}
+      </span>
+    );
+  }
+  return (
+    <>
+      {health && (
+        <span style={{ color: healthColor[health] || "inherit" }}>{health}</span>
+      )}
+      {event.planModified || event.signals?.plan_modified ? (
+        <span className="project-history__merged"> ✎ plan edited</span>
+      ) : null}
+      {event.signals?.recommend_stop && (
+        <span
+          style={{ color: "var(--color-error)", marginLeft: "0.5rem" }}
+          title="Reflection recommends stopping the loop"
+        >
+          ! stop
+        </span>
+      )}
+      {event.signals?.key_observation && (
+        <div
+          style={{ color: "var(--color-text-muted)", fontSize: "0.75rem", marginTop: "0.25rem" }}
+        >
+          {event.signals.key_observation}
+        </div>
+      )}
+    </>
+  );
 }
