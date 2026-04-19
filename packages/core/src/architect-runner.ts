@@ -19,6 +19,7 @@ import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
+import { validatePlanRewrite, planHasCompletedItems } from "./plan-validation.js";
 
 // Templates are resolved via the central templates module (embedded at build
 // time with per-repo / per-user filesystem overrides).
@@ -245,10 +246,28 @@ async function runReview(
   await writeArchitectInstructions(project.repoPath, project);
   await resetArchitectSignals(project.repoPath);
 
+  // Detect re-review mode. If cfcf-docs/plan.md already has any `[x]`
+  // completed items, the project has previous iterations and the architect
+  // is being re-run (e.g. user added new requirements to the problem pack,
+  // or adopted an existing repo with a partial plan). The prompt and the
+  // template branch on this so the architect extends the plan instead of
+  // producing a fresh one. Snapshot the plan so we can revert any
+  // destructive rewrite -- same rule reflection applies (§6.3).
+  const planPath = join(project.repoPath, "cfcf-docs", "plan.md");
+  let priorPlan = "";
+  try {
+    priorPlan = await readFile(planPath, "utf-8");
+  } catch {
+    priorPlan = "";
+  }
+  const reReviewMode = planHasCompletedItems(priorPlan);
+
   // Build and run the architect agent
   state.status = "executing";
 
-  const prompt = `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. Review the problem definition, produce cfcf-docs/architect-review.md, cfcf-docs/plan.md, and cfcf-docs/cfcf-architect-signals.json before exiting.`;
+  const prompt = reReviewMode
+    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing project -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration_history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
+    : `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. Review the problem definition, produce cfcf-docs/architect-review.md, cfcf-docs/plan.md, and cfcf-docs/cfcf-architect-signals.json before exiting.`;
   const cmd = adapter.buildCommand(project.repoPath, prompt, project.architectAgent.model);
 
   const managed = await spawnProcess({
@@ -276,6 +295,29 @@ async function runReview(
 
     // Collect results
     state.status = "collecting";
+
+    // Re-review non-destructive check: if the architect rewrote plan.md in
+    // a way that removes a completed item or an iteration header, revert
+    // the file to the snapshot we took before spawn. Record it in the
+    // signals so the review UI can explain.
+    if (reReviewMode) {
+      let newPlan = "";
+      try {
+        newPlan = await readFile(planPath, "utf-8");
+      } catch {
+        newPlan = "";
+      }
+      if (newPlan !== priorPlan) {
+        const validation = validatePlanRewrite(priorPlan, newPlan);
+        if (!validation.valid) {
+          await writeFile(planPath, priorPlan, "utf-8");
+          console.warn(
+            `[architect-runner] re-review rewrote plan.md destructively (${validation.reason}); reverted.`,
+          );
+        }
+      }
+    }
+
     const signals = await parseArchitectSignals(project.repoPath);
     state.signals = signals ?? undefined;
 

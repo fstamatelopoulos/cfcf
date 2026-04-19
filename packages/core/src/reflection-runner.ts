@@ -36,6 +36,11 @@ import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForProject, makeEvent } from "./notifications/index.js";
 import * as gitManager from "./git-manager.js";
+import { validatePlanRewrite as sharedValidatePlanRewrite } from "./plan-validation.js";
+
+// Re-export for backwards compatibility with callers that imported it from
+// this module before plan-validation.ts existed.
+export { validatePlanRewrite } from "./plan-validation.js";
 
 // --- Helpers ---
 
@@ -156,65 +161,9 @@ export async function archiveReflectionAnalysis(
   }
 }
 
-// --- Plan non-destructive validation (item 5.6 §6.3) ---
-
-/**
- * Validate that a reflection-produced plan.md preserves all completed
- * items and iteration headers from the previous plan.
- *
- * Returns { valid: true } when accepted, or { valid: false, reason } when
- * the caller should revert. Matches the rules in research doc §6.3:
- *   - file must parse as a markdown document (trivial here -- non-empty)
- *   - completed items in the old file must still be present in the new file
- *   - every iteration header in the old file must still be present
- */
-export function validatePlanRewrite(
-  oldPlan: string,
-  newPlan: string,
-): { valid: true } | { valid: false; reason: string } {
-  if (!newPlan || newPlan.trim().length === 0) {
-    return { valid: false, reason: "new plan is empty" };
-  }
-  const oldCompleted = extractCompletedItems(oldPlan);
-  const newCompleted = extractCompletedItems(newPlan);
-  for (const item of oldCompleted) {
-    if (!newCompleted.has(item)) {
-      return { valid: false, reason: `completed item removed: "${item}"` };
-    }
-  }
-  const oldHeaders = extractIterationHeaders(oldPlan);
-  const newHeaders = extractIterationHeaders(newPlan);
-  for (const h of oldHeaders) {
-    if (!newHeaders.has(h)) {
-      return { valid: false, reason: `iteration header removed: "${h}"` };
-    }
-  }
-  return { valid: true };
-}
-
-function extractCompletedItems(plan: string): Set<string> {
-  const out = new Set<string>();
-  const re = /^\s*-\s*\[x\]\s+(.+?)\s*$/gim;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(plan)) !== null) {
-    // Normalize whitespace and strip inline annotations after " -- "
-    const text = m[1].split(/\s+--\s+/)[0].trim();
-    if (text.length > 0) out.add(text);
-  }
-  return out;
-}
-
-function extractIterationHeaders(plan: string): Set<string> {
-  const out = new Set<string>();
-  // Match `## Iteration 3` or `## Iteration 3 -- Title`. Track the number only
-  // so the reflection agent is free to rename the title.
-  const re = /^##\s+Iteration\s+(\d+)\b/gim;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(plan)) !== null) {
-    out.add(m[1]);
-  }
-  return out;
-}
+// Plan-validation rules (research §6.3) live in plan-validation.ts and
+// are shared with the Architect re-review path. This module re-exports
+// `validatePlanRewrite` above for older import sites.
 
 // --- Reflection context assembly (research §3.2 + Q1/Q3) ---
 
@@ -581,7 +530,7 @@ export async function runReflectionSync(
       newPlan = "";
     }
     if (priorPlan && newPlan !== priorPlan) {
-      const validation = validatePlanRewrite(priorPlan, newPlan);
+      const validation = sharedValidatePlanRewrite(priorPlan, newPlan);
       if (!validation.valid) {
         await writeFile(planPath, priorPlan, "utf-8");
         planAccepted = false;

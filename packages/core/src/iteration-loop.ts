@@ -15,6 +15,7 @@ import { getProjectDir } from "./projects.js";
 import {
   writeContextToRepo,
   generateInstructionContent,
+  writeInstructionFile,
   parseHandoffDocument,
   parseSignalFile,
   generateIterationSummary,
@@ -730,11 +731,15 @@ async function runLoop(
       throw new Error(`Unknown dev agent adapter: ${project.devAgent.adapter}`);
     }
 
+    // Merge into the dev agent's instruction file (CLAUDE.md / AGENTS.md /
+    // adapter-specific) using sentinel markers. Any user-authored content
+    // *outside* the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` block is
+    // preserved across iterations; only the cfcf-owned block is refreshed.
     const instructionContent = generateInstructionContent(ctx);
-    await writeFile(
-      join(project.repoPath, devAdapter.instructionFilename),
+    await writeInstructionFile(
+      project.repoPath,
+      devAdapter.instructionFilename,
       instructionContent,
-      "utf-8",
     );
 
     // Prepare judge files

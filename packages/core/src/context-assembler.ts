@@ -293,6 +293,112 @@ function extractSummary(content: string): string | null {
   return body.length > 0 ? body : null;
 }
 
+// --- Instruction file merge (sentinel-based) ------------------------------
+//
+// cfcf regenerates the dev agent's instruction file (CLAUDE.md / AGENTS.md /
+// adapter-equivalent) every iteration. The first-run problem: if the user
+// already has a hand-curated CLAUDE.md in the repo -- their own notes,
+// skills, team conventions -- the old unconditional `writeFile` call
+// nuked it. This helper fixes that by carving out a cfcf-owned section
+// via sentinel markers:
+//
+//   <!-- cfcf:begin -->
+//   # cfcf Iteration N Instructions
+//   ...generated each iteration...
+//   <!-- cfcf:end -->
+//
+//   # User's own content
+//   ...preserved forever, cfcf never touches...
+//
+// Rules:
+//   - First run, file doesn't exist:
+//       write `<BEGIN>\n<cfcf content>\n<END>\n` by itself.
+//   - First run, file exists *without* markers:
+//       prepend `<BEGIN>\n<cfcf content>\n<END>\n\n` + original content.
+//   - Subsequent runs, file exists *with* markers:
+//       replace only the content between the markers; leave everything
+//       outside untouched.
+//   - Subsequent runs, markers somehow missing (user removed them):
+//       fall back to the "prepend" branch again -- re-inserts the
+//       sentinel section at the top without touching the rest.
+
+export const CFCF_INSTRUCTION_BEGIN = "<!-- cfcf:begin -->";
+export const CFCF_INSTRUCTION_END = "<!-- cfcf:end -->";
+
+/**
+ * Build the sentinel-wrapped block for a given cfcf-generated body.
+ * Exported so tests and tooling can inspect the exact bytes we write.
+ */
+export function wrapCfcfInstructionBlock(body: string): string {
+  const trimmed = body.endsWith("\n") ? body : body + "\n";
+  return `${CFCF_INSTRUCTION_BEGIN}\n${trimmed}${CFCF_INSTRUCTION_END}\n`;
+}
+
+/**
+ * Pure function: given the existing file contents (or null if absent)
+ * and the new cfcf-generated body, return the next file contents.
+ * Separated from the I/O so it can be unit-tested.
+ */
+export function mergeInstructionFile(
+  existing: string | null,
+  cfcfBody: string,
+): string {
+  const block = wrapCfcfInstructionBlock(cfcfBody);
+
+  if (existing === null) {
+    // File doesn't exist: write just the cfcf block.
+    return block;
+  }
+
+  const beginIdx = existing.indexOf(CFCF_INSTRUCTION_BEGIN);
+  const endIdx = existing.indexOf(CFCF_INSTRUCTION_END);
+  const hasMarkers = beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx;
+
+  if (hasMarkers) {
+    // Replace content between markers (inclusive of both). Preserve
+    // everything before the begin marker and everything after the end
+    // marker line. We include the end marker line's trailing newline in
+    // the "after" segment when present so the user's content layout is
+    // preserved byte-for-byte.
+    const before = existing.slice(0, beginIdx);
+    const afterStart = endIdx + CFCF_INSTRUCTION_END.length;
+    // If the end marker is followed by a newline, consume one so we don't
+    // double up when re-inserting our block (which ends in "\n").
+    const after = existing[afterStart] === "\n"
+      ? existing.slice(afterStart + 1)
+      : existing.slice(afterStart);
+    return before + block + after;
+  }
+
+  // Markers missing: prepend our block, keep original content below.
+  // Ensure a blank line separates the sentinel block from the user's
+  // content.
+  const sep = existing.startsWith("\n") ? "" : "\n";
+  return block + sep + existing;
+}
+
+/**
+ * Write the dev agent's instruction file (`CLAUDE.md`, `AGENTS.md`, etc.)
+ * into the repo root, preserving any user-authored content outside the
+ * `<!-- cfcf:begin --> ... <!-- cfcf:end -->` sentinel block. See the
+ * comment above `mergeInstructionFile` for the rules.
+ */
+export async function writeInstructionFile(
+  repoPath: string,
+  filename: string,
+  cfcfBody: string,
+): Promise<void> {
+  const dest = join(repoPath, filename);
+  let existing: string | null;
+  try {
+    existing = await readFile(dest, "utf-8");
+  } catch {
+    existing = null;
+  }
+  const merged = mergeInstructionFile(existing, cfcfBody);
+  await writeFile(dest, merged, "utf-8");
+}
+
 /**
  * Parse the iteration handoff document after the agent exits.
  * Returns null if the file doesn't exist or is empty.
