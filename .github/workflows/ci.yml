@@ -23,6 +23,12 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # 5.4: the typecheck references packages/server/src/web-assets.generated.ts,
+      # which is produced by `bun run build:web`. The file is gitignored (regenerated
+      # per build), so CI must build the web bundle before typechecking.
+      - name: Build web bundle (generates web-assets.generated.ts)
+        run: bun run build:web
+
       - name: Type check
         run: bun run typecheck
 
@@ -51,6 +57,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+
+      # 5.4: web bundle must be built first so the compiled binary includes
+      # the embedded web-assets.generated.ts. Without this, the published
+      # artifact would have no web GUI.
+      - name: Build web bundle
+        run: bun run build:web
 
       - name: Build binary
         run: bun build packages/cli/src/index.ts --compile --outfile ${{ matrix.artifact }} --target ${{ matrix.target }}
