@@ -9,20 +9,24 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-Iteration 5 distribution phase (in progress).
+## [0.5.0] -- 2026-04-18
+
+Iteration 5 distribution phase. Single self-contained `cfcf-binary` with no Bun runtime, no repo checkout, and no external assets on the user's disk. Finalized design for the upcoming Reflection role (item 5.6) now lives under `docs/research/`.
 
 ### Added
-- **Binary self-hosting (item 5.3):** compiled `cfcf-binary` now hosts the server itself. `cfcf server start` detects whether the server source file exists on disk; if not (compiled binary), it re-spawns itself with `CFCF_INTERNAL_SERVE=1`, and the CLI entry point dispatches straight to `startServer()`. Dev mode (`bun run dev:cli`) keeps the original `bun run packages/server/src/index.ts` spawn path. Verified end-to-end: a fresh `cfcf-binary` copied to `/tmp` with no repo and no Bun runtime starts the server, serves the API, serves the web GUI, and shuts down cleanly.
+- **Binary self-hosting (item 5.3):** compiled `cfcf-binary` hosts the server itself. `cfcf server start` detects whether the server source file exists on disk; if not (compiled binary), it re-spawns itself with `CFCF_INTERNAL_SERVE=1`, and the CLI entry point dispatches straight to `startServer()`. Dev mode (`bun run dev:cli`) keeps the original `bun run packages/server/src/index.ts` spawn path. Verified end-to-end: a fresh 64 MiB `cfcf-binary` copied to `/tmp` with no repo and no Bun runtime starts the server, serves the API, serves the web GUI, and shuts down cleanly.
 - **Embedded runtime assets (item 5.4):** templates (13 `.md` / `.json` files) and the web dist bundle (222 KB JS + 14 KB CSS + HTML, ~237 KB total) are now compiled into the binary, so the compiled artifact is self-contained.
   - `packages/core/src/templates.ts` — embedded template registry + resolver. Lookup order: `<repoPath>/cfcf-templates/<name>` (project-local override) → `<CFCF_CONFIG_DIR>/templates/<name>` (user-global override) → embedded default. All four template consumers (`architect-runner`, `judge-runner`, `documenter-runner`, `context-assembler`) migrated to `getTemplate()`. 12 unit tests cover embedded resolution, override precedence, and `writeTemplateIfMissing` non-clobbering behavior.
   - `scripts/embed-web-dist.ts` — runs as part of `bun run build:web`; reads `packages/web/dist/**` and writes a gitignored `packages/server/src/web-assets.generated.ts` whose exported `WEB_ASSETS` map is served by Hono. Dev fallback reads from disk when the generated file is absent.
 - **`cleanupMergedBranches` flag (item 5.2):** new optional config field on both `CfcfGlobalConfig` (default for new projects) and `ProjectConfig` (per-project override). When `true`, the iteration loop deletes the `cfcf/iteration-N` branch after a successful auto-merge to main. Default `false` so the audit trail is preserved by default. Non-fatal on delete failure (logged warning, loop continues). Tests added: `git-manager` round-trip (create → merge → delete) and `projects.createProject` default verification.
+- **Finalized design for Reflection role (item 5.6, implementation deferred):** `docs/research/reflection-role-and-iterative-planning.md` captures the full flow — per-iteration reflection with judge opt-out + `reflectSafeguardAfter` ceiling, non-destructive plan rewrites, single `decision-log.md` as multi-role journal with tagged entries, new `cfcf-docs/iteration-logs/iteration-N.md` changelog artifact (dev-agent authored), `cfcf reflect` CLI for ad-hoc reflection, three-PR implementation plan. All open questions resolved. Ready for a dedicated implementation session.
 
 ### Changed
 - `bun run build:web` now runs both the Vite build and `scripts/embed-web-dist.ts` so the generated server-side asset bundle stays in sync with the Vite output.
 - `bun run build` now depends on `build:web` so the compiled binary always carries a fresh embedded web bundle.
 - `tsconfig.json` `include` extended to cover `packages/core/src/templates/*.json` (so the `with { type: "text" }` import resolution is well-typed). An ambient `packages/core/src/templates.d.ts` declares `*.md` and `*/templates/*.json` as string modules so the `type: "text"` imports type-check cleanly without disabling `resolveJsonModule`.
-- `VERSION` bumped to `0.5.0-dev`.
+- `docs/plan.md`: item 5.6 marked "designing" and linked to the research doc; item 6.12 added for CLI ↔ web-GUI parity audit (surfaced by the `cfcf reflect` work).
+- Doc sanity pass across `CLAUDE.md`, `README.md`, `docs/design/cfcf-stack.md`, `docs/design/technical-design.md`, `docs/design/cfcf-requirements-vision.md`, `docs/design/agent-process-and-context.md` to reflect shipped 0.4.0, in-flight 0.5.0, and the upcoming Reflection role.
 
 ## [0.4.0] -- 2026-04-18
 
@@ -218,7 +222,8 @@ Iteration 0: Project scaffolding, server skeleton, CLI, first-run configuration.
 - CLAUDE.md with project principles for AI coding agents
 - docs/ structure: design/, api/, research/, guides/
 
-[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fstamatelopoulos/cfcf/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fstamatelopoulos/cfcf/compare/v0.1.0...v0.2.0
