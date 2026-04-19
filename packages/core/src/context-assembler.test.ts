@@ -132,6 +132,34 @@ describe("context-assembler", () => {
       }
     });
 
+    it("writes user-feedback.md from ctx.userFeedback (used by runReviewSync on pre-loop-review resume, v0.7.2 regression fix)", async () => {
+      // Pre-loop review resume path: runReviewSync passes state.userFeedback
+      // through the IterationContext so the architect's user-feedback.md
+      // carries the guidance the user typed on the FeedbackForm. Without
+      // this, the architect would see the default "No user feedback yet."
+      // on the next spawn and the user's answers silently disappeared.
+      const ctx = makeCtx({
+        userFeedback: "Memory API: setMem(name, value), getMem(name), clearMem().",
+      });
+      await writeContextToRepo(tempDir, ctx);
+
+      const feedback = await readFile(
+        join(tempDir, "cfcf-docs", "user-feedback.md"),
+        "utf-8",
+      );
+      expect(feedback).toContain("Memory API: setMem(name, value)");
+      expect(feedback).not.toContain("No user feedback yet");
+    });
+
+    it("falls back to default user-feedback.md when no feedback provided", async () => {
+      await writeContextToRepo(tempDir, makeCtx()); // no userFeedback
+      const feedback = await readFile(
+        join(tempDir, "cfcf-docs", "user-feedback.md"),
+        "utf-8",
+      );
+      expect(feedback).toContain("No user feedback yet");
+    });
+
     it("banner is not stacked when the source already has one", async () => {
       // If the Problem Pack source is itself banner-wrapped (pathological,
       // but possible if the user copy-pasted from cfcf-docs/), the same

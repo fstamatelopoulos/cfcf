@@ -238,6 +238,8 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
   readiness?: string;
   /** Full parsed architect signals (added in 0.4.0) */
   signals?: ArchitectSignals;
+  /** Added in 0.7.2: `"loop"` = pre-loop review phase; `"manual"` = user-invoked. */
+  trigger?: "loop" | "manual";
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {

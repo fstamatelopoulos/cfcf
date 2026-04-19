@@ -114,7 +114,9 @@ function HistoryRow({
     event.type === "iteration"
       ? `Iteration ${(event as IterationHistoryEvent).iteration}`
       : event.type === "review"
-      ? "Review"
+      ? (event as ReviewHistoryEvent).trigger === "loop"
+        ? "Pre-loop review"
+        : "Review"
       : event.type === "reflection"
       ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
       : "Document";

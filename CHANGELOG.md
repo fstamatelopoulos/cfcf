@@ -9,6 +9,18 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.2] -- 2026-04-20
+
+Small but meaningful follow-up pass after first real-world autoReviewSpecs testing: one regression fix surfaced mid-test, one UX consistency improvement, plus a UX protection against a gotcha the user hit.
+
+### Fixed
+- **User feedback was dropped on pre-loop-review resume.** When the loop paused at the pre-loop review phase (architect returned `NEEDS_REFINEMENT` + readiness gate rejected) and the user provided guidance on Resume (web FeedbackForm or `cfcf resume --feedback "..."`), the feedback was stored on `state.userFeedback` but `runReviewSync` built its own `IterationContext` without the field, so `cfcf-docs/user-feedback.md` was written as the default "No user feedback yet." on the next architect spawn. User feedback now plumbs through correctly on both the web and CLI resume paths (they share the server's `resumeLoop`).
+
+### Added
+- **`trigger` field on `ReviewHistoryEvent`.** `"loop"` for pre-loop reviews triggered by the iteration loop; `"manual"` for user-invoked `cfcf review` / web Review button / `POST /api/projects/:id/review`. Web History tab now labels loop-triggered reviews as "Pre-loop review" instead of the plain "Review" used for manual runs. Older events without the field are treated as `"manual"` for backward compat.
+- **Generated-copy banner on `cfcf-docs/` files sourced from `problem-pack/`.** `cfcf-docs/problem.md`, `success.md`, `constraints.md`, `hints.md`, `style-guide.md`, and `context/*` all get an HTML-comment banner prepended at write time saying "this file is generated from problem-pack/..., do not edit here — your changes will be lost, edit the source". Banner renders invisibly in markdown viewers, is idempotent (won't stack on re-runs), and explains the filepath to edit instead. Addresses a real user-experienced gotcha where an edit to `cfcf-docs/problem.md` was silently clobbered on the next `writeContextToRepo`.
+- **`docs/guides/workflow.md`** gains a new "Files you edit vs. files cfcf regenerates" table covering every user-facing file in `problem-pack/` and `cfcf-docs/` with edit-safe vs. not indicators, plus the `CLAUDE.md` / `AGENTS.md` sentinel rule for completeness.
+
 ## [0.7.1] -- 2026-04-19
 
 Ships plan item **5.1** end-to-end plus two small polish fixes surfaced during smoke-testing.

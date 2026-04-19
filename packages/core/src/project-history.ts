@@ -51,6 +51,14 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
    * after `cfcf-docs/cfcf-architect-signals.json` is overwritten by a later run.
    */
   signals?: ArchitectSignals;
+  /**
+   * Whether this review was triggered by the iteration loop's pre-loop
+   * review phase (`"loop"`) or by the user via `cfcf review` / the web
+   * Review button / `POST /api/projects/:id/review` (`"manual"`). Older
+   * review events written before v0.7.2 don't have this field -- treat
+   * undefined as `"manual"` for backward compat.
+   */
+  trigger?: "loop" | "manual";
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {

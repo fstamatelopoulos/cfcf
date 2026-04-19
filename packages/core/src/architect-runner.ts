@@ -163,7 +163,8 @@ export async function startReview(
     logFile: logFileName,
     agent: project.architectAgent.adapter,
     model: project.architectAgent.model,
-  });
+    trigger: "manual",
+  } as import("./project-history.js").ReviewHistoryEvent);
 
   const state: ReviewState = {
     projectId: project.id,
@@ -360,7 +361,28 @@ export interface ReviewRunResult {
  */
 export async function runReviewSync(
   project: ProjectConfig,
-  opts?: { problemPackPath?: string },
+  opts?: {
+    problemPackPath?: string;
+    /**
+     * User feedback text entered on the FeedbackForm / `cfcf resume
+     * --feedback`. When the loop paused at the pre-loop review phase
+     * (readiness gate rejected the previous spawn) and the user
+     * provides guidance on resume, it must reach the architect on the
+     * next spawn -- we write it to `cfcf-docs/user-feedback.md` via
+     * the iteration context. Without this, architect re-runs saw the
+     * default "No user feedback yet." even after the user typed
+     * something in. (fixed in v0.7.2)
+     */
+    userFeedback?: string;
+    /**
+     * Marks this review as loop-triggered (pre-loop review phase).
+     * Stored on the review history event so the web History tab can
+     * label it "Pre-loop review" instead of the plain "Review" used
+     * for user-invoked `cfcf review`. Defaults to undefined
+     * (treated as manual).
+     */
+    trigger?: "loop" | "manual";
+  },
 ): Promise<ReviewRunResult> {
   const adapter = getAdapter(project.architectAgent.adapter);
   if (!adapter) {
@@ -393,10 +415,18 @@ export async function runReviewSync(
     logFile: logFileName,
     agent: project.architectAgent.adapter,
     model: project.architectAgent.model,
-  });
+    trigger: opts?.trigger ?? "loop",
+  } as import("./project-history.js").ReviewHistoryEvent);
 
-  // Write context files and architect-specific files into the repo
-  const ctx: IterationContext = { iteration: 0, problemPack, project };
+  // Write context files and architect-specific files into the repo.
+  // `userFeedback` is plumbed through so the architect sees any guidance
+  // the user provided on resume from a pre-loop review pause.
+  const ctx: IterationContext = {
+    iteration: 0,
+    problemPack,
+    project,
+    userFeedback: opts?.userFeedback,
+  };
   await writeContextToRepo(project.repoPath, ctx);
   await writeArchitectInstructions(project.repoPath, project);
   await resetArchitectSignals(project.repoPath);

@@ -662,7 +662,15 @@ async function runLoop(
     let reviewRes: Awaited<ReturnType<typeof runReviewSync>> | null = null;
     let reviewError: string | undefined;
     try {
-      reviewRes = await runReviewSync(project, { problemPackPath: packPath });
+      // Pass through userFeedback so any guidance the user typed on the
+      // FeedbackForm (or `cfcf resume --feedback`) reaches the architect
+      // on the next spawn. Without this the user's feedback was being
+      // silently dropped for pre-loop-review resumes (pre-v0.7.2).
+      reviewRes = await runReviewSync(project, {
+        problemPackPath: packPath,
+        userFeedback: state.userFeedback,
+        trigger: "loop",
+      });
     } catch (err) {
       reviewError = err instanceof Error ? err.message : String(err);
     }
