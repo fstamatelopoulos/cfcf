@@ -161,7 +161,6 @@ The repo must be:
 Options:
 - `--repo <path>` (required) -- Absolute or relative path to the git repo
 - `--name <name>` (required) -- Human-readable project name
-- `--repo-url <url>` (optional) -- Remote git URL for push
 
 The project inherits agent settings from your global config. To override per-project, use the API or edit the project config file directly.
 

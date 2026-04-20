@@ -45,7 +45,6 @@ function generateProjectId(name: string): string {
 export async function createProject(opts: {
   name: string;
   repoPath: string;
-  repoUrl?: string;
   devAgent?: { adapter: string; model?: string };
   judgeAgent?: { adapter: string; model?: string };
   architectAgent?: { adapter: string; model?: string };
@@ -61,7 +60,6 @@ export async function createProject(opts: {
     id,
     name: opts.name,
     repoPath: opts.repoPath,
-    repoUrl: opts.repoUrl,
     devAgent: opts.devAgent ?? globalConfig?.devAgent ?? { adapter: "claude-code" },
     judgeAgent: opts.judgeAgent ?? globalConfig?.judgeAgent ?? { adapter: "codex" },
     architectAgent: opts.architectAgent ?? globalConfig?.architectAgent ?? { adapter: "claude-code" },

@@ -212,7 +212,6 @@ export function createApp() {
     const body = await c.req.json<{
       name: string;
       repoPath: string;
-      repoUrl?: string;
       devAgent?: { adapter: string; model?: string };
       judgeAgent?: { adapter: string; model?: string };
       architectAgent?: { adapter: string; model?: string };

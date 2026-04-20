@@ -50,8 +50,8 @@ const NOTIFICATION_CHANNELS: NotificationChannelName[] = [
  * `PUT /api/config`. Agent adapters are constrained to the detected
  * `availableAgents` list (fixed during `cfcf init`). Server-owned fields
  * (version, permissionsAcknowledged, availableAgents) are not editable.
- * Per-project overrides live in each project's Config tab, which becomes
- * editable in item 6.14.
+ * Per-project overrides live in each project's Config tab (editable as
+ * of v0.7.4).
  */
 export function ServerInfo() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -165,7 +165,7 @@ export function ServerInfo() {
         }}
       >
         <h2 className="dashboard__title" style={{ margin: 0 }}>
-          Server & settings
+          Server Info and Global Settings
         </h2>
         <button
           className="btn btn--small btn--secondary"
@@ -186,7 +186,7 @@ export function ServerInfo() {
           borderRadius: "4px",
         }}
       >
-        This page edits the <strong>global defaults</strong>. Per-project overrides live in each project's Config tab, which is read-only today and becomes editable in plan item 6.14.
+        This page edits the <strong>global defaults</strong>. To override any of these for a specific project, open that project and edit its <strong>Config</strong> tab — per-project settings take precedence over the global defaults.
       </div>
 
       {error && (
