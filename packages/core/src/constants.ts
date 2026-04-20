@@ -9,7 +9,7 @@ import { homedir } from "os";
 export const DEFAULT_PORT = 7233;
 
 /** cfcf version (updated on release) */
-export const VERSION = "0.7.5";
+export const VERSION = "0.7.6";
 
 /** Config file format version */
 export const CONFIG_VERSION = 1;

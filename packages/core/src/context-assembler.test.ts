@@ -11,6 +11,7 @@ import {
   rebuildIterationHistoryFromLogs,
   mergeInstructionFile,
   writeInstructionFile,
+  archiveHandoff,
   CFCF_INSTRUCTION_BEGIN,
   CFCF_INSTRUCTION_END,
 } from "./context-assembler.js";
@@ -184,18 +185,94 @@ describe("context-assembler", () => {
       expect(plan).toBe("Agent's plan\n"); // Not overwritten
     });
 
-    it("refreshes handoff template each iteration", async () => {
+    it("preserves the previous iteration's handoff across writeContextToRepo (v0.7.6)", async () => {
+      // Behavior change from pre-v0.7.6: the handoff file is NOT reset
+      // at the start of each iteration. Instead, the previous iteration's
+      // filled handoff is left in place so the next dev agent can read
+      // it as starting context. The dev agent replaces it by end of
+      // iteration; cfcf archives the committed version to
+      // iteration-handoffs/iteration-N.md.
       await writeContextToRepo(tempDir, makeCtx());
 
       // Simulate agent filling in handoff
       const { writeFile } = await import("fs/promises");
-      await writeFile(join(tempDir, "cfcf-docs", "iteration-handoff.md"), "Filled in handoff\n", "utf-8");
+      await writeFile(
+        join(tempDir, "cfcf-docs", "iteration-handoff.md"),
+        "## Iteration 1 handoff\nOpen question: how to handle X?\n",
+        "utf-8",
+      );
 
-      // Write context again (iteration 2) -- handoff should be reset
+      // Write context again (iteration 2) -- handoff should be preserved
       await writeContextToRepo(tempDir, makeCtx({ iteration: 2 }));
 
-      const handoff = await readFile(join(tempDir, "cfcf-docs", "iteration-handoff.md"), "utf-8");
-      expect(handoff).toContain("Iteration Handoff"); // Template again
+      const handoff = await readFile(
+        join(tempDir, "cfcf-docs", "iteration-handoff.md"),
+        "utf-8",
+      );
+      expect(handoff).toContain("Iteration 1 handoff");
+      expect(handoff).toContain("Open question: how to handle X?");
+    });
+
+    it("preserves the previous iteration's judge-assessment across writeContextToRepo when passed via ctx.previousJudgeAssessment (v0.7.6 architect fix path)", async () => {
+      // Regression fix: runReviewSync now reads the existing
+      // judge-assessment.md and passes it through as
+      // `previousJudgeAssessment` so writeContextToRepo doesn't overwrite
+      // it with the "No previous judge assessment..." default when
+      // running on a brownfield project.
+      const assessment = "# Iteration 5 verdict\nPROGRESS (8/10). Concerns: ...\n";
+      await writeContextToRepo(tempDir, makeCtx({ previousJudgeAssessment: assessment }));
+      const body = await readFile(
+        join(tempDir, "cfcf-docs", "judge-assessment.md"),
+        "utf-8",
+      );
+      expect(body).toContain("Iteration 5 verdict");
+      expect(body).not.toContain("No previous judge assessment");
+    });
+  });
+
+  describe("archiveHandoff", () => {
+    it("copies iteration-handoff.md to iteration-handoffs/iteration-N.md", async () => {
+      const { mkdir, writeFile } = await import("fs/promises");
+      await mkdir(join(tempDir, "cfcf-docs"), { recursive: true });
+      await writeFile(
+        join(tempDir, "cfcf-docs", "iteration-handoff.md"),
+        "## Iteration 3 handoff\nNext: wire XYZ.\n",
+        "utf-8",
+      );
+      const ok = await archiveHandoff(tempDir, 3);
+      expect(ok).toBe(true);
+      const archived = await readFile(
+        join(tempDir, "cfcf-docs", "iteration-handoffs", "iteration-3.md"),
+        "utf-8",
+      );
+      expect(archived).toContain("Iteration 3 handoff");
+      expect(archived).toContain("Next: wire XYZ.");
+    });
+
+    it("returns false when no handoff file exists to archive", async () => {
+      const ok = await archiveHandoff(tempDir, 1);
+      expect(ok).toBe(false);
+    });
+
+    it("creates the iteration-handoffs/ directory on demand", async () => {
+      const { mkdir, writeFile, access } = await import("fs/promises");
+      await mkdir(join(tempDir, "cfcf-docs"), { recursive: true });
+      await writeFile(
+        join(tempDir, "cfcf-docs", "iteration-handoff.md"),
+        "handoff content",
+        "utf-8",
+      );
+      // directory doesn't exist yet
+      let dirExistsBefore = true;
+      try {
+        await access(join(tempDir, "cfcf-docs", "iteration-handoffs"));
+      } catch {
+        dirExistsBefore = false;
+      }
+      expect(dirExistsBefore).toBe(false);
+      await archiveHandoff(tempDir, 7);
+      // now it does
+      await access(join(tempDir, "cfcf-docs", "iteration-handoffs", "iteration-7.md"));
     });
   });
 

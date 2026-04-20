@@ -944,6 +944,16 @@ async function runLoop(
       );
     }
 
+    // Archive the dev agent's iteration-handoff.md to
+    // cfcf-docs/iteration-handoffs/iteration-N.md so the forward-looking
+    // handoff is preserved per iteration (like iteration-reviews/ +
+    // reflection-reviews/). The live file stays as-is so the judge in
+    // this same iteration reads the same handoff, and so the next
+    // iteration's dev agent sees it as starting context until they
+    // replace it. (item 5.x polish, v0.7.6)
+    const { archiveHandoff } = await import("./context-assembler.js");
+    await archiveHandoff(project.repoPath, iterationNum);
+
     // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;
 

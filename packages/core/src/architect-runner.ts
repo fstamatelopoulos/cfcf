@@ -418,6 +418,19 @@ export async function runReviewSync(
     trigger: opts?.trigger ?? "loop",
   } as import("./project-history.js").ReviewHistoryEvent);
 
+  // Read any existing judge-assessment.md from disk BEFORE writeContextToRepo
+  // runs -- otherwise writeContextToRepo writes the default "No previous
+  // judge assessment..." placeholder and we silently clobber the previous
+  // iteration's verdict on brownfield projects (fixed in v0.7.6). Same
+  // fix pattern we used for `userFeedback` in v0.7.2.
+  let previousJudgeAssessment: string | undefined;
+  try {
+    const { parseJudgeAssessment } = await import("./judge-runner.js");
+    previousJudgeAssessment = (await parseJudgeAssessment(project.repoPath)) ?? undefined;
+  } catch {
+    // No previous assessment -- fresh project, pass through
+  }
+
   // Write context files and architect-specific files into the repo.
   // `userFeedback` is plumbed through so the architect sees any guidance
   // the user provided on resume from a pre-loop review pause.
@@ -426,6 +439,7 @@ export async function runReviewSync(
     problemPack,
     project,
     userFeedback: opts?.userFeedback,
+    previousJudgeAssessment,
   };
   await writeContextToRepo(project.repoPath, ctx);
   await writeArchitectInstructions(project.repoPath, project);

@@ -55,8 +55,6 @@ export interface IterationContext {
   problemPack: ProblemPack;
   /** Project configuration */
   project: ProjectConfig;
-  /** Previous iteration's handoff summary (if any) */
-  previousHandoff?: string;
   /** Previous iteration's judge assessment (if any) */
   previousJudgeAssessment?: string;
   /** User feedback (if any) */
@@ -139,8 +137,16 @@ export async function writeContextToRepo(
   await writeTemplateIfMissing(cfcfDocsDir, "decision-log.md", tplOpts);
   await writeTemplateIfMissing(cfcfDocsDir, "plan.md", tplOpts);
 
-  // Handoff and signal templates are always refreshed (agent fills them in each iteration)
-  await writeTemplate(cfcfDocsDir, "iteration-handoff.md", tplOpts);
+  // iteration-handoff.md: fresh template only when missing (v0.7.6 change).
+  // Previous iteration's handoff is preserved as context for the next
+  // iteration's dev agent. Dev agents are instructed to READ it for
+  // context, then REPLACE with their own iteration's handoff before
+  // exiting. We also archive the committed handoff per iteration to
+  // `cfcf-docs/iteration-handoffs/iteration-N.md` via `archiveHandoff()`
+  // in judge-runner.ts (called post-dev-commit).
+  await writeTemplateIfMissing(cfcfDocsDir, "iteration-handoff.md", tplOpts);
+  // Signals file still always reset -- it's machine-written by the agent
+  // every iteration with no cross-iteration carry-over expected.
   await writeTemplate(cfcfDocsDir, "cfcf-iteration-signals.json", tplOpts);
 
   // --- Dynamic files (cfcf regenerates these each iteration) ---
@@ -250,6 +256,8 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("- cfcf-docs/plan.md -- current implementation plan");
   lines.push("- cfcf-docs/iteration-history.md -- compressed previous iteration summaries");
   lines.push("- cfcf-docs/iteration-logs/ -- curated per-iteration changelogs (more detail than history)");
+  lines.push("- cfcf-docs/iteration-handoffs/ -- archived forward-looking notes from each previous iteration's dev agent");
+  lines.push("- cfcf-docs/iteration-handoff.md -- the LIVE handoff file; on a brownfield loop this starts with the previous iteration's handoff as starting context. You will REPLACE it with your own handoff before exiting (do not append)");
   lines.push("- cfcf-docs/decision-log.md -- tagged decisions and lessons from all roles (read the tail)");
   lines.push("- cfcf-docs/judge-assessment.md -- latest judge feedback");
   lines.push("- cfcf-docs/user-feedback.md -- user direction (if any)");
@@ -275,7 +283,7 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("1. Update cfcf-docs/plan.md with your progress");
   lines.push(`2. Write cfcf-docs/iteration-logs/iteration-${ctx.iteration}.md (backward-looking changelog of this iteration -- see process.md "Iteration Log Format")`);
   lines.push("3. Append tagged entries to cfcf-docs/decision-log.md when you make non-obvious decisions or learn lessons (format: `## <ISO-UTC>  [role: dev]  [iter: N]  [category: decision|lesson]`)");
-  lines.push("4. Fill in cfcf-docs/iteration-handoff.md (forward-looking: what's next, open questions, blockers)");
+  lines.push("4. REPLACE cfcf-docs/iteration-handoff.md with YOUR iteration's handoff (forward-looking: what's next, open questions, blockers). On a brownfield loop it starts with the previous iteration's content; read it for context, then overwrite with your own. cfcf will archive the committed version to cfcf-docs/iteration-handoffs/iteration-N.md automatically.");
   lines.push("5. Fill in cfcf-docs/cfcf-iteration-signals.json with structured data");
   lines.push("6. Update project docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
   lines.push("7. Commit your work frequently with meaningful messages");
@@ -460,6 +468,36 @@ export async function writeInstructionFile(
   }
   const merged = mergeInstructionFile(existing, cfcfBody);
   await writeFile(dest, merged, "utf-8");
+}
+
+/**
+ * Archive the current iteration-handoff.md to
+ * `cfcf-docs/iteration-handoffs/iteration-N.md` so the full per-iteration
+ * handoff history is queryable without git archaeology. Same pattern as
+ * `archiveJudgeAssessment` (iteration-reviews/) and
+ * `archiveReflectionAnalysis` (reflection-reviews/). Called from the
+ * iteration loop right after the dev agent commits. (item 5.x polish,
+ * v0.7.6)
+ *
+ * Returns true on success, false if the source file doesn't exist
+ * (shouldn't happen in normal flow but defensive).
+ */
+export async function archiveHandoff(
+  repoPath: string,
+  iteration: number,
+): Promise<boolean> {
+  const { copyFile, access } = await import("fs/promises");
+  const src = join(repoPath, "cfcf-docs", "iteration-handoff.md");
+  const archiveDir = join(repoPath, "cfcf-docs", "iteration-handoffs");
+  const dest = join(archiveDir, `iteration-${iteration}.md`);
+  try {
+    await access(src);
+    await mkdir(archiveDir, { recursive: true });
+    await copyFile(src, dest);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

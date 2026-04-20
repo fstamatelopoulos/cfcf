@@ -9,6 +9,23 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.6] -- 2026-04-20
+
+Two related brownfield-context bugs fixed, plus a small architecture improvement to the dev handoff lifecycle so the pre-loop architect and the next iteration's dev agent actually see the previous iteration's outputs.
+
+### Fixed
+- **`judge-assessment.md` clobbered on pre-loop review.** When `autoReviewSpecs=true` ran on a project with prior iterations, the pre-loop review's `writeContextToRepo` call silently overwrote the existing iteration-N judge verdict with the default "No previous judge assessment. This is the first iteration." placeholder, so the architect (and any subsequent agent in that loop) saw a fresh-project view of a brownfield repo. Fix: `runReviewSync` now reads the existing `judge-assessment.md` and passes it through as `previousJudgeAssessment` before calling `writeContextToRepo` (same pattern as the v0.7.2 `userFeedback` fix).
+- **`iteration-handoff.md` reset before the next dev agent could read it.** The file was unconditionally rewritten to the blank template at the start of every iteration, so the forward-looking handoff iter-N left behind was never visible to iter-(N+1)'s dev agent. Fix: switched from `writeTemplate` (always reset) to `writeTemplateIfMissing` (only populate when absent). The previous iteration's handoff is preserved as context; the dev agent is told to **replace** it with their own handoff by end of iteration.
+
+### Added
+- **`cfcf-docs/iteration-handoffs/iteration-N.md`** -- per-iteration archive of the dev's forward-looking handoff. cfcf copies the live `iteration-handoff.md` here at end of each iteration (right after the dev commit), mirroring how `iteration-reviews/` archives judge assessments and `reflection-reviews/` archives reflection analyses. Gives the full audit trail of forward-looking notes without git archaeology.
+- **Architect re-review template** (`cfcf-architect-instructions.md`) gains `iteration-handoffs/iteration-*.md` + `judge-assessment.md` in the "Read everything first" list for re-review mode -- so on a brownfield re-review the architect sees the previous iteration's forward-looking notes and the last judge verdict, not just the logs.
+- **Dev agent's generated CLAUDE.md / AGENTS.md instructions** now include `iteration-handoffs/` in the Tier-2 read list and explain the handoff-replace semantics explicitly: "starts with the previous iteration's handoff as context; replace with your own before exiting."
+- **`archiveHandoff(repoPath, iteration)`** helper in `context-assembler.ts` + +5 tests covering the new lifecycle (handoff preserved across `writeContextToRepo`, `previousJudgeAssessment` pass-through, archive happy path, missing-file fallback, auto-mkdir).
+
+### Removed
+- **Dead `previousHandoff` field on `IterationContext`.** Declared since the iteration-2 days but never set or read anywhere -- cleanup while we're in the area.
+
 ## [0.7.5] -- 2026-04-20
 
 Small cleanup pass: remove the unused `repoUrl` project field everywhere, and fix a user-facing string on the global-settings page that leaked internal plan-item references + claimed out-of-date UI state.
