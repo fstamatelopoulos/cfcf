@@ -39,7 +39,7 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBe("ok");
-      expect(body.version).toBe("0.7.3");
+      expect(body.version).toBe("0.7.4");
     });
   });
 
@@ -250,6 +250,179 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe("findme");
+    });
+  });
+
+  // --- PUT /api/projects/:id (item 6.14) ---
+
+  describe("PUT /api/projects/:id", () => {
+    async function createProj() {
+      const createRes = await app.request("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "edit-test", repoPath: repoDir }),
+      });
+      const body = (await createRes.json()) as { id: string; name: string };
+      return body.id;
+    }
+
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/api/projects/unknown-xyz", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxIterations: 5 }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("accepts a partial patch and returns the merged config", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maxIterations: 25,
+          pauseEvery: 5,
+          autoReviewSpecs: true,
+          readinessGate: "needs_refinement_or_blocked",
+          onStalled: "stop",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.maxIterations).toBe(25);
+      expect(body.pauseEvery).toBe(5);
+      expect(body.autoReviewSpecs).toBe(true);
+      expect(body.readinessGate).toBe("needs_refinement_or_blocked");
+      expect(body.onStalled).toBe("stop");
+      // Identity preserved
+      expect(body.id).toBe(id);
+      expect(body.name).toBe("edit-test");
+      expect(body.repoPath).toBe(repoDir);
+    });
+
+    it("preserves identity + runtime fields when client tries to set them", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "malicious-id",
+          name: "malicious-name",
+          repoPath: "/tmp/evil",
+          currentIteration: 999,
+          status: "completed",
+          processTemplate: "custom",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.id).toBe(id);
+      expect(body.name).toBe("edit-test");
+      expect(body.repoPath).toBe(repoDir);
+      expect(body.currentIteration).toBe(0);
+      expect(body.processTemplate).toBe("default");
+    });
+
+    it("rejects invalid JSON", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "not json",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects maxIterations < 1", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxIterations: 0 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects pauseEvery < 0", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pauseEvery: -1 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects reflectSafeguardAfter < 1", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reflectSafeguardAfter: 0 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects invalid onStalled enum", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ onStalled: "panic" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects invalid mergeStrategy enum", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mergeStrategy: "cherry-pick" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects invalid readinessGate enum", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ readinessGate: "sometimes" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects agent role without adapter", async () => {
+      const id = await createProj();
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ devAgent: { model: "opus" } }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("clears per-project notifications override when notifications:null is sent", async () => {
+      const id = await createProj();
+      // First, set an override
+      await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notifications: { enabled: true, events: { "loop.paused": ["log"] } },
+        }),
+      });
+      // Then clear it via notifications: null
+      const res = await app.request(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notifications: null }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.notifications).toBeUndefined();
     });
   });
 
