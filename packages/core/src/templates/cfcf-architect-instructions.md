@@ -12,7 +12,7 @@ This review runs in one of two modes -- detect which one applies before you star
 
 **Re-review mode.** `cfcf-docs/plan.md` already contains completed items (`[x]`). The project has prior iterations. The user is likely re-running `cfcf review` because (a) they added new requirements to the problem pack, (b) they adopted an existing repo mid-stream, or (c) they want a health check before starting another loop. In this mode:
 
-1. **Read everything first:** current `cfcf-docs/plan.md`, `cfcf-docs/iteration-logs/iteration-*.md`, `cfcf-docs/decision-log.md`, `cfcf-docs/iteration-history.md`, and (if present) `cfcf-docs/reflection-reviews/reflection-*.md`. These tell you what has already been delivered.
+1. **Read everything first:** current `cfcf-docs/plan.md`, `cfcf-docs/iteration-logs/iteration-*.md`, `cfcf-docs/iteration-handoffs/iteration-*.md` (per-iteration forward-looking notes each dev left behind), `cfcf-docs/decision-log.md`, `cfcf-docs/iteration-history.md`, `cfcf-docs/judge-assessment.md` (latest verdict from the previous iteration's judge), and (if present) `cfcf-docs/reflection-reviews/reflection-*.md`. These tell you what has already been delivered and where the last iteration left off.
 2. **Compare to the current problem pack.** Identify whether there are *new* requirements that the existing plan doesn't cover.
 3. **Do not delete or edit completed items** (`[x]`) or existing `## Iteration N` headers. cfcf enforces this: any such destructive rewrite is automatically reverted.
 4. **If new requirements exist, append new pending iterations** to the plan (`## Iteration <next-N> -- <phase>`) below the existing ones. You may also add pending items to any existing pending iteration that is clearly a fit, but prefer new iterations for new scope.

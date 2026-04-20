@@ -29,11 +29,13 @@ This is what makes the judge's per-iteration assessment meaningful and makes the
 4. **cfcf-docs/plan.md** -- current plan from previous iterations (if any)
 5. **cfcf-docs/iteration-history.md** -- compressed summaries of previous iterations
 6. **cfcf-docs/iteration-logs/** -- per-iteration changelogs from earlier iterations (curated, more detail than history)
-7. **cfcf-docs/judge-assessment.md** -- feedback from the judge on the last iteration
-8. **cfcf-docs/user-feedback.md** -- feedback from the user (if any)
-9. **cfcf-docs/decision-log.md** -- past decisions and lessons (read the tail, ~last 50 entries)
-10. **cfcf-docs/constraints.md**, **hints.md**, **style-guide.md** -- if present
-11. **cfcf-docs/context/** -- additional context files as needed
+7. **cfcf-docs/iteration-handoffs/** -- archived per-iteration handoffs (forward-looking notes each dev left behind; useful context for picking up where they left off)
+8. **cfcf-docs/iteration-handoff.md** -- the LIVE handoff file. When the loop already has history, this starts with the previous iteration's handoff (same content as the most recent file in `iteration-handoffs/`). Use it as starting context; **you will replace it** with your own handoff before exiting (see "What to Produce" below).
+9. **cfcf-docs/judge-assessment.md** -- feedback from the judge on the last iteration
+10. **cfcf-docs/user-feedback.md** -- feedback from the user (if any)
+11. **cfcf-docs/decision-log.md** -- past decisions and lessons (read the tail, ~last 50 entries)
+12. **cfcf-docs/constraints.md**, **hints.md**, **style-guide.md** -- if present
+13. **cfcf-docs/context/** -- additional context files as needed
 
 ## What to Produce
 
@@ -41,7 +43,7 @@ This is what makes the judge's per-iteration assessment meaningful and makes the
 
 - **cfcf-docs/plan.md** -- Update with your iteration plan and progress
 - **cfcf-docs/decision-log.md** -- Append tagged entries (format below) when you make non-obvious decisions or learn lessons
-- **cfcf-docs/iteration-handoff.md** -- Fill in the handoff template (forward-looking: what's next, open questions, blockers)
+- **cfcf-docs/iteration-handoff.md** -- **Replace** the file with your iteration's handoff (forward-looking: what's next, open questions, blockers). On a brownfield loop this file starts with the previous iteration's handoff; read it first for context, then overwrite with your own. Do not append -- the file represents the *most recent* iteration only. cfcf archives the committed version to `cfcf-docs/iteration-handoffs/iteration-N.md` at the end of the iteration so prior handoffs remain queryable.
 - **cfcf-docs/iteration-logs/iteration-N.md** -- Write a changelog-style record of this iteration (backward-looking: what changed, tests run, commits made). See "Iteration Log Format" below.
 - **cfcf-docs/cfcf-iteration-signals.json** -- Fill in the structured signal file
 

@@ -149,6 +149,10 @@ Before you start writing the Problem Pack, it helps to know which files in the r
 | `cfcf-docs/problem.md` and friends | **Generated copies.** cfcf copies from `problem-pack/` into `cfcf-docs/` at the start of every run (iteration, pre-loop review, architect review) so agents have a single `cfcf-docs/` surface to read. | ❌ No -- cfcf overwrites these on every run. Every generated copy also carries a banner at the top saying so. |
 | `cfcf-docs/plan.md` | Agent-maintained -- dev agent + reflection role + architect re-review mode edit it through cfcf's controlled path. | Read-only for you, except when the loop is paused and you want to manually hand-edit before resuming. |
 | `cfcf-docs/iteration-logs/iteration-N.md` | Written by the dev agent at the end of each iteration. cfcf rebuilds `iteration-history.md` from these. | Read-only. |
+| `cfcf-docs/iteration-handoff.md` | Live forward-looking handoff for the **current** iteration. The dev agent writes their handoff here; judge + reflection read it within the same iteration. On a brownfield loop this file starts with the **previous** iteration's handoff as context — the dev reads it, then replaces it with their own. | Read-only for you; the dev agent manages the content. |
+| `cfcf-docs/iteration-handoffs/iteration-N.md` | Per-iteration archive of `iteration-handoff.md`. cfcf copies the live handoff here at end of each iteration (same pattern as `iteration-reviews/` and `reflection-reviews/`). | Read-only audit trail. |
+| `cfcf-docs/iteration-reviews/iteration-N.md` | Per-iteration archive of `judge-assessment.md`. | Read-only audit trail. |
+| `cfcf-docs/reflection-reviews/reflection-N.md` | Per-iteration archive of `reflection-analysis.md`. | Read-only audit trail. |
 | `cfcf-docs/decision-log.md` | Multi-role append-only journal (dev, judge, architect, reflection, user all append tagged entries). | You may append entries (use the `[role: user]` tag). |
 | `cfcf-docs/*-signals.json` | Machine-readable signal files. Reset before each agent spawn, read by cfcf after. | Don't edit by hand. |
 | `CLAUDE.md` / `AGENTS.md` (at the repo root) | The cfcf-generated block lives between `<!-- cfcf:begin -->` and `<!-- cfcf:end -->`. Anything outside those markers is yours and cfcf never touches it. | Edit OUTSIDE the sentinel block (above or below). Never edit inside -- those lines get rewritten every iteration. |
@@ -308,12 +312,17 @@ cfcf run --project my-project
 │                      iteration-history.md from iteration-logs,   │
 │                      create branch cfcf/iteration-N              │
 │                                                                  │
-│  DEV (agent)         Fresh agent process; reads plan.md,         │
-│                      executes the next pending chunk, updates    │
-│                      plan.md with [x] + notes, writes            │
-│                      iteration-logs/iteration-N.md,              │
-│                      iteration-handoff.md, iteration signals     │
+│  DEV (agent)         Fresh agent process; reads plan.md +        │
+│                      previous iteration-handoff.md (if any) for  │
+│                      forward-looking context, executes the next  │
+│                      pending chunk, updates plan.md with         │
+│                      [x] + notes, writes iteration-logs/         │
+│                      iteration-N.md, REPLACES                    │
+│                      iteration-handoff.md with this iteration's  │
+│                      handoff, fills iteration signals            │
 │                      → commit: "cfcf iteration N dev (<adapter>)"│
+│                      cfcf then archives iteration-handoff.md →   │
+│                      iteration-handoffs/iteration-N.md           │
 │                                                                  │
 │  JUDGE (agent)       Fresh agent process; assesses this          │
 │                      iteration; writes judge-assessment.md       │

@@ -14,7 +14,7 @@ describe("constants", () => {
   });
 
   it("has a version string", () => {
-    expect(VERSION).toBe("0.7.5");
+    expect(VERSION).toBe("0.7.6");
   });
 
   it("lists supported agents", () => {
