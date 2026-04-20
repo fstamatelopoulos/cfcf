@@ -21,7 +21,6 @@ export function registerProjectCommands(program: Command): void {
     .description("Initialize a new cfcf project")
     .requiredOption("--repo <path>", "Path to the git repository")
     .requiredOption("--name <name>", "Project name")
-    .option("--repo-url <url>", "Remote git repo URL")
     .action(async (opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
@@ -33,7 +32,6 @@ export function registerProjectCommands(program: Command): void {
       const res = await post<ProjectConfig>("/api/projects", {
         name: opts.name,
         repoPath,
-        repoUrl: opts.repoUrl,
       });
 
       if (!res.ok) {
@@ -130,7 +128,6 @@ export function registerProjectCommands(program: Command): void {
       console.log(`Project: ${p.name}`);
       console.log(`  ID:             ${p.id}`);
       console.log(`  Repo:           ${p.repoPath}`);
-      console.log(`  Remote:         ${p.repoUrl || "(not set)"}`);
       console.log(`  Dev agent:         ${formatAgent(p.devAgent)}`);
       console.log(`  Judge agent:       ${formatAgent(p.judgeAgent)}`);
       console.log(`  Architect:         ${formatAgent(p.architectAgent)}`);

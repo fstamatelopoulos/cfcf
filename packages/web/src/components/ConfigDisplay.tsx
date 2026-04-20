@@ -217,27 +217,6 @@ export function ConfigDisplay({
       </section>
 
       {/* Editable: remote URL */}
-      <FormSection title="Remote">
-        <table className="config-display__table">
-          <tbody>
-            <tr>
-              <th>Remote URL</th>
-              <td>
-                <input
-                  type="text"
-                  placeholder="(not set)"
-                  value={draft.repoUrl ?? ""}
-                  onChange={(e) =>
-                    update("repoUrl", e.target.value === "" ? undefined : e.target.value)
-                  }
-                  style={{ minWidth: "20rem" }}
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </FormSection>
-
       {/* Agent roles */}
       <FormSection title="Agent roles">
         <table className="config-display__table">

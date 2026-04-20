@@ -22,7 +22,6 @@ export interface ProjectConfig {
   id: string;
   name: string;
   repoPath: string;
-  repoUrl?: string;
   devAgent: AgentConfig;
   judgeAgent: AgentConfig;
   architectAgent: AgentConfig;

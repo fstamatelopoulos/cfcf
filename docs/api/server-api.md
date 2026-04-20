@@ -206,8 +206,7 @@ Create a new project.
 ```json
 {
   "name": "my-web-app",
-  "repoPath": "/Users/fotis/src/my-web-app",
-  "repoUrl": "https://github.com/user/my-web-app.git"
+  "repoPath": "/Users/fotis/src/my-web-app"
 }
 ```
 
@@ -215,7 +214,6 @@ Create a new project.
 |-------|----------|-------------|
 | `name` | Yes | Project name |
 | `repoPath` | Yes | Absolute path to a local git repository |
-| `repoUrl` | No | Remote git URL (for push) |
 | `devAgent` | No | Override dev agent config (defaults from global config) |
 | `judgeAgent` | No | Override judge agent config |
 | `maxIterations` | No | Override max iterations |

@@ -166,7 +166,6 @@ interface ProjectConfig {
   id: string;
   name: string;
   repoPath: string;                // Local path to the git repo
-  repoUrl?: string;                // Remote git repo URL (for push)
   devAgent: AgentConfig;           // Dev agent configuration
   judgeAgent: AgentConfig;         // Judge agent configuration
   architectAgent: AgentConfig;     // Solution Architect (pre-iteration review)

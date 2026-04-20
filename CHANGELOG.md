@@ -9,6 +9,17 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.7.5] -- 2026-04-20
+
+Small cleanup pass: remove the unused `repoUrl` project field everywhere, and fix a user-facing string on the global-settings page that leaked internal plan-item references + claimed out-of-date UI state.
+
+### Removed
+- **`ProjectConfig.repoUrl`.** Optional field that was stored on project configs and rendered in `cfcf project show` / the old Remote URL input on the Config tab, but never actually consumed anywhere in the codebase -- `cfcf` has no push/pull logic yet, and when that lands (item 6.3 `cfcf push`) it will use the repo's own `git remote -v` (`origin`) rather than this field. Removed from: `ProjectConfig` type (core + web), `createProject` signature, `POST /api/projects` body, `cfcf project init --repo-url` CLI option, `cfcf project show` output, the Config tab's "Remote" section, `docs/design/technical-design.md`, `docs/api/server-api.md`, `docs/guides/cli-usage.md`. Existing project configs that happen to have the field set in JSON are harmless -- cfcf ignores unknown top-level fields.
+
+### Changed
+- **Global settings banner rewritten to be user-facing.** Was: "This page edits the global defaults. Per-project overrides live in each project's Config tab, which is read-only today and becomes editable in plan item 6.14." Now: "This page edits the **global defaults**. To override any of these for a specific project, open that project and edit its **Config** tab — per-project settings take precedence over the global defaults." The old text leaked an internal plan-item reference and incorrectly claimed the project Config tab was read-only (it became editable in v0.7.4).
+- **Page title renamed** from "Server & settings" to "Server Info and Global Settings" -- more accurate since the top section is read-only runtime info and the bottom is the editable global config.
+
 ## [0.7.4] -- 2026-04-20
 
 Ships plan item **6.14** (pulled forward from iteration 6 since 5.9 set the editor pattern and the two pages share structure): the read-only `Config` tab on the project detail page becomes a full editable form, wire-compatible with the CLI-hit `PUT /api/projects/:id`.
