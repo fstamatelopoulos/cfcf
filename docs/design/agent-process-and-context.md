@@ -109,6 +109,15 @@ cfcf-docs/
     iteration-2.md        # (see research/reflection-role-and-iterative-planning.md §4.3)
     ...                   # cf² rebuilds iteration-history.md from these each iteration
 
+  # --- Per-iteration handoffs (live file + archive; v0.7.6) ---
+  iteration-handoff.md    # LIVE forward-looking handoff (open questions, blockers, what's next).
+                          # On a brownfield loop, starts with the previous iteration's handoff;
+                          # the dev agent reads for context, then REPLACES with this iteration's.
+  iteration-handoffs/     # ARCHIVED per-iteration handoffs (cf² copies after each dev commit)
+    iteration-1.md
+    iteration-2.md
+    ...                   # Same pattern as iteration-reviews/ and reflection-reviews/.
+
   # --- Tier 3 Reflection role outputs (item 5.6; per-iteration + ad-hoc) ---
   cfcf-reflection-instructions.md   # cf² generates from template per reflection run
   cfcf-reflection-signals.json      # Reflection agent writes after each run
@@ -146,7 +155,8 @@ cfcf-docs/
 | iteration-logs/iteration-N.md | Dev agent | Judge, Reflection, next-iteration dev | End of each iteration | Per-iteration changelog (backward-looking). cf² rebuilds `iteration-history.md` from these. |
 | reflection-analysis.md | Reflection agent | Next-iteration dev, Judge, User | Each time reflection runs | Cross-iteration review. Archived to `reflection-reviews/reflection-N.md` each iteration. |
 | cfcf-reflection-signals.json | Reflection agent | cf² | Each reflection run | Machine-readable. Drives UI history coloring and `recommend_stop` handling. |
-| iteration-handoff.md | Dev agent | cf², Judge | Every iteration | cf² resets template each iteration |
+| iteration-handoff.md | Dev agent | cf², Judge, Reflection, next-iteration dev | Every iteration (replace semantics, v0.7.6+) | LIVE forward-looking handoff. Template only written when file missing. On a brownfield loop starts with previous iteration's handoff; dev reads for context then REPLACES with their own. cf² archives the committed version to `iteration-handoffs/iteration-N.md` after dev commits. |
+| iteration-handoffs/iteration-N.md | cf² (archived) | Architect (re-review), next-iteration dev, User | End of each iteration | Per-iteration audit of forward-looking handoffs (same archive pattern as iteration-reviews/ + reflection-reviews/). |
 | cfcf-iteration-signals.json | Dev agent | cf² | Every iteration | cf² resets template, agent fills in |
 | judge-assessment.md | Judge agent | Dev agent, User | Every iteration | cf² archives to iteration-reviews/ |
 | cfcf-judge-signals.json | Judge agent | cf² | Every iteration | cf² reads for flow control |
