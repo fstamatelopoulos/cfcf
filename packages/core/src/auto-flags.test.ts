@@ -12,11 +12,11 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { resolveLoopConfig, type LoopState } from "./iteration-loop.js";
 import { readinessGateBlocks } from "./architect-runner.js";
-import type { ProjectConfig } from "./types.js";
-import { getProject } from "./projects.js";
+import type { WorkspaceConfig } from "./types.js";
+import { getWorkspace } from "./workspaces.js";
 import { createDefaultConfig, writeConfig } from "./config.js";
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj",
     name: "test-project",
@@ -37,8 +37,8 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
 
 function makeLoopState(overrides?: Partial<LoopState>): LoopState {
   return {
-    projectId: "test-proj",
-    projectName: "test-project",
+    workspaceId: "test-proj",
+    workspaceName: "test-project",
     phase: "idle",
     currentIteration: 0,
     maxIterations: 10,
@@ -176,12 +176,12 @@ describe("Config backfill for older configs (item 5.1)", () => {
     expect(read!.readinessGate).toBe("blocked");
   });
 
-  it("a pre-5.1 project config is backfilled on getProject()", async () => {
+  it("a pre-5.1 project config is backfilled on getWorkspace()", async () => {
     const cfg = createDefaultConfig(["claude-code"]);
     await writeConfig(cfg);
 
     const projId = "old-proj-xyz";
-    const projDir = join(tmp, "projects", projId);
+    const projDir = join(tmp, "workspaces", projId);
     await mkdir(projDir, { recursive: true });
     // Pre-5.1 project config: no autoReviewSpecs / autoDocumenter / readinessGate keys
     await writeFile(
@@ -204,7 +204,7 @@ describe("Config backfill for older configs (item 5.1)", () => {
       "utf-8",
     );
 
-    const loaded = await getProject(projId);
+    const loaded = await getWorkspace(projId);
     expect(loaded).not.toBeNull();
     expect(loaded!.autoReviewSpecs).toBe(false);
     expect(loaded!.autoDocumenter).toBe(true);

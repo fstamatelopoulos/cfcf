@@ -7,14 +7,12 @@
 
 import { join } from "path";
 import { writeFile } from "fs/promises";
-import type { ProjectConfig, DevSignals } from "@cfcf/core";
+import type { WorkspaceConfig, DevSignals } from "@cfcf/core";
 import {
-  getProject,
   nextIteration,
   spawnProcess,
-  type ManagedProcess,
   getIterationLogPath,
-  ensureProjectLogDir,
+  ensureWorkspaceLogDir,
   readProblemPack,
   validateProblemPack,
   writeContextToRepo,
@@ -28,8 +26,8 @@ import * as gitManager from "@cfcf/core";
 
 export interface IterationState {
   iteration: number;
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   branch: string;
   mode: "manual" | "agent";
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
@@ -48,27 +46,27 @@ export interface IterationState {
   logLines: string[];
 }
 
-/** In-memory store of active/recent iterations, keyed by "projectId:iterationNum" */
+/** In-memory store of active/recent iterations, keyed by "workspaceId:iterationNum" */
 const iterationStore = new Map<string, IterationState>();
 
-function storeKey(projectId: string, iteration: number): string {
-  return `${projectId}:${iteration}`;
+function storeKey(workspaceId: string, iteration: number): string {
+  return `${workspaceId}:${iteration}`;
 }
 
 /**
  * Get the state of an iteration.
  */
-export function getIterationState(projectId: string, iteration: number): IterationState | undefined {
-  return iterationStore.get(storeKey(projectId, iteration));
+export function getIterationState(workspaceId: string, iteration: number): IterationState | undefined {
+  return iterationStore.get(storeKey(workspaceId, iteration));
 }
 
 /**
- * Get the latest iteration state for a project.
+ * Get the latest iteration state for a workspace.
  */
-export function getLatestIterationState(projectId: string): IterationState | undefined {
+export function getLatestIterationState(workspaceId: string): IterationState | undefined {
   let latest: IterationState | undefined;
   for (const state of iterationStore.values()) {
-    if (state.projectId === projectId) {
+    if (state.workspaceId === workspaceId) {
       if (!latest || state.iteration > latest.iteration) {
         latest = state;
       }
@@ -83,7 +81,7 @@ export function getLatestIterationState(projectId: string): IterationState | und
  * The actual execution runs in the background.
  */
 export async function startIteration(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   opts: {
     command?: string;
     args?: string[];
@@ -91,29 +89,29 @@ export async function startIteration(
   },
 ): Promise<IterationState> {
   // Get next iteration number
-  const iterationNum = await nextIteration(project.id);
+  const iterationNum = await nextIteration(workspace.id);
   if (iterationNum === null) {
     throw new Error("Failed to increment iteration counter");
   }
 
   // Create feature branch
   const branchName = `cfcf/iteration-${iterationNum}`;
-  const branchResult = await gitManager.createBranch(project.repoPath, branchName);
+  const branchResult = await gitManager.createBranch(workspace.repoPath, branchName);
   if (!branchResult.success) {
     throw new Error(`Failed to create branch: ${branchResult.error}`);
   }
 
   // Prepare log path
-  const logFile = getIterationLogPath(project.id, iterationNum, "dev");
-  await ensureProjectLogDir(project.id);
+  const logFile = getIterationLogPath(workspace.id, iterationNum, "dev");
+  await ensureWorkspaceLogDir(workspace.id);
 
   const mode = opts.command ? "manual" : "agent";
 
   // Create initial state
   const state: IterationState = {
     iteration: iterationNum,
-    projectId: project.id,
-    projectName: project.name,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
     branch: branchName,
     mode,
     status: "preparing",
@@ -122,10 +120,10 @@ export async function startIteration(
     logLines: [],
   };
 
-  iterationStore.set(storeKey(project.id, iterationNum), state);
+  iterationStore.set(storeKey(workspace.id, iterationNum), state);
 
   // Run the iteration in the background (don't await)
-  runIterationAsync(project, state, opts).catch((err) => {
+  runIterationAsync(workspace, state, opts).catch((err) => {
     state.status = "failed";
     state.error = err instanceof Error ? err.message : String(err);
     state.completedAt = new Date().toISOString();
@@ -138,7 +136,7 @@ export async function startIteration(
  * The actual iteration execution -- runs in the background.
  */
 async function runIterationAsync(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: IterationState,
   opts: {
     command?: string;
@@ -155,12 +153,12 @@ async function runIterationAsync(
     args = opts.args ?? [];
   } else {
     // Agent mode: assemble context
-    const adapter = getAdapter(project.devAgent.adapter);
+    const adapter = getAdapter(workspace.devAgent.adapter);
     if (!adapter) {
-      throw new Error(`Unknown agent adapter: ${project.devAgent.adapter}`);
+      throw new Error(`Unknown agent adapter: ${workspace.devAgent.adapter}`);
     }
 
-    const packPath = opts.problemPackPath || join(project.repoPath, "problem-pack");
+    const packPath = opts.problemPackPath || join(workspace.repoPath, "problem-pack");
     const packValidation = await validateProblemPack(packPath);
     if (!packValidation.valid) {
       throw new Error(
@@ -173,32 +171,31 @@ async function runIterationAsync(
     const ctx: IterationContext = {
       iteration: state.iteration,
       problemPack,
-      project,
+      workspace,
     };
 
-    await writeContextToRepo(project.repoPath, ctx);
+    await writeContextToRepo(workspace.repoPath, ctx);
 
     const instructionContent = generateInstructionContent(ctx);
     await writeFile(
-      join(project.repoPath, adapter.instructionFilename),
+      join(workspace.repoPath, adapter.instructionFilename),
       instructionContent,
       "utf-8",
     );
 
     const prompt = `Read ${adapter.instructionFilename} and follow the instructions. Execute the iteration plan, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
-    const cmd = adapter.buildCommand(project.repoPath, prompt, project.devAgent.model);
+    const cmd = adapter.buildCommand(workspace.repoPath, prompt, workspace.devAgent.model);
     command = cmd.command;
     args = cmd.args;
   }
 
   // Execute
   state.status = "executing";
-  const startTime = Date.now();
 
   const managed = await spawnProcess({
     command,
     args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile: state.logFile,
   });
 
@@ -211,17 +208,17 @@ async function runIterationAsync(
   state.status = "collecting";
 
   if (state.mode === "agent") {
-    state.handoffReceived = (await parseHandoffDocument(project.repoPath)) !== null;
-    const signals = await parseSignalFile(project.repoPath);
+    state.handoffReceived = (await parseHandoffDocument(workspace.repoPath)) !== null;
+    const signals = await parseSignalFile(workspace.repoPath);
     state.signalsReceived = signals !== null;
     state.signals = signals ?? undefined;
   }
 
   // Commit
-  if (await gitManager.hasChanges(project.repoPath)) {
+  if (await gitManager.hasChanges(workspace.repoPath)) {
     const commitResult = await gitManager.commitAll(
-      project.repoPath,
-      `cfcf iteration ${state.iteration}${state.mode === "agent" ? ` (${project.devAgent.adapter})` : ""}: ${command} ${args.slice(0, 3).join(" ")}`,
+      workspace.repoPath,
+      `cfcf iteration ${state.iteration}${state.mode === "agent" ? ` (${workspace.devAgent.adapter})` : ""}: ${command} ${args.slice(0, 3).join(" ")}`,
     );
     state.committed = commitResult.success;
   } else {

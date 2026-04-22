@@ -9,9 +9,9 @@ import {
   validatePlanRewrite,
   resolveReflectionAgent,
 } from "./reflection-runner.js";
-import type { ProjectConfig } from "./types.js";
+import type { WorkspaceConfig } from "./types.js";
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj-abc123",
     name: "test-project",

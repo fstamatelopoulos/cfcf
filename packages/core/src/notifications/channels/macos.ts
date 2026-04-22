@@ -24,7 +24,7 @@ export const macosChannel: NotificationChannel = {
 
     const title = escapeAppleScript(event.title);
     const message = escapeAppleScript(event.message);
-    const subtitle = escapeAppleScript(`cfcf — ${event.project.name}`);
+    const subtitle = escapeAppleScript(`cfcf — ${event.workspace.name}`);
 
     const script =
       `display notification "${message}" with title "${title}" subtitle "${subtitle}" sound name "Submarine"`;

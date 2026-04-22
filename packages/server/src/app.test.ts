@@ -39,7 +39,7 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBe("ok");
-      expect(body.version).toBe("0.7.6");
+      expect(body.version).toBe("0.8.0");
     });
   });
 
@@ -176,9 +176,9 @@ describe("server API", () => {
 
   // --- Projects ---
 
-  describe("POST /api/projects", () => {
+  describe("POST /api/workspaces", () => {
     it("creates a project", async () => {
-      const res = await app.request("/api/projects", {
+      const res = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "test-app", repoPath: repoDir }),
@@ -191,7 +191,7 @@ describe("server API", () => {
     });
 
     it("rejects missing name", async () => {
-      const res = await app.request("/api/projects", {
+      const res = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repoPath: repoDir }),
@@ -202,7 +202,7 @@ describe("server API", () => {
     it("rejects non-git directory", async () => {
       const nonGitDir = join(tempDir, "not-git");
       await mkdir(nonGitDir, { recursive: true });
-      const res = await app.request("/api/projects", {
+      const res = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "bad", repoPath: nonGitDir }),
@@ -211,53 +211,53 @@ describe("server API", () => {
     });
   });
 
-  describe("GET /api/projects", () => {
+  describe("GET /api/workspaces", () => {
     it("returns empty list initially", async () => {
-      const res = await app.request("/api/projects");
+      const res = await app.request("/api/workspaces");
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toEqual([]);
     });
 
     it("returns created projects", async () => {
-      await app.request("/api/projects", {
+      await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "app-one", repoPath: repoDir }),
       });
 
-      const res = await app.request("/api/projects");
+      const res = await app.request("/api/workspaces");
       const body = await res.json();
       expect(body.length).toBe(1);
       expect(body[0].name).toBe("app-one");
     });
   });
 
-  describe("GET /api/projects/:id", () => {
+  describe("GET /api/workspaces/:id", () => {
     it("returns 404 for unknown project", async () => {
-      const res = await app.request("/api/projects/nonexistent");
+      const res = await app.request("/api/workspaces/nonexistent");
       expect(res.status).toBe(404);
     });
 
     it("finds project by name", async () => {
-      await app.request("/api/projects", {
+      await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "findme", repoPath: repoDir }),
       });
 
-      const res = await app.request("/api/projects/findme");
+      const res = await app.request("/api/workspaces/findme");
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe("findme");
     });
   });
 
-  // --- PUT /api/projects/:id (item 6.14) ---
+  // --- PUT /api/workspaces/:id (item 6.14) ---
 
-  describe("PUT /api/projects/:id", () => {
+  describe("PUT /api/workspaces/:id", () => {
     async function createProj() {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "edit-test", repoPath: repoDir }),
@@ -267,7 +267,7 @@ describe("server API", () => {
     }
 
     it("returns 404 for unknown project", async () => {
-      const res = await app.request("/api/projects/unknown-xyz", {
+      const res = await app.request("/api/workspaces/unknown-xyz", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ maxIterations: 5 }),
@@ -277,7 +277,7 @@ describe("server API", () => {
 
     it("accepts a partial patch and returns the merged config", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -303,7 +303,7 @@ describe("server API", () => {
 
     it("preserves identity + runtime fields when client tries to set them", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -326,7 +326,7 @@ describe("server API", () => {
 
     it("rejects invalid JSON", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: "not json",
@@ -336,7 +336,7 @@ describe("server API", () => {
 
     it("rejects maxIterations < 1", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ maxIterations: 0 }),
@@ -346,7 +346,7 @@ describe("server API", () => {
 
     it("rejects pauseEvery < 0", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pauseEvery: -1 }),
@@ -356,7 +356,7 @@ describe("server API", () => {
 
     it("rejects reflectSafeguardAfter < 1", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reflectSafeguardAfter: 0 }),
@@ -366,7 +366,7 @@ describe("server API", () => {
 
     it("rejects invalid onStalled enum", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ onStalled: "panic" }),
@@ -376,7 +376,7 @@ describe("server API", () => {
 
     it("rejects invalid mergeStrategy enum", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mergeStrategy: "cherry-pick" }),
@@ -386,7 +386,7 @@ describe("server API", () => {
 
     it("rejects invalid readinessGate enum", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ readinessGate: "sometimes" }),
@@ -396,7 +396,7 @@ describe("server API", () => {
 
     it("rejects agent role without adapter", async () => {
       const id = await createProj();
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ devAgent: { model: "opus" } }),
@@ -407,7 +407,7 @@ describe("server API", () => {
     it("clears per-project notifications override when notifications:null is sent", async () => {
       const id = await createProj();
       // First, set an override
-      await app.request(`/api/projects/${id}`, {
+      await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -415,7 +415,7 @@ describe("server API", () => {
         }),
       });
       // Then clear it via notifications: null
-      const res = await app.request(`/api/projects/${id}`, {
+      const res = await app.request(`/api/workspaces/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notifications: null }),
@@ -428,16 +428,16 @@ describe("server API", () => {
 
   // --- Iterate (async) ---
 
-  describe("POST /api/projects/:id/iterate", () => {
+  describe("POST /api/workspaces/:id/iterate", () => {
     it("starts an iteration and returns 202", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "iter-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/iterate`, {
+      const res = await app.request(`/api/workspaces/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "echo", args: ["hello cfcf"] }),
@@ -452,14 +452,14 @@ describe("server API", () => {
     });
 
     it("increments iteration counter across calls", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "counter-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res1 = await app.request(`/api/projects/${project.id}/iterate`, {
+      const res1 = await app.request(`/api/workspaces/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "echo", args: ["iter 1"] }),
@@ -470,7 +470,7 @@ describe("server API", () => {
       // Wait for first iteration to complete so branch is free
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      const res2 = await app.request(`/api/projects/${project.id}/iterate`, {
+      const res2 = await app.request(`/api/workspaces/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "echo", args: ["iter 2"] }),
@@ -480,14 +480,14 @@ describe("server API", () => {
     });
 
     it("returns status after iteration completes", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "status-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const startRes = await app.request(`/api/projects/${project.id}/iterate`, {
+      const startRes = await app.request(`/api/workspaces/${project.id}/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "echo", args: ["done"] }),
@@ -498,7 +498,7 @@ describe("server API", () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       const statusRes = await app.request(
-        `/api/projects/${project.id}/iterations/${start.iteration}/status`,
+        `/api/workspaces/${project.id}/iterations/${start.iteration}/status`,
       );
       expect(statusRes.status).toBe(200);
       const status = await statusRes.json();
@@ -510,80 +510,80 @@ describe("server API", () => {
 
   // --- Document API ---
 
-  describe("POST /api/projects/:id/document", () => {
+  describe("POST /api/workspaces/:id/document", () => {
     it("returns 404 for unknown project", async () => {
-      const res = await app.request("/api/projects/nonexistent/document", {
+      const res = await app.request("/api/workspaces/nonexistent/document", {
         method: "POST",
       });
       expect(res.status).toBe(404);
     });
   });
 
-  describe("GET /api/projects/:id/document/status", () => {
+  describe("GET /api/workspaces/:id/document/status", () => {
     it("returns 404 when no documenter run active", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "doc-status-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/document/status`);
+      const res = await app.request(`/api/workspaces/${project.id}/document/status`);
       expect(res.status).toBe(404);
     });
   });
 
   // --- Loop API ---
 
-  describe("POST /api/projects/:id/loop/start", () => {
+  describe("POST /api/workspaces/:id/loop/start", () => {
     it("returns 404 for unknown project", async () => {
-      const res = await app.request("/api/projects/nonexistent/loop/start", {
+      const res = await app.request("/api/workspaces/nonexistent/loop/start", {
         method: "POST",
       });
       expect(res.status).toBe(404);
     });
   });
 
-  describe("GET /api/projects/:id/loop/status", () => {
+  describe("GET /api/workspaces/:id/loop/status", () => {
     it("returns 404 when no loop active", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "loop-status-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/loop/status`);
+      const res = await app.request(`/api/workspaces/${project.id}/loop/status`);
       expect(res.status).toBe(404);
     });
   });
 
-  describe("POST /api/projects/:id/loop/stop", () => {
+  describe("POST /api/workspaces/:id/loop/stop", () => {
     it("returns 400 when no loop active", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "loop-stop-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/loop/stop`, {
+      const res = await app.request(`/api/workspaces/${project.id}/loop/stop`, {
         method: "POST",
       });
       expect(res.status).toBe(400);
     });
   });
 
-  describe("POST /api/projects/:id/loop/resume", () => {
+  describe("POST /api/workspaces/:id/loop/resume", () => {
     it("returns 400 when no loop active", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "loop-resume-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/loop/resume`, {
+      const res = await app.request(`/api/workspaces/${project.id}/loop/resume`, {
         method: "POST",
       });
       expect(res.status).toBe(400);
@@ -592,25 +592,25 @@ describe("server API", () => {
 
   // --- Review API ---
 
-  describe("POST /api/projects/:id/review", () => {
+  describe("POST /api/workspaces/:id/review", () => {
     it("returns 404 for unknown project", async () => {
-      const res = await app.request("/api/projects/nonexistent/review", {
+      const res = await app.request("/api/workspaces/nonexistent/review", {
         method: "POST",
       });
       expect(res.status).toBe(404);
     });
   });
 
-  describe("GET /api/projects/:id/review/status", () => {
+  describe("GET /api/workspaces/:id/review/status", () => {
     it("returns 404 when no review active", async () => {
-      const createRes = await app.request("/api/projects", {
+      const createRes = await app.request("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "review-status-test", repoPath: repoDir }),
       });
       const project = await createRes.json();
 
-      const res = await app.request(`/api/projects/${project.id}/review/status`);
+      const res = await app.request(`/api/workspaces/${project.id}/review/status`);
       expect(res.status).toBe(404);
     });
   });

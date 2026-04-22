@@ -3,13 +3,13 @@
  *
  * Assembles the full context for an iteration: reads the Problem Pack,
  * merges with iteration history, judge feedback, user feedback,
- * and writes everything into the project repo as cfcf-docs/ + CLAUDE.md.
+ * and writes everything into the workspace repo as cfcf-docs/ + CLAUDE.md.
  */
 
 import { join } from "path";
 import { mkdir, writeFile, readFile, readdir } from "fs/promises";
 import type { ProblemPack } from "./problem-pack.js";
-import type { ProjectConfig, DevSignals } from "./types.js";
+import type { WorkspaceConfig, DevSignals } from "./types.js";
 import { writeTemplate, writeTemplateIfMissing } from "./templates.js";
 
 // Templates are now resolved via `getTemplate()` from templates.ts (embedded
@@ -53,8 +53,8 @@ export interface IterationContext {
   iteration: number;
   /** The problem pack contents */
   problemPack: ProblemPack;
-  /** Project configuration */
-  project: ProjectConfig;
+  /** Workspace configuration */
+  workspace: WorkspaceConfig;
   /** Previous iteration's judge assessment (if any) */
   previousJudgeAssessment?: string;
   /** User feedback (if any) */
@@ -64,7 +64,7 @@ export interface IterationContext {
 }
 
 /**
- * Write all cfcf context files into the project repo.
+ * Write all cfcf context files into the workspace repo.
  *
  * This is called before each iteration to set up the agent's context.
  * On first iteration, it scaffolds the full cfcf-docs/ directory.
@@ -186,7 +186,7 @@ export function generateInstructionContent(ctx: IterationContext): string {
 
   lines.push(`# cfcf Iteration ${ctx.iteration} Instructions`);
   lines.push("");
-  lines.push(`You are a dev agent working on iteration ${ctx.iteration} of the project "${ctx.project.name}".`);
+  lines.push(`You are a dev agent working on iteration ${ctx.iteration} of the workspace "${ctx.workspace.name}".`);
   lines.push(`Read this file first, then follow the process defined in cfcf-docs/process.md.`);
   lines.push("");
 
@@ -285,7 +285,7 @@ export function generateInstructionContent(ctx: IterationContext): string {
   lines.push("3. Append tagged entries to cfcf-docs/decision-log.md when you make non-obvious decisions or learn lessons (format: `## <ISO-UTC>  [role: dev]  [iter: N]  [category: decision|lesson]`)");
   lines.push("4. REPLACE cfcf-docs/iteration-handoff.md with YOUR iteration's handoff (forward-looking: what's next, open questions, blockers). On a brownfield loop it starts with the previous iteration's content; read it for context, then overwrite with your own. cfcf will archive the committed version to cfcf-docs/iteration-handoffs/iteration-N.md automatically.");
   lines.push("5. Fill in cfcf-docs/cfcf-iteration-signals.json with structured data");
-  lines.push("6. Update project docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
+  lines.push("6. Update workspace docs (docs/architecture.md, docs/api-reference.md, docs/setup-guide.md) -- create if missing");
   lines.push("7. Commit your work frequently with meaningful messages");
   lines.push("");
   lines.push("See cfcf-docs/process.md for the full process definition.");

@@ -7,9 +7,9 @@ import { join } from "path";
 import { mkdtemp, rm, mkdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { makeDecision, getLoopState, startLoop, stopLoop, shouldRunReflection, type LoopState } from "./iteration-loop.js";
-import type { ProjectConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
+import type { WorkspaceConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj-abc123",
     name: "test-project",
@@ -30,8 +30,8 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
 
 function makeLoopState(overrides?: Partial<LoopState>): LoopState {
   return {
-    projectId: "test-proj-abc123",
-    projectName: "test-project",
+    workspaceId: "test-proj-abc123",
+    workspaceName: "test-project",
     phase: "deciding",
     currentIteration: 1,
     maxIterations: 10,
@@ -287,33 +287,33 @@ describe("Loop State Persistence", () => {
     await wf(join(packDir, "success.md"), "# Success\nAll tests pass\n");
 
     // Create a project config on disk
-    const { createProject } = await import("./projects.js");
-    const project = await createProject({ name: "persist-test", repoPath: repoDir });
+    const { createWorkspace } = await import("./workspaces.js");
+    const project = await createWorkspace({ name: "persist-test", repoPath: repoDir });
 
     // Start loop -- it will fail quickly (no agent installed) but state should persist
     const state = await startLoop(project);
-    expect(state.projectId).toBe(project.id);
+    expect(state.workspaceId).toBe(project.id);
 
     // Wait a moment for the background task to write state
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Verify file exists on disk
-    const statePath = join(tempDir, "projects", project.id, "loop-state.json");
+    const statePath = join(tempDir, "workspaces", project.id, "loop-state.json");
     const raw = await readFile(statePath, "utf-8");
     const persisted = JSON.parse(raw);
-    expect(persisted.projectId).toBe(project.id);
-    expect(persisted.projectName).toBe("persist-test");
+    expect(persisted.workspaceId).toBe(project.id);
+    expect(persisted.workspaceName).toBe("persist-test");
   });
 
   test("getLoopState loads from disk when not in memory", async () => {
     // Write a state file directly to disk
-    const projectId = "fake-project-123";
-    const projectDir = join(tempDir, "projects", projectId);
+    const workspaceId = "fake-project-123";
+    const projectDir = join(tempDir, "workspaces", workspaceId);
     await mkdir(projectDir, { recursive: true });
 
     const fakeState: LoopState = {
-      projectId,
-      projectName: "fake-project",
+      workspaceId,
+      workspaceName: "fake-project",
       phase: "paused",
       currentIteration: 3,
       maxIterations: 10,
@@ -328,7 +328,7 @@ describe("Loop State Persistence", () => {
     await wf(join(projectDir, "loop-state.json"), JSON.stringify(fakeState), "utf-8");
 
     // getLoopState should find it on disk
-    const loaded = await getLoopState(projectId);
+    const loaded = await getLoopState(workspaceId);
     expect(loaded).not.toBeUndefined();
     expect(loaded!.phase).toBe("paused");
     expect(loaded!.currentIteration).toBe(3);

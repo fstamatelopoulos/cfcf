@@ -14,8 +14,8 @@
 #   ./scripts/setup-test-repos.sh
 #
 # After setup, register with cfcf:
-#   bun run dev:cli -- project init --repo /tmp/cfcf-calc --name calc
-#   bun run dev:cli -- project init --repo /tmp/cfcf-tracker --name tracker
+#   bun run dev:cli -- workspace init --repo /tmp/cfcf-calc --name calc
+#   bun run dev:cli -- workspace init --repo /tmp/cfcf-tracker --name tracker
 
 set -euo pipefail
 
@@ -86,8 +86,8 @@ echo "Next steps:"
 echo "  1. Make sure the cfcf server is running:"
 echo "     bun run dev:server"
 echo ""
-echo "  2. Register the projects:"
-echo "     bun run dev:cli -- project init --repo /tmp/cfcf-calc --name calc"
-echo "     bun run dev:cli -- project init --repo /tmp/cfcf-tracker --name tracker"
+echo "  2. Register the workspaces:"
+echo "     bun run dev:cli -- workspace init --repo /tmp/cfcf-calc --name calc"
+echo "     bun run dev:cli -- workspace init --repo /tmp/cfcf-tracker --name tracker"
 echo ""
 echo "  3. Open the web UI at http://localhost:7233"

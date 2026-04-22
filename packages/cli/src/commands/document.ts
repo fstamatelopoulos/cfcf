@@ -1,5 +1,5 @@
 /**
- * Document command: run the Documenter agent to produce polished project documentation.
+ * Document command: run the Documenter agent to produce polished workspace documentation.
  *
  * User-invoked, repeatable. Also runs automatically post-SUCCESS in the loop.
  */
@@ -9,15 +9,15 @@ import { isServerReachable, post, get } from "../client.js";
 import { formatElapsed } from "../format.js";
 
 interface DocumentStartResponse {
-  projectId: string;
+  workspaceId: string;
   status: string;
   logFile: string;
   message: string;
 }
 
 interface DocumentStatusResponse {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -29,21 +29,21 @@ interface DocumentStatusResponse {
 export function registerDocumentCommand(program: Command): void {
   program
     .command("document")
-    .description("Generate polished project documentation (runs the Documenter agent)")
-    .requiredOption("--project <name>", "Project name or ID")
+    .description("Generate polished workspace documentation (runs the Documenter agent)")
+    .requiredOption("--workspace <name>", "Workspace name or ID")
     .action(async (opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
         process.exit(1);
       }
 
-      console.log(`Project:  ${opts.project}`);
-      console.log(`Mode:     Documenter (final documentation)`);
+      console.log(`Workspace: ${opts.workspace}`);
+      console.log(`Mode:      Documenter (final documentation)`);
       console.log();
 
       // Start the documenter
       const startRes = await post<DocumentStartResponse>(
-        `/api/projects/${encodeURIComponent(opts.project)}/document`,
+        `/api/workspaces/${encodeURIComponent(opts.workspace)}/document`,
       );
 
       if (!startRes.ok) {
@@ -57,13 +57,13 @@ export function registerDocumentCommand(program: Command): void {
       console.log();
 
       // Poll for status with elapsed time
-      const projectParam = encodeURIComponent(opts.project);
+      const workspaceParam = encodeURIComponent(opts.workspace);
       let lastStatus = "";
       let statusStartTime = Date.now();
 
       while (true) {
         const statusRes = await get<DocumentStatusResponse>(
-          `/api/projects/${projectParam}/document/status`,
+          `/api/workspaces/${workspaceParam}/document/status`,
         );
 
         if (!statusRes.ok) {
@@ -108,11 +108,11 @@ function printDocumentResult(r: DocumentStatusResponse): void {
     console.log("  docs/architecture.md   -- system architecture");
     console.log("  docs/api-reference.md  -- API documentation (if applicable)");
     console.log("  docs/setup-guide.md    -- setup and usage guide");
-    console.log("  docs/README.md         -- project overview");
+    console.log("  docs/README.md         -- workspace overview");
     console.log();
   }
 
   console.log("What to do next:");
   console.log(`  Review docs:  ls docs/`);
-  console.log(`  Re-generate:  cfcf document --project ${r.projectName}`);
+  console.log(`  Re-generate:  cfcf document --workspace ${r.workspaceName}`);
 }

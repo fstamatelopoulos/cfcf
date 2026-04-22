@@ -50,8 +50,8 @@ function makeTestEvent(type: "loop.paused" | "loop.completed" | "agent.failed" =
     type,
     title: "Test",
     message: "Test message",
-    projectId: "p1",
-    projectName: "test-project",
+    workspaceId: "p1",
+    workspaceName: "test-project",
   });
 }
 
@@ -170,13 +170,13 @@ describe("notification dispatcher", () => {
       type: "loop.completed",
       title: "Done",
       message: "All done",
-      projectId: "abc",
-      projectName: "xyz",
+      workspaceId: "abc",
+      workspaceName: "xyz",
       details: { outcome: "success" },
     });
     expect(event.type).toBe("loop.completed");
-    expect(event.project.id).toBe("abc");
-    expect(event.project.name).toBe("xyz");
+    expect(event.workspace.id).toBe("abc");
+    expect(event.workspace.name).toBe("xyz");
     expect(event.details?.outcome).toBe("success");
     expect(typeof event.timestamp).toBe("string");
     expect(new Date(event.timestamp).getTime()).toBeGreaterThan(0);

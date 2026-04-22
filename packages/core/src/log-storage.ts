@@ -2,12 +2,12 @@
  * Log storage for cfcf.
  *
  * Agent stdout/stderr logs are stored outside the repo (too large) under:
- *   ~/.cfcf/logs/<project-id>/
+ *   ~/.cfcf/logs/<workspace-id>/
  *
  * Naming conventions:
  *   - Dev/judge logs:      iteration-NNN-dev.log, iteration-NNN-judge.log
- *   - Architect runs:      architect-NNN.log     (sequence-numbered per project)
- *   - Documenter runs:     documenter-NNN.log    (sequence-numbered per project)
+ *   - Architect runs:      architect-NNN.log     (sequence-numbered per workspace)
+ *   - Documenter runs:     documenter-NNN.log    (sequence-numbered per workspace)
  *
  * Each architect/documenter invocation gets a new sequence number so history
  * is preserved across re-runs.
@@ -20,22 +20,22 @@ import { getLogsDir } from "./constants.js";
 export type AgentRole = "dev" | "judge" | "architect" | "documenter" | "reflection";
 
 /**
- * Get the log directory for a project.
+ * Get the log directory for a workspace.
  */
-export function getProjectLogDir(projectId: string): string {
-  return join(getLogsDir(), projectId);
+export function getWorkspaceLogDir(workspaceId: string): string {
+  return join(getLogsDir(), workspaceId);
 }
 
 /**
  * Get the log file path for a dev or judge invocation within an iteration.
  */
 export function getIterationLogPath(
-  projectId: string,
+  workspaceId: string,
   iteration: number,
   role: "dev" | "judge",
 ): string {
   const iterStr = String(iteration).padStart(3, "0");
-  return join(getProjectLogDir(projectId), `iteration-${iterStr}-${role}.log`);
+  return join(getWorkspaceLogDir(workspaceId), `iteration-${iterStr}-${role}.log`);
 }
 
 /**
@@ -43,24 +43,24 @@ export function getIterationLogPath(
  * Each invocation gets its own sequence number.
  */
 export function getAgentRunLogPath(
-  projectId: string,
+  workspaceId: string,
   role: "architect" | "documenter" | "reflection",
   sequence: number,
 ): string {
   const seqStr = String(sequence).padStart(3, "0");
-  return join(getProjectLogDir(projectId), `${role}-${seqStr}.log`);
+  return join(getWorkspaceLogDir(workspaceId), `${role}-${seqStr}.log`);
 }
 
 /**
  * Find the next available sequence number for architect or documenter logs.
- * Scans the project log directory and returns max existing + 1 (or 1 if none exist).
+ * Scans the workspace log directory and returns max existing + 1 (or 1 if none exist).
  */
 export async function nextAgentRunSequence(
-  projectId: string,
+  workspaceId: string,
   role: "architect" | "documenter" | "reflection",
 ): Promise<number> {
   try {
-    const dir = getProjectLogDir(projectId);
+    const dir = getWorkspaceLogDir(workspaceId);
     const entries = await readdir(dir);
     const prefix = `${role}-`;
     let max = 0;
@@ -77,10 +77,10 @@ export async function nextAgentRunSequence(
 }
 
 /**
- * Ensure the log directory exists for a project.
+ * Ensure the log directory exists for a workspace.
  */
-export async function ensureProjectLogDir(projectId: string): Promise<string> {
-  const dir = getProjectLogDir(projectId);
+export async function ensureWorkspaceLogDir(workspaceId: string): Promise<string> {
+  const dir = getWorkspaceLogDir(workspaceId);
   await mkdir(dir, { recursive: true });
   return dir;
 }
@@ -90,7 +90,7 @@ export async function ensureProjectLogDir(projectId: string): Promise<string> {
  * Returns null if not found or if the filename is unsafe.
  */
 export async function readLogByFilename(
-  projectId: string,
+  workspaceId: string,
   filename: string,
 ): Promise<string | null> {
   // Safety: disallow path traversal
@@ -98,7 +98,7 @@ export async function readLogByFilename(
     return null;
   }
   try {
-    const path = join(getProjectLogDir(projectId), filename);
+    const path = join(getWorkspaceLogDir(workspaceId), filename);
     return await readFile(path, "utf-8");
   } catch {
     return null;
@@ -110,23 +110,23 @@ export async function readLogByFilename(
  * Returns null if the filename is unsafe.
  */
 export function getLogPathByFilename(
-  projectId: string,
+  workspaceId: string,
   filename: string,
 ): string | null {
   if (filename.includes("/") || filename.includes("..") || !filename.endsWith(".log")) {
     return null;
   }
-  return join(getProjectLogDir(projectId), filename);
+  return join(getWorkspaceLogDir(workspaceId), filename);
 }
 
 /**
- * List all log files for a project.
+ * List all log files for a workspace.
  */
-export async function listProjectLogs(
-  projectId: string,
+export async function listWorkspaceLogs(
+  workspaceId: string,
 ): Promise<string[]> {
   try {
-    const dir = getProjectLogDir(projectId);
+    const dir = getWorkspaceLogDir(workspaceId);
     const entries = await readdir(dir);
     return entries.filter((e) => e.endsWith(".log")).sort();
   } catch {

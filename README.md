@@ -11,8 +11,8 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 Early development. Iteration 5 largely complete; iteration 6 on deck.
 
 - **Iteration 3 (v0.3.0, shipped)** — MVP: iteration loop with dev + judge agents, Solution Architect review, Documenter, pause/resume/stop, loop state persistence.
-- **Iteration 4 (v0.4.0, shipped)** — React web GUI, unified agent-run state machine, project history tracking, graceful shutdown, notifications, architect-review UI, live elapsed-timer, one-phase-per-iteration discipline.
-- **Iteration 5 (v0.5.0 – v0.7.6, mostly shipped)** — single-binary self-hosting (no Bun runtime needed), embedded templates + web bundle with local override layer, `cleanupMergedBranches` flag. **Tier 3 Strategic Reflection role** (item 5.6) with non-destructive plan editing, three-commit-per-iteration discipline, multi-role decision log, per-iteration changelog artifact, `cfcf reflect` CLI, architect re-review mode, sentinel-based `CLAUDE.md` / `AGENTS.md` preservation, richer web History + cross-project activity indicator. **`autoReviewSpecs` / `autoDocumenter` / `readinessGate` config keys** (item 5.1) wiring the Solution Architect as an optional pre-loop phase with a user-in-the-loop readiness gate. **Editable global-settings page** (5.9) + top-bar `Projects` / `Settings` nav + **editable per-project Config tab** (6.14, pulled forward from iter-6). Generated-copy banners protect user-owned source files from accidental edits; `iteration-handoffs/` joins `iteration-reviews/` + `reflection-reviews/` as a per-iteration audit directory so brownfield runs see their own history. Still open in iter 5: `5.5` installer, `5.7` cross-project knowledge, `5.8` user manual. Design: [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md).
+- **Iteration 4 (v0.4.0, shipped)** — React web GUI, unified agent-run state machine, workspace history tracking, graceful shutdown, notifications, architect-review UI, live elapsed-timer, one-phase-per-iteration discipline.
+- **Iteration 5 (v0.5.0 – v0.8.0, mostly shipped)** — single-binary self-hosting (no Bun runtime needed), embedded templates + web bundle with local override layer, `cleanupMergedBranches` flag. **Tier 3 Strategic Reflection role** (item 5.6) with non-destructive plan editing, three-commit-per-iteration discipline, multi-role decision log, per-iteration changelog artifact, `cfcf reflect` CLI, architect re-review mode, sentinel-based `CLAUDE.md` / `AGENTS.md` preservation, richer web History + cross-workspace activity indicator. **`autoReviewSpecs` / `autoDocumenter` / `readinessGate` config keys** (item 5.1) wiring the Solution Architect as an optional pre-loop phase with a user-in-the-loop readiness gate. **Editable global-settings page** (5.9) + top-bar `Workspaces` / `Settings` nav + **editable per-workspace Config tab** (6.14, pulled forward from iter-6). Generated-copy banners protect user-owned source files from accidental edits; `iteration-handoffs/` joins `iteration-reviews/` + `reflection-reviews/` as a per-iteration audit directory so brownfield runs see their own history. **Workspace rename** (item 5.10, v0.8.0): cf²'s `project` noun renamed to `workspace` across CLI + API + types + web UI, so Cerefox's `Project` semantics stay free for the upcoming Clio memory layer. Still open in iter 5: `5.5` installer, `5.7` Clio, `5.8` user manual. Design: [`docs/research/reflection-role-and-iterative-planning.md`](docs/research/reflection-role-and-iterative-planning.md).
 
 cfcf can be driven from the CLI or from the web GUI served by the same Hono server. See `docs/plan.md` for the full roadmap and current status table.
 
@@ -75,17 +75,17 @@ bun run dev:cli -- init
 # Start the server
 bun run dev:cli -- server start
 
-# Create a project linked to a git repo
-bun run dev:cli -- project init --repo /path/to/your/project --name my-app
+# Create a workspace linked to a git repo
+bun run dev:cli -- workspace init --repo /path/to/your/project --name my-app
 
 # Edit the problem definition
 # (cfcf scaffolds problem-pack/problem.md and problem-pack/success.md for you)
 
 # Launch the AI agent against your problem
-bun run dev:cli -- run --project my-app
+bun run dev:cli -- run --workspace my-app
 
 # Or run a manual command (for testing)
-bun run dev:cli -- run --project my-app -- npm test
+bun run dev:cli -- run --workspace my-app -- npm test
 ```
 
 ## Development
@@ -157,14 +157,14 @@ User (CLI / Web GUI)
     v
 cfcf Server (Hono on Bun, serves API + static web GUI)
     |
-    +-- Project Manager           (config, state)
+    +-- Workspace Manager         (config, state)
     +-- Iteration Controller      (loop: prepare -> dev -> judge -> reflect? -> decide -> documenting)
     +-- Runners                   (architect [first-run or re-review], judge, reflection, documenter)
     +-- Process Manager           (spawn agents, capture logs)
     +-- Active Processes Registry (track + kill on shutdown)
     +-- Context Assembler         (merge sentinel block into CLAUDE.md/AGENTS.md, build cfcf-docs/)
     +-- Plan Validator            (non-destructive rewrite check for architect + reflection)
-    +-- Project History           (persistent audit trail: review / iteration / reflection / document)
+    +-- Workspace History         (persistent audit trail: review / iteration / reflection / document)
     +-- Notifications Dispatcher  (terminal bell / macOS / Linux / log)
     +-- Memory Layer              (file-based, in repo + ~/.cfcf/ for logs)
     |
@@ -176,7 +176,7 @@ Agent Processes (Claude Code, Codex, etc.)
 ## How It Works
 
 1. You define your problem in Markdown files (problem.md, success.md, optional constraints / hints / context).
-2. (Recommended) The **Solution Architect** reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.). On re-review (a project with prior iterations) the architect appends new iterations non-destructively when new requirements appear.
+2. (Recommended) The **Solution Architect** reviews the Problem Pack and produces an implementation plan with **phases mapped to concrete iterations** (`## Iteration 1 -- Foundation`, etc.). On re-review (a workspace with prior iterations) the architect appends new iterations non-destructively when new requirements appear.
 3. cfcf creates a feature branch and assembles context for the AI agent. The cfcf-owned block is written between sentinel markers in `CLAUDE.md` (Claude Code) or `AGENTS.md` (Codex); any user-authored content outside the markers is preserved across iterations.
 4. The **dev agent** reads context and executes **one phase per iteration**: picks up the next pending chunk from `cfcf-docs/plan.md`, does just that, marks it `[x]` with a brief note, writes a per-iteration changelog under `cfcf-docs/iteration-logs/`, and exits.
 5. The **judge agent** reviews the iteration and produces structured feedback (determination, quality score, tests, concerns, reflection opt-out).

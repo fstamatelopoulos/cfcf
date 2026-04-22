@@ -10,7 +10,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 
 - **Monorepo** with Bun workspaces: `packages/core`, `packages/server`, `packages/cli`, `packages/web`
 - **TypeScript** throughout, **Bun** as runtime and toolchain
-- **Hono** HTTP server as the backbone (manages projects, iterations, agent processes); React+Vite web GUI served from the same process (embedded into the compiled binary at build time)
+- **Hono** HTTP server as the backbone (manages workspaces, iterations, agent processes); React+Vite web GUI served from the same process (embedded into the compiled binary at build time)
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
@@ -22,7 +22,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 
 1. **Deterministic control, non-deterministic workers.** The orchestration loop is predictable code. LLMs do creative work inside agent processes. cfcf does plumbing.
 2. **Agent-agnostic.** Two adapters today (Claude Code, Codex). The `AgentAdapter` interface in `packages/core/src/types.ts` is the contract. No agent-specific code in core.
-3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<project>/` (too large, potentially contain PII/secrets). Agent-authored per-iteration changelogs live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` -- these are small, human-curated, safe to commit. `iteration-history.md` is rebuilt from those logs each iteration so it survives server restarts. Four per-iteration archive directories under `cfcf-docs/` preserve the full audit trail: `iteration-logs/` (backward-looking dev changelogs), `iteration-handoffs/` (forward-looking dev notes, v0.7.6), `iteration-reviews/` (judge verdicts), `reflection-reviews/` (reflection analyses). No external database.
+3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<workspace>/` (too large, potentially contain PII/secrets). Agent-authored per-iteration changelogs live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` -- these are small, human-curated, safe to commit. `iteration-history.md` is rebuilt from those logs each iteration so it survives server restarts. Four per-iteration archive directories under `cfcf-docs/` preserve the full audit trail: `iteration-logs/` (backward-looking dev changelogs), `iteration-handoffs/` (forward-looking dev notes, v0.7.6), `iteration-reviews/` (judge verdicts), `reflection-reviews/` (reflection analyses). No external database.
 4. **Signal files for machine-readable communication.** `cfcf-iteration-signals.json`, `cfcf-judge-signals.json`, `cfcf-architect-signals.json`, `cfcf-reflection-signals.json` complement human-readable Markdown docs.
 5. **Non-destructive plan rewrites.** Both the architect (re-review mode) and the reflection agent may rewrite `cfcf-docs/plan.md`, but cfcf validates each rewrite: completed items (`[x]`) and iteration-header numbers must survive. Destructive rewrites are auto-reverted to the pre-spawn snapshot. Logic lives in `packages/core/src/plan-validation.ts`.
 6. **Sentinel-based user-content preservation.** cfcf regenerates iteration-specific instructions for the dev agent every iteration, but only inside the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` block in `CLAUDE.md` / `AGENTS.md`. User content outside the markers is preserved byte-for-byte across iterations.
@@ -49,7 +49,7 @@ packages/
     types.ts             # All type definitions (AgentAdapter, signals, config, etc.)
     constants.ts         # Ports, paths, defaults
     config.ts            # Config read/write/validation
-    projects.ts          # Project CRUD, iteration counter
+    workspaces.ts        # Workspace CRUD, iteration counter
     process-manager.ts   # Spawn agents, stream logs, kill/timeout
     git-manager.ts       # Branch, commit, diff, reset, merge
     log-storage.ts       # Log file path helpers
@@ -67,7 +67,7 @@ packages/
                          #   entry for loop + async entry for `cfcf reflect`
     iteration-loop.ts    # Main iteration loop controller + decision engine
                          #   (preparing -> dev -> judging -> reflecting? -> deciding)
-    project-history.ts   # history.json: review / iteration / reflection / document events
+    workspace-history.ts # history.json: review / iteration / reflection / document events
     adapters/            # Agent adapter implementations (claude-code, codex)
     templates/           # cfcf-docs/ file templates (16 entries incl. reflection + iteration-log)
   server/src/
@@ -79,7 +79,7 @@ packages/
     commands/            # CLI command implementations
       init.ts            # First-run interactive setup (asks for all 5 roles + reflectSafeguardAfter)
       server.ts          # Server start/stop/status
-      project.ts         # Project init/list/show/delete
+      workspace.ts       # Workspace init/list/show/delete
       config.ts          # Global config show/edit
       run.ts             # Start iteration loop (agent) or single iteration (manual)
       review.ts          # Solution Architect review (cfcf review)
@@ -89,9 +89,9 @@ packages/
       reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
   web/src/
-    App.tsx              # Root router (dashboard / project / server)
-    pages/               # Dashboard, ProjectDetail, ServerInfo
-    components/          # Header, PhaseIndicator, ProjectHistory,
+    App.tsx              # Root router (dashboard / workspace / server)
+    pages/               # Dashboard, WorkspaceDetail, ServerInfo
+    components/          # Header, PhaseIndicator, WorkspaceHistory,
                          #   ArchitectReview, JudgeDetail, ReflectionDetail, …
     api.ts               # Client for all /api/* endpoints incl. /activity + /reflect
 problem-packs/           # Example Problem Pack definitions

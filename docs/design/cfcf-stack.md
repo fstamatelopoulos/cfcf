@@ -73,7 +73,7 @@ On each tagged release, CI (GitHub Actions) runs `bun build --compile --target=<
 ### Server Layer
 
 - **Framework**: Hono -- lightweight, fast, runs on Bun natively.
-- **Role**: Manages project and iteration lifecycles, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
+- **Role**: Manages workspace and iteration lifecycles, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
 - **Transport**: HTTP/SSE for streaming event output to the web GUI. WebSocket as an option for bidirectional agent communication.
 
 ### Web GUI (Iteration 4 — Available)
@@ -81,12 +81,12 @@ On each tagged release, CI (GitHub Actions) runs `bun build --compile --target=<
 A React + Vite web GUI at `packages/web`. The Vite build output (`packages/web/dist/`) is **embedded into the compiled binary at build time** via `scripts/embed-web-dist.ts` — the Hono server serves the embedded bytes directly, so a single `cfcf-binary` artifact carries both the API and the web UI with no separate asset deployment. In dev mode (`bun run dev:server`), the server falls back to reading `packages/web/dist/` from disk. The CLI remains the primary headless interface; the web GUI is for monitoring and control. Both drive the same server.
 
 Implemented (iteration 4):
-- Dashboard with project list + status badges
-- Project detail page with tabs: Status, History, Logs, Config
+- Dashboard with workspace list + status badges
+- Workspace detail page with tabs: Status, History, Logs, Config
 - Unified PhaseIndicator for loop / review / document runs
 - LoopControls with Start / Stop / Resume / Review / Document
 - Real-time log streaming via SSE (persists across tab switches)
-- Unified project history timeline (reviews + iterations + documents)
+- Unified workspace history timeline (reviews + iterations + documents)
 
 Still planned for later iterations:
 - Diff viewer per iteration
@@ -127,7 +127,7 @@ For each iteration, cfcf:
 1. Ensures the repo is on the correct cfcf git branch.
 2. Generates agent-specific instruction files (e.g., `CLAUDE.md`) from the assembled context.
 3. Writes cfcf-managed context files to the `cfcf-docs/` directory in the repo.
-4. Spawns the dev agent as a local process in the project directory.
+4. Spawns the dev agent as a local process in the workspace directory.
 5. Streams and captures all stdout/stderr.
 6. Waits for the agent process to exit.
 7. Reads the agent's output artifacts (handoff document, signal file).
@@ -217,9 +217,9 @@ Vendor AI SDKs (Anthropic, OpenAI, etc.) are dependencies of individual adapter 
 
 cfcf has a self-contained, file-based memory layer stored under `~/.cfcf/`. All iteration history, logs, judge assessments, decision logs, and cross-run knowledge are stored as structured Markdown and JSON files on the local filesystem. No external database or service is required.
 
-The memory layer is designed to be human-readable, version-controllable, and easy to back up. The user can copy the entire `~/.cfcf/` directory to preserve all project history.
+The memory layer is designed to be human-readable, version-controllable, and easy to back up. The user can copy the entire `~/.cfcf/` directory to preserve all workspace history.
 
-> **Note:** Cerefox (the OSS knowledge base) is supported as an optional external memory backend. When configured, cfcf syncs memory documents to Cerefox for semantic search across projects. This is not required -- the built-in file-based memory is fully functional on its own.
+> **Note:** Cerefox (the OSS knowledge base) is supported as an optional external memory backend. When configured, cfcf syncs memory documents to Cerefox for semantic search across workspaces. This is not required -- the built-in file-based memory is fully functional on its own.
 
 See `agent-process-and-context.md` for the full directory structure and file specifications.
 

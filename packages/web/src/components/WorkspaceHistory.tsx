@@ -48,13 +48,13 @@ function formatTime(iso: string): string {
 // Duration formatter moved to ../utils/time so PhaseIndicator's live timer
 // and this static column render identically.
 
-export function ProjectHistory({
+export function WorkspaceHistory({
   events,
-  projectId,
+  workspaceId,
   onSelectLog,
 }: {
   events: HistoryEvent[];
-  projectId: string;
+  workspaceId: string;
   onSelectLog: (target: LogTarget) => void;
 }) {
   if (events.length === 0) {
@@ -86,7 +86,7 @@ export function ProjectHistory({
         </thead>
         <tbody>
           {sorted.map((e) => (
-            <HistoryRow key={e.id} event={e} projectId={projectId} onSelectLog={onSelectLog} />
+            <HistoryRow key={e.id} event={e} workspaceId={workspaceId} onSelectLog={onSelectLog} />
           ))}
         </tbody>
       </table>
@@ -96,11 +96,11 @@ export function ProjectHistory({
 
 function HistoryRow({
   event,
-  projectId,
+  workspaceId,
   onSelectLog,
 }: {
   event: HistoryEvent;
-  projectId: string;
+  workspaceId: string;
   onSelectLog: (target: LogTarget) => void;
 }) {
   const statusColor =
@@ -232,7 +232,7 @@ function HistoryRow({
                 className="btn btn--small btn--secondary"
                 onClick={() =>
                   onSelectLog({
-                    projectId,
+                    workspaceId,
                     logFile: (event as IterationHistoryEvent).devLogFile,
                     label: `Iteration ${(event as IterationHistoryEvent).iteration} (dev)`,
                   })
@@ -244,7 +244,7 @@ function HistoryRow({
                 className="btn btn--small btn--secondary"
                 onClick={() =>
                   onSelectLog({
-                    projectId,
+                    workspaceId,
                     logFile: (event as IterationHistoryEvent).judgeLogFile,
                     label: `Iteration ${(event as IterationHistoryEvent).iteration} (judge)`,
                   })
@@ -258,7 +258,7 @@ function HistoryRow({
               className="btn btn--small btn--secondary"
               onClick={() =>
                 onSelectLog({
-                  projectId,
+                  workspaceId,
                   logFile: event.logFile,
                   label: `${typeLabel} (${event.agent})`,
                 })

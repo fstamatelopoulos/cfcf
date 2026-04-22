@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import {
-  fetchProject,
+  fetchWorkspace,
   fetchLoopStatus,
   fetchHistory,
   fetchReviewStatus,
@@ -15,10 +15,10 @@ import { LogViewer, type LogTarget } from "../components/LogViewer";
 import { ConfigDisplay } from "../components/ConfigDisplay";
 import { JudgeAssessment } from "../components/JudgeAssessment";
 import { ArchitectReview } from "../components/ArchitectReview";
-import { ProjectHistory } from "../components/ProjectHistory";
+import { WorkspaceHistory } from "../components/WorkspaceHistory";
 import { TabBar } from "../components/TabBar";
 import type {
-  ProjectConfig,
+  WorkspaceConfig,
   LoopState,
   HistoryEvent,
   IterationHistoryEvent,
@@ -37,10 +37,10 @@ const LOOP_ACTIVE_PHASES = ["pre_loop_reviewing", "preparing", "dev_executing", 
 const REVIEW_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
 const DOCUMENT_ACTIVE_STATUSES = ["preparing", "executing"];
 
-export function ProjectDetail({ projectId }: { projectId: string }) {
+export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const [activeTab, setActiveTab] = useState("status");
-  const [project, setProject] = useState<ProjectConfig | null>(null);
-  const [projectError, setProjectError] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<WorkspaceConfig | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [loopState, setLoopState] = useState<LoopState | null>(null);
   const [reviewState, setReviewState] = useState<ReviewState | null>(null);
   const [documentState, setDocumentState] = useState<DocumentState | null>(null);
@@ -49,55 +49,55 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   // --- Fetchers ---
 
-  const refreshProject = useCallback(async () => {
+  const refreshWorkspace = useCallback(async () => {
     try {
-      const p = await fetchProject(projectId);
-      setProject(p);
-      setProjectError(null);
+      const w = await fetchWorkspace(workspaceId);
+      setWorkspace(w);
+      setWorkspaceError(null);
     } catch (err) {
-      setProjectError(err instanceof Error ? err.message : String(err));
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
     }
-  }, [projectId]);
+  }, [workspaceId]);
 
   const refreshLoop = useCallback(async () => {
     try {
-      const state = await fetchLoopStatus(projectId);
+      const state = await fetchLoopStatus(workspaceId);
       setLoopState(state);
     } catch {
       setLoopState(null);
     }
-  }, [projectId]);
+  }, [workspaceId]);
 
   const refreshReview = useCallback(async () => {
     try {
-      const state = await fetchReviewStatus(projectId);
+      const state = await fetchReviewStatus(workspaceId);
       setReviewState(state);
     } catch {
       setReviewState(null);
     }
-  }, [projectId]);
+  }, [workspaceId]);
 
   const refreshDocument = useCallback(async () => {
     try {
-      const state = await fetchDocumentStatus(projectId);
+      const state = await fetchDocumentStatus(workspaceId);
       setDocumentState(state);
     } catch {
       setDocumentState(null);
     }
-  }, [projectId]);
+  }, [workspaceId]);
 
   const refreshHistory = useCallback(async () => {
     try {
-      const events = await fetchHistory(projectId);
+      const events = await fetchHistory(workspaceId);
       setHistory(events);
     } catch {
       setHistory([]);
     }
-  }, [projectId]);
+  }, [workspaceId]);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshProject(), refreshLoop(), refreshReview(), refreshDocument(), refreshHistory()]);
-  }, [refreshProject, refreshLoop, refreshReview, refreshDocument, refreshHistory]);
+    await Promise.all([refreshWorkspace(), refreshLoop(), refreshReview(), refreshDocument(), refreshHistory()]);
+  }, [refreshWorkspace, refreshLoop, refreshReview, refreshDocument, refreshHistory]);
 
   // --- Derived state ---
 
@@ -137,7 +137,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     // Auto-switch to Logs tab for new agent starts
     if (action === "review" || action === "start" || action === "resume" || action === "document") {
       setTimeout(async () => {
-        const events = await fetchHistory(projectId);
+        const events = await fetchHistory(workspaceId);
         setHistory(events);
         const targetType =
           action === "review" ? "review" : action === "document" ? "document" : "iteration";
@@ -154,17 +154,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 : `Document (${newest.agent})`;
           const logFile =
             newest.type === "iteration" ? (newest as IterationHistoryEvent).devLogFile : newest.logFile;
-          setLogTarget({ projectId, logFile, label });
+          setLogTarget({ workspaceId, logFile, label });
           setActiveTab("logs");
         }
       }, 500);
     }
   };
 
-  if (projectError && !project) {
-    return <div className="project-detail__error">Project not found: {projectError}</div>;
+  if (workspaceError && !workspace) {
+    return <div className="project-detail__error">Workspace not found: {workspaceError}</div>;
   }
-  if (!project) {
+  if (!workspace) {
     return <div className="project-detail__loading">Loading...</div>;
   }
 
@@ -177,26 +177,26 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     ? "running"
     : isDocumentActive
       ? "running"
-      : currentPhase || project.status;
+      : currentPhase || workspace.status;
 
   return (
     <div className="project-detail">
       <div className="project-detail__header">
         <button className="btn btn--link" onClick={() => navigateTo("/")}>
-          &larr; Projects
+          &larr; Workspaces
         </button>
-        <h2>{project.name}</h2>
+        <h2>{workspace.name}</h2>
         <StatusBadge status={headerBadgeStatus} />
         {isReviewActive && <span className="project-detail__active-tag">review running</span>}
         {isDocumentActive && <span className="project-detail__active-tag">document running</span>}
       </div>
 
       <LoopControls
-        projectId={project.id}
+        workspaceId={workspace.id}
         phase={currentPhase}
         activeAgent={activeAgent}
         onAction={handleAgentAction}
-        autoReviewSpecs={project.autoReviewSpecs}
+        autoReviewSpecs={workspace.autoReviewSpecs}
       />
 
       {/* Phase indicator: shows for whichever agent is active.
@@ -221,8 +221,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           completedAt={
             loopState.iterations[loopState.iterations.length - 1]?.completedAt
           }
-          autoReviewSpecs={project.autoReviewSpecs}
-          autoDocumenter={project.autoDocumenter}
+          autoReviewSpecs={workspace.autoReviewSpecs}
+          autoDocumenter={workspace.autoDocumenter}
         />
       )}
       {isReviewActive && reviewState && (
@@ -246,7 +246,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
       {isPaused && (
         <FeedbackForm
-          projectId={project.id}
+          workspaceId={workspace.id}
           questions={loopState?.pendingQuestions}
           onResume={() => handleAgentAction("resume")}
         />
@@ -291,7 +291,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 <h3>Review in progress</h3>
                 <div className="status-panel__info">
                   <span>Started: {new Date(reviewState.startedAt).toLocaleTimeString()}</span>
-                  <span>Agent: {reviewState.projectName ? "" : ""}{project.architectAgent.adapter}</span>
+                  <span>Agent: {workspace.architectAgent.adapter}</span>
                 </div>
               </div>
             )}
@@ -300,7 +300,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 <h3>Document in progress</h3>
                 <div className="status-panel__info">
                   <span>Started: {new Date(documentState.startedAt).toLocaleTimeString()}</span>
-                  <span>Agent: {project.documenterAgent.adapter}</span>
+                  <span>Agent: {workspace.documenterAgent.adapter}</span>
                 </div>
               </div>
             )}
@@ -351,9 +351,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
 
         <div style={{ display: activeTab === "history" ? "block" : "none" }}>
-          <ProjectHistory
+          <WorkspaceHistory
             events={history}
-            projectId={project.id}
+            workspaceId={workspace.id}
             onSelectLog={(target) => {
               setLogTarget(target);
               setActiveTab("logs");
@@ -366,7 +366,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
 
         <div style={{ display: activeTab === "config" ? "block" : "none" }}>
-          <ConfigDisplay project={project} onSaved={(p) => setProject(p)} />
+          <ConfigDisplay workspace={workspace} onSaved={(w) => setWorkspace(w)} />
         </div>
       </div>
     </div>

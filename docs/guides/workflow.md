@@ -85,7 +85,7 @@ cfcf server status
 cfcf server start
 ```
 
-The server runs in the background. You can stop it anytime with `cfcf server stop`. The web GUI is reachable at `http://localhost:7233`. The top bar has **Projects** + **Settings** links. The Settings page (`/#/server`) is a full editor for the global config -- same keys as `cfcf config edit` on the CLI, same endpoint (`PUT /api/config`). Per-project overrides live in each project's Config tab (read-only today; becomes editable in plan item 6.14).
+The server runs in the background. You can stop it anytime with `cfcf server stop`. The web GUI is reachable at `http://localhost:7233`. The top bar has **Workspaces** + **Settings** links. The Settings page (`/#/server`) is a full editor for the global config -- same keys as `cfcf config edit` on the CLI, same endpoint (`PUT /api/config`). Per-workspace overrides live in each workspace's Config tab.
 
 ---
 
@@ -130,7 +130,7 @@ cfcf will **preserve any existing `CLAUDE.md` / `AGENTS.md`** in the repo. Itera
 ### 3b. Register with cf²
 
 ```bash
-cfcf project init --repo /path/to/my-project --name my-project
+cfcf workspace init --repo /path/to/my-project --name my-project
 ```
 
 This creates:
@@ -237,7 +237,7 @@ Empty project. No existing code.
 Before launching the development process, you can ask cf²'s **Solution Architect** agent to review your Problem Pack. This is an advisory tool -- not a gate or requirement. You can skip it entirely, or iterate as many times as you want.
 
 ```bash
-cfcf review --project my-project
+cfcf review --workspace my-project
 ```
 
 The Solution Architect reads your Problem Pack and produces:
@@ -262,7 +262,7 @@ This means you can safely re-run `cfcf review` mid-project or after a finished l
 
 ```
   ┌──────────────────────────────────────────────────┐
-  │  1. Run: cfcf review --project my-project        │
+  │  1. Run: cfcf review --workspace my-project        │
   │  2. Read: cfcf-docs/architect-review.md          │
   │  3. The architect points out gaps/suggestions     │
   │  4. User updates problem-pack/ files              │
@@ -281,7 +281,7 @@ When you feel the Problem Pack adequately describes the problem, launch the dark
 
 ```bash
 # Launch cf² -- it takes over from here
-cfcf run --project my-project
+cfcf run --workspace my-project
 ```
 
 **This is the last user action until cf² needs input.** From this point, cf² manages everything autonomously.
@@ -381,7 +381,7 @@ This deserves its own walkthrough -- it's a tight user-in-the-loop pattern for g
 
 **History-tab label.** Pre-loop reviews appear in the History tab as **"Pre-loop review"** (loop-triggered). Manual `cfcf review` runs stay labeled **"Review"**. Both share the same `ArchitectReview` expanded-row detail -- only the top-line label distinguishes them.
 
-**Stopping vs resuming.** If the pre-loop gate never accepts and you want to bail out entirely (rewrite the problem pack wholesale, change strategy), `cfcf stop --project <name>` ends the loop in a clean terminal state. The pre-loop review commit on main is preserved (useful for audit); you can start a fresh loop later.
+**Stopping vs resuming.** If the pre-loop gate never accepts and you want to bail out entirely (rewrite the problem pack wholesale, change strategy), `cfcf stop --workspace <name>` ends the loop in a clean terminal state. The pre-loop review commit on main is preserved (useful for audit); you can start a fresh loop later.
 
 ### Behaviour flags: `autoReviewSpecs`, `autoDocumenter`, `readinessGate` (item 5.1)
 
@@ -403,7 +403,7 @@ Per-run CLI overrides on `cfcf run`:
 
 Example: "try once without the pre-loop review even though the project default has it on":
 ```bash
-cfcf run --project my-project --no-auto-review
+cfcf run --workspace my-project --no-auto-review
 ```
 
 Each iteration produces **up to three separate commits** (dev / judge / reflect) on the feature branch, so `git log --oneline cfcf/iteration-N` reads as a clean per-iteration story.
@@ -480,7 +480,7 @@ Last reflect: stable · "Auth layer is coming together cleanly."
 
 ```bash
 # Quick status
-cfcf status --project my-project
+cfcf status --workspace my-project
 
 # Watch the current iteration's live log
 tail -f ~/.cfcf/logs/<project-id>/iteration-NNN-dev.log
@@ -529,11 +529,11 @@ cat cfcf-docs/reflection-analysis.md
 cat cfcf-docs/plan.md
 
 # Resume (optionally with feedback for the next iteration)
-cfcf resume --project my-project
-cfcf resume --project my-project --feedback "Focus on error handling"
+cfcf resume --workspace my-project
+cfcf resume --workspace my-project --feedback "Focus on error handling"
 
 # Stop the loop
-cfcf stop --project my-project
+cfcf stop --workspace my-project
 ```
 
 ---
@@ -543,8 +543,8 @@ cfcf stop --project my-project
 Outside the iteration loop, you can invoke the Reflection role manually:
 
 ```bash
-cfcf reflect --project my-project
-cfcf reflect --project my-project --prompt "focus on the auth-layer drift"
+cfcf reflect --workspace my-project
+cfcf reflect --workspace my-project --prompt "focus on the auth-layer drift"
 ```
 
 This is useful when you:
@@ -574,7 +574,7 @@ These build on the doc stubs created by the architect and maintained by the dev 
 You can also run the documenter manually at any time:
 
 ```bash
-cfcf document --project my-project
+cfcf document --workspace my-project
 ```
 
 This is useful for regenerating docs after manual code changes, or if you want to run it on a project that didn't go through the full loop.
@@ -629,12 +629,12 @@ cf² is designed for the "add more work later" case. The flow for extending a su
 
 ```
 1. Edit problem-pack/problem.md + success.md with the new requirements.
-2. cfcf review --project my-project
+2. cfcf review --workspace my-project
    → architect enters re-review mode, reads the full history, appends
      new pending iterations to plan.md (or says "plan is still valid")
-3. (Optional) cfcf reflect --project my-project
+3. (Optional) cfcf reflect --workspace my-project
    → ad-hoc reflection confirms health + notes any strategic concerns
-4. cfcf run --project my-project
+4. cfcf run --workspace my-project
    → loop picks up the next pending iteration in the appended plan
 ```
 
@@ -649,7 +649,7 @@ Because the non-destructive rules are applied to both architect re-review *and* 
 | Start the server | Before any cf² commands | Yes (once) |
 | Run `cfcf init` | First use only | Yes (once) |
 | Create/provide the git repo | Before project init | Yes |
-| Run `cfcf project init` | Once per project | Yes |
+| Run `cfcf workspace init` | Once per project | Yes |
 | Write `problem.md` | Before launching iterations | **Yes -- critical** |
 | Write `success.md` | Before launching iterations | **Yes -- critical** |
 | Write `constraints.md` | Before launching iterations | Optional |
@@ -668,7 +668,7 @@ Because the non-destructive rules are applied to both architect re-review *and* 
 
 | Task | When |
 |------|------|
-| Scaffold `problem-pack/` templates | On `cfcf project init` |
+| Scaffold `problem-pack/` templates | On `cfcf workspace init` |
 | Solution Architect review (first-run or re-review) | On `cfcf review` (user-triggered, advisory) |
 | Assemble context (sentinel-merged CLAUDE.md/AGENTS.md + cfcf-docs/) | Before each iteration |
 | Preserve user content in CLAUDE.md/AGENTS.md outside sentinel markers | Every iteration |
@@ -701,41 +701,41 @@ cfcf server start                                  # Start server
 cfcf init                                          # First-run config (five agent roles)
 
 # Per-project setup
-cfcf project init --repo <path> --name <name>      # Register project
+cfcf workspace init --repo <path> --name <name>      # Register project
 # Edit problem-pack/problem.md and success.md      # USER WRITES THESE
 
 # Solution Architect review (optional, recommended)
-cfcf review --project <name>                       # Get feedback + plan outline
+cfcf review --workspace <name>                       # Get feedback + plan outline
                                                     # (re-review-aware on existing projects)
 # Read cfcf-docs/architect-review.md               # Review suggestions
 # Refine problem-pack/ files, repeat if desired
 
 # Launch the dark factory
-cfcf run --project <name>                          # cf² takes over
+cfcf run --workspace <name>                          # cf² takes over
 
 # Monitor (while running)
-cfcf status --project <name>                       # Current state
+cfcf status --workspace <name>                       # Current state
 tail -f ~/.cfcf/logs/<id>/iteration-NNN-dev.log    # Live dev output
 tail -f ~/.cfcf/logs/<id>/reflection-NNN.log      # Live reflection output
 
 # At pause points
-cfcf resume --project <name>                       # Continue after review
-cfcf resume --project <name> --feedback "..."      # Continue with direction
-cfcf stop --project <name>                         # Stop the process
+cfcf resume --workspace <name>                       # Continue after review
+cfcf resume --workspace <name> --feedback "..."      # Continue with direction
+cfcf stop --workspace <name>                         # Stop the process
 
 # Strategic health-check (ad-hoc, no iteration)
-cfcf reflect --project <name>
-cfcf reflect --project <name> --prompt "focus on X"
+cfcf reflect --workspace <name>
+cfcf reflect --workspace <name> --prompt "focus on X"
 
 # Documentation (on-demand, also runs auto post-SUCCESS)
-cfcf document --project <name>                     # Generate polished docs
+cfcf document --workspace <name>                     # Generate polished docs
 
 # Manual mode (testing)
-cfcf run --project <name> -- <cmd>                 # Run a specific command
+cfcf run --workspace <name> -- <cmd>                 # Run a specific command
 
 # Management
-cfcf project show <name>                           # Project config
-cfcf project list                                  # All projects
+cfcf workspace show <name>                           # Project config
+cfcf workspace list                                  # All projects
 cfcf config show                                   # Global config
 cfcf server stop                                   # Stop server
 ```

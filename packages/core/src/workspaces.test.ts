@@ -3,15 +3,15 @@ import { join } from "path";
 import { mkdtemp, rm, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import {
-  createProject,
-  getProject,
-  listProjects,
-  findProjectByName,
-  updateProject,
-  deleteProject,
-  validateProjectRepo,
+  createWorkspace,
+  getWorkspace,
+  listWorkspaces,
+  findWorkspaceByName,
+  updateWorkspace,
+  deleteWorkspace,
+  validateWorkspaceRepo,
   nextIteration,
-} from "./projects.js";
+} from "./workspaces.js";
 
 describe("projects", () => {
   let tempDir: string;
@@ -32,9 +32,9 @@ describe("projects", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  describe("createProject", () => {
+  describe("createWorkspace", () => {
     it("creates a project with defaults", async () => {
-      const project = await createProject({
+      const project = await createWorkspace({
         name: "test-project",
         repoPath: repoDir,
       });
@@ -49,7 +49,7 @@ describe("projects", () => {
     });
 
     it("creates a project with custom config", async () => {
-      const project = await createProject({
+      const project = await createWorkspace({
         name: "custom",
         repoPath: repoDir,
         devAgent: { adapter: "codex" },
@@ -61,7 +61,7 @@ describe("projects", () => {
     });
 
     it("defaults cleanupMergedBranches to false (item 5.2)", async () => {
-      const project = await createProject({
+      const project = await createWorkspace({
         name: "cleanup-default",
         repoPath: repoDir,
       });
@@ -70,92 +70,92 @@ describe("projects", () => {
     });
   });
 
-  describe("getProject", () => {
+  describe("getWorkspace", () => {
     it("returns null for non-existent project", async () => {
-      expect(await getProject("nonexistent")).toBeNull();
+      expect(await getWorkspace("nonexistent")).toBeNull();
     });
 
     it("returns the project after creation", async () => {
-      const created = await createProject({ name: "my-app", repoPath: repoDir });
-      const fetched = await getProject(created.id);
+      const created = await createWorkspace({ name: "my-app", repoPath: repoDir });
+      const fetched = await getWorkspace(created.id);
       expect(fetched).not.toBeNull();
       expect(fetched!.name).toBe("my-app");
     });
   });
 
-  describe("listProjects", () => {
+  describe("listWorkspaces", () => {
     it("returns empty array when no projects", async () => {
-      expect(await listProjects()).toEqual([]);
+      expect(await listWorkspaces()).toEqual([]);
     });
 
     it("returns all projects sorted by name", async () => {
-      await createProject({ name: "bravo", repoPath: repoDir });
-      await createProject({ name: "alpha", repoPath: repoDir });
+      await createWorkspace({ name: "bravo", repoPath: repoDir });
+      await createWorkspace({ name: "alpha", repoPath: repoDir });
 
-      const projects = await listProjects();
+      const projects = await listWorkspaces();
       expect(projects.length).toBe(2);
       expect(projects[0].name).toBe("alpha");
       expect(projects[1].name).toBe("bravo");
     });
   });
 
-  describe("findProjectByName", () => {
+  describe("findWorkspaceByName", () => {
     it("finds by exact name match", async () => {
-      await createProject({ name: "my-app", repoPath: repoDir });
-      const found = await findProjectByName("my-app");
+      await createWorkspace({ name: "my-app", repoPath: repoDir });
+      const found = await findWorkspaceByName("my-app");
       expect(found).not.toBeNull();
       expect(found!.name).toBe("my-app");
     });
 
     it("is case-insensitive", async () => {
-      await createProject({ name: "My-App", repoPath: repoDir });
-      const found = await findProjectByName("my-app");
+      await createWorkspace({ name: "My-App", repoPath: repoDir });
+      const found = await findWorkspaceByName("my-app");
       expect(found).not.toBeNull();
     });
 
     it("returns null when not found", async () => {
-      expect(await findProjectByName("nonexistent")).toBeNull();
+      expect(await findWorkspaceByName("nonexistent")).toBeNull();
     });
   });
 
-  describe("updateProject", () => {
+  describe("updateWorkspace", () => {
     it("updates project fields", async () => {
-      const created = await createProject({ name: "updatable", repoPath: repoDir });
-      const updated = await updateProject(created.id, { maxIterations: 20 });
+      const created = await createWorkspace({ name: "updatable", repoPath: repoDir });
+      const updated = await updateWorkspace(created.id, { maxIterations: 20 });
       expect(updated).not.toBeNull();
       expect(updated!.maxIterations).toBe(20);
       expect(updated!.name).toBe("updatable"); // unchanged
     });
 
     it("returns null for non-existent project", async () => {
-      expect(await updateProject("nonexistent", { maxIterations: 5 })).toBeNull();
+      expect(await updateWorkspace("nonexistent", { maxIterations: 5 })).toBeNull();
     });
   });
 
-  describe("deleteProject", () => {
+  describe("deleteWorkspace", () => {
     it("deletes an existing project", async () => {
-      const created = await createProject({ name: "deletable", repoPath: repoDir });
-      expect(await deleteProject(created.id)).toBe(true);
-      expect(await getProject(created.id)).toBeNull();
+      const created = await createWorkspace({ name: "deletable", repoPath: repoDir });
+      expect(await deleteWorkspace(created.id)).toBe(true);
+      expect(await getWorkspace(created.id)).toBeNull();
     });
 
     it("returns false for non-existent project", async () => {
-      expect(await deleteProject("nonexistent")).toBe(true); // rm -rf is idempotent
+      expect(await deleteWorkspace("nonexistent")).toBe(true); // rm -rf is idempotent
     });
   });
 
   describe("nextIteration", () => {
     it("increments from 0 to 1", async () => {
-      const project = await createProject({ name: "iter-test", repoPath: repoDir });
+      const project = await createWorkspace({ name: "iter-test", repoPath: repoDir });
       const next = await nextIteration(project.id);
       expect(next).toBe(1);
 
-      const updated = await getProject(project.id);
+      const updated = await getWorkspace(project.id);
       expect(updated!.currentIteration).toBe(1);
     });
 
     it("increments monotonically", async () => {
-      const project = await createProject({ name: "mono-test", repoPath: repoDir });
+      const project = await createWorkspace({ name: "mono-test", repoPath: repoDir });
       expect(await nextIteration(project.id)).toBe(1);
       expect(await nextIteration(project.id)).toBe(2);
       expect(await nextIteration(project.id)).toBe(3);
@@ -166,14 +166,14 @@ describe("projects", () => {
     });
   });
 
-  describe("validateProjectRepo", () => {
+  describe("validateWorkspaceRepo", () => {
     it("validates a valid git repo", async () => {
-      const result = await validateProjectRepo(repoDir);
+      const result = await validateWorkspaceRepo(repoDir);
       expect(result.valid).toBe(true);
     });
 
     it("rejects a non-existent directory", async () => {
-      const result = await validateProjectRepo("/nonexistent/path");
+      const result = await validateWorkspaceRepo("/nonexistent/path");
       expect(result.valid).toBe(false);
       expect(result.error).toContain("not found");
     });
@@ -181,7 +181,7 @@ describe("projects", () => {
     it("rejects a directory that is not a git repo", async () => {
       const nonGitDir = join(tempDir, "not-git");
       await mkdir(nonGitDir, { recursive: true });
-      const result = await validateProjectRepo(nonGitDir);
+      const result = await validateWorkspaceRepo(nonGitDir);
       expect(result.valid).toBe(false);
       expect(result.error).toContain("Not a git repository");
     });

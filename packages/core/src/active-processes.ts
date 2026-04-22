@@ -2,7 +2,7 @@
  * Central registry of all active agent processes.
  *
  * Every spawned agent (dev, judge, architect, documenter) registers itself
- * here with a key that identifies the project and role. On graceful shutdown,
+ * here with a key that identifies the workspace and role. On graceful shutdown,
  * the server iterates over the registry and kills everything.
  *
  * This replaces the per-runner process maps (reviewProcessStore,
@@ -15,7 +15,7 @@ import type { ManagedProcess } from "./process-manager.js";
 import type { AgentRole } from "./log-storage.js";
 
 export interface ActiveProcessEntry {
-  projectId: string;
+  workspaceId: string;
   role: AgentRole;
   process: ManagedProcess;
   /** ISO timestamp when the process was registered */
@@ -26,9 +26,9 @@ export interface ActiveProcessEntry {
   logFileName?: string;
 }
 
-/** Key format: `${projectId}:${role}` */
-function makeKey(projectId: string, role: AgentRole): string {
-  return `${projectId}:${role}`;
+/** Key format: `${workspaceId}:${role}` */
+function makeKey(workspaceId: string, role: AgentRole): string {
+  return `${workspaceId}:${role}`;
 }
 
 const registry = new Map<string, ActiveProcessEntry>();
@@ -37,7 +37,7 @@ const registry = new Map<string, ActiveProcessEntry>();
  * Register an active agent process. Returns a cleanup function.
  */
 export function registerProcess(entry: ActiveProcessEntry): () => void {
-  const key = makeKey(entry.projectId, entry.role);
+  const key = makeKey(entry.workspaceId, entry.role);
   registry.set(key, entry);
   return () => {
     // Only unregister if the same process is still registered (not replaced)
@@ -48,46 +48,46 @@ export function registerProcess(entry: ActiveProcessEntry): () => void {
 }
 
 /**
- * Get an active process entry by project + role.
+ * Get an active process entry by workspace + role.
  */
 export function getActiveProcess(
-  projectId: string,
+  workspaceId: string,
   role: AgentRole,
 ): ActiveProcessEntry | undefined {
-  return registry.get(makeKey(projectId, role));
+  return registry.get(makeKey(workspaceId, role));
 }
 
 /**
- * Get all active processes for a given project.
+ * Get all active processes for a given workspace.
  */
-export function getActiveProcessesForProject(projectId: string): ActiveProcessEntry[] {
+export function getActiveProcessesForWorkspace(workspaceId: string): ActiveProcessEntry[] {
   const out: ActiveProcessEntry[] = [];
   for (const entry of registry.values()) {
-    if (entry.projectId === projectId) out.push(entry);
+    if (entry.workspaceId === workspaceId) out.push(entry);
   }
   return out;
 }
 
 /**
- * Get all active processes (across all projects).
+ * Get all active processes (across all workspaces).
  */
 export function getAllActiveProcesses(): ActiveProcessEntry[] {
   return Array.from(registry.values());
 }
 
 /**
- * Kill all active processes for a specific project.
+ * Kill all active processes for a specific workspace.
  */
-export function killProjectProcesses(projectId: string): number {
+export function killWorkspaceProcesses(workspaceId: string): number {
   let killed = 0;
-  for (const entry of getActiveProcessesForProject(projectId)) {
+  for (const entry of getActiveProcessesForWorkspace(workspaceId)) {
     try {
       entry.process.kill();
       killed++;
     } catch {
       // Process may already be dead
     }
-    registry.delete(makeKey(entry.projectId, entry.role));
+    registry.delete(makeKey(entry.workspaceId, entry.role));
   }
   return killed;
 }

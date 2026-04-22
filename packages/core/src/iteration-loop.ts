@@ -9,16 +9,15 @@
  */
 
 import { join } from "path";
-import { writeFile, readFile, access, mkdir } from "fs/promises";
-import type { ProjectConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
-import { getProjectDir } from "./projects.js";
+import { writeFile, readFile, mkdir } from "fs/promises";
+import type { WorkspaceConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
+import { getWorkspaceDir } from "./workspaces.js";
 import {
   writeContextToRepo,
   generateInstructionContent,
   writeInstructionFile,
   parseHandoffDocument,
   parseSignalFile,
-  generateIterationSummary,
   type IterationContext,
 } from "./context-assembler.js";
 import {
@@ -28,20 +27,19 @@ import {
   parseJudgeSignals,
   parseJudgeAssessment,
   archiveJudgeAssessment,
-  summarizeJudgeAssessment,
 } from "./judge-runner.js";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
-import { getIterationLogPath, ensureProjectLogDir } from "./log-storage.js";
+import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
-import { nextIteration, updateProject } from "./projects.js";
+import { nextIteration, updateWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
-import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { registerProcess } from "./active-processes.js";
-import { dispatchForProject, makeEvent } from "./notifications/index.js";
+import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
@@ -61,8 +59,8 @@ export type LoopPhase =
   | "stopped";
 
 export interface LoopState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   phase: LoopPhase;
   currentIteration: number;
   maxIterations: number;
@@ -89,12 +87,12 @@ export interface LoopState {
   /**
    * Number of consecutive iterations the judge has opted out of reflection
    * (via `reflection_needed: false`). Reset to 0 each time reflection runs.
-   * When this reaches `project.reflectSafeguardAfter`, the next iteration
+   * When this reaches `workspace.reflectSafeguardAfter`, the next iteration
    * forces reflection regardless of what the judge says. (item 5.6 U1)
    */
   iterationsSinceLastReflection?: number;
   /**
-   * Whether cfcf has already emitted the `project.decision_log_large`
+   * Whether cfcf has already emitted the `workspace.decision_log_large`
    * notification for this loop run. Prevents re-firing each iteration
    * once the 50-iteration threshold is crossed. (item 5.6 U4)
    */
@@ -107,7 +105,7 @@ export interface LoopState {
   preLoopReviewCompleted?: boolean;
   /**
    * Per-run overrides for the three 5.1 config keys. When set, these
-   * take precedence over the project/global defaults for the lifetime
+   * take precedence over the workspace/global defaults for the lifetime
    * of this loop. Persisted on loop-state.json so resume keeps the same
    * behaviour across server restarts. (item 5.1)
    */
@@ -154,28 +152,28 @@ const loopStore = new Map<string, LoopState>();
 const LOOP_STATE_FILENAME = "loop-state.json";
 
 /**
- * Get the path to the loop state file for a project.
+ * Get the path to the loop state file for a workspace.
  */
-function getLoopStatePath(projectId: string): string {
-  return join(getProjectDir(projectId), LOOP_STATE_FILENAME);
+function getLoopStatePath(workspaceId: string): string {
+  return join(getWorkspaceDir(workspaceId), LOOP_STATE_FILENAME);
 }
 
 /**
  * Persist loop state to disk. Called on every phase transition.
  */
 async function persistLoopState(state: LoopState): Promise<void> {
-  const dir = getProjectDir(state.projectId);
+  const dir = getWorkspaceDir(state.workspaceId);
   await mkdir(dir, { recursive: true });
-  const path = getLoopStatePath(state.projectId);
+  const path = getLoopStatePath(state.workspaceId);
   await writeFile(path, JSON.stringify(state, null, 2) + "\n", "utf-8");
 }
 
 /**
  * Load loop state from disk. Returns null if no persisted state exists.
  */
-async function loadLoopState(projectId: string): Promise<LoopState | null> {
+async function loadLoopState(workspaceId: string): Promise<LoopState | null> {
   try {
-    const path = getLoopStatePath(projectId);
+    const path = getLoopStatePath(workspaceId);
     const raw = await readFile(path, "utf-8");
     return JSON.parse(raw) as LoopState;
   } catch {
@@ -188,7 +186,7 @@ async function loadLoopState(projectId: string): Promise<LoopState | null> {
  * Use this for all state mutations to keep memory and disk in sync.
  */
 async function saveLoopState(state: LoopState): Promise<void> {
-  loopStore.set(state.projectId, state);
+  loopStore.set(state.workspaceId, state);
   await persistLoopState(state);
 }
 
@@ -203,8 +201,8 @@ async function saveLoopState(state: LoopState): Promise<void> {
 export async function cleanupStaleActiveLoops(
   reason: string = "Server restarted while this loop was in progress",
 ): Promise<number> {
-  const { listProjects } = await import("./projects.js");
-  const projects = await listProjects();
+  const { listWorkspaces } = await import("./workspaces.js");
+  const workspaces = await listWorkspaces();
   let total = 0;
   const activePhases: LoopPhase[] = [
     "preparing",
@@ -214,8 +212,8 @@ export async function cleanupStaleActiveLoops(
     "documenting",
   ];
 
-  for (const p of projects) {
-    const state = await loadLoopState(p.id);
+  for (const w of workspaces) {
+    const state = await loadLoopState(w.id);
     if (!state) continue;
     if (activePhases.includes(state.phase)) {
       state.phase = "failed";
@@ -223,7 +221,7 @@ export async function cleanupStaleActiveLoops(
       state.completedAt = new Date().toISOString();
       state.outcome = "failure";
       await persistLoopState(state);
-      await updateProject(p.id, { status: "failed" }).catch(() => {});
+      await updateWorkspace(w.id, { status: "failed" }).catch(() => {});
       total++;
     }
   }
@@ -232,18 +230,18 @@ export async function cleanupStaleActiveLoops(
 }
 
 /**
- * Get the loop state for a project.
+ * Get the loop state for a workspace.
  * Checks in-memory cache first, then falls back to disk.
  */
-export async function getLoopState(projectId: string): Promise<LoopState | undefined> {
+export async function getLoopState(workspaceId: string): Promise<LoopState | undefined> {
   // Check in-memory first
-  const cached = loopStore.get(projectId);
+  const cached = loopStore.get(workspaceId);
   if (cached) return cached;
 
   // Fall back to disk
-  const persisted = await loadLoopState(projectId);
+  const persisted = await loadLoopState(workspaceId);
   if (persisted) {
-    loopStore.set(projectId, persisted);
+    loopStore.set(workspaceId, persisted);
     return persisted;
   }
 
@@ -255,12 +253,12 @@ export async function getLoopState(projectId: string): Promise<LoopState | undef
 /**
  * Resolve the three 5.1 config keys for this loop, respecting the
  * priority order: per-run overrides (from `cfcf run --auto-review` etc.)
- * → project config → hard defaults. Project config was already merged
- * with global defaults by `getProject()`, so we don't look at global
+ * → workspace config → hard defaults. Workspace config was already merged
+ * with global defaults by `getWorkspace()`, so we don't look at global
  * here.
  */
 export function resolveLoopConfig(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: LoopState,
 ): {
   autoReviewSpecs: boolean;
@@ -269,9 +267,9 @@ export function resolveLoopConfig(
 } {
   const o = state.runOverrides ?? {};
   return {
-    autoReviewSpecs: o.autoReviewSpecs ?? project.autoReviewSpecs ?? false,
-    autoDocumenter: o.autoDocumenter ?? project.autoDocumenter ?? true,
-    readinessGate: o.readinessGate ?? project.readinessGate ?? "blocked",
+    autoReviewSpecs: o.autoReviewSpecs ?? workspace.autoReviewSpecs ?? false,
+    autoDocumenter: o.autoDocumenter ?? workspace.autoDocumenter ?? true,
+    readinessGate: o.readinessGate ?? workspace.readinessGate ?? "blocked",
   };
 }
 
@@ -293,12 +291,12 @@ export function resolveLoopConfig(
 export function shouldRunReflection(
   judgeSignals: JudgeSignals | null,
   state: LoopState,
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
 ): { run: boolean; reason: string } {
   if (!judgeSignals) {
     return { run: false, reason: "judge signals missing -- harness will pause before reflection" };
   }
-  const ceiling = project.reflectSafeguardAfter ?? 3;
+  const ceiling = workspace.reflectSafeguardAfter ?? 3;
   const skipped = state.iterationsSinceLastReflection ?? 0;
 
   if (judgeSignals.reflection_needed === false) {
@@ -344,7 +342,7 @@ export function makeDecision(
   judgeSignals: JudgeSignals | null,
   devSignals: DevSignals | null,
   state: LoopState,
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   reflectionSignals?: ReflectionSignals | null,
 ): LoopDecision {
   // Check max iterations
@@ -411,7 +409,7 @@ export function makeDecision(
 
     case "STALLED": {
       const newStalledCount = state.consecutiveStalled + 1;
-      switch (project.onStalled) {
+      switch (workspace.onStalled) {
         case "stop":
           return { action: "stop", reason: `Judge determination: STALLED (${newStalledCount} consecutive). Policy: stop` };
         case "alert":
@@ -454,11 +452,11 @@ export function makeDecision(
 // --- Main Loop ---
 
 /**
- * Start the iteration loop for a project.
+ * Start the iteration loop for a workspace.
  * Runs in the background -- returns the initial state immediately.
  */
 export async function startLoop(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   opts?: {
     problemPackPath?: string;
     /** Per-run overrides for the 5.1 config keys. Persisted on loop-state. */
@@ -467,9 +465,9 @@ export async function startLoop(
     readinessGate?: import("./types.js").ReadinessGate;
   },
 ): Promise<LoopState> {
-  const existing = await getLoopState(project.id);
+  const existing = await getLoopState(workspace.id);
   if (existing && existing.phase !== "completed" && existing.phase !== "failed" && existing.phase !== "stopped") {
-    throw new Error(`Loop already active for project ${project.name} (phase: ${existing.phase})`);
+    throw new Error(`Loop already active for workspace ${workspace.name} (phase: ${existing.phase})`);
   }
 
   const runOverrides =
@@ -484,12 +482,12 @@ export async function startLoop(
       : undefined;
 
   const state: LoopState = {
-    projectId: project.id,
-    projectName: project.name,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
     phase: "idle",
     currentIteration: 0,
-    maxIterations: project.maxIterations,
-    pauseEvery: project.pauseEvery,
+    maxIterations: workspace.maxIterations,
+    pauseEvery: workspace.pauseEvery,
     startedAt: new Date().toISOString(),
     iterations: [],
     consecutiveStalled: 0,
@@ -498,31 +496,31 @@ export async function startLoop(
 
   await saveLoopState(state);
 
-  // Update project status
-  await updateProject(project.id, { status: "running" });
+  // Update workspace status
+  await updateWorkspace(workspace.id, { status: "running" });
 
   // Run loop in background. Error handler is itself try/catch-wrapped so a
   // disk write failure during error recording doesn't silently swallow the error.
-  runLoop(project, state, opts).catch(async (err) => {
+  runLoop(workspace, state, opts).catch(async (err) => {
     try {
       state.phase = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
       await saveLoopState(state);
-      updateProject(project.id, { status: "failed" }).catch(() => {});
-      dispatchForProject(
+      updateWorkspace(workspace.id, { status: "failed" }).catch(() => {});
+      dispatchForWorkspace(
         makeEvent({
           type: "loop.completed",
           title: "Loop failed",
-          message: `${project.name}: ${state.error}`,
-          projectId: project.id,
-          projectName: project.name,
+          message: `${workspace.name}: ${state.error}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: { outcome: "failure", error: state.error },
         }),
-        project.notifications,
+        workspace.notifications,
       );
     } catch (handlerErr) {
-      console.error(`[iteration-loop] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`[iteration-loop] Failed to record error for ${workspace.id}:`, handlerErr);
       console.error(`  Original error:`, err);
     }
   });
@@ -534,12 +532,12 @@ export async function startLoop(
  * Resume a paused loop with optional user feedback.
  */
 export async function resumeLoop(
-  projectId: string,
+  workspaceId: string,
   feedback?: string,
 ): Promise<LoopState> {
-  const state = await getLoopState(projectId);
+  const state = await getLoopState(workspaceId);
   if (!state) {
-    throw new Error("No active loop for this project");
+    throw new Error("No active loop for this workspace");
   }
   if (state.phase !== "paused") {
     throw new Error(`Loop is not paused (current phase: ${state.phase})`);
@@ -549,26 +547,26 @@ export async function resumeLoop(
   state.pauseReason = undefined;
   state.pendingQuestions = undefined;
 
-  // Re-read the project config in case it was updated
-  const { getProject } = await import("./projects.js");
-  const project = await getProject(projectId);
-  if (!project) {
-    throw new Error("Project not found");
+  // Re-read the workspace config in case it was updated
+  const { getWorkspace } = await import("./workspaces.js");
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace) {
+    throw new Error("Workspace not found");
   }
 
   await saveLoopState(state);
-  await updateProject(projectId, { status: "running" });
+  await updateWorkspace(workspaceId, { status: "running" });
 
   // Resume loop in background. Error handler itself is try/catch-wrapped.
-  runLoop(project, state).catch(async (err) => {
+  runLoop(workspace, state).catch(async (err) => {
     try {
       state.phase = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
       await saveLoopState(state);
-      updateProject(projectId, { status: "failed" }).catch(() => {});
+      updateWorkspace(workspaceId, { status: "failed" }).catch(() => {});
     } catch (handlerErr) {
-      console.error(`[iteration-loop] Failed to record resume error for ${projectId}:`, handlerErr);
+      console.error(`[iteration-loop] Failed to record resume error for ${workspaceId}:`, handlerErr);
       console.error(`  Original error:`, err);
     }
   });
@@ -579,10 +577,10 @@ export async function resumeLoop(
 /**
  * Stop a running or paused loop.
  */
-export async function stopLoop(projectId: string): Promise<LoopState> {
-  const state = await getLoopState(projectId);
+export async function stopLoop(workspaceId: string): Promise<LoopState> {
+  const state = await getLoopState(workspaceId);
   if (!state) {
-    throw new Error("No active loop for this project");
+    throw new Error("No active loop for this workspace");
   }
   if (state.phase === "completed" || state.phase === "failed" || state.phase === "stopped") {
     throw new Error(`Loop already ended (phase: ${state.phase})`);
@@ -592,7 +590,7 @@ export async function stopLoop(projectId: string): Promise<LoopState> {
   state.outcome = "stopped";
   state.completedAt = new Date().toISOString();
   await saveLoopState(state);
-  await updateProject(projectId, { status: "stopped" });
+  await updateWorkspace(workspaceId, { status: "stopped" });
 
   return state;
 }
@@ -635,12 +633,12 @@ function isLoopDone(state: LoopState): boolean {
  * Runs iterations until a stop condition is met or the loop is paused.
  */
 async function runLoop(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: LoopState,
   opts?: { problemPackPath?: string },
 ): Promise<void> {
-  const packPath = opts?.problemPackPath || join(project.repoPath, "problem-pack");
-  const loopCfg = resolveLoopConfig(project, state);
+  const packPath = opts?.problemPackPath || join(workspace.repoPath, "problem-pack");
+  const loopCfg = resolveLoopConfig(workspace, state);
 
   // --- PRE-LOOP REVIEW (item 5.1 autoReviewSpecs=true) ---
   // Runs before iteration 1, not on resume. When the readiness gate
@@ -666,7 +664,7 @@ async function runLoop(
       // FeedbackForm (or `cfcf resume --feedback`) reaches the architect
       // on the next spawn. Without this the user's feedback was being
       // silently dropped for pre-loop-review resumes (pre-v0.7.2).
-      reviewRes = await runReviewSync(project, {
+      reviewRes = await runReviewSync(workspace, {
         problemPackPath: packPath,
         userFeedback: state.userFeedback,
         trigger: "loop",
@@ -684,11 +682,11 @@ async function runLoop(
     // regardless of gate outcome. The artifacts (architect-review.md,
     // plan.md, docs/ stubs, signals) are useful to the user even when
     // the gate blocks.
-    if (await gitManager.hasChanges(project.repoPath)) {
+    if (await gitManager.hasChanges(workspace.repoPath)) {
       const subject = readiness
         ? `cfcf pre-loop review (${readiness})`
         : "cfcf pre-loop review (signals missing)";
-      await gitManager.commitAll(project.repoPath, subject);
+      await gitManager.commitAll(workspace.repoPath, subject);
     }
 
     if (blocked || reviewError) {
@@ -702,15 +700,15 @@ async function runLoop(
       const questions = reviewRes?.signals?.gaps?.slice(0, 5) ?? [];
       state.pendingQuestions = questions.length ? questions : [reason];
       await saveLoopState(state);
-      await updateProject(project.id, { status: "paused" });
+      await updateWorkspace(workspace.id, { status: "paused" });
 
-      dispatchForProject(
+      dispatchForWorkspace(
         makeEvent({
           type: "loop.paused",
           title: "Pre-loop review blocked the loop",
-          message: `${project.name}: ${reason}`,
-          projectId: project.id,
-          projectName: project.name,
+          message: `${workspace.name}: ${reason}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: {
             pauseReason: "anomaly",
             kind: "pre_loop_review_blocked",
@@ -719,7 +717,7 @@ async function runLoop(
             gaps: questions,
           },
         }),
-        project.notifications,
+        workspace.notifications,
       );
       return;
     }
@@ -744,14 +742,14 @@ async function runLoop(
       const branchName = lastIter.branch;
 
       // Ensure we're on the right branch
-      await gitManager.checkoutBranch(project.repoPath, branchName);
+      await gitManager.checkoutBranch(workspace.repoPath, branchName);
 
       // Re-read the dev signals (they're still in the repo from the last run)
-      const devSignals = await parseSignalFile(project.repoPath);
+      const devSignals = await parseSignalFile(workspace.repoPath);
 
       // Jump straight to judge -- see the JUDGE section below
       await runJudgeAndDecide(
-        project, state, lastIter, iterationNum, branchName, devSignals, packPath,
+        workspace, state, lastIter, iterationNum, branchName, devSignals, packPath,
       );
 
       // If we returned (paused or stopped), exit the while loop
@@ -774,7 +772,7 @@ async function runLoop(
       );
     }
 
-    const iterationNum = await nextIteration(project.id);
+    const iterationNum = await nextIteration(workspace.id);
     if (iterationNum === null) {
       throw new Error("Failed to increment iteration counter");
     }
@@ -785,19 +783,19 @@ async function runLoop(
     // delete it first so we get a fresh branch off the current HEAD --
     // not a stale branch that was created off a different base.
     const branchName = `cfcf/iteration-${iterationNum}`;
-    if (await gitManager.branchExists(project.repoPath, branchName)) {
+    if (await gitManager.branchExists(workspace.repoPath, branchName)) {
       // Delete the stale branch (we're not on it, since we haven't checked it out)
-      await gitManager.deleteBranch(project.repoPath, branchName);
+      await gitManager.deleteBranch(workspace.repoPath, branchName);
     }
-    const branchResult = await gitManager.createBranch(project.repoPath, branchName);
+    const branchResult = await gitManager.createBranch(workspace.repoPath, branchName);
     if (!branchResult.success) {
       throw new Error(`Failed to create branch ${branchName}: ${branchResult.error}`);
     }
 
     // Prepare log paths
-    await ensureProjectLogDir(project.id);
-    const devLogFile = getIterationLogPath(project.id, iterationNum, "dev");
-    const judgeLogFile = getIterationLogPath(project.id, iterationNum, "judge");
+    await ensureWorkspaceLogDir(workspace.id);
+    const devLogFile = getIterationLogPath(workspace.id, iterationNum, "dev");
+    const judgeLogFile = getIterationLogPath(workspace.id, iterationNum, "judge");
     const iterStr = String(iterationNum).padStart(3, "0");
     const devLogFileName = `iteration-${iterStr}-dev.log`;
     const judgeLogFileName = `iteration-${iterStr}-judge.log`;
@@ -819,7 +817,7 @@ async function runLoop(
     state.iterations.push(iterRecord);
 
     // Record history event (will be updated when iteration completes)
-    await appendHistoryEvent(project.id, {
+    await appendHistoryEvent(workspace.id, {
       id: historyEventId,
       type: "iteration",
       status: "running",
@@ -829,10 +827,10 @@ async function runLoop(
       logFile: devLogFileName, // primary log file for display
       devLogFile: devLogFileName,
       judgeLogFile: judgeLogFileName,
-      agent: project.devAgent.adapter, // used by BaseHistoryEvent
-      model: project.devAgent.model,
-      devAgent: project.devAgent.adapter,
-      judgeAgent: project.judgeAgent.adapter,
+      agent: workspace.devAgent.adapter, // used by BaseHistoryEvent
+      model: workspace.devAgent.model,
+      devAgent: workspace.devAgent.adapter,
+      judgeAgent: workspace.judgeAgent.adapter,
     });
 
     const problemPack = await readProblemPack(packPath);
@@ -842,7 +840,7 @@ async function runLoop(
     let previousJudgeAssessment: string | undefined;
     let iterationHistory: string | undefined;
     try {
-      previousJudgeAssessment = (await parseJudgeAssessment(project.repoPath)) ?? undefined;
+      previousJudgeAssessment = (await parseJudgeAssessment(workspace.repoPath)) ?? undefined;
     } catch { /* no previous assessment */ }
 
     // Build iteration history from previous iterations
@@ -868,18 +866,18 @@ async function runLoop(
     const ctx: IterationContext = {
       iteration: iterationNum,
       problemPack,
-      project,
+      workspace,
       previousJudgeAssessment,
       userFeedback: state.userFeedback,
       iterationHistory,
     };
 
-    await writeContextToRepo(project.repoPath, ctx);
+    await writeContextToRepo(workspace.repoPath, ctx);
 
     // Generate agent instruction file
-    const devAdapter = getAdapter(project.devAgent.adapter);
+    const devAdapter = getAdapter(workspace.devAgent.adapter);
     if (!devAdapter) {
-      throw new Error(`Unknown dev agent adapter: ${project.devAgent.adapter}`);
+      throw new Error(`Unknown dev agent adapter: ${workspace.devAgent.adapter}`);
     }
 
     // Merge into the dev agent's instruction file (CLAUDE.md / AGENTS.md /
@@ -888,14 +886,14 @@ async function runLoop(
     // preserved across iterations; only the cfcf-owned block is refreshed.
     const instructionContent = generateInstructionContent(ctx);
     await writeInstructionFile(
-      project.repoPath,
+      workspace.repoPath,
       devAdapter.instructionFilename,
       instructionContent,
     );
 
     // Prepare judge files
-    await writeJudgeInstructions(project.repoPath, project, iterationNum);
-    await resetJudgeSignals(project.repoPath);
+    await writeJudgeInstructions(workspace.repoPath, workspace, iterationNum);
+    await resetJudgeSignals(workspace.repoPath);
 
     // --- DEV EXECUTE ---
     if (isStopped(state)) break;
@@ -903,16 +901,16 @@ async function runLoop(
     await saveLoopState(state);
 
     const devPrompt = `Read ${devAdapter.instructionFilename} and follow the instructions. This is a single iteration in a multi-iteration loop -- execute only the next pending chunk from cfcf-docs/plan.md (map phases to iterations first if the plan is not yet structured that way), update plan.md with what you completed, then fill in cfcf-docs/iteration-handoff.md and cfcf-docs/cfcf-iteration-signals.json before exiting.`;
-    const devCmd = devAdapter.buildCommand(project.repoPath, devPrompt, project.devAgent.model);
+    const devCmd = devAdapter.buildCommand(workspace.repoPath, devPrompt, workspace.devAgent.model);
 
     const devProcess = await spawnProcess({
       command: devCmd.command,
       args: devCmd.args,
-      cwd: project.repoPath,
+      cwd: workspace.repoPath,
       logFile: devLogFile,
     });
     const unregisterDev = registerProcess({
-      projectId: project.id,
+      workspaceId: workspace.id,
       role: "dev",
       process: devProcess,
       startedAt: iterRecord.startedAt,
@@ -932,15 +930,15 @@ async function runLoop(
     if (isStopped(state)) break;
 
     // Collect dev results
-    const handoff = await parseHandoffDocument(project.repoPath);
-    const devSignals = await parseSignalFile(project.repoPath);
+    await parseHandoffDocument(workspace.repoPath);
+    const devSignals = await parseSignalFile(workspace.repoPath);
     iterRecord.devSignals = devSignals ?? undefined;
 
     // Commit dev work
-    if (await gitManager.hasChanges(project.repoPath)) {
+    if (await gitManager.hasChanges(workspace.repoPath)) {
       await gitManager.commitAll(
-        project.repoPath,
-        `cfcf iteration ${iterationNum} dev (${project.devAgent.adapter})`,
+        workspace.repoPath,
+        `cfcf iteration ${iterationNum} dev (${workspace.devAgent.adapter})`,
       );
     }
 
@@ -952,13 +950,13 @@ async function runLoop(
     // iteration's dev agent sees it as starting context until they
     // replace it. (item 5.x polish, v0.7.6)
     const { archiveHandoff } = await import("./context-assembler.js");
-    await archiveHandoff(project.repoPath, iterationNum);
+    await archiveHandoff(workspace.repoPath, iterationNum);
 
     // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;
 
     await runJudgeAndDecide(
-      project, state, iterRecord, iterationNum, branchName, devSignals, packPath,
+      workspace, state, iterRecord, iterationNum, branchName, devSignals, packPath,
     );
 
     // If the judge+decide phase ended the loop (pause/complete/stop), exit
@@ -974,7 +972,7 @@ async function runLoop(
  * Modifies state and iterRecord in place.
  */
 async function runJudgeAndDecide(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: LoopState,
   iterRecord: LoopIterationRecord,
   iterationNum: number,
@@ -987,24 +985,24 @@ async function runJudgeAndDecide(
   await saveLoopState(state);
 
   // Prepare judge files
-  await writeJudgeInstructions(project.repoPath, project, iterationNum);
-  await resetJudgeSignals(project.repoPath);
+  await writeJudgeInstructions(workspace.repoPath, workspace, iterationNum);
+  await resetJudgeSignals(workspace.repoPath);
 
   const judgeLogFile = iterRecord.judgeLogFile;
 
-  const judgeCmd = buildJudgeCommand(project);
+  const judgeCmd = buildJudgeCommand(workspace);
   if (!judgeCmd) {
-    throw new Error(`Unknown judge agent adapter: ${project.judgeAgent.adapter}`);
+    throw new Error(`Unknown judge agent adapter: ${workspace.judgeAgent.adapter}`);
   }
 
   const judgeProcess = await spawnProcess({
     command: judgeCmd.command,
     args: judgeCmd.args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile: judgeLogFile,
   });
   const unregisterJudge = registerProcess({
-    projectId: project.id,
+    workspaceId: workspace.id,
     role: "judge",
     process: judgeProcess,
     startedAt: iterRecord.startedAt,
@@ -1024,8 +1022,7 @@ async function runJudgeAndDecide(
   if (isStopped(state)) return;
 
   // Collect judge results
-  const judgeSignals = await parseJudgeSignals(project.repoPath);
-  const judgeAssessment = await parseJudgeAssessment(project.repoPath);
+  const judgeSignals = await parseJudgeSignals(workspace.repoPath);
   iterRecord.judgeSignals = judgeSignals ?? undefined;
 
   // If judge exited with non-zero and produced no signals, log it
@@ -1034,15 +1031,15 @@ async function runJudgeAndDecide(
   }
 
   // Commit judge work
-  if (await gitManager.hasChanges(project.repoPath)) {
+  if (await gitManager.hasChanges(workspace.repoPath)) {
     await gitManager.commitAll(
-      project.repoPath,
-      `cfcf iteration ${iterationNum} judge (${project.judgeAgent.adapter})`,
+      workspace.repoPath,
+      `cfcf iteration ${iterationNum} judge (${workspace.judgeAgent.adapter})`,
     );
   }
 
   // Archive judge assessment
-  await archiveJudgeAssessment(project.repoPath, iterationNum);
+  await archiveJudgeAssessment(workspace.repoPath, iterationNum);
 
   // Flip the iteration's history event to `completed` NOW, before
   // reflection starts. The dev and judge agents have both exited and
@@ -1052,7 +1049,7 @@ async function runJudgeAndDecide(
   // History tab look stuck. Merge status is updated separately in the
   // DECIDE block after auto-merge succeeds.
   const iterCompletedAt = new Date().toISOString();
-  await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+  await updateHistoryEvent(workspace.id, iterRecord.historyEventId, {
     status: "completed",
     completedAt: iterCompletedAt,
     devExitCode: iterRecord.devExitCode,
@@ -1061,7 +1058,7 @@ async function runJudgeAndDecide(
     judgeQuality: judgeSignals?.quality_score,
     devSignals: iterRecord.devSignals,
     judgeSignals: judgeSignals ?? undefined,
-  } as Partial<import("./project-history.js").IterationHistoryEvent>);
+  } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
 
   // --- REFLECT (item 5.6) ---
   // Runs after the judge commits and before DECIDE. Decides whether to
@@ -1071,13 +1068,13 @@ async function runJudgeAndDecide(
   //   dev(iter N) -> judge(iter N) -> reflect(iter N)
   let reflectionSignals: ReflectionSignals | null = null;
   if (judgeSignals) {
-    const trigger = shouldRunReflection(judgeSignals, state, project);
+    const trigger = shouldRunReflection(judgeSignals, state, workspace);
     if (trigger.run) {
       state.phase = "reflecting";
       await saveLoopState(state);
       try {
         const reflectRes = await runReflectionSync(
-          project,
+          workspace,
           iterationNum,
           judgeSignals.reflection_reason ? { reason: judgeSignals.reflection_reason } : undefined,
         );
@@ -1092,14 +1089,14 @@ async function runJudgeAndDecide(
 
         // Archive the reflection analysis into reflection-reviews/reflection-N.md
         const { archiveReflectionAnalysis } = await import("./reflection-runner.js");
-        await archiveReflectionAnalysis(project.repoPath, iterationNum);
+        await archiveReflectionAnalysis(workspace.repoPath, iterationNum);
 
         // Commit the reflection outputs separately.
-        if (await gitManager.hasChanges(project.repoPath)) {
+        if (await gitManager.hasChanges(workspace.repoPath)) {
           const health = reflectRes.signals?.iteration_health ?? "inconclusive";
           const obs = reflectRes.signals?.key_observation || "reflection output";
           const subject = `cfcf iteration ${iterationNum} reflect (${health}): ${obs}`.slice(0, 200);
-          await gitManager.commitAll(project.repoPath, subject);
+          await gitManager.commitAll(workspace.repoPath, subject);
         }
 
         // Reset the skip counter now that reflection has actually run.
@@ -1130,22 +1127,22 @@ async function runJudgeAndDecide(
     !state.decisionLogWarningFired
   ) {
     state.decisionLogWarningFired = true;
-    dispatchForProject(
+    dispatchForWorkspace(
       makeEvent({
         type: "loop.paused", // closest existing type; using it as an informational channel
         title: "Decision log is getting large",
         message:
-          `${project.name}: decision-log.md has accumulated through ${iterationNum} iterations. ` +
+          `${workspace.name}: decision-log.md has accumulated through ${iterationNum} iterations. ` +
           `Consider archiving it (copy to decision-log.archive-iter-${iterationNum}.md). No action required from cfcf.`,
-        projectId: project.id,
-        projectName: project.name,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
         details: {
           informational: true,
           kind: "decision_log_large",
           iteration: iterationNum,
         },
       }),
-      project.notifications,
+      workspace.notifications,
     );
   }
 
@@ -1160,38 +1157,38 @@ async function runJudgeAndDecide(
     state.consecutiveStalled = 0;
   }
 
-  const decision = makeDecision(judgeSignals, devSignals, state, project, reflectionSignals);
+  const decision = makeDecision(judgeSignals, devSignals, state, workspace, reflectionSignals);
 
   // Merge branch to main if auto-merge and progress/success
   if (
-    project.mergeStrategy === "auto" &&
+    workspace.mergeStrategy === "auto" &&
     judgeSignals &&
     (judgeSignals.determination === "PROGRESS" || judgeSignals.determination === "SUCCESS")
   ) {
     const mainBranch = "main"; // TODO: detect default branch
-    await gitManager.checkoutBranch(project.repoPath, mainBranch);
+    await gitManager.checkoutBranch(workspace.repoPath, mainBranch);
     const mergeResult = await gitManager.merge(
-      project.repoPath,
+      workspace.repoPath,
       branchName,
       `Merge cfcf iteration ${iterationNum}`,
     );
     iterRecord.merged = mergeResult.success;
     if (!mergeResult.success) {
       // If merge fails, stay on the feature branch
-      await gitManager.checkoutBranch(project.repoPath, branchName);
+      await gitManager.checkoutBranch(workspace.repoPath, branchName);
     }
     // Update history with merge status
-    await updateHistoryEvent(project.id, iterRecord.historyEventId, {
+    await updateHistoryEvent(workspace.id, iterRecord.historyEventId, {
       merged: iterRecord.merged,
-    } as Partial<import("./project-history.js").IterationHistoryEvent>);
+    } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
 
     // Auto-delete the merged iteration branch when configured (item 5.2).
     // Default is false -- we keep branches so the audit trail is preserved
     // and the user can still diff iterations after the fact. Enabling this
-    // is useful for long-running projects that would otherwise accumulate
+    // is useful for long-running workspaces that would otherwise accumulate
     // hundreds of merged `cfcf/iteration-N` branches.
-    if (mergeResult.success && project.cleanupMergedBranches === true) {
-      const delResult = await gitManager.deleteBranch(project.repoPath, branchName);
+    if (mergeResult.success && workspace.cleanupMergedBranches === true) {
+      const delResult = await gitManager.deleteBranch(workspace.repoPath, branchName);
       if (!delResult.success) {
         // Non-fatal -- branch is still there, audit trail is still intact
         console.warn(
@@ -1215,24 +1212,24 @@ async function runJudgeAndDecide(
       // so the UI knows the documenter is still producing output.
       // Skipped when `autoDocumenter=false` (item 5.1) -- user can
       // invoke `cfcf document` manually later.
-      if (outcome === "success" && resolveLoopConfig(project, state).autoDocumenter) {
+      if (outcome === "success" && resolveLoopConfig(workspace, state).autoDocumenter) {
         state.phase = "documenting";
         await saveLoopState(state);
 
         try {
-          const docResult = await runDocumentSync(project);
+          const docResult = await runDocumentSync(workspace);
           let committed = false;
-          if (await gitManager.hasChanges(project.repoPath)) {
+          if (await gitManager.hasChanges(workspace.repoPath)) {
             const commitResult = await gitManager.commitAll(
-              project.repoPath,
-              `cfcf documentation (${project.documenterAgent.adapter})`,
+              workspace.repoPath,
+              `cfcf documentation (${workspace.documenterAgent.adapter})`,
             );
             committed = commitResult.success;
           }
           // Update the history event with the commit status
-          await updateHistoryEvent(project.id, docResult.historyEventId, {
+          await updateHistoryEvent(workspace.id, docResult.historyEventId, {
             committed,
-          } as Partial<import("./project-history.js").DocumentHistoryEvent>);
+          } as Partial<import("./workspace-history.js").DocumentHistoryEvent>);
         } catch {
           // Documenter failure is not fatal -- the code is done
         }
@@ -1242,26 +1239,26 @@ async function runJudgeAndDecide(
       state.outcome = outcome;
       state.completedAt = new Date().toISOString();
       await saveLoopState(state);
-      await updateProject(project.id, { status: "completed" });
+      await updateWorkspace(workspace.id, { status: "completed" });
 
       // Notify on loop completion
-      dispatchForProject(
+      dispatchForWorkspace(
         makeEvent({
           type: "loop.completed",
           title: `Loop ${outcome === "success" ? "completed successfully" : "ended"}`,
           message: outcome === "success"
-            ? `${project.name}: all success criteria met (${iterationNum} iteration${iterationNum === 1 ? "" : "s"})`
-            : `${project.name}: loop ended with outcome "${outcome}" after ${iterationNum} iteration${iterationNum === 1 ? "" : "s"}`,
-          projectId: project.id,
-          projectName: project.name,
+            ? `${workspace.name}: all success criteria met (${iterationNum} iteration${iterationNum === 1 ? "" : "s"})`
+            : `${workspace.name}: loop ended with outcome "${outcome}" after ${iterationNum} iteration${iterationNum === 1 ? "" : "s"}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: { outcome, iterations: iterationNum },
         }),
-        project.notifications,
+        workspace.notifications,
       );
 
       // Push to remote on success
       if (outcome === "success") {
-        await gitManager.push(project.repoPath).catch(() => {
+        await gitManager.push(workspace.repoPath).catch(() => {
           // Push failure is not fatal
         });
       }
@@ -1278,41 +1275,41 @@ async function runJudgeAndDecide(
         state.retryJudge = true;
       }
       await saveLoopState(state);
-      await updateProject(project.id, { status: "paused" });
+      await updateWorkspace(workspace.id, { status: "paused" });
 
       // Notify on pause (cadence, anomaly, user input needed)
-      dispatchForProject(
+      dispatchForWorkspace(
         makeEvent({
           type: "loop.paused",
           title: pauseReasonTitle(decision.pauseReason),
-          message: `${project.name}: ${decision.reason}`,
-          projectId: project.id,
-          projectName: project.name,
+          message: `${workspace.name}: ${decision.reason}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: {
             iteration: iterationNum,
             pauseReason: decision.pauseReason,
             questions: decision.questions,
           },
         }),
-        project.notifications,
+        workspace.notifications,
       );
 
       // For judge failure (null signals + non-zero exit), also fire agent.failed
       if (!judgeSignals && iterRecord.judgeExitCode !== undefined && iterRecord.judgeExitCode !== 0) {
-        dispatchForProject(
+        dispatchForWorkspace(
           makeEvent({
             type: "agent.failed",
             title: "Judge agent failed",
-            message: `${project.name}: judge exited with code ${iterRecord.judgeExitCode} and produced no signals. Check log.`,
-            projectId: project.id,
-            projectName: project.name,
+            message: `${workspace.name}: judge exited with code ${iterRecord.judgeExitCode} and produced no signals. Check log.`,
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
             details: {
               iteration: iterationNum,
               role: "judge",
               exitCode: iterRecord.judgeExitCode,
             },
           }),
-          project.notifications,
+          workspace.notifications,
         );
       }
 

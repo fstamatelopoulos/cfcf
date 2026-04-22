@@ -1,15 +1,15 @@
 import { useState, useEffect } from "react";
 
 interface Route {
-  page: "dashboard" | "project" | "server";
-  projectId?: string;
+  page: "dashboard" | "workspace" | "server";
+  workspaceId?: string;
 }
 
 function parseHash(): Route {
   const hash = window.location.hash.slice(1); // remove #
-  const projectMatch = hash.match(/^\/projects\/(.+)/);
-  if (projectMatch) {
-    return { page: "project", projectId: decodeURIComponent(projectMatch[1]) };
+  const workspaceMatch = hash.match(/^\/workspaces\/(.+)/);
+  if (workspaceMatch) {
+    return { page: "workspace", workspaceId: decodeURIComponent(workspaceMatch[1]) };
   }
   if (hash === "/server") {
     return { page: "server" };

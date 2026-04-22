@@ -10,11 +10,11 @@ import {
   resetArchitectSignals,
   parseArchitectSignals,
 } from "./architect-runner.js";
-import type { ProjectConfig, ArchitectSignals } from "./types.js";
+import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 
 const TEST_DIR = join(import.meta.dir, "..", ".test-architect-runner");
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj",
     name: "test-project",

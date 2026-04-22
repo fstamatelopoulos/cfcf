@@ -10,15 +10,15 @@ Creates two test repos at `/tmp/cfcf-calc` and `/tmp/cfcf-tracker` with problem-
 ./scripts/setup-test-repos.sh
 ```
 
-After running, register the projects with cfcf:
+After running, register the workspaces with cfcf:
 ```bash
-bun run dev:cli -- project init --repo /tmp/cfcf-calc --name calc
-bun run dev:cli -- project init --repo /tmp/cfcf-tracker --name tracker
+bun run dev:cli -- workspace init --repo /tmp/cfcf-calc --name calc
+bun run dev:cli -- workspace init --repo /tmp/cfcf-tracker --name tracker
 ```
 
 ## cleanup-test-repos.sh
 
-Removes all cfcf test state: test repos, project configs, loop state, and agent logs. Preserves the global cfcf config (`config.json` with agent/model settings).
+Removes all cfcf test state: test repos, workspace configs, loop state, and agent logs. Preserves the global cfcf config (`config.json` with agent/model settings).
 
 ```bash
 ./scripts/cleanup-test-repos.sh             # interactive (prompts for confirmation)

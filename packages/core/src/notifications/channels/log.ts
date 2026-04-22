@@ -1,7 +1,7 @@
 /**
  * Log channel.
  *
- * Appends a JSON line to `<project-log-dir>/notifications.log` per event.
+ * Appends a JSON line to `<workspace-log-dir>/notifications.log` per event.
  * Serves as an always-on audit trail that survives terminal close and
  * is easy to grep.
  */
@@ -9,13 +9,13 @@
 import { join } from "path";
 import { appendFile, mkdir } from "fs/promises";
 import type { NotificationChannel } from "../types.js";
-import { getProjectLogDir } from "../../log-storage.js";
+import { getWorkspaceLogDir } from "../../log-storage.js";
 
 export const logChannel: NotificationChannel = {
   name: "log",
   async deliver(event) {
     try {
-      const dir = getProjectLogDir(event.project.id);
+      const dir = getWorkspaceLogDir(event.workspace.id);
       await mkdir(dir, { recursive: true });
       const line = JSON.stringify({
         timestamp: event.timestamp,

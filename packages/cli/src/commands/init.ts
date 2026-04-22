@@ -274,7 +274,7 @@ export function registerInitCommand(program: Command): void {
       console.log();
       console.log("Guardrails:");
       console.log("  - Agents work on a dedicated git branch (your main branch is untouched)");
-      console.log("  - Agent instructions scope work to the project directory");
+      console.log("  - Agent instructions scope work to the workspace directory");
       console.log("  - cfcf verifies read-only files are not modified after each iteration");
       console.log();
 
@@ -292,10 +292,10 @@ export function registerInitCommand(program: Command): void {
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
-      console.log("  2. Create a project:    cfcf project init --repo <path> --name <name>");
+      console.log("  2. Create a workspace:  cfcf workspace init --repo <path> --name <name>");
       console.log("  3. Populate problem-pack/problem.md and success.md with your problem definition");
-      console.log("  4. Review with:         cfcf review --project <name>  (optional)");
-      console.log("  5. Launch development:  cfcf run --project <name>");
+      console.log("  4. Review with:         cfcf review --workspace <name>  (optional)");
+      console.log("  5. Launch development:  cfcf run --workspace <name>");
       console.log();
     });
 }

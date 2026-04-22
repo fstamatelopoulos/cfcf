@@ -1,6 +1,6 @@
-import type { ProjectStatus, LoopPhase } from "../types";
+import type { WorkspaceStatus, LoopPhase } from "../types";
 
-type BadgeStatus = ProjectStatus | LoopPhase;
+type BadgeStatus = WorkspaceStatus | LoopPhase;
 
 const statusColors: Record<string, string> = {
   idle: "var(--color-muted)",

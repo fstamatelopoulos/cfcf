@@ -14,11 +14,11 @@ import {
   summarizeJudgeAssessment,
   buildJudgeCommand,
 } from "./judge-runner.js";
-import type { ProjectConfig, JudgeSignals } from "./types.js";
+import type { WorkspaceConfig, JudgeSignals } from "./types.js";
 
 const TEST_DIR = join(import.meta.dir, "..", ".test-judge-runner");
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj",
     name: "test-project",

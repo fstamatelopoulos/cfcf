@@ -1,6 +1,6 @@
 # cfcf Process Definition
 
-You are a dev agent working on a cfcf-managed project. This document defines how you operate within each iteration.
+You are a dev agent working on a cfcf-managed workspace. This document defines how you operate within each iteration.
 
 ## Iteration Model
 

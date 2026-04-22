@@ -7,7 +7,7 @@ import type { AgentConfig } from "@cfcf/core";
 /**
  * Format an agent config for display: "adapter:model" or "adapter:default".
  * Examples: "codex:o3", "claude-code:opus", "codex:default"
- * Handles missing/undefined agents gracefully (projects created before a role was added).
+ * Handles missing/undefined agents gracefully (workspaces created before a role was added).
  */
 export function formatAgent(agent: AgentConfig | undefined): string {
   if (!agent?.adapter) return "(not configured)";

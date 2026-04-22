@@ -86,14 +86,14 @@ async function deliverWithTimeout(
 }
 
 /**
- * Resolve the effective notification config for a project.
- * Project-level overrides take precedence; otherwise falls back to the
+ * Resolve the effective notification config for a workspace.
+ * Workspace-level overrides take precedence; otherwise falls back to the
  * global config.
  */
 export async function resolveNotificationConfig(
-  projectNotifications: NotificationConfig | undefined,
+  workspaceNotifications: NotificationConfig | undefined,
 ): Promise<NotificationConfig | undefined> {
-  if (projectNotifications) return projectNotifications;
+  if (workspaceNotifications) return workspaceNotifications;
   const { readConfig } = await import("../config.js");
   const global = await readConfig();
   return global?.notifications;
@@ -103,11 +103,11 @@ export async function resolveNotificationConfig(
  * Fire-and-forget dispatch helper. Resolves effective config, fires
  * channels in background, never throws or blocks the caller.
  */
-export function dispatchForProject(
+export function dispatchForWorkspace(
   event: NotificationEvent,
-  projectNotifications: NotificationConfig | undefined,
+  workspaceNotifications: NotificationConfig | undefined,
 ): void {
-  resolveNotificationConfig(projectNotifications)
+  resolveNotificationConfig(workspaceNotifications)
     .then((config) => dispatch(event, config))
     .catch((err) => {
       console.error(`[notifications] Dispatch failed:`, err);
@@ -119,15 +119,15 @@ export function makeEvent(params: {
   type: NotificationEventType;
   title: string;
   message: string;
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   details?: Record<string, unknown>;
 }): NotificationEvent {
   return {
     type: params.type,
     title: params.title,
     message: params.message,
-    project: { id: params.projectId, name: params.projectName },
+    workspace: { id: params.workspaceId, name: params.workspaceName },
     timestamp: new Date().toISOString(),
     details: params.details,
   };

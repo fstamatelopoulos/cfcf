@@ -78,7 +78,7 @@ export interface CfcfGlobalConfig {
   /** Notification configuration (optional; defaults applied if missing) */
   notifications?: NotificationConfig;
   /**
-   * Default for new projects' `cleanupMergedBranches`. When true, merged
+   * Default for new workspaces' `cleanupMergedBranches`. When true, merged
    * iteration branches are deleted after a successful auto-merge. Default
    * false (keep for audit). (item 5.2)
    */
@@ -140,8 +140,8 @@ export interface NotificationEvent {
   title: string;
   /** Longer body (used in OS notification body / log entry) */
   message: string;
-  /** Project context */
-  project: {
+  /** Workspace context */
+  workspace: {
     id: string;
     name: string;
   };
@@ -151,9 +151,9 @@ export interface NotificationEvent {
   details?: Record<string, unknown>;
 }
 
-export type ProjectStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
+export type WorkspaceStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
 
-export interface ProjectConfig {
+export interface WorkspaceConfig {
   id: string;
   name: string;
   repoPath: string;
@@ -164,7 +164,7 @@ export interface ProjectConfig {
   /** Reflection agent (item 5.6). Optional override -- defaults to the
    * global config's reflectionAgent, or devAgent if that is also unset. */
   reflectionAgent?: AgentConfig;
-  /** Per-project override for the global reflectSafeguardAfter ceiling. */
+  /** Per-workspace override for the global reflectSafeguardAfter ceiling. */
   reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;
@@ -174,22 +174,22 @@ export interface ProjectConfig {
    * When true, delete the `cfcf/iteration-N` branch after a successful
    * auto-merge to main. Default false: keeps branches so iteration diffs
    * remain accessible via `git diff main..cfcf/iteration-N` even after
-   * merge. Enable this for long-running projects that would otherwise
+   * merge. Enable this for long-running workspaces that would otherwise
    * accumulate many merged branches. (item 5.2)
    */
   cleanupMergedBranches?: boolean;
-  /** Per-project override for the global `autoReviewSpecs` default. (item 5.1) */
+  /** Per-workspace override for the global `autoReviewSpecs` default. (item 5.1) */
   autoReviewSpecs?: boolean;
-  /** Per-project override for the global `autoDocumenter` default. (item 5.1) */
+  /** Per-workspace override for the global `autoDocumenter` default. (item 5.1) */
   autoDocumenter?: boolean;
-  /** Per-project override for the global `readinessGate` default. (item 5.1) */
+  /** Per-workspace override for the global `readinessGate` default. (item 5.1) */
   readinessGate?: ReadinessGate;
   processTemplate: string;
-  /** Monotonically increasing iteration counter for this project */
+  /** Monotonically increasing iteration counter for this workspace */
   currentIteration: number;
-  /** Current project status in the iteration loop */
-  status?: ProjectStatus;
-  /** Per-project notification override (defaults to global config) */
+  /** Current workspace status in the iteration loop */
+  status?: WorkspaceStatus;
+  /** Per-workspace notification override (defaults to global config) */
   notifications?: NotificationConfig;
 }
 
@@ -305,9 +305,9 @@ export type CfcfEvent =
       determination: string;
     }
   | {
-      type: "project.paused";
+      type: "workspace.paused";
       reason: "cadence" | "anomaly" | "user_input_needed";
       questions?: string[];
     }
-  | { type: "project.completed"; status: "success" | "failure" | "stopped" }
+  | { type: "workspace.completed"; status: "success" | "failure" | "stopped" }
   | { type: "alert"; message: string };

@@ -1,6 +1,6 @@
 import { usePolling } from "../hooks/usePolling";
-import { fetchProjects } from "../api";
-import { ProjectCard } from "../components/ProjectCard";
+import { fetchWorkspaces } from "../api";
+import { WorkspaceCard } from "../components/WorkspaceCard";
 import { navigateTo } from "../hooks/useRoute";
 
 function DashboardHeader() {
@@ -14,7 +14,7 @@ function DashboardHeader() {
       }}
     >
       <h2 className="dashboard__title" style={{ margin: 0 }}>
-        Projects
+        Workspaces
       </h2>
       <button
         className="btn btn--small btn--secondary"
@@ -28,24 +28,24 @@ function DashboardHeader() {
 }
 
 export function Dashboard() {
-  const { data: projects, error, loading } = usePolling(fetchProjects, 5000);
+  const { data: workspaces, error, loading } = usePolling(fetchWorkspaces, 5000);
 
-  if (loading && !projects) {
-    return <div className="dashboard__loading">Loading projects...</div>;
+  if (loading && !workspaces) {
+    return <div className="dashboard__loading">Loading workspaces...</div>;
   }
 
   if (error) {
     return <div className="dashboard__error">Error: {error}</div>;
   }
 
-  if (!projects || projects.length === 0) {
+  if (!workspaces || workspaces.length === 0) {
     return (
       <div className="dashboard">
         <DashboardHeader />
         <div className="dashboard__empty">
-          <h2>No projects</h2>
-          <p>Create a project with the CLI:</p>
-          <code>cfcf project init --repo &lt;path&gt; --name &lt;name&gt;</code>
+          <h2>No workspaces</h2>
+          <p>Create a workspace with the CLI:</p>
+          <code>cfcf workspace init --repo &lt;path&gt; --name &lt;name&gt;</code>
         </div>
       </div>
     );
@@ -55,8 +55,8 @@ export function Dashboard() {
     <div className="dashboard">
       <DashboardHeader />
       <div className="dashboard__grid">
-        {projects.map((p) => (
-          <ProjectCard key={p.id} project={p} />
+        {workspaces.map((w) => (
+          <WorkspaceCard key={w.id} workspace={w} />
         ))}
       </div>
     </div>

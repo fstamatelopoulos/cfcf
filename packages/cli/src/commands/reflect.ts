@@ -11,15 +11,15 @@ import { isServerReachable, post, get } from "../client.js";
 import { formatElapsed } from "../format.js";
 
 interface ReflectStartResponse {
-  projectId: string;
+  workspaceId: string;
   status: string;
   logFile: string;
   message: string;
 }
 
 interface ReflectStatusResponse {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -42,7 +42,7 @@ export function registerReflectCommand(program: Command): void {
   program
     .command("reflect")
     .description("Run the Reflection agent ad-hoc against the current state (reviews cross-iteration history, may rewrite pending plan items)")
-    .requiredOption("--project <name>", "Project name or ID")
+    .requiredOption("--workspace <name>", "Workspace name or ID")
     .option("--prompt <hint>", "Optional focus hint for the reflection agent")
     .action(async (opts) => {
       if (!(await isServerReachable())) {
@@ -50,13 +50,13 @@ export function registerReflectCommand(program: Command): void {
         process.exit(1);
       }
 
-      console.log(`Project: ${opts.project}`);
-      console.log(`Mode:    Reflection (ad-hoc)`);
-      if (opts.prompt) console.log(`Focus:   ${opts.prompt}`);
+      console.log(`Workspace: ${opts.workspace}`);
+      console.log(`Mode:      Reflection (ad-hoc)`);
+      if (opts.prompt) console.log(`Focus:     ${opts.prompt}`);
       console.log();
 
       const startRes = await post<ReflectStartResponse>(
-        `/api/projects/${encodeURIComponent(opts.project)}/reflect`,
+        `/api/workspaces/${encodeURIComponent(opts.workspace)}/reflect`,
         opts.prompt ? { prompt: opts.prompt } : {},
       );
       if (!startRes.ok) {
@@ -69,13 +69,13 @@ export function registerReflectCommand(program: Command): void {
       console.log(`Log file: ${start.logFile}`);
       console.log();
 
-      const projectParam = encodeURIComponent(opts.project);
+      const workspaceParam = encodeURIComponent(opts.workspace);
       let lastStatus = "";
       let statusStartTime = Date.now();
 
       while (true) {
         const statusRes = await get<ReflectStatusResponse>(
-          `/api/projects/${projectParam}/reflect/status`,
+          `/api/workspaces/${workspaceParam}/reflect/status`,
         );
         if (!statusRes.ok) {
           console.error(`Failed to get reflection status: ${statusRes.error}`);
@@ -114,11 +114,11 @@ function printReflectResult(r: ReflectStatusResponse): void {
     console.log(`Key observation: ${r.signals.key_observation || "(none)"}`);
     if (r.signals.recommend_stop) {
       console.log();
-      console.log("!! Reflection recommends STOPPING the loop: it believes the project is fundamentally stuck.");
+      console.log("!! Reflection recommends STOPPING the loop: it believes the workspace is fundamentally stuck.");
     }
     console.log();
   }
   console.log("What to do next:");
   console.log(`  Read analysis: cat cfcf-docs/reflection-analysis.md`);
-  console.log(`  Re-run:        cfcf reflect --project ${r.projectName}`);
+  console.log(`  Re-run:        cfcf reflect --workspace ${r.workspaceName}`);
 }

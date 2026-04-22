@@ -19,26 +19,26 @@ This document defines the concrete process that governs each iteration: what fil
 
 In both scenarios, cf² handles the scaffolding and automation, but **the user is responsible for providing the problem definition** -- cf² cannot know what to build without the user populating the Problem Pack files. See `../guides/workflow.md` for the complete step-by-step workflow.
 
-### 2.1 Blank Slate Project
+### 2.1 Blank Slate Workspace
 
-The user starts a new project from scratch:
+The user starts a new workspace from scratch:
 
 1. **User** creates or provides a local git repo.
-2. **User** runs `cfcf project init` -- cf² scaffolds `problem-pack/` with template files.
+2. **User** runs `cfcf workspace init` -- cf² scaffolds `problem-pack/` with template files.
 3. **User** populates the Problem Pack: writes `problem.md` (what to build), `success.md` (how to measure success), and optionally `constraints.md`, `hints.md`, `style-guide.md`, and `context/` files.
 4. **User** triggers `cfcf run` -- cf² assembles context, injects `cfcf-docs/` and `CLAUDE.md`, and launches the agent.
 5. No existing source code -- the agent builds from scratch based on the user's problem definition.
 
-### 2.2 Existing Project
+### 2.2 Existing Workspace
 
 The user has an existing repo with source code, tests, CI, etc.:
 
-1. **User** runs `cfcf project init` pointing at the existing repo -- cf² scaffolds `problem-pack/`.
+1. **User** runs `cfcf workspace init` pointing at the existing repo -- cf² scaffolds `problem-pack/`.
 2. **User** populates the Problem Pack, including context files that describe the existing codebase, architectural decisions, and the new features or changes required.
 3. **User** triggers `cfcf run` -- cf² assembles context and launches the agent.
 4. The agent works within the existing codebase, guided by the user's problem definition and context.
 
-The iteration process is identical in both cases. The difference is only in the initial context: the existing project has more context files describing what already exists. See `technical-design.md` section 2 for the rationale behind the local-process execution model.
+The iteration process is identical in both cases. The difference is only in the initial context: the existing workspace has more context files describing what already exists. See `technical-design.md` section 2 for the rationale behind the local-process execution model.
 
 ---
 
@@ -48,7 +48,7 @@ The iteration process is identical in both cases. The difference is only in the 
 
 The primary instruction file for the agent. cfcf generates this from the assembled context. It contains:
 
-- **Role and identity**: What the agent is (a dev agent working on iteration N of a cfcf-managed project)
+- **Role and identity**: What the agent is (a dev agent working on iteration N of a cfcf-managed workspace)
 - **Process instructions**: Concise step-by-step process the agent must follow (read context → formulate plan → execute → produce handoff)
 - **File pointers**: Explicit list of which files to read and in what order
 - **Guardrails**: What the agent must NOT do (e.g., do not modify cfcf-docs/ files marked as read-only, do not delete test files)
@@ -64,7 +64,7 @@ This folder lives in the repo root and contains all cf²-managed context. All fi
 ```
 cfcf-docs/
   # --- User-provided context (user must edit before first iteration) ---
-  # These are copied from the Problem Pack on project init.
+  # These are copied from the Problem Pack on workspace init.
   # The user MUST populate problem.md and success.md with real content.
   # cf² copies templates; the user replaces the template content.
   problem.md              # Problem/goal definition - USER MUST EDIT
@@ -169,7 +169,7 @@ cfcf-docs/
 | docs/architecture.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration + polished post-SUCCESS | System architecture, components, data flow |
 | docs/api-reference.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration (if API exists) + polished post-SUCCESS | Endpoints, models, errors |
 | docs/setup-guide.md | Architect (initial) / Dev agent / Documenter | Dev agent, Judge, User | Every iteration + polished post-SUCCESS | Prerequisites, install, run, config |
-| docs/README.md | Documenter | User | Post-SUCCESS | Project overview, quick start |
+| docs/README.md | Documenter | User | Post-SUCCESS | Workspace overview, quick start |
 | cfcf-documenter-instructions.md | cf² | Documenter | Before each documenter run | cf² generates (sequence-numbered) |
 
 ---
@@ -186,13 +186,13 @@ The Solution Architect reviews the problem definition, success criteria, constra
 
 The user drives this process. It is iterative and optional:
 
-1. **User invokes**: `cfcf review --project <name>`
+1. **User invokes**: `cfcf review --workspace <name>`
 2. cf² spawns the Solution Architect agent (configurable agent + model)
 3. The architect reads all Problem Pack files and produces its assessment
 4. **User reads**: `cfcf-docs/architect-review.md` -- human-readable feedback
 5. **User decides**: refine the Problem Pack based on feedback, or move on
 6. **User may repeat**: run `cfcf review` again after making changes, as many times as desired
-7. **User launches development** whenever ready: `cfcf run --project <name>` -- no permission needed from the architect
+7. **User launches development** whenever ready: `cfcf run --workspace <name>` -- no permission needed from the architect
 
 ### 4.0.3 Architect Outputs
 
@@ -462,7 +462,7 @@ This is the template that cfcf places at `cfcf-docs/iteration-handoff.md` for th
      "conflicting requirements in problem.md" -->
 
 ## Self-Assessment
-<!-- Honest evaluation: is the project converging toward success?
+<!-- Honest evaluation: is the workspace converging toward success?
      Rate confidence: HIGH / MEDIUM / LOW -->
 ```
 
@@ -523,7 +523,7 @@ cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very larg
 ```
 ~/.cfcf/
   logs/
-    <project-id>/
+    <workspace-id>/
       iteration-001-dev.log      # Full dev agent stdout/stderr
       iteration-001-judge.log    # Full judge agent stdout/stderr
       iteration-002-dev.log
@@ -536,13 +536,13 @@ cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very larg
 
 ### 8.3 No External Persistent Memory (for now)
 
-A richer external memory layer (cross-project knowledge, semantic search, Cerefox integration) is a future extension. The need for it will appear organically as cfcf evolves. For now, keeping everything in the repo is simpler and more transparent.
+A richer external memory layer (cross-workspace knowledge, semantic search, Cerefox integration) is a future extension. The need for it will appear organically as cfcf evolves. For now, keeping everything in the repo is simpler and more transparent.
 
 ---
 
 ## 9. Process Definition: What Goes Into process.md
 
-The `cfcf-docs/process.md` file is a concise, agent-readable description of the iteration process. cfcf ships with a default process template (under `process-templates/default/` in the cfcf source). On `cfcf init`, the template is **copied into the repo** so it becomes part of the project's version history. The user or agents can modify it over time -- changes are tracked in git like any other file.
+The `cfcf-docs/process.md` file is a concise, agent-readable description of the iteration process. cfcf ships with a default process template (under `process-templates/default/` in the cfcf source). On `cfcf init`, the template is **copied into the repo** so it becomes part of the workspace's version history. The user or agents can modify it over time -- changes are tracked in git like any other file.
 
 The process.md file's purpose is to ensure the agent understands its role and the expected workflow regardless of which agent is used.
 
@@ -551,16 +551,16 @@ The process.md file's purpose is to ensure the agent understands its role and th
 The long-term vision for process templates:
 
 - **cfcf ships multiple template flavors**: e.g., test-driven development, greenfield exploration, refactoring-focused, documentation-focused. Each template defines a different process emphasis and agent instruction style.
-- **Users select a template** during `cfcf init` (or change it for the next iteration at any time via config). Which template is active is recorded in the project config.
-- **Community templates**: Users or the community can create and publish custom templates. A user adds a template to their cfcf deployment and selects it per-project.
-- **Templates are living documents**: Once copied into the repo, the template evolves with the project. The user or agents may modify it and changes are tracked in git. The original template name/version is recorded for reference.
-- **Per-project customization**: Different projects in the same cfcf installation can use different templates simultaneously.
+- **Users select a template** during `cfcf init` (or change it for the next iteration at any time via config). Which template is active is recorded in the workspace config.
+- **Community templates**: Users or the community can create and publish custom templates. A user adds a template to their cfcf deployment and selects it per-workspace.
+- **Templates are living documents**: Once copied into the repo, the template evolves with the workspace. The user or agents may modify it and changes are tracked in git. The original template name/version is recorded for reference.
+- **Per-workspace customization**: Different workspaces in the same cfcf installation can use different templates simultaneously.
 
 For v0.1, cfcf ships a single default template. The template selection and community publishing infrastructure is a future enhancement.
 
 Key contents:
 
-1. **Your role**: You are a dev agent working on iteration N of a cfcf-managed project.
+1. **Your role**: You are a dev agent working on iteration N of a cfcf-managed workspace.
 2. **The iteration model**: Each iteration is a single uninterrupted execution. You read context, plan, execute, and produce artifacts. You do not interact with the user during the iteration.
 3. **Files you must read** (with order guidance).
 4. **Files you must update**: plan.md, decision-log.md, iteration-handoff.md.
@@ -592,7 +592,7 @@ A key design question: which parts of the post-iteration analysis are done by cf
 ### Judge-based (requires LLM)
 
 - **Success determination**: Are the success criteria actually met? (Tests passing is necessary but not sufficient -- the judge assesses qualitative criteria too)
-- **Progress assessment**: Is the project making meaningful progress or stalling?
+- **Progress assessment**: Is the workspace making meaningful progress or stalling?
 - **Anomaly detection**: Did the agent run out of tokens? Is it circling? Are there blocking questions?
 - **Quality assessment**: Is the code well-structured? Are there architectural concerns?
 - **Tactical guidance**: What should the next iteration focus on?
@@ -600,7 +600,7 @@ A key design question: which parts of the post-iteration analysis are done by cf
 
 ### The boundary
 
-cfcf can detect simple signals mechanically (e.g., "tests passed", "handoff document exists", "no code changes detected"). But interpreting whether the project is converging, whether the approach is sound, and what to try next requires the judge. The judge's signal file format (section 5.2) is designed to make its assessments parseable by cfcf's deterministic logic.
+cfcf can detect simple signals mechanically (e.g., "tests passed", "handoff document exists", "no code changes detected"). But interpreting whether the workspace is converging, whether the approach is sound, and what to try next requires the judge. The judge's signal file format (section 5.2) is designed to make its assessments parseable by cfcf's deterministic logic.
 
 ---
 

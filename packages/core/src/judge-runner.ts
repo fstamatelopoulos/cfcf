@@ -8,7 +8,7 @@
 
 import { join } from "path";
 import { readFile, writeFile, mkdir, access, copyFile } from "fs/promises";
-import type { ProjectConfig, JudgeSignals } from "./types.js";
+import type { WorkspaceConfig, JudgeSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { getTemplate, writeTemplate } from "./templates.js";
 
@@ -18,12 +18,12 @@ import { getTemplate, writeTemplate } from "./templates.js";
  */
 export async function writeJudgeInstructions(
   repoPath: string,
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   iteration: number,
 ): Promise<void> {
   let template = await getTemplate("cfcf-judge-instructions.md", { repoPath });
   template = template.replace(/\{\{ITERATION\}\}/g, String(iteration));
-  template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
+  template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
 
   const destPath = join(repoPath, "cfcf-docs", "cfcf-judge-instructions.md");
   await writeFile(destPath, template, "utf-8");
@@ -46,13 +46,13 @@ export async function resetJudgeSignals(
  * Build the command to run the judge agent.
  */
 export function buildJudgeCommand(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
 ): { command: string; args: string[] } | null {
-  const adapter = getAdapter(project.judgeAgent.adapter);
+  const adapter = getAdapter(workspace.judgeAgent.adapter);
   if (!adapter) return null;
 
   const prompt = `Read cfcf-docs/cfcf-judge-instructions.md and follow the instructions exactly. Evaluate the dev agent's iteration work, then write cfcf-docs/judge-assessment.md and cfcf-docs/cfcf-judge-signals.json before exiting.`;
-  return adapter.buildCommand("", prompt, project.judgeAgent.model);
+  return adapter.buildCommand("", prompt, workspace.judgeAgent.model);
 }
 
 /**

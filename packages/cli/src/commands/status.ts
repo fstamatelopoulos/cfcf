@@ -8,8 +8,8 @@ import { configExists, readConfig } from "@cfcf/core";
 import { formatAgent } from "../format.js";
 
 interface LoopStatusResponse {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   phase: string;
   currentIteration: number;
   maxIterations: number;
@@ -24,7 +24,7 @@ interface LoopStatusResponse {
   }>;
 }
 
-interface ProjectListItem {
+interface WorkspaceListItem {
   id: string;
   name: string;
   status?: string;
@@ -34,8 +34,8 @@ interface ProjectListItem {
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("Show cfcf status (server, config, project loops)")
-    .option("--project <name>", "Show detailed status for a specific project")
+    .description("Show cfcf status (server, config, workspace loops)")
+    .option("--workspace <name>", "Show detailed status for a specific workspace")
     .action(async (opts) => {
       // Check config
       const hasConfig = await configExists();
@@ -67,56 +67,56 @@ export function registerStatusCommand(program: Command): void {
       console.log("Server: running");
       console.log();
 
-      if (opts.project) {
-        // Detailed project status
-        await showProjectStatus(opts.project);
+      if (opts.workspace) {
+        // Detailed workspace status
+        await showWorkspaceStatus(opts.workspace);
       } else {
-        // Overview of all projects
-        await showProjectOverview();
+        // Overview of all workspaces
+        await showWorkspaceOverview();
       }
     });
 }
 
-async function showProjectOverview(): Promise<void> {
-  const res = await get<ProjectListItem[]>("/api/projects");
+async function showWorkspaceOverview(): Promise<void> {
+  const res = await get<WorkspaceListItem[]>("/api/workspaces");
   if (!res.ok || !res.data || res.data.length === 0) {
-    console.log("No projects found. Create one with: cfcf project init --repo <path> --name <name>");
+    console.log("No workspaces found. Create one with: cfcf workspace init --repo <path> --name <name>");
     return;
   }
 
-  console.log("Projects:");
-  for (const p of res.data) {
-    const status = p.status ?? "idle";
-    const iter = p.currentIteration > 0 ? ` (iteration ${p.currentIteration})` : "";
-    console.log(`  ${p.name}: ${status}${iter}`);
+  console.log("Workspaces:");
+  for (const w of res.data) {
+    const status = w.status ?? "idle";
+    const iter = w.currentIteration > 0 ? ` (iteration ${w.currentIteration})` : "";
+    console.log(`  ${w.name}: ${status}${iter}`);
   }
 }
 
-async function showProjectStatus(project: string): Promise<void> {
+async function showWorkspaceStatus(workspace: string): Promise<void> {
   const loopRes = await get<LoopStatusResponse>(
-    `/api/projects/${encodeURIComponent(project)}/loop/status`,
+    `/api/workspaces/${encodeURIComponent(workspace)}/loop/status`,
   );
 
   if (!loopRes.ok) {
-    // No active loop -- show basic project info
-    const projRes = await get<ProjectListItem>(
-      `/api/projects/${encodeURIComponent(project)}`,
+    // No active loop -- show basic workspace info
+    const wsRes = await get<WorkspaceListItem>(
+      `/api/workspaces/${encodeURIComponent(workspace)}`,
     );
-    if (!projRes.ok) {
-      console.error(`Project not found: ${project}`);
+    if (!wsRes.ok) {
+      console.error(`Workspace not found: ${workspace}`);
       return;
     }
-    const p = projRes.data!;
-    console.log(`Project:    ${p.name}`);
-    console.log(`Status:     ${p.status ?? "idle"}`);
-    console.log(`Iterations: ${p.currentIteration}`);
+    const w = wsRes.data!;
+    console.log(`Workspace:  ${w.name}`);
+    console.log(`Status:     ${w.status ?? "idle"}`);
+    console.log(`Iterations: ${w.currentIteration}`);
     console.log();
-    console.log("No active loop. Start with: cfcf run --project " + p.name);
+    console.log("No active loop. Start with: cfcf run --workspace " + w.name);
     return;
   }
 
   const s = loopRes.data!;
-  console.log(`Project:     ${s.projectName}`);
+  console.log(`Workspace:   ${s.workspaceName}`);
   console.log(`Phase:       ${s.phase}`);
   console.log(`Iteration:   ${s.currentIteration}/${s.maxIterations}`);
 
