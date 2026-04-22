@@ -11,7 +11,7 @@ import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerStatusCommand } from "./commands/status.js";
-import { registerProjectCommands } from "./commands/project.js";
+import { registerWorkspaceCommands } from "./commands/workspace.js";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerResumeCommand } from "./commands/resume.js";
@@ -46,7 +46,7 @@ program
 registerServerCommands(program);
 registerInitCommand(program);
 registerStatusCommand(program);
-registerProjectCommands(program);
+registerWorkspaceCommands(program);
 registerConfigCommands(program);
 registerRunCommand(program);
 registerResumeCommand(program);

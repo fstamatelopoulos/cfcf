@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSSE } from "../hooks/useSSE";
 
 export interface LogTarget {
-  projectId: string;
+  workspaceId: string;
   logFile: string;
   /** Human-readable label: "Iteration 2 (dev)", "Architect run 1", "Documenter run 1", etc. */
   label: string;
@@ -10,7 +10,7 @@ export interface LogTarget {
 
 export function LogViewer({ target }: { target: LogTarget | null }) {
   const url = target
-    ? `/api/projects/${encodeURIComponent(target.projectId)}/logs/${encodeURIComponent(target.logFile)}`
+    ? `/api/workspaces/${encodeURIComponent(target.workspaceId)}/logs/${encodeURIComponent(target.logFile)}`
     : null;
   const { lines, connected, done } = useSSE(url);
   const containerRef = useRef<HTMLDivElement>(null);

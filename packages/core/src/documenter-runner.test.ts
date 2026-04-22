@@ -8,11 +8,11 @@ import { mkdir, rm } from "fs/promises";
 import {
   writeDocumenterInstructions,
 } from "./documenter-runner.js";
-import type { ProjectConfig } from "./types.js";
+import type { WorkspaceConfig } from "./types.js";
 
 const TEST_DIR = join(import.meta.dir, "..", ".test-documenter-runner");
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj",
     name: "test-project",

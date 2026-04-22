@@ -2,11 +2,11 @@ import { useState } from "react";
 import * as api from "../api";
 
 export function FeedbackForm({
-  projectId,
+  workspaceId,
   questions,
   onResume,
 }: {
-  projectId: string;
+  workspaceId: string;
   questions?: string[];
   onResume: () => void;
 }) {
@@ -18,7 +18,7 @@ export function FeedbackForm({
     setLoading(true);
     setError(null);
     try {
-      await api.resumeLoop(projectId, feedback || undefined);
+      await api.resumeLoop(workspaceId, feedback || undefined);
       setFeedback("");
       onResume();
     } catch (err) {

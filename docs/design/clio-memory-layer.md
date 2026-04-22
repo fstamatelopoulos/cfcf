@@ -34,21 +34,19 @@ Concretely:
 
 These collide. In Clio, a grouping like "my TypeScript backend services" would hold memories from many cf² repos (each a separate cf² "project"). The same word can't mean both.
 
-**Proposed resolution:** rename cf²'s `project` → `workspace` across code + API + docs. Then:
-- **cf² workspace** = one managed git repo (what's called a project today).
+**Resolution (landed in v0.8.0, plan item 5.10):** cf²'s `project` noun has been renamed to `workspace` across code + API + docs. Now:
+- **cf² workspace** = one managed git repo.
 - **Clio Project** = grouping of cf² workspaces that share a knowledge domain (matches Cerefox semantics exactly).
 
-Rename scope if adopted:
-- `ProjectConfig` → `WorkspaceConfig` (types)
-- `cfcf project init` → `cfcf workspace init` (CLI; keep `project` as deprecated alias for one release)
-- `/api/projects/*` → `/api/workspaces/*` (REST; keep `/api/projects/*` as deprecated alias for one release)
-- All docs + templates + UI labels
+What shipped:
+- `WorkspaceConfig` / `WorkspaceStatus` types (was `ProjectConfig` / `ProjectStatus`)
+- `cfcf workspace *` CLI (was `cfcf project *`); `--workspace <name>` flag (was `--project`)
+- `/api/workspaces/*` REST surface (was `/api/projects/*`); `workspaceId` / `workspaceName` on response bodies
+- Web UI: "Workspaces" top-bar link + Workspace detail page; `#/workspaces/:id` hash route
+- `~/.cfcf/workspaces/<id>/` on-disk config (was `~/.cfcf/projects/<id>/`)
 - The `cfcf-docs/` internal file tree stays (`cfcf-docs/iteration-logs/`, etc.) — those names don't reference "project."
-- **Project detail page** (web UI) becomes Workspace detail page; **Projects** top-bar link becomes **Workspaces**.
 
-This is a breaking change. It should land as its own iter-5.x polish PR **before** Clio ships, so Clio can be built in a world where the two nouns don't overload. Alternative (keep cf²'s "project" and invent a non-Cerefox-compatible name for the grouping tier) would be faster but permanently forks cf² from Cerefox semantics — discouraged.
-
-**For the rest of this document, "workspace" refers to a single cf² repo and "Clio Project" refers to the grouping tier.** Wherever this doc says "workspace" the code still uses "project" today — read with that in mind.
+For the rest of this document, "workspace" refers to a single cf² repo and "Clio Project" refers to the grouping tier.
 
 ## 3. Architecture Overview
 

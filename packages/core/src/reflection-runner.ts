@@ -19,7 +19,7 @@ import { join } from "path";
 import { readFile, writeFile, mkdir, readdir, access, copyFile } from "fs/promises";
 import { randomBytes } from "crypto";
 import type {
-  ProjectConfig,
+  WorkspaceConfig,
   ReflectionSignals,
   AgentConfig,
 } from "./types.js";
@@ -29,12 +29,12 @@ import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import {
   getAgentRunLogPath,
   nextAgentRunSequence,
-  ensureProjectLogDir,
-  getProjectLogDir,
+  ensureWorkspaceLogDir,
+  getWorkspaceLogDir,
 } from "./log-storage.js";
-import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { registerProcess } from "./active-processes.js";
-import { dispatchForProject, makeEvent } from "./notifications/index.js";
+import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import * as gitManager from "./git-manager.js";
 import { validatePlanRewrite as sharedValidatePlanRewrite } from "./plan-validation.js";
 
@@ -45,22 +45,22 @@ export { validatePlanRewrite } from "./plan-validation.js";
 // --- Helpers ---
 
 /**
- * Resolve the reflection agent config for a project, falling back through
- * project -> project.architect -> project.dev.
+ * Resolve the reflection agent config for a workspace, falling back through
+ * workspace -> workspace.architect -> workspace.dev.
  */
-export function resolveReflectionAgent(project: ProjectConfig): AgentConfig {
+export function resolveReflectionAgent(workspace: WorkspaceConfig): AgentConfig {
   return (
-    project.reflectionAgent ??
-    project.architectAgent ??
-    project.devAgent
+    workspace.reflectionAgent ??
+    workspace.architectAgent ??
+    workspace.devAgent
   );
 }
 
 // --- State ---
 
 export interface ReflectState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -79,20 +79,20 @@ export interface ReflectState {
 const reflectStore = new Map<string, ReflectState>();
 const reflectProcessStore = new Map<string, ManagedProcess>();
 
-export function getReflectState(projectId: string): ReflectState | undefined {
-  return reflectStore.get(projectId);
+export function getReflectState(workspaceId: string): ReflectState | undefined {
+  return reflectStore.get(workspaceId);
 }
 
 // --- Template helpers ---
 
 export async function writeReflectionInstructions(
   repoPath: string,
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   iteration: number,
 ): Promise<void> {
   let template = await getTemplate("cfcf-reflection-instructions.md", { repoPath });
   template = template.replace(/\{\{ITERATION\}\}/g, String(iteration));
-  template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
+  template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
   await mkdir(cfcfDocsDir, { recursive: true });
@@ -179,7 +179,7 @@ export async function archiveReflectionAnalysis(
  */
 export async function writeReflectionContext(
   repoPath: string,
-  projectId: string,
+  workspaceId: string,
   iteration: number,
 ): Promise<void> {
   const lines: string[] = [];
@@ -227,7 +227,7 @@ export async function writeReflectionContext(
   // --- Tail of the most recent dev log ---
   lines.push("## Tail of the most recent dev log");
   lines.push("");
-  const tail = await readLatestDevLogTail(projectId);
+  const tail = await readLatestDevLogTail(workspaceId);
   if (tail) {
     lines.push("```");
     lines.push(tail);
@@ -248,11 +248,11 @@ export async function writeReflectionContext(
 
 /**
  * Read the last ~500 lines of the most recent iteration-NNN-dev.log file
- * for this project. Returns null if no dev logs exist.
+ * for this workspace. Returns null if no dev logs exist.
  */
-async function readLatestDevLogTail(projectId: string): Promise<string | null> {
+async function readLatestDevLogTail(workspaceId: string): Promise<string | null> {
   try {
-    const dir = getProjectLogDir(projectId);
+    const dir = getWorkspaceLogDir(workspaceId);
     const entries = await readdir(dir);
     const devLogs = entries
       .filter((e) => /^iteration-\d+-dev\.log$/.test(e))
@@ -268,27 +268,27 @@ async function readLatestDevLogTail(projectId: string): Promise<string | null> {
   }
 }
 
-// --- Ad-hoc entry point (used by `cfcf reflect` and /api/projects/:id/reflect) ---
+// --- Ad-hoc entry point (used by `cfcf reflect` and /api/workspaces/:id/reflect) ---
 
 /**
  * Start a reflection run asynchronously (ad-hoc, not inside the loop).
  * Returns the initial state; the actual agent runs in the background.
  */
 export async function startReflection(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   opts?: { prompt?: string },
 ): Promise<ReflectState> {
-  await ensureProjectLogDir(project.id);
-  const sequence = await nextAgentRunSequence(project.id, "reflection");
-  const logFile = getAgentRunLogPath(project.id, "reflection", sequence);
+  await ensureWorkspaceLogDir(workspace.id);
+  const sequence = await nextAgentRunSequence(workspace.id, "reflection");
+  const logFile = getAgentRunLogPath(workspace.id, "reflection", sequence);
   const logFileName = `reflection-${String(sequence).padStart(3, "0")}.log`;
   const historyEventId = randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
-  const agent = resolveReflectionAgent(project);
-  const iteration = project.currentIteration || 0;
+  const agent = resolveReflectionAgent(workspace);
+  const iteration = workspace.currentIteration || 0;
 
-  await appendHistoryEvent(project.id, {
+  await appendHistoryEvent(workspace.id, {
     id: historyEventId,
     type: "reflection",
     status: "running",
@@ -301,8 +301,8 @@ export async function startReflection(
   });
 
   const state: ReflectState = {
-    projectId: project.id,
-    projectName: project.name,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
     status: "preparing",
     startedAt,
     logFile,
@@ -312,31 +312,31 @@ export async function startReflection(
     iteration,
     trigger: "manual",
   };
-  reflectStore.set(project.id, state);
+  reflectStore.set(workspace.id, state);
 
-  runReflectionAsync(project, state, opts).catch(async (err) => {
+  runReflectionAsync(workspace, state, opts).catch(async (err) => {
     try {
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
-      await updateHistoryEvent(project.id, historyEventId, {
+      await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
         completedAt: state.completedAt,
       });
-      dispatchForProject(
+      dispatchForWorkspace(
         makeEvent({
           type: "agent.failed",
           title: "Reflection failed",
-          message: `${project.name}: ${state.error}`,
-          projectId: project.id,
-          projectName: project.name,
+          message: `${workspace.name}: ${state.error}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: { role: "reflection", error: state.error },
         }),
-        project.notifications,
+        workspace.notifications,
       );
     } catch (handlerErr) {
-      console.error(`[reflection-runner] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`[reflection-runner] Failed to record error for ${workspace.id}:`, handlerErr);
       console.error(`  Original error:`, err);
     }
   });
@@ -345,21 +345,21 @@ export async function startReflection(
 }
 
 /** Stop a manually-running reflection. */
-export async function stopReflection(projectId: string): Promise<ReflectState | null> {
-  const state = reflectStore.get(projectId);
+export async function stopReflection(workspaceId: string): Promise<ReflectState | null> {
+  const state = reflectStore.get(workspaceId);
   if (!state) return null;
   if (!["preparing", "executing", "collecting"].includes(state.status)) {
     return state;
   }
-  const proc = reflectProcessStore.get(projectId);
+  const proc = reflectProcessStore.get(workspaceId);
   if (proc) {
     proc.kill();
-    reflectProcessStore.delete(projectId);
+    reflectProcessStore.delete(workspaceId);
   }
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
-  await updateHistoryEvent(projectId, state.historyEventId, {
+  await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
     error: "Stopped by user",
     completedAt: state.completedAt,
@@ -368,19 +368,19 @@ export async function stopReflection(projectId: string): Promise<ReflectState | 
 }
 
 async function runReflectionAsync(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: ReflectState,
   opts?: { prompt?: string },
 ): Promise<void> {
-  const agent = resolveReflectionAgent(project);
+  const agent = resolveReflectionAgent(workspace);
   const adapter = getAdapter(agent.adapter);
   if (!adapter) {
     throw new Error(`Unknown reflection agent adapter: ${agent.adapter}`);
   }
 
-  await writeReflectionInstructions(project.repoPath, project, state.iteration);
-  await resetReflectionSignals(project.repoPath);
-  await writeReflectionContext(project.repoPath, project.id, state.iteration);
+  await writeReflectionInstructions(workspace.repoPath, workspace, state.iteration);
+  await resetReflectionSignals(workspace.repoPath);
+  await writeReflectionContext(workspace.repoPath, workspace.id, state.iteration);
 
   state.status = "executing";
 
@@ -388,17 +388,17 @@ async function runReflectionAsync(
     ? ` The user has supplied this focus hint: "${opts.prompt.replace(/"/g, '\\"')}". Weigh it against the cross-iteration evidence; it is advisory, not binding.`
     : "";
   const prompt = `Read cfcf-docs/cfcf-reflection-instructions.md and follow the instructions exactly. Review the full cross-iteration history (decision log, iteration logs, prior reflections, compact git log in cfcf-docs/cfcf-reflection-context.md), classify iteration health, optionally rewrite pending items in cfcf-docs/plan.md (non-destructive), and produce cfcf-docs/reflection-analysis.md + cfcf-docs/cfcf-reflection-signals.json before exiting.${focusHint}`;
-  const cmd = adapter.buildCommand(project.repoPath, prompt, agent.model);
+  const cmd = adapter.buildCommand(workspace.repoPath, prompt, agent.model);
 
   const managed = await spawnProcess({
     command: cmd.command,
     args: cmd.args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile: state.logFile,
   });
-  reflectProcessStore.set(project.id, managed);
+  reflectProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
-    projectId: project.id,
+    workspaceId: workspace.id,
     role: "reflection",
     process: managed,
     startedAt: state.startedAt,
@@ -412,21 +412,21 @@ async function runReflectionAsync(
     if ((state.status as string) === "failed") return; // externally stopped
 
     state.status = "collecting";
-    const signals = await parseReflectionSignals(project.repoPath);
+    const signals = await parseReflectionSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
     state.status = "completed";
     state.completedAt = new Date().toISOString();
 
-    await updateHistoryEvent(project.id, state.historyEventId, {
+    await updateHistoryEvent(workspace.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: state.completedAt,
       exitCode: result.exitCode,
       signals: signals ?? undefined,
       iterationHealth: signals?.iteration_health,
       planModified: signals?.plan_modified,
-    } as Partial<import("./project-history.js").ReflectionHistoryEvent>);
+    } as Partial<import("./workspace-history.js").ReflectionHistoryEvent>);
   } finally {
-    reflectProcessStore.delete(project.id);
+    reflectProcessStore.delete(workspace.id);
     unregister();
   }
 }
@@ -454,24 +454,24 @@ export interface ReflectionRunResult {
  * new version violates the rules (research doc §6.3).
  */
 export async function runReflectionSync(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   iteration: number,
   opts?: { reason?: string },
 ): Promise<ReflectionRunResult> {
-  await ensureProjectLogDir(project.id);
-  const sequence = await nextAgentRunSequence(project.id, "reflection");
-  const logFile = getAgentRunLogPath(project.id, "reflection", sequence);
+  await ensureWorkspaceLogDir(workspace.id);
+  const sequence = await nextAgentRunSequence(workspace.id, "reflection");
+  const logFile = getAgentRunLogPath(workspace.id, "reflection", sequence);
   const logFileName = `reflection-${String(sequence).padStart(3, "0")}.log`;
   const historyEventId = randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
-  const agent = resolveReflectionAgent(project);
+  const agent = resolveReflectionAgent(workspace);
   const adapter = getAdapter(agent.adapter);
   if (!adapter) {
     throw new Error(`Unknown reflection agent adapter: ${agent.adapter}`);
   }
 
-  await appendHistoryEvent(project.id, {
+  await appendHistoryEvent(workspace.id, {
     id: historyEventId,
     type: "reflection",
     status: "running",
@@ -483,12 +483,12 @@ export async function runReflectionSync(
     trigger: "loop",
   });
 
-  await writeReflectionInstructions(project.repoPath, project, iteration);
-  await resetReflectionSignals(project.repoPath);
-  await writeReflectionContext(project.repoPath, project.id, iteration);
+  await writeReflectionInstructions(workspace.repoPath, workspace, iteration);
+  await resetReflectionSignals(workspace.repoPath);
+  await writeReflectionContext(workspace.repoPath, workspace.id, iteration);
 
   // Snapshot plan.md so we can revert if the rewrite is invalid.
-  const planPath = join(project.repoPath, "cfcf-docs", "plan.md");
+  const planPath = join(workspace.repoPath, "cfcf-docs", "plan.md");
   let priorPlan = "";
   try {
     priorPlan = await readFile(planPath, "utf-8");
@@ -500,16 +500,16 @@ export async function runReflectionSync(
     ? ` The judge flagged: "${opts.reason.replace(/"/g, '\\"')}". Weigh it against the cross-iteration evidence.`
     : "";
   const prompt = `Read cfcf-docs/cfcf-reflection-instructions.md and follow the instructions exactly. This reflection runs at the END of iteration ${iteration}. Review the full cross-iteration history (decision log, iteration logs, prior reflections, compact git log in cfcf-docs/cfcf-reflection-context.md), classify iteration health, optionally rewrite pending items in cfcf-docs/plan.md (non-destructive: preserve all completed items), and produce cfcf-docs/reflection-analysis.md + cfcf-docs/cfcf-reflection-signals.json before exiting.${reasonHint}`;
-  const cmd = adapter.buildCommand(project.repoPath, prompt, agent.model);
+  const cmd = adapter.buildCommand(workspace.repoPath, prompt, agent.model);
 
   const managed = await spawnProcess({
     command: cmd.command,
     args: cmd.args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile,
   });
   const unregister = registerProcess({
-    projectId: project.id,
+    workspaceId: workspace.id,
     role: "reflection",
     process: managed,
     startedAt,
@@ -538,9 +538,9 @@ export async function runReflectionSync(
       }
     }
 
-    const signals = await parseReflectionSignals(project.repoPath);
+    const signals = await parseReflectionSignals(workspace.repoPath);
 
-    await updateHistoryEvent(project.id, historyEventId, {
+    await updateHistoryEvent(workspace.id, historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: new Date().toISOString(),
       exitCode: result.exitCode,
@@ -548,7 +548,7 @@ export async function runReflectionSync(
       iterationHealth: signals?.iteration_health,
       planModified: planAccepted && signals?.plan_modified === true,
       planRejectionReason,
-    } as Partial<import("./project-history.js").ReflectionHistoryEvent>);
+    } as Partial<import("./workspace-history.js").ReflectionHistoryEvent>);
 
     return {
       exitCode: result.exitCode,

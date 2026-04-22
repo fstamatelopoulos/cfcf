@@ -14,13 +14,13 @@ export type AgentAction = "review" | "start" | "resume" | "stop" | "document" | 
 export type ActiveAgent = "loop" | "review" | "document" | null;
 
 export function LoopControls({
-  projectId,
+  workspaceId,
   phase,
   activeAgent,
   onAction,
   autoReviewSpecs,
 }: {
-  projectId: string;
+  workspaceId: string;
   phase?: LoopPhase | null;
   /** Which agent is currently active (derived in ProjectDetail). */
   activeAgent: ActiveAgent;
@@ -67,7 +67,7 @@ export function LoopControls({
             <button
               className="btn btn--danger"
               disabled={loading !== null}
-              onClick={() => doAction("stopReview", () => api.stopReview(projectId))}
+              onClick={() => doAction("stopReview", () => api.stopReview(workspaceId))}
             >
               {loading === "stopReview" ? "Stopping..." : "Stop Review"}
             </button>
@@ -75,7 +75,7 @@ export function LoopControls({
             <button
               className="btn btn--primary"
               disabled={loading !== null || isBusy}
-              onClick={() => doAction("review", () => api.startReview(projectId))}
+              onClick={() => doAction("review", () => api.startReview(workspaceId))}
             >
               {loading === "review" ? "Starting review..." : "Review"}
             </button>
@@ -87,7 +87,7 @@ export function LoopControls({
           <button
             className="btn btn--primary"
             disabled={loading !== null || isBusy}
-            onClick={() => doAction("start", () => api.startLoop(projectId))}
+            onClick={() => doAction("start", () => api.startLoop(workspaceId))}
           >
             {loading === "start" ? "Starting..." : "Start Loop"}
           </button>
@@ -96,7 +96,7 @@ export function LoopControls({
           <button
             className="btn btn--danger"
             disabled={loading !== null}
-            onClick={() => doAction("stop", () => api.stopLoop(projectId))}
+            onClick={() => doAction("stop", () => api.stopLoop(workspaceId))}
           >
             {loading === "stop" ? "Stopping..." : "Stop"}
           </button>
@@ -105,7 +105,7 @@ export function LoopControls({
           <button
             className="btn btn--primary"
             disabled={loading !== null}
-            onClick={() => doAction("resume", () => api.resumeLoop(projectId))}
+            onClick={() => doAction("resume", () => api.resumeLoop(workspaceId))}
           >
             {loading === "resume" ? "Resuming..." : "Resume"}
           </button>
@@ -114,7 +114,7 @@ export function LoopControls({
           <button
             className="btn btn--danger"
             disabled={loading !== null}
-            onClick={() => doAction("stop", () => api.stopLoop(projectId))}
+            onClick={() => doAction("stop", () => api.stopLoop(workspaceId))}
           >
             Stop
           </button>
@@ -125,7 +125,7 @@ export function LoopControls({
           <button
             className="btn btn--danger"
             disabled={loading !== null}
-            onClick={() => doAction("stopDocument", () => api.stopDocument(projectId))}
+            onClick={() => doAction("stopDocument", () => api.stopDocument(workspaceId))}
           >
             {loading === "stopDocument" ? "Stopping..." : "Stop Document"}
           </button>
@@ -133,7 +133,7 @@ export function LoopControls({
           <button
             className="btn btn--primary"
             disabled={loading !== null || isBusy}
-            onClick={() => doAction("document", () => api.startDocument(projectId))}
+            onClick={() => doAction("document", () => api.startDocument(workspaceId))}
           >
             {loading === "document" ? "Starting document..." : "Document"}
           </button>

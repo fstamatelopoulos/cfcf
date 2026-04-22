@@ -23,15 +23,15 @@ function activityCaption(a: ActivityItem): string {
     case "iteration": {
       const step = a.phase ? phaseLabel[a.phase] ?? a.phase : "running";
       const iter = a.iteration ? ` #${a.iteration}` : "";
-      return `${a.projectName}: ${step}${iter}`;
+      return `${a.workspaceName}: ${step}${iter}`;
     }
     case "review":
-      return `${a.projectName}: review`;
+      return `${a.workspaceName}: review`;
     case "document":
-      return `${a.projectName}: document`;
+      return `${a.workspaceName}: document`;
     case "reflection": {
       const iter = a.iteration ? ` #${a.iteration}` : "";
-      return `${a.projectName}: reflect${iter}`;
+      return `${a.workspaceName}: reflect${iter}`;
     }
   }
 }
@@ -71,7 +71,7 @@ export function Header() {
             navigateTo("/");
           }}
         >
-          Projects
+          Workspaces
         </a>
         <a
           href="#/server"
@@ -84,7 +84,7 @@ export function Header() {
         </a>
       </nav>
       {anyActive && (
-        <span className="header__activity" title="Click to open the active project">
+        <span className="header__activity" title="Click to open the active workspace">
           <span className="status-dot status-dot--active" />
           <span className="header__activity-label">
             {activity.length === 1

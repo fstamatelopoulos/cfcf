@@ -90,9 +90,9 @@ The execution interface is designed so that swapping in a container backend does
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  <cfcf config dir>                                           │   │
 │  │    config.json               (global config, from cfcf init) │   │
-│  │    projects/<id>/config.json (per-project config)            │   │
-│  │    projects/<id>/loop-state.json   (persists across restarts)│   │
-│  │    projects/<id>/history.json      (all agent-run events)    │   │
+│  │    workspaces/<id>/config.json (per-workspace config)          │   │
+│  │    workspaces/<id>/loop-state.json   (persists across restarts)│   │
+│  │    workspaces/<id>/history.json      (all agent-run events)    │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -132,37 +132,37 @@ The central process. Always running on localhost. Manages everything.
 **Key API endpoints (sketch):**
 
 ```
-# Project management
-POST   /api/projects                    # Create/register project
-GET    /api/projects                    # List projects
-GET    /api/projects/:id                # Get project details
-PUT    /api/projects/:id/config         # Update project config
+# Workspace management
+POST   /api/workspaces                  # Create/register workspace
+GET    /api/workspaces                  # List workspaces
+GET    /api/workspaces/:id                # Get workspace details
+PUT    /api/workspaces/:id/config         # Update workspace config
 
 # Iteration lifecycle
-POST   /api/projects/:id/iterate               # Execute the next iteration
-POST   /api/projects/:id/pause                 # Pause iteration loop
-POST   /api/projects/:id/resume                # Resume (with optional feedback)
-POST   /api/projects/:id/stop                  # Stop iterating
+POST   /api/workspaces/:id/iterate               # Execute the next iteration
+POST   /api/workspaces/:id/pause                 # Pause iteration loop
+POST   /api/workspaces/:id/resume                # Resume (with optional feedback)
+POST   /api/workspaces/:id/stop                  # Stop iterating
 
 # Solution Architect review (user-invoked, advisory)
-POST   /api/projects/:id/review                # Spawn architect agent (202 Accepted)
-GET    /api/projects/:id/review/status          # Review status (poll)
+POST   /api/workspaces/:id/review                # Spawn architect agent (202 Accepted)
+GET    /api/workspaces/:id/review/status          # Review status (poll)
 
 # Iterate (async -- returns immediately, runs in background)
-POST   /api/projects/:id/iterate               # Start next iteration (202 Accepted)
-GET    /api/projects/:id/iterations/latest      # Latest iteration status
-GET    /api/projects/:id/iterations/:n/status   # Iteration status (poll for progress)
-GET    /api/projects/:id/iterations/:n/logs     # SSE log stream (live or historical)
+POST   /api/workspaces/:id/iterate               # Start next iteration (202 Accepted)
+GET    /api/workspaces/:id/iterations/latest      # Latest iteration status
+GET    /api/workspaces/:id/iterations/:n/status   # Iteration status (poll for progress)
+GET    /api/workspaces/:id/iterations/:n/logs     # SSE log stream (live or historical)
 ```
 
-### 4.2 Project Manager
+### 4.2 Workspace Manager
 
-Manages the lifecycle and configuration of projects.
+Manages the lifecycle and configuration of workspaces.
 
-**Project configuration (config.json):**
+**Workspace configuration (config.json):**
 
 ```typescript
-interface ProjectConfig {
+interface WorkspaceConfig {
   id: string;
   name: string;
   repoPath: string;                // Local path to the git repo
@@ -363,7 +363,7 @@ Runs a **separate agent** (not an API call) to evaluate the iteration.
 6. The judge agent exits
 7. cfcf reads the assessment and signal file
 
-> **Shipped in iteration 5 (item 5.6):** A fifth agent role — **Reflection** — runs after the judge on every iteration unless the judge opts out via `reflection_needed: false`, capped by the `reflectSafeguardAfter` ceiling (default 3 consecutive opt-outs, at which point reflection is forced). Reflection reads the full project history: the decision log, per-iteration changelogs under `cfcf-docs/iteration-logs/`, prior reflection analyses under `cfcf-docs/reflection-reviews/`, a compact per-iteration-branch git log assembled by cfcf into `cfcf-docs/cfcf-reflection-context.md`, and the tail of the last dev log. It may non-destructively rewrite the pending part of `plan.md` (completed items and iteration headers are preserved; cfcf validates and reverts invalid rewrites). The judge signal schema gained `reflection_needed` / `reflection_reason`; a new `reflection-runner.ts` mirrors `architect-runner.ts` and `documenter-runner.ts`, with both a sync entry point (loop) and async entry point (`cfcf reflect` CLI + `POST /api/projects/:id/reflect`). Each iteration now produces up to three commits — `dev`, `judge`, and (when reflection runs) `reflect` — so `git log --oneline` reads as a clean per-iteration story. The reflection role is also the only role that may set `recommend_stop` to pause the loop; that signal takes precedence over the judge's `continue` (research Q6). Full design, flow diagrams, signal schemas, and non-destructive plan rules: **[`docs/research/reflection-role-and-iterative-planning.md`](../research/reflection-role-and-iterative-planning.md)**.
+> **Shipped in iteration 5 (item 5.6):** A fifth agent role — **Reflection** — runs after the judge on every iteration unless the judge opts out via `reflection_needed: false`, capped by the `reflectSafeguardAfter` ceiling (default 3 consecutive opt-outs, at which point reflection is forced). Reflection reads the full project history: the decision log, per-iteration changelogs under `cfcf-docs/iteration-logs/`, prior reflection analyses under `cfcf-docs/reflection-reviews/`, a compact per-iteration-branch git log assembled by cfcf into `cfcf-docs/cfcf-reflection-context.md`, and the tail of the last dev log. It may non-destructively rewrite the pending part of `plan.md` (completed items and iteration headers are preserved; cfcf validates and reverts invalid rewrites). The judge signal schema gained `reflection_needed` / `reflection_reason`; a new `reflection-runner.ts` mirrors `architect-runner.ts` and `documenter-runner.ts`, with both a sync entry point (loop) and async entry point (`cfcf reflect` CLI + `POST /api/workspaces/:id/reflect`). Each iteration now produces up to three commits — `dev`, `judge`, and (when reflection runs) `reflect` — so `git log --oneline` reads as a clean per-iteration story. The reflection role is also the only role that may set `recommend_stop` to pause the loop; that signal takes precedence over the judge's `continue` (research Q6). Full design, flow diagrams, signal schemas, and non-destructive plan rules: **[`docs/research/reflection-role-and-iterative-planning.md`](../research/reflection-role-and-iterative-planning.md)**.
 
 ### 4.7 Signal Files (Machine-Readable Communication)
 
@@ -413,7 +413,7 @@ For v0.1, **all cfcf-generated files live in the repo** under `cfcf-docs/`. This
 
 cfcf also keeps a **local backup** of agent logs (stdout/stderr) under `~/.cfcf/` since these can be very large and shouldn't bloat the repo. But all structured context is in the repo.
 
-An external persistent memory layer (like `~/.cfcf/projects/...` or Cerefox) is a future extension. The need for it will appear organically as we evolve cfcf. For now, keeping everything in the repo is simpler, more transparent, and avoids premature optimization.
+An external persistent memory layer (like `~/.cfcf/workspaces/...` or Cerefox) is a future extension. The need for it will appear organically as we evolve cfcf. For now, keeping everything in the repo is simpler, more transparent, and avoids premature optimization.
 
 ```typescript
 // Simplified for v0.1 -- repo is the source of truth

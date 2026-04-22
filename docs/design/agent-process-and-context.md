@@ -24,7 +24,7 @@ In both scenarios, cf² handles the scaffolding and automation, but **the user i
 The user starts a new project from scratch:
 
 1. **User** creates or provides a local git repo.
-2. **User** runs `cfcf project init` -- cf² scaffolds `problem-pack/` with template files.
+2. **User** runs `cfcf workspace init` -- cf² scaffolds `problem-pack/` with template files.
 3. **User** populates the Problem Pack: writes `problem.md` (what to build), `success.md` (how to measure success), and optionally `constraints.md`, `hints.md`, `style-guide.md`, and `context/` files.
 4. **User** triggers `cfcf run` -- cf² assembles context, injects `cfcf-docs/` and `CLAUDE.md`, and launches the agent.
 5. No existing source code -- the agent builds from scratch based on the user's problem definition.
@@ -33,7 +33,7 @@ The user starts a new project from scratch:
 
 The user has an existing repo with source code, tests, CI, etc.:
 
-1. **User** runs `cfcf project init` pointing at the existing repo -- cf² scaffolds `problem-pack/`.
+1. **User** runs `cfcf workspace init` pointing at the existing repo -- cf² scaffolds `problem-pack/`.
 2. **User** populates the Problem Pack, including context files that describe the existing codebase, architectural decisions, and the new features or changes required.
 3. **User** triggers `cfcf run` -- cf² assembles context and launches the agent.
 4. The agent works within the existing codebase, guided by the user's problem definition and context.
@@ -186,13 +186,13 @@ The Solution Architect reviews the problem definition, success criteria, constra
 
 The user drives this process. It is iterative and optional:
 
-1. **User invokes**: `cfcf review --project <name>`
+1. **User invokes**: `cfcf review --workspace <name>`
 2. cf² spawns the Solution Architect agent (configurable agent + model)
 3. The architect reads all Problem Pack files and produces its assessment
 4. **User reads**: `cfcf-docs/architect-review.md` -- human-readable feedback
 5. **User decides**: refine the Problem Pack based on feedback, or move on
 6. **User may repeat**: run `cfcf review` again after making changes, as many times as desired
-7. **User launches development** whenever ready: `cfcf run --project <name>` -- no permission needed from the architect
+7. **User launches development** whenever ready: `cfcf run --workspace <name>` -- no permission needed from the architect
 
 ### 4.0.3 Architect Outputs
 

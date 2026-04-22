@@ -134,7 +134,7 @@ One-command overview of cfcf state: configuration, server status, and active pro
 
 ```bash
 cfcf status                          # Overview of everything
-cfcf status --project my-project     # Detailed loop status for a project
+cfcf status --workspace my-project     # Detailed loop status for a project
 ```
 
 With `--project`, shows the current loop phase, iteration progress, judge determinations, and pending questions.
@@ -143,14 +143,14 @@ With `--project`, shows the current loop phase, iteration progress, judge determ
 
 ## Project Management
 
-Projects link cfcf to a local git repository. Each project has its own configuration (agents, iteration limits, etc.) that inherits from the global defaults.
+Workspaces link cfcf to a local git repository. Each workspace has its own configuration (agents, iteration limits, etc.) that inherits from the global defaults.
 
-### `cfcf project init`
+### `cfcf workspace init`
 
-Create a new cfcf project linked to a git repository.
+Create a new cfcf workspace linked to a git repository.
 
 ```bash
-cfcf project init --repo /path/to/my-project --name my-project
+cfcf workspace init --repo /path/to/my-project --name my-project
 ```
 
 The repo must be:
@@ -164,28 +164,28 @@ Options:
 
 The project inherits agent settings from your global config. To override per-project, use the API or edit the project config file directly.
 
-### `cfcf project list`
+### `cfcf workspace list`
 
 List all projects.
 
 ```bash
-cfcf project list
+cfcf workspace list
 ```
 
-### `cfcf project show`
+### `cfcf workspace show`
 
 Show detailed configuration for a project.
 
 ```bash
-cfcf project show my-project
+cfcf workspace show my-project
 ```
 
-### `cfcf project delete`
+### `cfcf workspace delete`
 
 Delete a project from cfcf. This removes the cfcf config only -- your git repo is untouched.
 
 ```bash
-cfcf project delete my-project
+cfcf workspace delete my-project
 ```
 
 ---
@@ -197,7 +197,7 @@ cfcf project delete my-project
 Run the Solution Architect agent to review your Problem Pack before starting unattended development. Advisory, repeatable -- run as many times as you like.
 
 ```bash
-cfcf review --project my-project
+cfcf review --workspace my-project
 ```
 
 What the architect does:
@@ -222,11 +222,11 @@ The architect automatically detects which mode to use:
 
 Typical flow:
 ```bash
-cfcf review --project my-project     # Architect identifies gaps
+cfcf review --workspace my-project     # Architect identifies gaps
 # → User reads architect-review.md, refines problem-pack/
-cfcf review --project my-project     # Re-review after changes
+cfcf review --workspace my-project     # Re-review after changes
 # → Architect says READY
-cfcf run --project my-project        # Start unattended development
+cfcf run --workspace my-project        # Start unattended development
 ```
 
 ---
@@ -238,7 +238,7 @@ cfcf run --project my-project        # Start unattended development
 Start the full iteration loop. Each iteration runs `dev → judge → reflect (conditional) → decide` and produces up to three separate commits; when `autoReviewSpecs=true` a leading pre-loop `review` phase runs on main and gates the loop on the architect's readiness signal; when the judge determines SUCCESS, `documenter` runs (unless `autoDocumenter=false`). This is the primary workflow.
 
 ```bash
-cfcf run --project my-project
+cfcf run --workspace my-project
 ```
 
 What happens:
@@ -263,7 +263,7 @@ What happens:
 6. On completion: shows iteration history and outcome.
 
 Options:
-- `--project <name>` (required) -- project name or ID
+- `--workspace <name>` (required) -- project name or ID
 - `--problem-pack <path>` (optional) -- custom Problem Pack path (default: `<repo>/problem-pack/`)
 - `--auto-review` / `--no-auto-review` (optional, item 5.1) -- per-run override: force the Solution Architect to run as a pre-loop phase (`--auto-review`) or skip it (`--no-auto-review`). When the flag is omitted the project's `autoReviewSpecs` config value decides.
 - `--auto-document` / `--no-auto-document` (optional, item 5.1) -- per-run override for the post-SUCCESS Documenter. When omitted the project's `autoDocumenter` config value decides.
@@ -276,16 +276,16 @@ Per-run overrides are persisted on `loop-state.json` for this run, so a pause + 
 Run any command within a project (for testing, debugging, or non-agent tasks).
 
 ```bash
-cfcf run --project my-project -- echo "hello"
-cfcf run --project my-project -- npm test
-cfcf run --project my-project -- make build
+cfcf run --workspace my-project -- echo "hello"
+cfcf run --workspace my-project -- npm test
+cfcf run --workspace my-project -- make build
 ```
 
 Same branch/commit/log behavior, but without context assembly or agent launching.
 
 ### Problem Pack
 
-The Problem Pack is a directory of Markdown files that define your problem. Located at `<repo>/problem-pack/` by default (scaffolded by `cfcf project init`).
+The Problem Pack is a directory of Markdown files that define your problem. Located at `<repo>/problem-pack/` by default (scaffolded by `cfcf workspace init`).
 
 Required files:
 - `problem.md` -- what needs to be built or fixed
@@ -320,8 +320,8 @@ Resume a paused iteration loop. The loop pauses when:
 - **The pre-loop Solution Architect's readiness signal fails the `readinessGate`** (when `autoReviewSpecs=true`). In this case the loop hasn't yet entered iteration 1 -- it paused before the first iteration branch was created.
 
 ```bash
-cfcf resume --project my-project
-cfcf resume --project my-project --feedback "Focus on error handling in the API layer"
+cfcf resume --workspace my-project
+cfcf resume --workspace my-project --feedback "Focus on error handling in the API layer"
 ```
 
 The optional `--feedback` text is written to `cfcf-docs/user-feedback.md` and read by the next agent spawn. Two distinct code paths use this, both via the same flag:
@@ -334,16 +334,16 @@ The optional `--feedback` text is written to `cfcf-docs/user-feedback.md` and re
 In both cases cfcf clears `state.userFeedback` once the consuming agent has been spawned, so later iterations don't silently inherit stale guidance.
 
 **Pre-loop review resume tips:**
-- Fastest path: edit `problem-pack/problem.md` (and `success.md` if needed) to close the gaps the architect listed as `pendingQuestions`, then `cfcf resume --project <name>` with no feedback. The architect re-reads the source.
+- Fastest path: edit `problem-pack/problem.md` (and `success.md` if needed) to close the gaps the architect listed as `pendingQuestions`, then `cfcf resume --workspace <name>` with no feedback. The architect re-reads the source.
 - Faster-still path for tiny clarifications: skip the edit and pass `--feedback "..."`. The architect sees your text in `user-feedback.md` on the next spawn.
-- Status peek: `cfcf status --project <name>` prints the current `pendingQuestions` so you can see exactly what the architect asked before you type your answer.
+- Status peek: `cfcf status --workspace <name>` prints the current `pendingQuestions` so you can see exactly what the architect asked before you type your answer.
 
 ### `cfcf document`
 
 Run the Documenter agent to produce polished final project documentation. This runs automatically when the loop completes with SUCCESS, but you can also invoke it manually at any time.
 
 ```bash
-cfcf document --project my-project
+cfcf document --workspace my-project
 ```
 
 The documenter reads the entire codebase and produces:
@@ -363,8 +363,8 @@ strategic health-check between loop runs, or after editing the Problem
 Pack and before kicking off the next `cfcf run`.
 
 ```bash
-cfcf reflect --project my-project
-cfcf reflect --project my-project --prompt "focus on the auth-layer drift"
+cfcf reflect --workspace my-project
+cfcf reflect --workspace my-project --prompt "focus on the auth-layer drift"
 ```
 
 What the reflection agent does:
@@ -389,14 +389,14 @@ Results:
 - Optional: non-destructive edits to `cfcf-docs/plan.md`
 - Entry in `cfcf-docs/decision-log.md`
 
-Web parity: `POST /api/projects/:id/reflect` (see `docs/api/server-api.md`).
+Web parity: `POST /api/workspaces/:id/reflect` (see `docs/api/server-api.md`).
 
 ### `cfcf stop`
 
 Stop a running or paused iteration loop.
 
 ```bash
-cfcf stop --project my-project
+cfcf stop --workspace my-project
 ```
 
 The iteration branch is preserved. You can review the code, then restart with `cfcf run`.
@@ -421,9 +421,9 @@ Override with `CFCF_CONFIG_DIR` environment variable.
 cfcf config dir/
   config.json               # Global config (from cfcf init)
   server.pid                # Server PID file (when running)
-  projects/
-    my-project-a1b2c3/
-      config.json           # Project-specific config
+  workspaces/
+    my-workspace-a1b2c3/
+      config.json           # Workspace-specific config
       loop-state.json       # Current loop run state (phase, iterations, etc.)
       history.json          # Persistent history of all agent runs (reviews, iterations, documents)
 ```
@@ -523,32 +523,32 @@ cfcf init                                          # Configure agents and defaul
 cfcf server start                                  # Start the server
 
 # Per-project setup
-cfcf project init --repo /path/to/repo --name my-app
+cfcf workspace init --repo /path/to/repo --name my-app
 
 # Define the problem
 # Edit problem-pack/problem.md and success.md with your problem definition
 
 # Architect review (recommended before unattended development)
-cfcf review --project my-app                       # Architect identifies gaps
+cfcf review --workspace my-app                       # Architect identifies gaps
 # Read cfcf-docs/architect-review.md, refine problem-pack/
-cfcf review --project my-app                       # Re-review after refinements
+cfcf review --workspace my-app                       # Re-review after refinements
                                                     # (re-review-aware on existing projects)
 
 # Start the dark factory loop
-cfcf run --project my-app
+cfcf run --workspace my-app
 # cfcf runs: dev → judge → reflect (unless judge opts out) → decide → repeat
 # Three separate commits per iteration: dev / judge / reflect
 # On SUCCESS: documenter runs automatically to produce final docs
 # On pause: review and provide feedback
-cfcf resume --project my-app --feedback "Focus on X"
+cfcf resume --workspace my-app --feedback "Focus on X"
 
 # Ad-hoc strategic health-check (no iteration)
-cfcf reflect --project my-app
-cfcf reflect --project my-app --prompt "focus on auth-layer drift"
+cfcf reflect --workspace my-app
+cfcf reflect --workspace my-app --prompt "focus on auth-layer drift"
 
 # Monitor progress anytime
-cfcf status --project my-app
+cfcf status --workspace my-app
 
 # Stop if needed
-cfcf stop --project my-app
+cfcf stop --workspace my-app
 ```

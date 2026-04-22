@@ -61,7 +61,7 @@ async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<v
     for (const entry of active) {
       if (entry.historyEventId) {
         try {
-          await updateHistoryEvent(entry.projectId, entry.historyEventId, {
+          await updateHistoryEvent(entry.workspaceId, entry.historyEventId, {
             status: "failed",
             error: reason,
             completedAt: new Date().toISOString(),

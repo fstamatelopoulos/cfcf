@@ -62,9 +62,9 @@ Detailed server status including configuration state.
 
 ### GET /api/activity
 
-Returns a cross-project list of agent runs that are currently in flight.
+Returns a cross-workspace list of agent runs that are currently in flight.
 Used by the web header to drive the pulsing blue activity indicator and
-the "project: phase" label. Added in v0.6.0.
+the "workspace: phase" label. Added in v0.6.0.
 
 **Response:** `200 OK`
 
@@ -72,16 +72,16 @@ the "project: phase" label. Added in v0.6.0.
 {
   "active": [
     {
-      "projectId": "calc-849371",
-      "projectName": "calc",
+      "workspaceId": "calc-849371",
+      "workspaceName": "calc",
       "type": "iteration",
       "phase": "reflecting",
       "iteration": 3,
       "startedAt": "2026-04-19T01:43:32.931Z"
     },
     {
-      "projectId": "other-xyz",
-      "projectName": "other",
+      "workspaceId": "other-xyz",
+      "workspaceName": "other",
       "type": "review",
       "startedAt": "2026-04-19T01:44:10.000Z"
     }
@@ -91,13 +91,13 @@ the "project: phase" label. Added in v0.6.0.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `projectId` / `projectName` | string | Project that owns the run |
+| `workspaceId` / `workspaceName` | string | Workspace that owns the run |
 | `type` | `"iteration" \| "review" \| "document" \| "reflection"` | Kind of run |
 | `phase` | `LoopPhase` | Only for `type: "iteration"` — current phase (preparing, dev_executing, judging, reflecting, deciding, documenting) |
 | `iteration` | number | Iteration number when applicable |
 | `startedAt` | ISO string | When the run started |
 
-Loop-state has priority over raw history.json events: if a project has an
+Loop-state has priority over raw history.json events: if a workspace has an
 active loop, we emit a single entry for it (with the finer-grained
 `phase`) instead of the raw iteration / reflection "running" history rows.
 
@@ -195,11 +195,11 @@ Unknown / invalid values for bounded fields (e.g. `readinessGate` set to
 
 ---
 
-## Projects
+## Workspaces
 
-### POST /api/projects
+### POST /api/workspaces
 
-Create a new project.
+Create a new workspace.
 
 **Request body:**
 
@@ -212,7 +212,7 @@ Create a new project.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Project name |
+| `name` | Yes | Workspace name |
 | `repoPath` | Yes | Absolute path to a local git repository |
 | `devAgent` | No | Override dev agent config (defaults from global config) |
 | `judgeAgent` | No | Override judge agent config |
@@ -240,29 +240,29 @@ Create a new project.
 
 ---
 
-### GET /api/projects
+### GET /api/workspaces
 
-List all projects.
+List all workspaces.
 
-**Response:** `200 OK` -- Array of project configs, sorted by name.
+**Response:** `200 OK` -- Array of workspace configs, sorted by name.
 
 ---
 
-### GET /api/projects/:id
+### GET /api/workspaces/:id
 
-Get a project by ID or name (case-insensitive name match supported).
+Get a workspace by ID or name (case-insensitive name match supported).
 
-**Response:** `200 OK` -- Project config object.
+**Response:** `200 OK` -- Workspace config object.
 
 **Error:** `404` if not found.
 
 ---
 
-### PUT /api/projects/:id
+### PUT /api/workspaces/:id
 
-Update per-project config (partial update). Backs the web UI's project detail Config tab (item 6.14, v0.7.4) and is the same endpoint `cfcf` CLI would use for a per-project edit if one existed.
+Update per-workspace config (partial update). Backs the web UI's workspace detail Config tab (item 6.14, v0.7.4) and is the same endpoint `cfcf` CLI would use for a per-workspace edit if one existed.
 
-**Request body:** a full `ProjectConfig` object or a partial patch. Server merges onto the existing config, **preserves identity + runtime fields** (`id`, `name`, `repoPath`, `currentIteration`, `status`, `processTemplate`) regardless of what the client sends, validates bounded + enum fields, and writes the result. `notifications: null` is a special signal meaning "clear the per-project override, inherit global".
+**Request body:** a full `WorkspaceConfig` object or a partial patch. Server merges onto the existing config, **preserves identity + runtime fields** (`id`, `name`, `repoPath`, `currentIteration`, `status`, `processTemplate`) regardless of what the client sends, validates bounded + enum fields, and writes the result. `notifications: null` is a special signal meaning "clear the per-workspace override, inherit global".
 
 ```json
 {
@@ -284,20 +284,20 @@ Update per-project config (partial update). Backs the web UI's project detail Co
 }
 ```
 
-**Response:** `200 OK` -- the saved, canonicalised project config (identical shape to `GET /api/projects/:id`).
+**Response:** `200 OK` -- the saved, canonicalised workspace config (identical shape to `GET /api/workspaces/:id`).
 
 **Errors:**
 
 | Status | When |
 |---|---|
 | `400` | Invalid JSON body; `maxIterations < 1`; `pauseEvery < 0`; `reflectSafeguardAfter < 1`; invalid enum for `onStalled` / `mergeStrategy` / `readinessGate`; agent role object missing `adapter`. |
-| `404` | Project not found. |
+| `404` | Workspace not found. |
 
 ---
 
-### DELETE /api/projects/:id
+### DELETE /api/workspaces/:id
 
-Delete a project (removes config only, does not touch the repo).
+Delete a workspace (removes config only, does not touch the repo).
 
 **Response:** `200 OK` -- `{ "deleted": true }`
 
@@ -305,9 +305,9 @@ Delete a project (removes config only, does not touch the repo).
 
 ## Iterate
 
-### POST /api/projects/:id/iterate
+### POST /api/workspaces/:id/iterate
 
-Execute the next iteration within a project. Two modes:
+Execute the next iteration within a workspace. Two modes:
 
 **Agent mode** (no `command` field): reads Problem Pack, assembles context (CLAUDE.md + cfcf-docs/), launches configured dev agent, parses handoff + signal file.
 
@@ -345,7 +345,7 @@ Or with custom Problem Pack path:
   "mode": "agent",
   "status": "preparing",
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-001-dev.log",
-  "message": "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress."
+  "message": "Iteration started. Poll GET /api/workspaces/:id/iterations/:n/status for progress."
 }
 ```
 
@@ -353,7 +353,7 @@ The iteration runs in the background. Use the status and logs endpoints to track
 
 ---
 
-### GET /api/projects/:id/iterations/:n/status
+### GET /api/workspaces/:id/iterations/:n/status
 
 Get the current status of an iteration.
 
@@ -362,8 +362,8 @@ Get the current status of an iteration.
 ```json
 {
   "iteration": 1,
-  "projectId": "my-web-app-a1b2c3",
-  "projectName": "my-web-app",
+  "workspaceId": "my-web-app-a1b2c3",
+  "workspaceName": "my-web-app",
   "branch": "cfcf/iteration-1",
   "mode": "agent",
   "status": "completed",
@@ -398,15 +398,15 @@ Get the current status of an iteration.
 
 ---
 
-### GET /api/projects/:id/iterations/latest
+### GET /api/workspaces/:id/iterations/latest
 
-Get the status of the most recent iteration for a project.
+Get the status of the most recent iteration for a workspace.
 
 Same response format as `/iterations/:n/status`.
 
 ---
 
-### GET /api/projects/:id/iterations/:n/logs
+### GET /api/workspaces/:id/iterations/:n/logs
 
 SSE stream of log events for a completed iteration (the dev agent log). Tails the file if the iteration is still active.
 
@@ -417,17 +417,17 @@ SSE stream of log events for a completed iteration (the dev agent log). Tails th
 
 ---
 
-### GET /api/projects/:id/logs/:filename
+### GET /api/workspaces/:id/logs/:filename
 
-Generic SSE log streaming by filename. Used for architect / documenter / judge logs and any other file under the project's log directory.
+Generic SSE log streaming by filename. Used for architect / documenter / judge logs and any other file under the workspace's log directory.
 
 The server detects if the log belongs to a live agent run (iteration in progress, review in progress, etc.) and tails the file accordingly. For completed runs, reads the file once and closes the stream.
 
 **Examples:**
-- `/api/projects/my-app/logs/iteration-001-dev.log`
-- `/api/projects/my-app/logs/iteration-001-judge.log`
-- `/api/projects/my-app/logs/architect-001.log`
-- `/api/projects/my-app/logs/documenter-001.log`
+- `/api/workspaces/my-app/logs/iteration-001-dev.log`
+- `/api/workspaces/my-app/logs/iteration-001-judge.log`
+- `/api/workspaces/my-app/logs/architect-001.log`
+- `/api/workspaces/my-app/logs/documenter-001.log`
 
 **Events:** same as above (`log`, `done`, `error`).
 
@@ -435,9 +435,9 @@ The server detects if the log belongs to a live agent run (iteration in progress
 
 ---
 
-### GET /api/projects/:id/history
+### GET /api/workspaces/:id/history
 
-Returns the project's history events array. Each event represents an agent invocation (review, iteration, document). History persists across loop restarts — unlike `loop-state.json` which resets on each `startLoop`.
+Returns the workspace's history events array. Each event represents an agent invocation (review, iteration, document). History persists across loop restarts — unlike `loop-state.json` which resets on each `startLoop`.
 
 **Response:** `200 OK`
 
@@ -530,7 +530,7 @@ Events are returned in insertion order (chronological). Clients should sort if a
 
 ## Solution Architect Review
 
-### POST /api/projects/:id/review
+### POST /api/workspaces/:id/review
 
 Start a Solution Architect review of the Problem Pack. User-invoked, advisory, repeatable. The architect reviews the problem definition, identifies gaps, and produces an initial plan outline.
 
@@ -546,30 +546,30 @@ Start a Solution Architect review of the Problem Pack. User-invoked, advisory, r
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
+  "workspaceId": "my-web-app-a1b2c3",
   "status": "preparing",
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-000-architect.log",
-  "message": "Architect review started. Poll GET /api/projects/:id/review/status for progress."
+  "message": "Architect review started. Poll GET /api/workspaces/:id/review/status for progress."
 }
 ```
 
 ---
 
-### POST /api/projects/:id/review/stop
+### POST /api/workspaces/:id/review/stop
 
 Stop a running architect review. Kills the agent process and marks the review as failed with "Stopped by user".
 
 **Response:** `200 OK`
 
 ```json
-{ "projectId": "...", "status": "failed", "message": "Review stopped." }
+{ "workspaceId": "...", "status": "failed", "message": "Review stopped." }
 ```
 
-**Error:** `404` if no review is running for this project.
+**Error:** `404` if no review is running for this workspace.
 
 ---
 
-### GET /api/projects/:id/review/status
+### GET /api/workspaces/:id/review/status
 
 Get the status of an architect review.
 
@@ -577,8 +577,8 @@ Get the status of an architect review.
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
-  "projectName": "my-web-app",
+  "workspaceId": "my-web-app-a1b2c3",
+  "workspaceName": "my-web-app",
   "status": "completed",
   "startedAt": "2026-04-12T05:16:00.000Z",
   "completedAt": "2026-04-12T05:17:30.000Z",
@@ -598,38 +598,38 @@ Get the status of an architect review.
 
 ## Documenter
 
-### POST /api/projects/:id/document
+### POST /api/workspaces/:id/document
 
-Run the Documenter agent to produce polished final project documentation. User-invoked, repeatable. Also runs automatically post-SUCCESS in the iteration loop.
+Run the Documenter agent to produce polished final workspace documentation. User-invoked, repeatable. Also runs automatically post-SUCCESS in the iteration loop.
 
 **Response:** `202 Accepted`
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
+  "workspaceId": "my-web-app-a1b2c3",
   "status": "preparing",
   "logFile": "/Users/fotis/.cfcf/logs/my-web-app-a1b2c3/iteration-000-documenter.log",
-  "message": "Documenter started. Poll GET /api/projects/:id/document/status for progress."
+  "message": "Documenter started. Poll GET /api/workspaces/:id/document/status for progress."
 }
 ```
 
 ---
 
-### POST /api/projects/:id/document/stop
+### POST /api/workspaces/:id/document/stop
 
 Stop a running documenter. Kills the agent process and marks the document run as failed with "Stopped by user".
 
 **Response:** `200 OK`
 
 ```json
-{ "projectId": "...", "status": "failed", "message": "Documenter stopped." }
+{ "workspaceId": "...", "status": "failed", "message": "Documenter stopped." }
 ```
 
-**Error:** `404` if no document run is active for this project.
+**Error:** `404` if no document run is active for this workspace.
 
 ---
 
-### GET /api/projects/:id/document/status
+### GET /api/workspaces/:id/document/status
 
 Get the status of a documenter run.
 
@@ -637,8 +637,8 @@ Get the status of a documenter run.
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
-  "projectName": "my-web-app",
+  "workspaceId": "my-web-app-a1b2c3",
+  "workspaceName": "my-web-app",
   "status": "completed",
   "startedAt": "2026-04-12T05:16:00.000Z",
   "completedAt": "2026-04-12T05:17:30.000Z",
@@ -651,7 +651,7 @@ Get the status of a documenter run.
 
 ## Reflection (ad-hoc)
 
-### POST /api/projects/:id/reflect
+### POST /api/workspaces/:id/reflect
 
 Run the Reflection agent ad-hoc against the current state. Does NOT
 modify `loop-state.json` and does NOT write an `iteration-log` (no
@@ -669,14 +669,14 @@ iteration happened). Added in v0.6.0.
 
 ```json
 {
-  "projectId": "calc-849371",
+  "workspaceId": "calc-849371",
   "status": "preparing",
   "logFile": "/Users/you/.cfcf/logs/calc-849371/reflection-002.log",
-  "message": "Reflection started. Poll GET /api/projects/:id/reflect/status for progress."
+  "message": "Reflection started. Poll GET /api/workspaces/:id/reflect/status for progress."
 }
 ```
 
-### GET /api/projects/:id/reflect/status
+### GET /api/workspaces/:id/reflect/status
 
 Returns the current reflection run state (including parsed signals once
 available).
@@ -686,7 +686,7 @@ available).
 `ReflectionSignals` when complete (`iteration_health`, `plan_modified`,
 `key_observation`, `recommend_stop`).
 
-### POST /api/projects/:id/reflect/stop
+### POST /api/workspaces/:id/reflect/stop
 
 Kill a running reflection and mark it failed.
 
@@ -694,7 +694,7 @@ Kill a running reflection and mark it failed.
 
 ```json
 {
-  "projectId": "calc-849371",
+  "workspaceId": "calc-849371",
   "status": "failed",
   "message": "Reflection stopped."
 }
@@ -708,7 +708,7 @@ the loop (see below) rather than as a standalone endpoint. The loop's
 
 ## Iteration Loop (Dark Factory)
 
-### POST /api/projects/:id/loop/start
+### POST /api/workspaces/:id/loop/start
 
 Start the full iteration loop: `pre_loop_reviewing` (conditional, item 5.1) → dev → judge → reflect (conditional) → decide → repeat.
 
@@ -723,23 +723,23 @@ Start the full iteration loop: `pre_loop_reviewing` (conditional, item 5.1) → 
 }
 ```
 
-The three 5.1 keys are optional per-run overrides. When omitted they fall back to the project config (then the global config, then the hard default). Overrides are persisted on `loop-state.json` so the behaviour is stable across pause/resume cycles.
+The three 5.1 keys are optional per-run overrides. When omitted they fall back to the workspace config (then the global config, then the hard default). Overrides are persisted on `loop-state.json` so the behaviour is stable across pause/resume cycles.
 
 **Response:** `202 Accepted`
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
+  "workspaceId": "my-web-app-a1b2c3",
   "phase": "idle",
   "maxIterations": 10,
   "pauseEvery": 3,
-  "message": "Iteration loop started. Poll GET /api/projects/:id/loop/status for progress."
+  "message": "Iteration loop started. Poll GET /api/workspaces/:id/loop/status for progress."
 }
 ```
 
 ---
 
-### GET /api/projects/:id/loop/status
+### GET /api/workspaces/:id/loop/status
 
 Get the full loop state including iteration history.
 
@@ -747,8 +747,8 @@ Get the full loop state including iteration history.
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
-  "projectName": "my-web-app",
+  "workspaceId": "my-web-app-a1b2c3",
+  "workspaceName": "my-web-app",
   "phase": "dev_executing",
   "currentIteration": 3,
   "maxIterations": 10,
@@ -784,7 +784,7 @@ Get the full loop state including iteration history.
 
 ---
 
-### POST /api/projects/:id/loop/resume
+### POST /api/workspaces/:id/loop/resume
 
 Resume a paused loop with optional user feedback.
 
@@ -800,7 +800,7 @@ Resume a paused loop with optional user feedback.
 
 ---
 
-### POST /api/projects/:id/loop/stop
+### POST /api/workspaces/:id/loop/stop
 
 Stop a running or paused loop.
 
@@ -808,7 +808,7 @@ Stop a running or paused loop.
 
 ```json
 {
-  "projectId": "my-web-app-a1b2c3",
+  "workspaceId": "my-web-app-a1b2c3",
   "phase": "stopped",
   "currentIteration": 3,
   "outcome": "stopped",

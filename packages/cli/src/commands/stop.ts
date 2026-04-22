@@ -8,16 +8,16 @@ import { isServerReachable, post } from "../client.js";
 export function registerStopCommand(program: Command): void {
   program
     .command("stop")
-    .description("Stop the iteration loop for a project")
-    .requiredOption("--project <name>", "Project name or ID")
+    .description("Stop the iteration loop for a workspace")
+    .requiredOption("--workspace <name>", "Workspace name or ID")
     .action(async (opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
         process.exit(1);
       }
 
-      const res = await post<{ projectId: string; phase: string; currentIteration: number; outcome: string; message: string }>(
-        `/api/projects/${encodeURIComponent(opts.project)}/loop/stop`,
+      const res = await post<{ workspaceId: string; phase: string; currentIteration: number; outcome: string; message: string }>(
+        `/api/workspaces/${encodeURIComponent(opts.workspace)}/loop/stop`,
       );
 
       if (!res.ok) {
@@ -30,6 +30,6 @@ export function registerStopCommand(program: Command): void {
       console.log();
       console.log("The iteration branch is preserved. You can:");
       console.log(`  Review code:  cd <repo> && git log --oneline`);
-      console.log(`  Restart loop: cfcf run --project ${opts.project}`);
+      console.log(`  Restart loop: cfcf run --workspace ${opts.workspace}`);
     });
 }

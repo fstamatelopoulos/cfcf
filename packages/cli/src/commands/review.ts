@@ -10,15 +10,15 @@ import { isServerReachable, post, get } from "../client.js";
 import { formatElapsed } from "../format.js";
 
 interface ReviewStartResponse {
-  projectId: string;
+  workspaceId: string;
   status: string;
   logFile: string;
   message: string;
 }
 
 interface ReviewStatusResponse {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -38,7 +38,7 @@ export function registerReviewCommand(program: Command): void {
   program
     .command("review")
     .description("Run Solution Architect review on the Problem Pack (advisory, repeatable)")
-    .requiredOption("--project <name>", "Project name or ID")
+    .requiredOption("--workspace <name>", "Workspace name or ID")
     .option("--problem-pack <path>", "Path to Problem Pack directory")
     .action(async (opts) => {
       if (!(await isServerReachable())) {
@@ -46,8 +46,8 @@ export function registerReviewCommand(program: Command): void {
         process.exit(1);
       }
 
-      console.log(`Project:  ${opts.project}`);
-      console.log(`Mode:     Solution Architect review`);
+      console.log(`Workspace: ${opts.workspace}`);
+      console.log(`Mode:      Solution Architect review`);
       console.log();
 
       const body: Record<string, unknown> = {};
@@ -57,7 +57,7 @@ export function registerReviewCommand(program: Command): void {
 
       // Start the review
       const startRes = await post<ReviewStartResponse>(
-        `/api/projects/${encodeURIComponent(opts.project)}/review`,
+        `/api/workspaces/${encodeURIComponent(opts.workspace)}/review`,
         Object.keys(body).length > 0 ? body : undefined,
       );
 
@@ -72,13 +72,13 @@ export function registerReviewCommand(program: Command): void {
       console.log();
 
       // Poll for status with elapsed time
-      const projectParam = encodeURIComponent(opts.project);
+      const workspaceParam = encodeURIComponent(opts.workspace);
       let lastStatus = "";
       let statusStartTime = Date.now();
 
       while (true) {
         const statusRes = await get<ReviewStatusResponse>(
-          `/api/projects/${projectParam}/review/status`,
+          `/api/workspaces/${workspaceParam}/review/status`,
         );
 
         if (!statusRes.ok) {
@@ -158,6 +158,6 @@ function printReviewResult(r: ReviewStatusResponse): void {
   console.log("What to do next:");
   console.log(`  Read full review:   cat cfcf-docs/architect-review.md`);
   console.log(`  Read plan outline:  cat cfcf-docs/plan.md`);
-  console.log(`  Refine & re-review: cfcf review --project ${r.projectName}`);
-  console.log(`  Start development:  cfcf run --project ${r.projectName}`);
+  console.log(`  Refine & re-review: cfcf review --workspace ${r.workspaceName}`);
+  console.log(`  Start development:  cfcf run --workspace ${r.workspaceName}`);
 }

@@ -1,35 +1,35 @@
 /**
- * Project management for cfcf.
+ * Workspace management for cfcf.
  *
- * Projects are stored under ~/.cfcf/projects/<project-id>/config.json.
- * Each project links to a local git repo and has its own agent/iteration config.
+ * Workspaces are stored under ~/.cfcf/workspaces/<workspace-id>/config.json.
+ * Each workspace links to a local git repo and has its own agent/iteration config.
  */
 
 import { join } from "path";
 import { mkdir, readFile, writeFile, readdir, access, rm } from "fs/promises";
 import { getConfigDir, DEFAULT_MAX_ITERATIONS, DEFAULT_PAUSE_EVERY } from "./constants.js";
 import { readConfig } from "./config.js";
-import type { ProjectConfig, CfcfGlobalConfig } from "./types.js";
+import type { WorkspaceConfig } from "./types.js";
 import { randomBytes } from "crypto";
 
 /**
- * Get the projects root directory.
+ * Get the workspaces root directory.
  */
-export function getProjectsDir(): string {
-  return join(getConfigDir(), "projects");
+export function getWorkspacesDir(): string {
+  return join(getConfigDir(), "workspaces");
 }
 
 /**
- * Get the directory for a specific project.
+ * Get the directory for a specific workspace.
  */
-export function getProjectDir(projectId: string): string {
-  return join(getProjectsDir(), projectId);
+export function getWorkspaceDir(workspaceId: string): string {
+  return join(getWorkspacesDir(), workspaceId);
 }
 
 /**
- * Generate a short unique project ID from the name.
+ * Generate a short unique workspace ID from the name.
  */
-function generateProjectId(name: string): string {
+function generateWorkspaceId(name: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -40,9 +40,9 @@ function generateProjectId(name: string): string {
 }
 
 /**
- * Create a new project.
+ * Create a new workspace.
  */
-export async function createProject(opts: {
+export async function createWorkspace(opts: {
   name: string;
   repoPath: string;
   devAgent?: { adapter: string; model?: string };
@@ -51,12 +51,12 @@ export async function createProject(opts: {
   documenterAgent?: { adapter: string; model?: string };
   maxIterations?: number;
   pauseEvery?: number;
-}): Promise<ProjectConfig> {
+}): Promise<WorkspaceConfig> {
   // Load global config for defaults
   const globalConfig = await readConfig();
 
-  const id = generateProjectId(opts.name);
-  const config: ProjectConfig = {
+  const id = generateWorkspaceId(opts.name);
+  const config: WorkspaceConfig = {
     id,
     name: opts.name,
     repoPath: opts.repoPath,
@@ -79,7 +79,7 @@ export async function createProject(opts: {
     status: "idle",
   };
 
-  const dir = getProjectDir(id);
+  const dir = getWorkspaceDir(id);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
 
@@ -87,14 +87,14 @@ export async function createProject(opts: {
 }
 
 /**
- * Get a project by ID.
+ * Get a workspace by ID.
  */
-export async function getProject(projectId: string): Promise<ProjectConfig | null> {
+export async function getWorkspace(workspaceId: string): Promise<WorkspaceConfig | null> {
   try {
-    const raw = await readFile(join(getProjectDir(projectId), "config.json"), "utf-8");
-    const parsed = JSON.parse(raw) as ProjectConfig;
-    // Backfill fields introduced after the project was created. (item 5.6
-    // adds reflectionAgent / reflectSafeguardAfter; older project configs
+    const raw = await readFile(join(getWorkspaceDir(workspaceId), "config.json"), "utf-8");
+    const parsed = JSON.parse(raw) as WorkspaceConfig;
+    // Backfill fields introduced after the workspace was created. (item 5.6
+    // adds reflectionAgent / reflectSafeguardAfter; older workspace configs
     // don't have them.) Kept in-memory only -- do not rewrite the file here.
     if (!parsed.reflectionAgent?.adapter) {
       parsed.reflectionAgent = {
@@ -126,48 +126,48 @@ export async function getProject(projectId: string): Promise<ProjectConfig | nul
 }
 
 /**
- * Find a project by name (partial match, case-insensitive).
+ * Find a workspace by name (partial match, case-insensitive).
  * Returns the first match.
  */
-export async function findProjectByName(name: string): Promise<ProjectConfig | null> {
-  const projects = await listProjects();
+export async function findWorkspaceByName(name: string): Promise<WorkspaceConfig | null> {
+  const workspaces = await listWorkspaces();
   const lower = name.toLowerCase();
-  return projects.find((p) => p.name.toLowerCase() === lower) ??
-    projects.find((p) => p.id.toLowerCase().startsWith(lower)) ??
+  return workspaces.find((w) => w.name.toLowerCase() === lower) ??
+    workspaces.find((w) => w.id.toLowerCase().startsWith(lower)) ??
     null;
 }
 
 /**
- * List all projects.
+ * List all workspaces.
  */
-export async function listProjects(): Promise<ProjectConfig[]> {
-  const dir = getProjectsDir();
+export async function listWorkspaces(): Promise<WorkspaceConfig[]> {
+  const dir = getWorkspacesDir();
   try {
     const entries = await readdir(dir);
-    const projects: ProjectConfig[] = [];
+    const workspaces: WorkspaceConfig[] = [];
     for (const entry of entries) {
-      const config = await getProject(entry);
-      if (config) projects.push(config);
+      const config = await getWorkspace(entry);
+      if (config) workspaces.push(config);
     }
-    return projects.sort((a, b) => a.name.localeCompare(b.name));
+    return workspaces.sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return [];
   }
 }
 
 /**
- * Update a project config.
+ * Update a workspace config.
  */
-export async function updateProject(
-  projectId: string,
-  updates: Partial<Omit<ProjectConfig, "id">>,
-): Promise<ProjectConfig | null> {
-  const existing = await getProject(projectId);
+export async function updateWorkspace(
+  workspaceId: string,
+  updates: Partial<Omit<WorkspaceConfig, "id">>,
+): Promise<WorkspaceConfig | null> {
+  const existing = await getWorkspace(workspaceId);
   if (!existing) return null;
 
   const updated = { ...existing, ...updates };
   await writeFile(
-    join(getProjectDir(projectId), "config.json"),
+    join(getWorkspaceDir(workspaceId), "config.json"),
     JSON.stringify(updated, null, 2) + "\n",
     "utf-8",
   );
@@ -175,11 +175,11 @@ export async function updateProject(
 }
 
 /**
- * Delete a project.
+ * Delete a workspace.
  */
-export async function deleteProject(projectId: string): Promise<boolean> {
+export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
   try {
-    await rm(getProjectDir(projectId), { recursive: true, force: true });
+    await rm(getWorkspaceDir(workspaceId), { recursive: true, force: true });
     return true;
   } catch {
     return false;
@@ -187,22 +187,22 @@ export async function deleteProject(projectId: string): Promise<boolean> {
 }
 
 /**
- * Increment the project's iteration counter and return the new iteration number.
+ * Increment the workspace's iteration counter and return the new iteration number.
  * This is atomic: read current, increment, write back.
  */
-export async function nextIteration(projectId: string): Promise<number | null> {
-  const project = await getProject(projectId);
-  if (!project) return null;
+export async function nextIteration(workspaceId: string): Promise<number | null> {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace) return null;
 
-  const next = (project.currentIteration || 0) + 1;
-  await updateProject(projectId, { currentIteration: next });
+  const next = (workspace.currentIteration || 0) + 1;
+  await updateWorkspace(workspaceId, { currentIteration: next });
   return next;
 }
 
 /**
- * Verify a project's repo path exists and is a git repo.
+ * Verify a workspace's repo path exists and is a git repo.
  */
-export async function validateProjectRepo(repoPath: string): Promise<{ valid: boolean; error?: string }> {
+export async function validateWorkspaceRepo(repoPath: string): Promise<{ valid: boolean; error?: string }> {
   try {
     await access(repoPath);
   } catch {

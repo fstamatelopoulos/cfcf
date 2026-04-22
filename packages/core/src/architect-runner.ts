@@ -8,14 +8,14 @@
 
 import { join } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
-import type { ProjectConfig, ArchitectSignals } from "./types.js";
+import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 import { getTemplate, writeTemplate } from "./templates.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { registerProcess } from "./active-processes.js";
-import { dispatchForProject, makeEvent } from "./notifications/index.js";
-import { getAgentRunLogPath, nextAgentRunSequence, ensureProjectLogDir } from "./log-storage.js";
-import { appendHistoryEvent, updateHistoryEvent } from "./project-history.js";
+import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
+import { getAgentRunLogPath, nextAgentRunSequence, ensureWorkspaceLogDir } from "./log-storage.js";
+import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
@@ -27,8 +27,8 @@ import { validatePlanRewrite, planHasCompletedItems } from "./plan-validation.js
 // --- Review State ---
 
 export interface ReviewState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -48,31 +48,31 @@ export interface ReviewState {
 const reviewStore = new Map<string, ReviewState>();
 const reviewProcessStore = new Map<string, ManagedProcess>();
 
-export function getReviewState(projectId: string): ReviewState | undefined {
-  return reviewStore.get(projectId);
+export function getReviewState(workspaceId: string): ReviewState | undefined {
+  return reviewStore.get(workspaceId);
 }
 
 /**
- * Stop a running review for a project. Kills the process and updates state.
+ * Stop a running review for a workspace. Kills the process and updates state.
  */
-export async function stopReview(projectId: string): Promise<ReviewState | null> {
-  const state = reviewStore.get(projectId);
+export async function stopReview(workspaceId: string): Promise<ReviewState | null> {
+  const state = reviewStore.get(workspaceId);
   if (!state) return null;
   if (!["preparing", "executing", "collecting"].includes(state.status)) {
     return state; // already terminal
   }
 
-  const proc = reviewProcessStore.get(projectId);
+  const proc = reviewProcessStore.get(workspaceId);
   if (proc) {
     proc.kill();
-    reviewProcessStore.delete(projectId);
+    reviewProcessStore.delete(workspaceId);
   }
 
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
 
-  await updateHistoryEvent(projectId, state.historyEventId, {
+  await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
     error: "Stopped by user",
     completedAt: state.completedAt,
@@ -88,10 +88,10 @@ export async function stopReview(projectId: string): Promise<ReviewState | null>
  */
 export async function writeArchitectInstructions(
   repoPath: string,
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
 ): Promise<void> {
   let template = await getTemplate("cfcf-architect-instructions.md", { repoPath });
-  template = template.replace(/\{\{PROJECT_NAME\}\}/g, project.name);
+  template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
   await mkdir(cfcfDocsDir, { recursive: true });
@@ -139,36 +139,36 @@ export async function parseArchitectSignals(
 }
 
 /**
- * Start an architect review for a project.
+ * Start an architect review for a workspace.
  * Runs asynchronously -- returns the initial state immediately.
  */
 export async function startReview(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   opts?: { problemPackPath?: string },
 ): Promise<ReviewState> {
-  await ensureProjectLogDir(project.id);
-  const sequence = await nextAgentRunSequence(project.id, "architect");
-  const logFile = getAgentRunLogPath(project.id, "architect", sequence);
+  await ensureWorkspaceLogDir(workspace.id);
+  const sequence = await nextAgentRunSequence(workspace.id, "architect");
+  const logFile = getAgentRunLogPath(workspace.id, "architect", sequence);
   const logFileName = `architect-${String(sequence).padStart(3, "0")}.log`;
 
   const historyEventId = randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
   // Record the history event immediately
-  await appendHistoryEvent(project.id, {
+  await appendHistoryEvent(workspace.id, {
     id: historyEventId,
     type: "review",
     status: "running",
     startedAt,
     logFile: logFileName,
-    agent: project.architectAgent.adapter,
-    model: project.architectAgent.model,
+    agent: workspace.architectAgent.adapter,
+    model: workspace.architectAgent.model,
     trigger: "manual",
-  } as import("./project-history.js").ReviewHistoryEvent);
+  } as import("./workspace-history.js").ReviewHistoryEvent);
 
   const state: ReviewState = {
-    projectId: project.id,
-    projectName: project.name,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
     status: "preparing",
     startedAt,
     logFile,
@@ -177,34 +177,34 @@ export async function startReview(
     historyEventId,
   };
 
-  reviewStore.set(project.id, state);
+  reviewStore.set(workspace.id, state);
 
   // Run in background. Wrap the error handler itself in try/catch so that
   // a failure to update state (e.g., disk write error) doesn't result in
   // a silent failure with no trace.
-  runReview(project, state, opts).catch(async (err) => {
+  runReview(workspace, state, opts).catch(async (err) => {
     try {
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
-      await updateHistoryEvent(project.id, historyEventId, {
+      await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
         completedAt: state.completedAt,
       });
-      dispatchForProject(
+      dispatchForWorkspace(
         makeEvent({
           type: "agent.failed",
           title: "Architect review failed",
-          message: `${project.name}: ${state.error}`,
-          projectId: project.id,
-          projectName: project.name,
+          message: `${workspace.name}: ${state.error}`,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
           details: { role: "architect", error: state.error },
         }),
-        project.notifications,
+        workspace.notifications,
       );
     } catch (handlerErr) {
-      console.error(`[architect-runner] Failed to record error for ${project.id}:`, handlerErr);
+      console.error(`[architect-runner] Failed to record error for ${workspace.id}:`, handlerErr);
       console.error(`  Original error:`, err);
     }
   });
@@ -216,17 +216,17 @@ export async function startReview(
  * Execute the architect review.
  */
 async function runReview(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   state: ReviewState,
   opts?: { problemPackPath?: string },
 ): Promise<void> {
-  const adapter = getAdapter(project.architectAgent.adapter);
+  const adapter = getAdapter(workspace.architectAgent.adapter);
   if (!adapter) {
-    throw new Error(`Unknown architect agent adapter: ${project.architectAgent.adapter}`);
+    throw new Error(`Unknown architect agent adapter: ${workspace.architectAgent.adapter}`);
   }
 
   // Validate and read Problem Pack
-  const packPath = opts?.problemPackPath || join(project.repoPath, "problem-pack");
+  const packPath = opts?.problemPackPath || join(workspace.repoPath, "problem-pack");
   const packValidation = await validateProblemPack(packPath);
   if (!packValidation.valid) {
     throw new Error(
@@ -239,22 +239,22 @@ async function runReview(
   const ctx: IterationContext = {
     iteration: 0, // Architect runs before any iteration
     problemPack,
-    project,
+    workspace,
   };
-  await writeContextToRepo(project.repoPath, ctx);
+  await writeContextToRepo(workspace.repoPath, ctx);
 
   // Write architect-specific instructions
-  await writeArchitectInstructions(project.repoPath, project);
-  await resetArchitectSignals(project.repoPath);
+  await writeArchitectInstructions(workspace.repoPath, workspace);
+  await resetArchitectSignals(workspace.repoPath);
 
   // Detect re-review mode. If cfcf-docs/plan.md already has any `[x]`
-  // completed items, the project has previous iterations and the architect
+  // completed items, the workspace has previous iterations and the architect
   // is being re-run (e.g. user added new requirements to the problem pack,
   // or adopted an existing repo with a partial plan). The prompt and the
   // template branch on this so the architect extends the plan instead of
   // producing a fresh one. Snapshot the plan so we can revert any
   // destructive rewrite -- same rule reflection applies (§6.3).
-  const planPath = join(project.repoPath, "cfcf-docs", "plan.md");
+  const planPath = join(workspace.repoPath, "cfcf-docs", "plan.md");
   let priorPlan = "";
   try {
     priorPlan = await readFile(planPath, "utf-8");
@@ -267,19 +267,19 @@ async function runReview(
   state.status = "executing";
 
   const prompt = reReviewMode
-    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing project -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration_history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
+    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing workspace -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration_history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
     : `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. Review the problem definition, produce cfcf-docs/architect-review.md, cfcf-docs/plan.md, and cfcf-docs/cfcf-architect-signals.json before exiting.`;
-  const cmd = adapter.buildCommand(project.repoPath, prompt, project.architectAgent.model);
+  const cmd = adapter.buildCommand(workspace.repoPath, prompt, workspace.architectAgent.model);
 
   const managed = await spawnProcess({
     command: cmd.command,
     args: cmd.args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile: state.logFile,
   });
-  reviewProcessStore.set(project.id, managed);
+  reviewProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
-    projectId: project.id,
+    workspaceId: workspace.id,
     role: "architect",
     process: managed,
     startedAt: state.startedAt,
@@ -319,7 +319,7 @@ async function runReview(
       }
     }
 
-    const signals = await parseArchitectSignals(project.repoPath);
+    const signals = await parseArchitectSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
 
     state.status = "completed";
@@ -328,14 +328,14 @@ async function runReview(
     // Update history event with final status.
     // We persist the full signals inline so prior reviews remain viewable
     // after `cfcf-docs/cfcf-architect-signals.json` is overwritten by later runs.
-    await updateHistoryEvent(project.id, state.historyEventId, {
+    await updateHistoryEvent(workspace.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: state.completedAt,
       readiness: signals?.readiness,
       signals: signals ?? undefined,
-    } as Partial<import("./project-history.js").ReviewHistoryEvent>);
+    } as Partial<import("./workspace-history.js").ReviewHistoryEvent>);
   } finally {
-    reviewProcessStore.delete(project.id);
+    reviewProcessStore.delete(workspace.id);
     unregister();
   }
 }
@@ -360,7 +360,7 @@ export interface ReviewRunResult {
  * gate. Mirrors `runDocumentSync` in shape.
  */
 export async function runReviewSync(
-  project: ProjectConfig,
+  workspace: WorkspaceConfig,
   opts?: {
     problemPackPath?: string;
     /**
@@ -384,13 +384,13 @@ export async function runReviewSync(
     trigger?: "loop" | "manual";
   },
 ): Promise<ReviewRunResult> {
-  const adapter = getAdapter(project.architectAgent.adapter);
+  const adapter = getAdapter(workspace.architectAgent.adapter);
   if (!adapter) {
-    throw new Error(`Unknown architect agent adapter: ${project.architectAgent.adapter}`);
+    throw new Error(`Unknown architect agent adapter: ${workspace.architectAgent.adapter}`);
   }
 
   // Validate + read Problem Pack
-  const packPath = opts?.problemPackPath || join(project.repoPath, "problem-pack");
+  const packPath = opts?.problemPackPath || join(workspace.repoPath, "problem-pack");
   const packValidation = await validateProblemPack(packPath);
   if (!packValidation.valid) {
     throw new Error(
@@ -400,35 +400,35 @@ export async function runReviewSync(
   const problemPack = await readProblemPack(packPath);
 
   // Log + history event
-  await ensureProjectLogDir(project.id);
-  const sequence = await nextAgentRunSequence(project.id, "architect");
-  const logFile = getAgentRunLogPath(project.id, "architect", sequence);
+  await ensureWorkspaceLogDir(workspace.id);
+  const sequence = await nextAgentRunSequence(workspace.id, "architect");
+  const logFile = getAgentRunLogPath(workspace.id, "architect", sequence);
   const logFileName = `architect-${String(sequence).padStart(3, "0")}.log`;
   const historyEventId = randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
 
-  await appendHistoryEvent(project.id, {
+  await appendHistoryEvent(workspace.id, {
     id: historyEventId,
     type: "review",
     status: "running",
     startedAt,
     logFile: logFileName,
-    agent: project.architectAgent.adapter,
-    model: project.architectAgent.model,
+    agent: workspace.architectAgent.adapter,
+    model: workspace.architectAgent.model,
     trigger: opts?.trigger ?? "loop",
-  } as import("./project-history.js").ReviewHistoryEvent);
+  } as import("./workspace-history.js").ReviewHistoryEvent);
 
   // Read any existing judge-assessment.md from disk BEFORE writeContextToRepo
   // runs -- otherwise writeContextToRepo writes the default "No previous
   // judge assessment..." placeholder and we silently clobber the previous
-  // iteration's verdict on brownfield projects (fixed in v0.7.6). Same
+  // iteration's verdict on brownfield workspaces (fixed in v0.7.6). Same
   // fix pattern we used for `userFeedback` in v0.7.2.
   let previousJudgeAssessment: string | undefined;
   try {
     const { parseJudgeAssessment } = await import("./judge-runner.js");
-    previousJudgeAssessment = (await parseJudgeAssessment(project.repoPath)) ?? undefined;
+    previousJudgeAssessment = (await parseJudgeAssessment(workspace.repoPath)) ?? undefined;
   } catch {
-    // No previous assessment -- fresh project, pass through
+    // No previous assessment -- fresh workspace, pass through
   }
 
   // Write context files and architect-specific files into the repo.
@@ -437,16 +437,16 @@ export async function runReviewSync(
   const ctx: IterationContext = {
     iteration: 0,
     problemPack,
-    project,
+    workspace,
     userFeedback: opts?.userFeedback,
     previousJudgeAssessment,
   };
-  await writeContextToRepo(project.repoPath, ctx);
-  await writeArchitectInstructions(project.repoPath, project);
-  await resetArchitectSignals(project.repoPath);
+  await writeContextToRepo(workspace.repoPath, ctx);
+  await writeArchitectInstructions(workspace.repoPath, workspace);
+  await resetArchitectSignals(workspace.repoPath);
 
   // Re-review snapshot (same non-destructive rule as the async entry)
-  const planPath = join(project.repoPath, "cfcf-docs", "plan.md");
+  const planPath = join(workspace.repoPath, "cfcf-docs", "plan.md");
   let priorPlan = "";
   try {
     priorPlan = await readFile(planPath, "utf-8");
@@ -456,18 +456,18 @@ export async function runReviewSync(
   const reReviewMode = planHasCompletedItems(priorPlan);
 
   const prompt = reReviewMode
-    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing project -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
+    ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing workspace -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
     : `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. Review the problem definition, produce cfcf-docs/architect-review.md, cfcf-docs/plan.md, and cfcf-docs/cfcf-architect-signals.json before exiting.`;
-  const cmd = adapter.buildCommand(project.repoPath, prompt, project.architectAgent.model);
+  const cmd = adapter.buildCommand(workspace.repoPath, prompt, workspace.architectAgent.model);
 
   const managed = await spawnProcess({
     command: cmd.command,
     args: cmd.args,
-    cwd: project.repoPath,
+    cwd: workspace.repoPath,
     logFile,
   });
   const unregister = registerProcess({
-    projectId: project.id,
+    workspaceId: workspace.id,
     role: "architect",
     process: managed,
     startedAt,
@@ -497,13 +497,13 @@ export async function runReviewSync(
       }
     }
 
-    const signals = await parseArchitectSignals(project.repoPath);
-    await updateHistoryEvent(project.id, historyEventId, {
+    const signals = await parseArchitectSignals(workspace.repoPath);
+    await updateHistoryEvent(workspace.id, historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: new Date().toISOString(),
       readiness: signals?.readiness,
       signals: signals ?? undefined,
-    } as Partial<import("./project-history.js").ReviewHistoryEvent>);
+    } as Partial<import("./workspace-history.js").ReviewHistoryEvent>);
 
     return { exitCode: result.exitCode, logFile, logFileName, sequence, historyEventId, signals };
   } finally {

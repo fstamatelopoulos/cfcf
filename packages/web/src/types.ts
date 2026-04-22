@@ -8,7 +8,7 @@ export interface AgentConfig {
   model?: string;
 }
 
-export type ProjectStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
+export type WorkspaceStatus = "idle" | "running" | "paused" | "completed" | "failed" | "stopped";
 
 export type NotificationEventType = "loop.paused" | "loop.completed" | "agent.failed";
 export type NotificationChannelName = "terminal-bell" | "macos" | "linux" | "log";
@@ -18,7 +18,7 @@ export interface NotificationConfig {
   events: Partial<Record<NotificationEventType, NotificationChannelName[]>>;
 }
 
-export interface ProjectConfig {
+export interface WorkspaceConfig {
   id: string;
   name: string;
   repoPath: string;
@@ -41,7 +41,7 @@ export interface ProjectConfig {
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
   processTemplate: string;
   currentIteration: number;
-  status?: ProjectStatus;
+  status?: WorkspaceStatus;
   notifications?: NotificationConfig;
 }
 
@@ -104,8 +104,8 @@ export interface LoopIterationRecord {
 }
 
 export interface LoopState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   phase: LoopPhase;
   currentIteration: number;
   maxIterations: number;
@@ -123,8 +123,8 @@ export interface LoopState {
 }
 
 export interface ReviewState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "collecting" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -138,8 +138,8 @@ export interface ReviewState {
 }
 
 export interface DocumentState {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: "preparing" | "executing" | "completed" | "failed";
   startedAt: string;
   completedAt?: string;
@@ -157,7 +157,7 @@ export interface HealthResponse {
   uptime: number;
 }
 
-// --- Project history ---
+// --- Workspace history ---
 
 export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
 

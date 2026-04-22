@@ -17,7 +17,7 @@ import {
 } from "./context-assembler.js";
 import type { ProblemPack } from "./problem-pack.js";
 import type { IterationContext } from "./context-assembler.js";
-import type { ProjectConfig } from "./types.js";
+import type { WorkspaceConfig } from "./types.js";
 
 function makePack(overrides?: Partial<ProblemPack>): ProblemPack {
   return {
@@ -29,7 +29,7 @@ function makePack(overrides?: Partial<ProblemPack>): ProblemPack {
   };
 }
 
-function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+function makeWorkspace(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
   return {
     id: "test-proj-abc123",
     name: "test-project",
@@ -52,7 +52,7 @@ function makeCtx(overrides?: Partial<IterationContext>): IterationContext {
   return {
     iteration: 1,
     problemPack: makePack(),
-    project: makeProject(),
+    workspace: makeWorkspace(),
     ...overrides,
   };
 }

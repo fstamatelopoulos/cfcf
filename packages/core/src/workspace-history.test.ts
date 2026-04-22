@@ -16,7 +16,7 @@ import {
   cleanupStaleRunningEvents,
   type ReviewHistoryEvent,
   type IterationHistoryEvent,
-} from "./project-history.js";
+} from "./workspace-history.js";
 import type { ArchitectSignals } from "./types.js";
 
 const TEST_CONFIG_DIR = join(tmpdir(), `cfcf-history-test-${process.pid}`);
@@ -24,7 +24,7 @@ const PROJECT_ID = "test-proj";
 
 beforeEach(async () => {
   process.env.CFCF_CONFIG_DIR = TEST_CONFIG_DIR;
-  await mkdir(join(TEST_CONFIG_DIR, "projects", PROJECT_ID), { recursive: true });
+  await mkdir(join(TEST_CONFIG_DIR, "workspaces", PROJECT_ID), { recursive: true });
 });
 
 afterEach(async () => {
@@ -124,7 +124,7 @@ describe("ReviewHistoryEvent.signals persistence", () => {
 
     // Read raw JSON from disk to confirm it's persisted (not just in memory).
     const raw = await readFile(
-      join(TEST_CONFIG_DIR, "projects", PROJECT_ID, "history.json"),
+      join(TEST_CONFIG_DIR, "workspaces", PROJECT_ID, "history.json"),
       "utf-8",
     );
     const parsed = JSON.parse(raw) as ReviewHistoryEvent[];

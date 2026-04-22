@@ -1,5 +1,5 @@
 /**
- * Run command: start the iteration loop for a cfcf project.
+ * Run command: start the iteration loop for a cfcf workspace.
  *
  * Agent mode (default, no --): starts the full iteration loop
  *   (dev → judge → decide → loop) and polls for status.
@@ -11,7 +11,7 @@ import { isServerReachable, post, get } from "../client.js";
 import { formatElapsed } from "../format.js";
 
 interface LoopStartResponse {
-  projectId: string;
+  workspaceId: string;
   phase: string;
   maxIterations: number;
   pauseEvery: number;
@@ -19,8 +19,8 @@ interface LoopStartResponse {
 }
 
 interface LoopStatusResponse {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   phase: string;
   currentIteration: number;
   maxIterations: number;
@@ -55,8 +55,8 @@ interface SingleIterationStartResponse {
 
 interface SingleIterationStatusResponse {
   iteration: number;
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   status: string;
   exitCode?: number;
   durationMs?: number;
@@ -69,11 +69,11 @@ export function registerRunCommand(program: Command): void {
   program
     .command("run")
     .description(
-      "Start the iteration loop for a project.\n" +
+      "Start the iteration loop for a workspace.\n" +
       "Without -- : launches the dark factory loop (dev → judge → decide → repeat).\n" +
       "With -- <cmd>: runs a single command iteration (manual/testing mode)."
     )
-    .requiredOption("--project <name>", "Project name or ID")
+    .requiredOption("--workspace <name>", "Workspace name or ID")
     .option("--problem-pack <path>", "Path to Problem Pack directory (default: <repo>/problem-pack)")
     .option("--auto-review", "Per-run override: run Solution Architect before iteration 1")
     .option("--no-auto-review", "Per-run override: skip the pre-loop Solution Architect")
@@ -101,22 +101,22 @@ export function registerRunCommand(program: Command): void {
 }
 
 async function runLoopMode(opts: {
-  project: string;
+  workspace: string;
   problemPack?: string;
   autoReview?: boolean;
   autoDocument?: boolean;
   readinessGate?: string;
 }): Promise<void> {
-  console.log(`Project:  ${opts.project}`);
-  console.log(`Mode:     dark factory (iteration loop)`);
+  console.log(`Workspace: ${opts.workspace}`);
+  console.log(`Mode:      dark factory (iteration loop)`);
   if (opts.autoReview !== undefined) {
-    console.log(`Override: autoReviewSpecs = ${opts.autoReview}`);
+    console.log(`Override:  autoReviewSpecs = ${opts.autoReview}`);
   }
   if (opts.autoDocument !== undefined) {
-    console.log(`Override: autoDocumenter = ${opts.autoDocument}`);
+    console.log(`Override:  autoDocumenter = ${opts.autoDocument}`);
   }
   if (opts.readinessGate) {
-    console.log(`Override: readinessGate = ${opts.readinessGate}`);
+    console.log(`Override:  readinessGate = ${opts.readinessGate}`);
   }
   console.log();
 
@@ -141,7 +141,7 @@ async function runLoopMode(opts: {
 
   // Start the loop
   const startRes = await post<LoopStartResponse>(
-    `/api/projects/${encodeURIComponent(opts.project)}/loop/start`,
+    `/api/workspaces/${encodeURIComponent(opts.workspace)}/loop/start`,
     Object.keys(body).length > 0 ? body : undefined,
   );
 
@@ -158,18 +158,18 @@ async function runLoopMode(opts: {
   console.log();
 
   // Poll for status until completed, paused, or failed
-  await pollLoopStatus(opts.project);
+  await pollLoopStatus(opts.workspace);
 }
 
-async function pollLoopStatus(project: string): Promise<void> {
-  const projectParam = encodeURIComponent(project);
+async function pollLoopStatus(workspace: string): Promise<void> {
+  const workspaceParam = encodeURIComponent(workspace);
   let lastPhase = "";
   let lastIteration = 0;
   let phaseStartTime = Date.now();
 
   while (true) {
     const statusRes = await get<LoopStatusResponse>(
-      `/api/projects/${projectParam}/loop/status`,
+      `/api/workspaces/${workspaceParam}/loop/status`,
     );
 
     if (!statusRes.ok) {
@@ -219,7 +219,7 @@ function printLoopResult(s: LoopStatusResponse): void {
     console.log();
   }
 
-  console.log(`Project:    ${s.projectName}`);
+  console.log(`Workspace:  ${s.workspaceName}`);
   console.log(`Outcome:    ${s.outcome ?? s.phase}`);
   console.log(`Iterations: ${s.currentIteration}/${s.maxIterations}`);
   console.log(`Duration:   ${formatDuration(s.startedAt, s.completedAt)}`);
@@ -246,14 +246,14 @@ function printLoopResult(s: LoopStatusResponse): void {
   } else {
     console.log(`  Review iteration handoff: cat cfcf-docs/iteration-handoff.md`);
     console.log(`  Check the plan:          cat cfcf-docs/plan.md`);
-    console.log(`  Resume the loop:         cfcf resume --project ${s.projectName}`);
+    console.log(`  Resume the loop:         cfcf resume --workspace ${s.workspaceName}`);
   }
 }
 
 function printPausedState(s: LoopStatusResponse): void {
   console.log(`=== Loop PAUSED ===`);
   console.log();
-  console.log(`Project:    ${s.projectName}`);
+  console.log(`Workspace:  ${s.workspaceName}`);
   console.log(`Iteration:  ${s.currentIteration}/${s.maxIterations}`);
   console.log(`Reason:     ${s.pauseReason}`);
 
@@ -281,9 +281,9 @@ function printPausedState(s: LoopStatusResponse): void {
   console.log();
   console.log("What to do next:");
   console.log(`  Review: cat cfcf-docs/judge-assessment.md`);
-  console.log(`  Resume: cfcf resume --project ${s.projectName}`);
-  console.log(`  Resume with feedback: cfcf resume --project ${s.projectName} --feedback "your direction"`);
-  console.log(`  Stop:   cfcf stop --project ${s.projectName}`);
+  console.log(`  Resume: cfcf resume --workspace ${s.workspaceName}`);
+  console.log(`  Resume with feedback: cfcf resume --workspace ${s.workspaceName} --feedback "your direction"`);
+  console.log(`  Stop:   cfcf stop --workspace ${s.workspaceName}`);
 }
 
 
@@ -303,11 +303,11 @@ function formatDuration(startedAt: string, completedAt?: string): string {
 
 // --- Manual mode (single iteration, backwards compatible) ---
 
-async function runManualMode(commandParts: string[], opts: { project: string; problemPack?: string }): Promise<void> {
+async function runManualMode(commandParts: string[], opts: { workspace: string; problemPack?: string }): Promise<void> {
   const [command, ...args] = commandParts;
-  console.log(`Project:  ${opts.project}`);
-  console.log(`Mode:     manual (single iteration)`);
-  console.log(`Command:  ${command} ${args.join(" ")}`);
+  console.log(`Workspace: ${opts.workspace}`);
+  console.log(`Mode:      manual (single iteration)`);
+  console.log(`Command:   ${command} ${args.join(" ")}`);
   console.log();
 
   const body: Record<string, unknown> = { command, args };
@@ -316,7 +316,7 @@ async function runManualMode(commandParts: string[], opts: { project: string; pr
   }
 
   const startRes = await post<SingleIterationStartResponse>(
-    `/api/projects/${encodeURIComponent(opts.project)}/iterate`,
+    `/api/workspaces/${encodeURIComponent(opts.workspace)}/iterate`,
     body,
   );
 
@@ -331,13 +331,13 @@ async function runManualMode(commandParts: string[], opts: { project: string; pr
   console.log();
 
   // Poll for status
-  const projectParam = encodeURIComponent(opts.project);
+  const workspaceParam = encodeURIComponent(opts.workspace);
   let lastStatus = "";
   let statusStartTime = Date.now();
 
   while (true) {
     const statusRes = await get<SingleIterationStatusResponse>(
-      `/api/projects/${projectParam}/iterations/${start.iteration}/status`,
+      `/api/workspaces/${workspaceParam}/iterations/${start.iteration}/status`,
     );
 
     if (!statusRes.ok) {

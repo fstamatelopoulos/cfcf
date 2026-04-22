@@ -1,6 +1,6 @@
 import { Header } from "./components/Header";
 import { Dashboard } from "./pages/Dashboard";
-import { ProjectDetail } from "./pages/ProjectDetail";
+import { WorkspaceDetail } from "./pages/WorkspaceDetail";
 import { ServerInfo } from "./pages/ServerInfo";
 import { useRoute } from "./hooks/useRoute";
 
@@ -11,8 +11,8 @@ export function App() {
     <div className="app">
       <Header />
       <main className="app__content">
-        {route.page === "project" && route.projectId ? (
-          <ProjectDetail projectId={route.projectId} />
+        {route.page === "workspace" && route.workspaceId ? (
+          <WorkspaceDetail workspaceId={route.workspaceId} />
         ) : route.page === "server" ? (
           <ServerInfo />
         ) : (

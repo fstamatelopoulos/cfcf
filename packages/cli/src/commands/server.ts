@@ -68,7 +68,7 @@ export function registerServerCommands(program: Command): void {
       if (ready) {
         console.log(`cfcf server v${VERSION} started on port ${port} (pid: ${child.pid})`);
         console.log();
-        console.log("Ready. Create a project:  cfcf project init --repo <path> --name <name>");
+        console.log("Ready. Create a workspace: cfcf workspace init --repo <path> --name <name>");
         console.log("Or check status:          cfcf status");
         // Explicit exit so the CLI parent doesn't stay tethered to the
         // spawned server child (Bun.spawn children keep the parent alive

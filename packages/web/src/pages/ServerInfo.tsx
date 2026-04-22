@@ -50,7 +50,7 @@ const NOTIFICATION_CHANNELS: NotificationChannelName[] = [
  * `PUT /api/config`. Agent adapters are constrained to the detected
  * `availableAgents` list (fixed during `cfcf init`). Server-owned fields
  * (version, permissionsAcknowledged, availableAgents) are not editable.
- * Per-project overrides live in each project's Config tab (editable as
+ * Per-workspace overrides live in each workspace's Config tab (editable as
  * of v0.7.4).
  */
 export function ServerInfo() {
@@ -171,7 +171,7 @@ export function ServerInfo() {
           className="btn btn--small btn--secondary"
           onClick={() => navigateTo("/")}
         >
-          ← back to projects
+          ← back to workspaces
         </button>
       </div>
 
@@ -186,7 +186,7 @@ export function ServerInfo() {
           borderRadius: "4px",
         }}
       >
-        This page edits the <strong>global defaults</strong>. To override any of these for a specific project, open that project and edit its <strong>Config</strong> tab — per-project settings take precedence over the global defaults.
+        This page edits the <strong>global defaults</strong>. To override any of these for a specific workspace, open that workspace and edit its <strong>Config</strong> tab — per-workspace settings take precedence over the global defaults.
       </div>
 
       {error && (
@@ -308,7 +308,7 @@ export function ServerInfo() {
               <tbody>
                 <CheckboxRow
                   label="autoReviewSpecs"
-                  hint="When on, Start Loop first runs the Solution Architect. Review button hidden in project detail; a leading 'Review (agent)' step appears in the phase indicator."
+                  hint="When on, Start Loop first runs the Solution Architect. Review button hidden in workspace detail; a leading 'Review (agent)' step appears in the phase indicator."
                   checked={!!draft.autoReviewSpecs}
                   onChange={(v) => update("autoReviewSpecs", v)}
                 />
@@ -453,7 +453,7 @@ export function ServerInfo() {
             }}
           >
             Equivalent CLI: <code>cfcf config edit</code>. Changes apply to new
-            projects and to existing projects that don't override the field.
+            workspaces and to existing workspaces that don't override the field.
           </div>
         </>
       )}

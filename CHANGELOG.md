@@ -9,6 +9,29 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+## [0.8.0] -- 2026-04-22
+
+**Breaking change**: cf²'s `project` noun is renamed to `workspace` everywhere. This is plan item 5.10 -- a prerequisite for Clio (item 5.7, the upcoming memory layer), which reserves the `Project` concept for Cerefox-aligned domain groupings of knowledge. Resolution: cf²'s "one managed git repo" entity becomes a **workspace**, and Clio's `Project` stays free to mean what Cerefox expects.
+
+This is a clean break -- no CLI or API aliases. If you have scripts that invoke `cfcf project ...` or call `/api/projects/*`, update them before upgrading.
+
+### Changed -- user-facing rename
+- **CLI**: `cfcf project *` → `cfcf workspace *` (init/list/show/delete). `--project <name>` flag on `run`, `resume`, `stop`, `review`, `document`, `reflect`, `status` → `--workspace <name>`.
+- **REST API**: `/api/projects/*` → `/api/workspaces/*` (every sub-route). Response bodies now use `workspaceId` / `workspaceName` instead of `projectId` / `projectName`.
+- **Web UI**: "Projects" nav → "Workspaces"; project detail page → workspace detail page; `#/projects/:id` hash route → `#/workspaces/:id`; all labels + empty states + hints.
+- **Notifications**: `NotificationEvent.project.{id,name}` → `NotificationEvent.workspace.{id,name}` (only relevant to custom webhook channels).
+- **On-disk config directory**: `~/.cfcf/projects/` → `~/.cfcf/workspaces/`. Existing `~/.cfcf/projects/` directories are **not migrated** -- new workspaces are written to the new location. Delete the old directory manually once you've verified the rename works for you.
+- **Types** (`@cfcf/core` + `@cfcf/web`): `ProjectConfig` → `WorkspaceConfig`, `ProjectStatus` → `WorkspaceStatus`, `getProject`/`listProjects`/`createProject`/`findProjectByName`/`updateProject`/`deleteProject`/`validateProjectRepo` → `getWorkspace`/`listWorkspaces`/`createWorkspace`/…, `dispatchForProject` → `dispatchForWorkspace`, `getProjectLogDir`/`ensureProjectLogDir` → `getWorkspaceLogDir`/`ensureWorkspaceLogDir`, `getProjectDir`/`getProjectsDir` → `getWorkspaceDir`/`getWorkspacesDir`.
+- **Templates**: `{{PROJECT_NAME}}` placeholder in agent instruction templates → `{{WORKSPACE_NAME}}`.
+- **Modules**: `packages/core/src/projects.ts` → `workspaces.ts`; `project-history.ts` → `workspace-history.ts`; `packages/cli/src/commands/project.ts` → `workspace.ts`; `packages/web/src/pages/ProjectDetail.tsx` → `WorkspaceDetail.tsx`; `ProjectCard.tsx` → `WorkspaceCard.tsx`; `ProjectHistory.tsx` → `WorkspaceHistory.tsx`.
+
+### Not renamed (deliberate)
+- The word "project" when it refers to the **user's codebase / problem domain** in prose, templates, or user-authored content. Only cf²'s own infrastructure noun changes.
+- Cerefox's `Project` vocabulary (Clio design docs, SQL table names like `clio_projects`) -- that's the upstream concept cf² is rhyming with, not overloading.
+- Iteration branch names (`cfcf/iteration-N`) and per-iteration archive directories under `cfcf-docs/` -- no `project` in the path.
+
+See [`docs/research/workspace-rename-plan.md`](docs/research/workspace-rename-plan.md) for the full rationale + rename surface enumeration, and [`docs/design/clio-memory-layer.md`](docs/design/clio-memory-layer.md) §2 for the Cerefox alignment that motivated the rename.
+
 ## [0.7.6] -- 2026-04-20
 
 Two related brownfield-context bugs fixed, plus a small architecture improvement to the dev handoff lifecycle so the pre-loop architect and the next iteration's dev agent actually see the previous iteration's outputs.

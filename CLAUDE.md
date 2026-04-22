@@ -10,7 +10,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 
 - **Monorepo** with Bun workspaces: `packages/core`, `packages/server`, `packages/cli`, `packages/web`
 - **TypeScript** throughout, **Bun** as runtime and toolchain
-- **Hono** HTTP server as the backbone (manages projects, iterations, agent processes); React+Vite web GUI served from the same process (embedded into the compiled binary at build time)
+- **Hono** HTTP server as the backbone (manages workspaces, iterations, agent processes); React+Vite web GUI served from the same process (embedded into the compiled binary at build time)
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
@@ -49,7 +49,7 @@ packages/
     types.ts             # All type definitions (AgentAdapter, signals, config, etc.)
     constants.ts         # Ports, paths, defaults
     config.ts            # Config read/write/validation
-    projects.ts          # Project CRUD, iteration counter
+    workspaces.ts        # Workspace CRUD, iteration counter
     process-manager.ts   # Spawn agents, stream logs, kill/timeout
     git-manager.ts       # Branch, commit, diff, reset, merge
     log-storage.ts       # Log file path helpers
@@ -67,7 +67,7 @@ packages/
                          #   entry for loop + async entry for `cfcf reflect`
     iteration-loop.ts    # Main iteration loop controller + decision engine
                          #   (preparing -> dev -> judging -> reflecting? -> deciding)
-    project-history.ts   # history.json: review / iteration / reflection / document events
+    workspace-history.ts # history.json: review / iteration / reflection / document events
     adapters/            # Agent adapter implementations (claude-code, codex)
     templates/           # cfcf-docs/ file templates (16 entries incl. reflection + iteration-log)
   server/src/
@@ -79,7 +79,7 @@ packages/
     commands/            # CLI command implementations
       init.ts            # First-run interactive setup (asks for all 5 roles + reflectSafeguardAfter)
       server.ts          # Server start/stop/status
-      project.ts         # Project init/list/show/delete
+      workspace.ts       # Workspace init/list/show/delete
       config.ts          # Global config show/edit
       run.ts             # Start iteration loop (agent) or single iteration (manual)
       review.ts          # Solution Architect review (cfcf review)

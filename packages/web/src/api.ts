@@ -3,7 +3,7 @@
  */
 
 import type {
-  ProjectConfig,
+  WorkspaceConfig,
   LoopState,
   ReviewState,
   DocumentState,
@@ -96,31 +96,31 @@ export function saveGlobalConfig(patch: Partial<GlobalConfig>): Promise<GlobalCo
   });
 }
 
-// --- Projects ---
+// --- Workspaces ---
 
-export function fetchProjects(): Promise<ProjectConfig[]> {
-  return request<ProjectConfig[]>("/api/projects");
+export function fetchWorkspaces(): Promise<WorkspaceConfig[]> {
+  return request<WorkspaceConfig[]>("/api/workspaces");
 }
 
-export function fetchProject(id: string): Promise<ProjectConfig> {
-  return request<ProjectConfig>(`/api/projects/${encodeURIComponent(id)}`);
+export function fetchWorkspace(id: string): Promise<WorkspaceConfig> {
+  return request<WorkspaceConfig>(`/api/workspaces/${encodeURIComponent(id)}`);
 }
 
 /**
- * Save edits to a project's per-project config (item 6.14). Accepts a
- * partial patch; server merges onto the existing project config,
+ * Save edits to a workspace's per-workspace config (item 6.14). Accepts a
+ * partial patch; server merges onto the existing workspace config,
  * preserves identity + runtime fields (id, name, repoPath,
  * currentIteration, status, processTemplate), validates bounded + enum
  * fields, and writes. Returns the saved config.
  *
- * Sending `notifications: null` clears any per-project notification
+ * Sending `notifications: null` clears any per-workspace notification
  * override, re-inheriting the global config.
  */
-export function saveProject(
+export function saveWorkspace(
   id: string,
-  patch: Partial<ProjectConfig> & { notifications?: ProjectConfig["notifications"] | null },
-): Promise<ProjectConfig> {
-  return request<ProjectConfig>(`/api/projects/${encodeURIComponent(id)}`, {
+  patch: Partial<WorkspaceConfig> & { notifications?: WorkspaceConfig["notifications"] | null },
+): Promise<WorkspaceConfig> {
+  return request<WorkspaceConfig>(`/api/workspaces/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -129,55 +129,55 @@ export function saveProject(
 
 // --- Loop ---
 
-export function fetchLoopStatus(projectId: string): Promise<LoopState> {
-  return request<LoopState>(`/api/projects/${encodeURIComponent(projectId)}/loop/status`);
+export function fetchLoopStatus(workspaceId: string): Promise<LoopState> {
+  return request<LoopState>(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/status`);
 }
 
-export function startLoop(projectId: string): Promise<{ phase: string }> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/loop/start`);
+export function startLoop(workspaceId: string): Promise<{ phase: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/start`);
 }
 
-export function stopLoop(projectId: string): Promise<{ phase: string }> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/loop/stop`);
+export function stopLoop(workspaceId: string): Promise<{ phase: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/stop`);
 }
 
-export function resumeLoop(projectId: string, feedback?: string): Promise<{ phase: string }> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/loop/resume`, feedback ? { feedback } : undefined);
+export function resumeLoop(workspaceId: string, feedback?: string): Promise<{ phase: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/resume`, feedback ? { feedback } : undefined);
 }
 
 // --- Review ---
 
-export function startReview(projectId: string): Promise<ReviewState> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/review`);
+export function startReview(workspaceId: string): Promise<ReviewState> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/review`);
 }
 
-export function fetchReviewStatus(projectId: string): Promise<ReviewState> {
-  return request<ReviewState>(`/api/projects/${encodeURIComponent(projectId)}/review/status`);
+export function fetchReviewStatus(workspaceId: string): Promise<ReviewState> {
+  return request<ReviewState>(`/api/workspaces/${encodeURIComponent(workspaceId)}/review/status`);
 }
 
-export function stopReview(projectId: string): Promise<{ status: string }> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/review/stop`);
+export function stopReview(workspaceId: string): Promise<{ status: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/review/stop`);
 }
 
 // --- Document ---
 
-export function startDocument(projectId: string): Promise<DocumentState> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/document`);
+export function startDocument(workspaceId: string): Promise<DocumentState> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/document`);
 }
 
-export function fetchDocumentStatus(projectId: string): Promise<DocumentState> {
-  return request<DocumentState>(`/api/projects/${encodeURIComponent(projectId)}/document/status`);
+export function fetchDocumentStatus(workspaceId: string): Promise<DocumentState> {
+  return request<DocumentState>(`/api/workspaces/${encodeURIComponent(workspaceId)}/document/status`);
 }
 
-export function stopDocument(projectId: string): Promise<{ status: string }> {
-  return post(`/api/projects/${encodeURIComponent(projectId)}/document/stop`);
+export function stopDocument(workspaceId: string): Promise<{ status: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/document/stop`);
 }
 
 // --- History ---
 
 export interface ActivityItem {
-  projectId: string;
-  projectName: string;
+  workspaceId: string;
+  workspaceName: string;
   type: "iteration" | "review" | "document" | "reflection";
   phase?: string;
   iteration?: number;
@@ -188,6 +188,6 @@ export function fetchActivity(): Promise<{ active: ActivityItem[] }> {
   return request<{ active: ActivityItem[] }>(`/api/activity`);
 }
 
-export function fetchHistory(projectId: string): Promise<HistoryEvent[]> {
-  return request<HistoryEvent[]>(`/api/projects/${encodeURIComponent(projectId)}/history`);
+export function fetchHistory(workspaceId: string): Promise<HistoryEvent[]> {
+  return request<HistoryEvent[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/history`);
 }

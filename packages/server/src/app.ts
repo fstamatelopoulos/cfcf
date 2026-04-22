@@ -13,13 +13,13 @@ import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import {
-  createProject,
-  listProjects,
-  getProject,
-  findProjectByName,
-  updateProject,
-  deleteProject,
-  validateProjectRepo,
+  createWorkspace,
+  listWorkspaces,
+  getWorkspace,
+  findWorkspaceByName,
+  updateWorkspace,
+  deleteWorkspace,
+  validateWorkspaceRepo,
 } from "@cfcf/core";
 import { getIterationLogPath, getLogPathByFilename, readHistory } from "@cfcf/core";
 import {
@@ -61,32 +61,32 @@ export function createApp() {
     });
   });
 
-  // --- Activity (cross-project) ---
+  // --- Activity (cross-workspace) ---
   //
   // Returns a compact list of currently-running agent runs across all
-  // projects. Drives the blue pulsing dot + phase label in the web header
+  // workspaces. Drives the blue pulsing dot + phase label in the web header
   // so the user can see "something is running" at a glance from any page.
   //
-  // Implementation: read each project's history.json + loop-state.json.
+  // Implementation: read each workspace's history.json + loop-state.json.
   // History events with status="running" are the source of truth for
   // review / document / reflection. For loop iterations we also pick up
   // the current phase from loop-state.json (which has finer-grained
   // phase info -- preparing/dev_executing/judging/reflecting/etc.).
   app.get("/api/activity", async (c) => {
-    const projects = await listProjects();
+    const workspaces = await listWorkspaces();
     const items: Array<{
-      projectId: string;
-      projectName: string;
+      workspaceId: string;
+      workspaceName: string;
       type: "iteration" | "review" | "document" | "reflection";
       phase?: string; // LoopPhase when type=iteration
       iteration?: number;
       startedAt: string;
     }> = [];
-    for (const p of projects) {
-      const history = await readHistory(p.id);
+    for (const w of workspaces) {
+      const history = await readHistory(w.id);
       const running = history.filter((e) => e.status === "running");
       // Loop-state gives a finer-grained phase for the current iteration.
-      const loopState = await getLoopState(p.id);
+      const loopState = await getLoopState(w.id);
       const activeLoopPhases = [
         "pre_loop_reviewing", "preparing", "dev_executing", "judging",
         "reflecting", "deciding", "documenting",
@@ -98,8 +98,8 @@ export function createApp() {
       // stays `running` across dev/judge/reflect phases).
       if (loopActive) {
         items.push({
-          projectId: p.id,
-          projectName: p.name,
+          workspaceId: w.id,
+          workspaceName: w.name,
           type: "iteration",
           phase: loopState.phase,
           iteration: loopState.currentIteration,
@@ -113,8 +113,8 @@ export function createApp() {
       // after a crash that we haven't cleaned up yet).
       for (const e of running) {
         items.push({
-          projectId: p.id,
-          projectName: p.name,
+          workspaceId: w.id,
+          workspaceName: w.name,
           type: e.type as "iteration" | "review" | "document" | "reflection",
           iteration:
             e.type === "iteration" || e.type === "reflection"
@@ -206,9 +206,9 @@ export function createApp() {
     return c.json(validated);
   });
 
-  // --- Projects ---
+  // --- Workspaces ---
 
-  app.post("/api/projects", async (c) => {
+  app.post("/api/workspaces", async (c) => {
     const body = await c.req.json<{
       name: string;
       repoPath: string;
@@ -224,41 +224,41 @@ export function createApp() {
       return c.json({ error: "name and repoPath are required" }, 400);
     }
 
-    const validation = await validateProjectRepo(body.repoPath);
+    const validation = await validateWorkspaceRepo(body.repoPath);
     if (!validation.valid) {
       return c.json({ error: validation.error }, 400);
     }
 
-    const project = await createProject(body);
-    return c.json(project, 201);
+    const workspace = await createWorkspace(body);
+    return c.json(workspace, 201);
   });
 
-  app.get("/api/projects", async (c) => {
-    const projects = await listProjects();
-    return c.json(projects);
+  app.get("/api/workspaces", async (c) => {
+    const workspaces = await listWorkspaces();
+    return c.json(workspaces);
   });
 
-  app.get("/api/projects/:id", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
-    return c.json(project);
+    return c.json(workspace);
   });
 
-  // Edit per-project config (item 6.14). Accepts a partial patch; server
-  // merges onto the existing project config, preserves identity + runtime
+  // Edit per-workspace config (item 6.14). Accepts a partial patch; server
+  // merges onto the existing workspace config, preserves identity + runtime
   // fields regardless of client input (id, name, repoPath,
   // currentIteration, status, processTemplate), validates bounded + enum
   // fields, and writes. Returns the saved config.
-  app.put("/api/projects/:id", async (c) => {
+  app.put("/api/workspaces/:id", async (c) => {
     const id = c.req.param("id");
     const existing =
-      (await getProject(id)) ?? (await findProjectByName(id));
+      (await getWorkspace(id)) ?? (await findWorkspaceByName(id));
     if (!existing) {
-      return c.json({ error: "Project not found" }, 404);
+      return c.json({ error: "Workspace not found" }, 404);
     }
     let patch: Record<string, unknown>;
     try {
@@ -351,36 +351,36 @@ export function createApp() {
       if (f in patch) delete (patch as Record<string, unknown>)[f];
     }
 
-    // Special case: `notifications: null` means "clear the per-project
+    // Special case: `notifications: null` means "clear the per-workspace
     // override, inherit global". Drop the field so the saved config
     // omits it.
     if ("notifications" in patch && patch.notifications === null) {
       (patch as Record<string, unknown>).notifications = undefined;
     }
 
-    const updated = await updateProject(existing.id, patch);
+    const updated = await updateWorkspace(existing.id, patch);
     if (!updated) {
-      return c.json({ error: "Project not found" }, 404);
+      return c.json({ error: "Workspace not found" }, 404);
     }
     return c.json(updated);
   });
 
-  app.delete("/api/projects/:id", async (c) => {
-    const success = await deleteProject(c.req.param("id"));
+  app.delete("/api/workspaces/:id", async (c) => {
+    const success = await deleteWorkspace(c.req.param("id"));
     if (!success) {
-      return c.json({ error: "Project not found" }, 404);
+      return c.json({ error: "Workspace not found" }, 404);
     }
     return c.json({ deleted: true });
   });
 
   // --- Iterate (async) ---
 
-  app.post("/api/projects/:id/iterate", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/iterate", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const body = await c.req.json<{
@@ -391,7 +391,7 @@ export function createApp() {
 
     try {
       // Start iteration in background -- returns immediately
-      const state = await startIteration(project, body);
+      const state = await startIteration(workspace, body);
 
       return c.json({
         iteration: state.iteration,
@@ -399,7 +399,7 @@ export function createApp() {
         mode: state.mode,
         status: state.status,
         logFile: state.logFile,
-        message: "Iteration started. Poll GET /api/projects/:id/iterations/:n/status for progress.",
+        message: "Iteration started. Poll GET /api/workspaces/:id/iterations/:n/status for progress.",
       }, 202);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -409,15 +409,15 @@ export function createApp() {
 
   // --- Iteration status ---
 
-  app.get("/api/projects/:id/iterations/latest", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/iterations/latest", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = getLatestIterationState(project.id);
+    const state = getLatestIterationState(workspace.id);
     if (!state) {
       return c.json({ error: "No iterations found" }, 404);
     }
@@ -426,16 +426,16 @@ export function createApp() {
     return c.json(stateWithoutLogs);
   });
 
-  app.get("/api/projects/:id/iterations/:n/status", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/iterations/:n/status", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const iterationNum = parseInt(c.req.param("n"), 10);
-    const state = getIterationState(project.id, iterationNum);
+    const state = getIterationState(workspace.id, iterationNum);
     if (!state) {
       return c.json({ error: "Iteration not found" }, 404);
     }
@@ -446,19 +446,19 @@ export function createApp() {
 
   // --- SSE endpoint for streaming iteration logs ---
 
-  app.get("/api/projects/:id/iterations/:n/logs", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/iterations/:n/logs", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const iterationNum = parseInt(c.req.param("n"), 10);
 
     return streamSSE(c, async (stream) => {
       // Try live state first (for in-progress iterations)
-      const state = getIterationState(project.id, iterationNum);
+      const state = getIterationState(workspace.id, iterationNum);
 
       if (state) {
         // Stream from live state -- poll until done
@@ -493,10 +493,10 @@ export function createApp() {
       }
 
       // Fall back to reading from log file (works for both completed and in-progress iterations)
-      const logFile = getIterationLogPath(project.id, iterationNum, "dev");
+      const logFile = getIterationLogPath(workspace.id, iterationNum, "dev");
 
       // Check if this iteration is part of an active loop
-      const loopState = await getLoopState(project.id);
+      const loopState = await getLoopState(workspace.id);
       const isLiveIteration = loopState &&
         loopState.currentIteration === iterationNum &&
         ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
@@ -534,7 +534,7 @@ export function createApp() {
           }
 
           // For live iterations, check if the loop moved past this iteration
-          const currentLoop = await getLoopState(project.id);
+          const currentLoop = await getLoopState(workspace.id);
           const stillLive = currentLoop &&
             currentLoop.currentIteration === iterationNum &&
             ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
@@ -581,12 +581,12 @@ export function createApp() {
 
   // --- Solution Architect Review ---
 
-  app.post("/api/projects/:id/review", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/review", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const body = await c.req.json<{
@@ -594,12 +594,12 @@ export function createApp() {
     }>().catch(() => ({} as { problemPackPath?: string }));
 
     try {
-      const state = await startReview(project, body);
+      const state = await startReview(workspace, body);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         status: state.status,
         logFile: state.logFile,
-        message: "Architect review started. Poll GET /api/projects/:id/review/status for progress.",
+        message: "Architect review started. Poll GET /api/workspaces/:id/review/status for progress.",
       }, 202);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -607,54 +607,54 @@ export function createApp() {
     }
   });
 
-  app.get("/api/projects/:id/review/status", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/review/status", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = getReviewState(project.id);
+    const state = getReviewState(workspace.id);
     if (!state) {
-      return c.json({ error: "No review found for this project" }, 404);
+      return c.json({ error: "No review found for this workspace" }, 404);
     }
 
     return c.json(state);
   });
 
-  app.post("/api/projects/:id/review/stop", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/review/stop", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = await stopReview(project.id);
+    const state = await stopReview(workspace.id);
     if (!state) {
-      return c.json({ error: "No review running for this project" }, 404);
+      return c.json({ error: "No review running for this workspace" }, 404);
     }
-    return c.json({ projectId: state.projectId, status: state.status, message: "Review stopped." });
+    return c.json({ workspaceId: state.workspaceId, status: state.status, message: "Review stopped." });
   });
 
   // --- Documenter ---
 
-  app.post("/api/projects/:id/document", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/document", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     try {
-      const state = await startDocument(project);
+      const state = await startDocument(workspace);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         status: state.status,
         logFile: state.logFile,
-        message: "Documenter started. Poll GET /api/projects/:id/document/status for progress.",
+        message: "Documenter started. Poll GET /api/workspaces/:id/document/status for progress.",
       }, 202);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -662,54 +662,54 @@ export function createApp() {
     }
   });
 
-  app.get("/api/projects/:id/document/status", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/document/status", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = getDocumentState(project.id);
+    const state = getDocumentState(workspace.id);
     if (!state) {
-      return c.json({ error: "No documenter run found for this project" }, 404);
+      return c.json({ error: "No documenter run found for this workspace" }, 404);
     }
 
     return c.json(state);
   });
 
-  app.post("/api/projects/:id/document/stop", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/document/stop", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = await stopDocument(project.id);
+    const state = await stopDocument(workspace.id);
     if (!state) {
-      return c.json({ error: "No documenter running for this project" }, 404);
+      return c.json({ error: "No documenter running for this workspace" }, 404);
     }
-    return c.json({ projectId: state.projectId, status: state.status, message: "Documenter stopped." });
+    return c.json({ workspaceId: state.workspaceId, status: state.status, message: "Documenter stopped." });
   });
 
   // --- Reflection (ad-hoc, item 5.6) ---
 
-  app.post("/api/projects/:id/reflect", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/reflect", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
     const body = await c.req.json<{ prompt?: string }>().catch(() => ({} as { prompt?: string }));
     try {
-      const state = await startReflection(project, body);
+      const state = await startReflection(workspace, body);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         status: state.status,
         logFile: state.logFile,
-        message: "Reflection started. Poll GET /api/projects/:id/reflect/status for progress.",
+        message: "Reflection started. Poll GET /api/workspaces/:id/reflect/status for progress.",
       }, 202);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -717,52 +717,52 @@ export function createApp() {
     }
   });
 
-  app.get("/api/projects/:id/reflect/status", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) return c.json({ error: "Project not found" }, 404);
-    const state = getReflectState(project.id);
-    if (!state) return c.json({ error: "No reflection found for this project" }, 404);
+  app.get("/api/workspaces/:id/reflect/status", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+    const state = getReflectState(workspace.id);
+    if (!state) return c.json({ error: "No reflection found for this workspace" }, 404);
     return c.json(state);
   });
 
-  app.post("/api/projects/:id/reflect/stop", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) return c.json({ error: "Project not found" }, 404);
-    const state = await stopReflection(project.id);
-    if (!state) return c.json({ error: "No reflection running for this project" }, 404);
-    return c.json({ projectId: state.projectId, status: state.status, message: "Reflection stopped." });
+  app.post("/api/workspaces/:id/reflect/stop", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+    const state = await stopReflection(workspace.id);
+    if (!state) return c.json({ error: "No reflection running for this workspace" }, 404);
+    return c.json({ workspaceId: state.workspaceId, status: state.status, message: "Reflection stopped." });
   });
 
-  // --- Project history ---
+  // --- Workspace history ---
 
-  app.get("/api/projects/:id/history", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/history", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const events = await readHistory(project.id);
+    const events = await readHistory(workspace.id);
     return c.json(events);
   });
 
   // --- Generic log streaming (by filename) ---
 
-  app.get("/api/projects/:id/logs/:filename", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/logs/:filename", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const filename = c.req.param("filename");
-    const logPath = getLogPathByFilename(project.id, filename);
+    const logPath = getLogPathByFilename(workspace.id, filename);
     if (!logPath) {
       return c.json({ error: "Invalid log filename" }, 400);
     }
@@ -777,26 +777,26 @@ export function createApp() {
         const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
         if (match) {
           const iterNum = parseInt(match[1], 10);
-          const loopState = await getLoopState(project.id);
+          const loopState = await getLoopState(workspace.id);
           isLive = !!loopState &&
             loopState.currentIteration === iterNum &&
             ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(loopState.phase);
         }
       } else if (filename.startsWith("architect-")) {
-        const reviewState = getReviewState(project.id);
+        const reviewState = getReviewState(workspace.id);
         isLive = !!reviewState &&
           reviewState.logFileName === filename &&
           ["preparing", "executing", "collecting"].includes(reviewState.status);
       } else if (filename.startsWith("documenter-")) {
-        const docState = getDocumentState(project.id);
-        const loopState = await getLoopState(project.id);
+        const docState = getDocumentState(workspace.id);
+        const loopState = await getLoopState(workspace.id);
         // Check both: standalone documenter run OR loop's documenting phase
         isLive = (!!docState && docState.logFileName === filename &&
           ["preparing", "executing"].includes(docState.status)) ||
           (!!loopState && loopState.phase === "documenting");
       } else if (filename.startsWith("reflection-")) {
-        const reflectState = getReflectState(project.id);
-        const loopState = await getLoopState(project.id);
+        const reflectState = getReflectState(workspace.id);
+        const loopState = await getLoopState(workspace.id);
         isLive = (!!reflectState && reflectState.logFileName === filename &&
           ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
           (!!loopState && loopState.phase === "reflecting");
@@ -838,28 +838,28 @@ export function createApp() {
             const match = filename.match(/^iteration-(\d+)-(dev|judge)\.log$/);
             if (match) {
               const iterNum = parseInt(match[1], 10);
-              const currentLoop = await getLoopState(project.id);
+              const currentLoop = await getLoopState(workspace.id);
               const stillLive = !!currentLoop &&
                 currentLoop.currentIteration === iterNum &&
                 ["preparing", "dev_executing", "judging", "deciding", "documenting"].includes(currentLoop.phase);
               if (!stillLive) isLive = false;
             }
           } else if (filename.startsWith("architect-")) {
-            const reviewState = getReviewState(project.id);
+            const reviewState = getReviewState(workspace.id);
             const stillLive = !!reviewState &&
               reviewState.logFileName === filename &&
               ["preparing", "executing", "collecting"].includes(reviewState.status);
             if (!stillLive) isLive = false;
           } else if (filename.startsWith("documenter-")) {
-            const docState = getDocumentState(project.id);
-            const loopState = await getLoopState(project.id);
+            const docState = getDocumentState(workspace.id);
+            const loopState = await getLoopState(workspace.id);
             const stillLive = (!!docState && docState.logFileName === filename &&
               ["preparing", "executing"].includes(docState.status)) ||
               (!!loopState && loopState.phase === "documenting");
             if (!stillLive) isLive = false;
           } else if (filename.startsWith("reflection-")) {
-            const reflectState = getReflectState(project.id);
-            const loopState = await getLoopState(project.id);
+            const reflectState = getReflectState(workspace.id);
+            const loopState = await getLoopState(workspace.id);
             const stillLive = (!!reflectState && reflectState.logFileName === filename &&
               ["preparing", "executing", "collecting"].includes(reflectState.status)) ||
               (!!loopState && loopState.phase === "reflecting");
@@ -889,12 +889,12 @@ export function createApp() {
 
   // --- Iteration Loop (dark factory) ---
 
-  app.post("/api/projects/:id/loop/start", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/loop/start", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const body = await c.req.json<{
@@ -910,13 +910,13 @@ export function createApp() {
     });
 
     try {
-      const state = await startLoop(project, body);
+      const state = await startLoop(workspace, body);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         phase: state.phase,
         maxIterations: state.maxIterations,
         pauseEvery: state.pauseEvery,
-        message: "Iteration loop started. Poll GET /api/projects/:id/loop/status for progress.",
+        message: "Iteration loop started. Poll GET /api/workspaces/:id/loop/status for progress.",
       }, 202);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -924,28 +924,28 @@ export function createApp() {
     }
   });
 
-  app.get("/api/projects/:id/loop/status", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/loop/status", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
-    const state = await getLoopState(project.id);
+    const state = await getLoopState(workspace.id);
     if (!state) {
-      return c.json({ error: "No active loop for this project" }, 404);
+      return c.json({ error: "No active loop for this workspace" }, 404);
     }
 
     return c.json(state);
   });
 
-  app.post("/api/projects/:id/loop/resume", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/loop/resume", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     const body = await c.req.json<{
@@ -953,9 +953,9 @@ export function createApp() {
     }>().catch(() => ({} as { feedback?: string }));
 
     try {
-      const state = await resumeLoop(project.id, body.feedback);
+      const state = await resumeLoop(workspace.id, body.feedback);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         phase: state.phase,
         currentIteration: state.currentIteration,
         message: "Loop resumed.",
@@ -966,18 +966,18 @@ export function createApp() {
     }
   });
 
-  app.post("/api/projects/:id/loop/stop", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.post("/api/workspaces/:id/loop/stop", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     try {
-      const state = await stopLoop(project.id);
+      const state = await stopLoop(workspace.id);
       return c.json({
-        projectId: state.projectId,
+        workspaceId: state.workspaceId,
         phase: state.phase,
         currentIteration: state.currentIteration,
         outcome: state.outcome,
@@ -991,12 +991,12 @@ export function createApp() {
 
   // --- Loop Events SSE ---
 
-  app.get("/api/projects/:id/loop/events", async (c) => {
-    const project =
-      (await getProject(c.req.param("id"))) ??
-      (await findProjectByName(c.req.param("id")));
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+  app.get("/api/workspaces/:id/loop/events", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
     }
 
     return streamSSE(c, async (stream) => {
@@ -1004,7 +1004,7 @@ export function createApp() {
       let lastIteration = 0;
 
       while (true) {
-        const state = await getLoopState(project.id);
+        const state = await getLoopState(workspace.id);
         if (!state) {
           await stream.writeSSE({ event: "error", data: JSON.stringify({ error: "No active loop" }) });
           return;

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import type { ProjectConfig } from "../types";
+import type { WorkspaceConfig } from "../types";
 import type { NotificationChannelName, NotificationEventType } from "../types";
-import { fetchGlobalConfig, saveProject } from "../api";
+import { fetchGlobalConfig, saveWorkspace } from "../api";
 
 const ROLE_KEYS: (keyof Pick<
-  ProjectConfig,
+  WorkspaceConfig,
   "devAgent" | "judgeAgent" | "architectAgent" | "documenterAgent" | "reflectionAgent"
 >)[] = ["devAgent", "judgeAgent", "architectAgent", "documenterAgent", "reflectionAgent"];
 
@@ -29,33 +29,33 @@ const NOTIFICATION_CHANNELS: NotificationChannelName[] = [
 ];
 
 /**
- * Editable per-project config tab (item 6.14). Mirrors the 5.9 global
- * settings page's structure adapted to `ProjectConfig`. Identity +
+ * Editable per-workspace config tab (item 6.14). Mirrors the 5.9 global
+ * settings page's structure adapted to `WorkspaceConfig`. Identity +
  * runtime fields (id, name, repoPath, currentIteration, status,
  * processTemplate) render read-only at the top; everything else is
- * editable and writes via `PUT /api/projects/:id`. A top banner makes
+ * editable and writes via `PUT /api/workspaces/:id`. A top banner makes
  * the scope explicit: "these override the global defaults; global
  * settings live in the top-bar Settings link."
  */
 export function ConfigDisplay({
-  project,
+  workspace,
   onSaved,
 }: {
-  project: ProjectConfig;
-  /** Called after a successful save with the returned (canonicalised) project config. */
-  onSaved?: (p: ProjectConfig) => void;
+  workspace: WorkspaceConfig;
+  /** Called after a successful save with the returned (canonicalised) workspace config. */
+  onSaved?: (w: WorkspaceConfig) => void;
 }) {
-  const [draft, setDraft] = useState<ProjectConfig>(() => structuredClone(project));
+  const [draft, setDraft] = useState<WorkspaceConfig>(() => structuredClone(workspace));
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // Sync draft when the upstream project prop changes (e.g. after external refresh)
+  // Sync draft when the upstream workspace prop changes (e.g. after external refresh)
   useEffect(() => {
-    setDraft(structuredClone(project));
+    setDraft(structuredClone(workspace));
     setSavedAt(null);
-  }, [project]);
+  }, [workspace]);
 
   useEffect(() => {
     fetchGlobalConfig()
@@ -63,10 +63,10 @@ export function ConfigDisplay({
       .catch(() => setAvailableAgents([]));
   }, []);
 
-  const isDirty = JSON.stringify(project) !== JSON.stringify(draft);
+  const isDirty = JSON.stringify(workspace) !== JSON.stringify(draft);
   const notificationsOverridden = !!draft.notifications;
 
-  function update<K extends keyof ProjectConfig>(key: K, value: ProjectConfig[K]) {
+  function update<K extends keyof WorkspaceConfig>(key: K, value: WorkspaceConfig[K]) {
     setDraft({ ...draft, [key]: value });
     setSavedAt(null);
   }
@@ -141,23 +141,23 @@ export function ConfigDisplay({
     setError(null);
     try {
       // Build patch of changed fields. Send `notifications: null` to
-      // explicitly clear a per-project override (treated as "inherit").
+      // explicitly clear a per-workspace override (treated as "inherit").
       const patch: Record<string, unknown> = {};
       const draftRec = draft as unknown as Record<string, unknown>;
-      const projRec = project as unknown as Record<string, unknown>;
+      const wsRec = workspace as unknown as Record<string, unknown>;
       for (const k of Object.keys(draftRec)) {
         const a = draftRec[k];
-        const b = projRec[k];
+        const b = wsRec[k];
         if (JSON.stringify(a) !== JSON.stringify(b)) {
           patch[k] = a;
         }
       }
       // If notifications was removed (inherit), mark it null so the server
       // clears the override rather than ignoring the field.
-      if (!draft.notifications && project.notifications) {
+      if (!draft.notifications && workspace.notifications) {
         patch.notifications = null;
       }
-      const saved = await saveProject(draft.id, patch);
+      const saved = await saveWorkspace(draft.id, patch);
       setDraft(structuredClone(saved));
       setSavedAt(Date.now());
       onSaved?.(saved);
@@ -169,7 +169,7 @@ export function ConfigDisplay({
   }
 
   function onCancel() {
-    setDraft(structuredClone(project));
+    setDraft(structuredClone(workspace));
     setError(null);
     setSavedAt(null);
   }
@@ -187,7 +187,7 @@ export function ConfigDisplay({
           borderRadius: "4px",
         }}
       >
-        These <strong>override the global defaults</strong> for this project only. Global settings live in the top-bar <strong>Settings</strong> link.
+        These <strong>override the global defaults</strong> for this workspace only. Global settings live in the top-bar <strong>Settings</strong> link.
       </div>
 
       {error && (
@@ -203,15 +203,15 @@ export function ConfigDisplay({
         </h3>
         <table className="config-display__table">
           <tbody>
-            <InfoRow label="Project ID" value={project.id} />
-            <InfoRow label="Name" value={project.name} />
-            <InfoRow label="Repo path" value={project.repoPath} mono />
-            {project.status && <InfoRow label="Status" value={project.status} />}
+            <InfoRow label="Workspace ID" value={workspace.id} />
+            <InfoRow label="Name" value={workspace.name} />
+            <InfoRow label="Repo path" value={workspace.repoPath} mono />
+            {workspace.status && <InfoRow label="Status" value={workspace.status} />}
             <InfoRow
               label="Iterations completed"
-              value={String(project.currentIteration || 0)}
+              value={String(workspace.currentIteration || 0)}
             />
-            <InfoRow label="Process template" value={project.processTemplate} />
+            <InfoRow label="Process template" value={workspace.processTemplate} />
           </tbody>
         </table>
       </section>
@@ -294,7 +294,7 @@ export function ConfigDisplay({
                 <select
                   value={draft.onStalled}
                   onChange={(e) =>
-                    update("onStalled", e.target.value as ProjectConfig["onStalled"])
+                    update("onStalled", e.target.value as WorkspaceConfig["onStalled"])
                   }
                 >
                   <option value="continue">continue</option>
@@ -311,7 +311,7 @@ export function ConfigDisplay({
                   onChange={(e) =>
                     update(
                       "mergeStrategy",
-                      e.target.value as ProjectConfig["mergeStrategy"],
+                      e.target.value as WorkspaceConfig["mergeStrategy"],
                     )
                   }
                 >
@@ -343,7 +343,7 @@ export function ConfigDisplay({
                     onChange={(e) =>
                       update(
                         "readinessGate",
-                        e.target.value as ProjectConfig["readinessGate"],
+                        e.target.value as WorkspaceConfig["readinessGate"],
                       )
                     }
                   >
@@ -381,7 +381,7 @@ export function ConfigDisplay({
               checked={notificationsOverridden}
               onChange={(e) => toggleNotificationsOverride(e.target.checked)}
             />{" "}
-            Override global notifications for this project
+            Override global notifications for this workspace
           </label>
           {!notificationsOverridden && (
             <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
