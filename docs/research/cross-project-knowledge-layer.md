@@ -1,6 +1,6 @@
 # Cross-project knowledge layer — design research (item 5.7)
 
-**Status:** Research draft, 2026-04-20. Not yet decided. Meant as a starting point for iteration during the week.
+**Status:** Research draft, 2026-04-20. **Outcome →** Design chosen and detailed in [`docs/design/clio-memory-layer.md`](../design/clio-memory-layer.md) (codename **Clio**, 2026-04-21). This doc stays as the design-space survey that led to the pick; the design doc is the implementable spec.
 **Owner:** Fotis + Claude.
 **Scope:** plan item `5.7` (iteration 5, currently ❌). Not a commitment to any single approach — the document surveys the design space, identifies the tensions, and sketches a few viable paths so the next session can narrow and pick one.
 
