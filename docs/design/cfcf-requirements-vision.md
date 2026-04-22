@@ -13,7 +13,7 @@
 
 ## 1. Executive Summary
 
-cfcf (Cerefox Code Factory) is a lightweight, open-source orchestration harness that runs autonomous AI coding agents in iterative loops against a user-defined problem until success criteria are met or iteration limits are reached. The user defines the problem via documentation files (Markdown with optional Mermaid diagrams); cfcf's Mission Control prepares each iteration by writing accumulated context -- problem definition, success metrics, test scenarios, decision logs, plans, and iteration history -- into the project repo, then launches the agent, evaluates results via a separate judge agent, and decides whether to continue, adjust, or stop.
+cfcf (Cerefox Code Factory) is a lightweight, open-source orchestration harness that runs autonomous AI coding agents in iterative loops against a user-defined problem until success criteria are met or iteration limits are reached. The user defines the problem via documentation files (Markdown with optional Mermaid diagrams); cfcf's Mission Control prepares each iteration by writing accumulated context -- problem definition, success metrics, test scenarios, decision logs, plans, and iteration history -- into the workspace repo, then launches the agent, evaluates results via a separate judge agent, and decides whether to continue, adjust, or stop.
 
 **cfcf is deterministic orchestration, not another AI agent.** The control loop is plain code, not an LLM. LLMs do the coding work as agent processes; cfcf does the plumbing, context assembly, evaluation, and iteration management. LLMs are used as utility functions at specific points in the loop: an LLM judge assesses iteration quality beyond what tests can capture, and SLMs assist with context preparation tasks like log summarization and failure classification. These LLM invocations are tools called by the deterministic harness -- they inform decisions but do not make them.
 
@@ -53,7 +53,7 @@ cfcf is a **software factory** that takes a problem definition and iteratively a
 4. **Memory-backed context**: Each iteration starts with full accumulated knowledge -- not just the repo state, but what was tried, what failed, what was learned.
 5. **Deterministic control**: The orchestration loop is predictable code -- no LLM in the critical path of control flow decisions.
 6. **Intelligent evaluation**: Machine-checkable tests are the foundation, but LLM judges and periodic strategic reflection ensure the loop converges on quality solutions, not just passing tests.
-7. **Controlled execution**: Each agent runs as a local process in the project directory on a dedicated git branch. State between iterations is managed explicitly via git commits and the cfcf context pipeline. Container-based isolation is a future option.
+7. **Controlled execution**: Each agent runs as a local process in the workspace directory on a dedicated git branch. State between iterations is managed explicitly via git commits and the cfcf context pipeline. Container-based isolation is a future option.
 8. **Human on the loop**: Iterations are headless and uninterrupted by default. The user may configure a pause cadence (every N iterations) for review and course correction.
 9. **Cheap to operate**: Run locally on a developer's machine. Costs are LLM API calls from the coding agents plus lightweight judge/SLM calls from the harness.
 
@@ -63,7 +63,7 @@ The initial implementation uses a single dev agent per iteration with a single n
 
 This does not contradict the deterministic outer loop. The outer loop (iteration lifecycle, environment setup, evaluation, continue/stop) remains deterministic code. The coordinator operates within the iteration boundary, replacing the single fire-and-forget agent invocation with a richer inner execution model.
 
-The chief agent solves the **token bootstrapping problem**: instead of a single agent spending a large fraction of its context window re-reading all project context every iteration, the chief holds the big picture and spawns sub-agents with focused, minimal context for specific tasks. The chief uses cfcf CLI commands to spawn and manage sub-agents, and communicates with them via structured files in the repo. From cfcf's perspective, the iteration is still a single unit -- it just takes longer and involves multiple agent processes internally.
+The chief agent solves the **token bootstrapping problem**: instead of a single agent spending a large fraction of its context window re-reading all workspace context every iteration, the chief holds the big picture and spawns sub-agents with focused, minimal context for specific tasks. The chief uses cfcf CLI commands to spawn and manage sub-agents, and communicates with them via structured files in the repo. From cfcf's perspective, the iteration is still a single unit -- it just takes longer and involves multiple agent processes internally.
 
 The path from v0.1 to this vision is incremental: first prove the loop works with a single agent (v0.1), then add the judge as a separate agent role (v0.1), then explore chief-subagent coordination within iterations (v0.4+).
 
@@ -109,11 +109,11 @@ cf² manages five distinct agent roles, each independently configurable (agent a
 
 | Role | Purpose | When invoked |
 |------|---------|-------------|
-| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. Re-review-aware: on a project with completed iterations, the architect appends new pending iterations non-destructively when new requirements appear. | User-invoked (`cfcf review`), optional, can run multiple times |
+| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. Re-review-aware: on a workspace with completed iterations, the architect appends new pending iterations non-destructively when new requirements appear. | User-invoked (`cfcf review`), optional, can run multiple times |
 | **Dev Agent** | Reads context, writes code, runs tests, produces handoff + iteration-log + signals. | Each iteration |
 | **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY, opts in/out of reflection via the `reflection_needed` signal. | After each iteration |
 | **Reflection** | Reads the full cross-iteration history (decision log, per-iteration changelogs, prior reflection analyses, compact git log of iteration branches, tail of the latest dev log), classifies iteration health, and may non-destructively rewrite pending plan items. The only role allowed to edit a plan that has completed work. | After each judge, unless the judge opts out and `reflectSafeguardAfter` is not yet hit. Also user-invoked ad-hoc via `cfcf reflect`. |
-| **Documenter** | Produces polished final project documentation (architecture, API reference, setup guide). | Auto post-SUCCESS, or user-invoked (`cfcf document`) |
+| **Documenter** | Produces polished final workspace documentation (architecture, API reference, setup guide). | Auto post-SUCCESS, or user-invoked (`cfcf document`) |
 
 Cross-agent review is encouraged: e.g., Codex for dev, Claude Code for judge and architect, Claude Opus for reflection and documenter. Different agents catch different types of issues. Reflection has the broadest context of any role, so a strong model is recommended there.
 
@@ -145,7 +145,7 @@ The user may then:
 - Update hints.md.
 - Stop iterating.
 
-This model preserves the headless, zero-touch default while giving users a natural checkpoint mechanism for longer or higher-stakes projects.
+This model preserves the headless, zero-touch default while giving users a natural checkpoint mechanism for longer or higher-stakes workspaces.
 
 ### 4.4 Iteration Cycle
 
@@ -264,7 +264,7 @@ cfcf uses git branches for iteration isolation. GitHub is the supported remote f
 
 ### 4.7 Secret Management
 
-Agents use the user's existing local credentials and environment variables. cfcf does not manage API keys or agent authentication -- the user is responsible for having their agents properly authenticated before starting iteration. Project-specific secrets (e.g., database URLs, service tokens) can be configured in cfcf's project config and injected as environment variables. Secrets never appear in the memory layer or iteration logs.
+Agents use the user's existing local credentials and environment variables. cfcf does not manage API keys or agent authentication -- the user is responsible for having their agents properly authenticated before starting iteration. Workspace-specific secrets (e.g., database URLs, service tokens) can be configured in cfcf's workspace config and injected as environment variables. Secrets never appear in the memory layer or iteration logs.
 
 ---
 
@@ -347,7 +347,7 @@ Agent-specific logic is fully contained within the adapter. cfcf core has no kno
 
 ## 8. Memory Layer
 
-For v0.1, **all cfcf-generated files live in the project repo** under `cfcf-docs/`. This is the source of truth. Everything is tracked in git -- the repo IS the memory layer. This keeps things simple, transparent, and version-controlled.
+For v0.1, **all cfcf-generated files live in the workspace repo** under `cfcf-docs/`. This is the source of truth. Everything is tracked in git -- the repo IS the memory layer. This keeps things simple, transparent, and version-controlled.
 
 **Per-iteration artifacts (tracked in git under cfcf-docs/):**
 - `plan.md` -- Evolving implementation plan (agent updates each iteration).
@@ -361,11 +361,11 @@ For v0.1, **all cfcf-generated files live in the project repo** under `cfcf-docs
 - `iteration-logs/` -- Detailed per-iteration summaries.
 
 **Agent logs (outside repo, under ~/.cfcf/):**
-- Full agent stdout/stderr is too large for the repo. cfcf stores it under `~/.cfcf/logs/<project-id>/`.
+- Full agent stdout/stderr is too large for the repo. cfcf stores it under `~/.cfcf/logs/<workspace-id>/`.
 
-**Cross-project knowledge** (e.g., which agents work best for which tasks, lessons across projects) is a future extension. The need will appear organically as cfcf evolves.
+**Cross-workspace knowledge** (e.g., which agents work best for which tasks, lessons across workspaces) is a future extension. The need will appear organically as cfcf evolves.
 
-> **Note:** Cerefox (the Cerefox knowledge base) is supported as an optional future memory backend for richer semantic search across projects. Not required -- the built-in repo-based memory is fully functional on its own.
+> **Note:** Cerefox (the Cerefox knowledge base) is supported as an optional future memory backend for richer semantic search across workspaces. Not required -- the built-in repo-based memory is fully functional on its own.
 
 See `agent-process-and-context.md` section 7 for the full file structure specification.
 
@@ -377,7 +377,7 @@ See `agent-process-and-context.md` section 7 for the full file structure specifi
 
 The deterministic foundation. Fast, cheap, unambiguous.
 
-- Run the project's test suite (or the subset specified in success.md).
+- Run the workspace's test suite (or the subset specified in success.md).
 - Parse results: total, passed, failed, errors.
 - Run lint checks (if configured).
 - Run type checks (if configured).
@@ -402,7 +402,7 @@ The judge does not decide whether to continue or stop. Its output is logged to t
 
 > **Refined spec (April 2026):** see [`docs/research/reflection-role-and-iterative-planning.md`](../research/reflection-role-and-iterative-planning.md) for the detailed design driving iteration-5 item 5.6. The frequency model and plan-editing semantics below are kept here for historical context; the research doc supersedes them.
 
-Mission Control invokes a deeper reflection pass after the judge. The reflection LLM reviews the full iteration history -- not just the latest iteration, but the accumulated pattern across all iterations in the project.
+Mission Control invokes a deeper reflection pass after the judge. The reflection LLM reviews the full iteration history -- not just the latest iteration, but the accumulated pattern across all iterations in the workspace.
 
 The reflection produces strategic guidance: pattern analysis across iterations, a strategy recommendation, direct (non-destructive) rewrite of the pending part of `plan.md`, and an iteration health assessment (converging, stable, stalled, diverging).
 
@@ -440,14 +440,14 @@ cfcf iterate my-problem/ \
   --judge-model anthropic/claude-sonnet-4-20250514 \
   --slm-model ollama/llama3.2:3b
 
-# Check status of a running project
-cfcf status <project-name>
+# Check status of a running workspace
+cfcf status --workspace <name>
 
 # Review iteration history
-cfcf log <project-name>
+cfcf log <workspace-name>
 
 # Apply the successful result to your repo
-cfcf apply <project-name>
+cfcf apply <workspace-name>
 
 # List available agent adapters
 cfcf agents
@@ -462,7 +462,7 @@ cfcf prepare my-problem/ --repo /path/to/project --agent claude-code
 
 ### Relationship to Cerefox
 
-Cerefox is the overarching ecosystem. Currently it includes the Cerefox memory layer (an OSS project for persistent knowledge management) and cfcf. cfcf is the first concrete product in the ecosystem -- an instantiation of broader concepts around agent orchestration, structured operational knowledge (decision logs, plans, lessons), human-on-the-loop philosophy, and agent-agnostic design. cfcf has its own self-contained file-based memory layer, with optional Cerefox memory integration for richer semantic search across projects.
+Cerefox is the overarching ecosystem. Currently it includes the Cerefox memory layer (an OSS project for persistent knowledge management) and cfcf. cfcf is the first concrete product in the ecosystem -- an instantiation of broader concepts around agent orchestration, structured operational knowledge (decision logs, plans, lessons), human-on-the-loop philosophy, and agent-agnostic design. cfcf has its own self-contained file-based memory layer, with optional Cerefox memory integration for richer semantic search across workspaces.
 
 ### vs. OpenHands
 
@@ -563,9 +563,9 @@ The architecture is designed to be additive: when Cerefox enterprise knowledge b
 
 5. **Token bootstrapping cost**: Each iteration requires the agent to re-read all context from scratch, which may consume a large percentage of available tokens. Mitigation strategies: (a) tightly defined process docs that tell the agent exactly what to read and in what order, (b) SLM-compressed summaries of previous iterations, (c) clear separation between "must read" and "reference only" context. This is an ongoing design challenge.
 
-6. **Multi-agent within a project**: Could cfcf switch agents mid-project? The plugin model supports this, but orchestration logic gets more complex. Deferred to v0.4+.
+6. **Multi-agent within a workspace**: Could cfcf switch agents mid-workspace? The plugin model supports this, but orchestration logic gets more complex. Deferred to v0.4+.
 
-7. **Cost tracking**: Should cfcf track LLM API costs per iteration and per project? Includes coding agent costs, judge costs, reflection costs, and SLM worker costs. Likely yes, but not a priority for v0.1.
+7. **Cost tracking**: Should cfcf track LLM API costs per iteration and per workspace? Includes coding agent costs, judge costs, reflection costs, and SLM worker costs. Likely yes, but not a priority for v0.1.
 
 8. **Judge disagreement with tests**: What if tests pass but the judge flags serious concerns? Should a sufficiently negative judge assessment block SUCCESS? TBD.
 

@@ -43,7 +43,7 @@ What shipped:
 - `cfcf workspace *` CLI (was `cfcf project *`); `--workspace <name>` flag (was `--project`)
 - `/api/workspaces/*` REST surface (was `/api/projects/*`); `workspaceId` / `workspaceName` on response bodies
 - Web UI: "Workspaces" top-bar link + Workspace detail page; `#/workspaces/:id` hash route
-- `~/.cfcf/workspaces/<id>/` on-disk config (was `~/.cfcf/projects/<id>/`)
+- `<cfcf config dir>/workspaces/<id>/` on-disk config (was `<cfcf config dir>/projects/<id>/`) -- platform-specific dir: `~/Library/Application Support/cfcf/` on macOS, `~/.config/cfcf/` on Linux
 - The `cfcf-docs/` internal file tree stays (`cfcf-docs/iteration-logs/`, etc.) — those names don't reference "project."
 
 For the rest of this document, "workspace" refers to a single cf² repo and "Clio Project" refers to the grouping tier.

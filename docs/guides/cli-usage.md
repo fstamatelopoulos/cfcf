@@ -45,7 +45,7 @@ cfcf init --force
 
 ## Server Management
 
-cfcf runs a background server that manages projects, executes iterations, and streams logs. The CLI communicates with the server via HTTP.
+cfcf runs a background server that manages workspaces, executes iterations, and streams logs. The CLI communicates with the server via HTTP.
 
 ### `cfcf server start`
 
@@ -130,18 +130,18 @@ cfcf config edit
 
 ### `cfcf status`
 
-One-command overview of cfcf state: configuration, server status, and active project loops.
+One-command overview of cfcf state: configuration, server status, and active workspace loops.
 
 ```bash
 cfcf status                          # Overview of everything
-cfcf status --workspace my-project     # Detailed loop status for a project
+cfcf status --workspace my-project     # Detailed loop status for a workspace
 ```
 
-With `--project`, shows the current loop phase, iteration progress, judge determinations, and pending questions.
+With `--workspace`, shows the current loop phase, iteration progress, judge determinations, and pending questions.
 
 ---
 
-## Project Management
+## Workspace Management
 
 Workspaces link cfcf to a local git repository. Each workspace has its own configuration (agents, iteration limits, etc.) that inherits from the global defaults.
 
@@ -160,13 +160,13 @@ The repo must be:
 
 Options:
 - `--repo <path>` (required) -- Absolute or relative path to the git repo
-- `--name <name>` (required) -- Human-readable project name
+- `--name <name>` (required) -- Human-readable workspace name
 
-The project inherits agent settings from your global config. To override per-project, use the API or edit the project config file directly.
+The workspace inherits agent settings from your global config. To override per-workspace, use the API or edit the workspace config file directly.
 
 ### `cfcf workspace list`
 
-List all projects.
+List all workspaces.
 
 ```bash
 cfcf workspace list
@@ -174,7 +174,7 @@ cfcf workspace list
 
 ### `cfcf workspace show`
 
-Show detailed configuration for a project.
+Show detailed configuration for a workspace.
 
 ```bash
 cfcf workspace show my-project
@@ -182,7 +182,7 @@ cfcf workspace show my-project
 
 ### `cfcf workspace delete`
 
-Delete a project from cfcf. This removes the cfcf config only -- your git repo is untouched.
+Delete a workspace from cfcf. This removes the cfcf config only -- your git repo is untouched.
 
 ```bash
 cfcf workspace delete my-project
@@ -263,17 +263,17 @@ What happens:
 6. On completion: shows iteration history and outcome.
 
 Options:
-- `--workspace <name>` (required) -- project name or ID
+- `--workspace <name>` (required) -- workspace name or ID
 - `--problem-pack <path>` (optional) -- custom Problem Pack path (default: `<repo>/problem-pack/`)
-- `--auto-review` / `--no-auto-review` (optional, item 5.1) -- per-run override: force the Solution Architect to run as a pre-loop phase (`--auto-review`) or skip it (`--no-auto-review`). When the flag is omitted the project's `autoReviewSpecs` config value decides.
-- `--auto-document` / `--no-auto-document` (optional, item 5.1) -- per-run override for the post-SUCCESS Documenter. When omitted the project's `autoDocumenter` config value decides.
+- `--auto-review` / `--no-auto-review` (optional, item 5.1) -- per-run override: force the Solution Architect to run as a pre-loop phase (`--auto-review`) or skip it (`--no-auto-review`). When the flag is omitted the workspace's `autoReviewSpecs` config value decides.
+- `--auto-document` / `--no-auto-document` (optional, item 5.1) -- per-run override for the post-SUCCESS Documenter. When omitted the workspace's `autoDocumenter` config value decides.
 - `--readiness-gate <level>` (optional, item 5.1) -- per-run override for the pre-loop readiness gate: `never | blocked | needs_refinement_or_blocked`. Only consulted when auto-review is on.
 
 Per-run overrides are persisted on `loop-state.json` for this run, so a pause + resume keeps the same behaviour across server restarts.
 
 ### `cfcf run` -- Manual Mode
 
-Run any command within a project (for testing, debugging, or non-agent tasks).
+Run any command within a workspace (for testing, debugging, or non-agent tasks).
 
 ```bash
 cfcf run --workspace my-project -- echo "hello"
@@ -340,7 +340,7 @@ In both cases cfcf clears `state.userFeedback` once the consuming agent has been
 
 ### `cfcf document`
 
-Run the Documenter agent to produce polished final project documentation. This runs automatically when the loop completes with SUCCESS, but you can also invoke it manually at any time.
+Run the Documenter agent to produce polished final workspace documentation. This runs automatically when the loop completes with SUCCESS, but you can also invoke it manually at any time.
 
 ```bash
 cfcf document --workspace my-project
@@ -350,13 +350,13 @@ The documenter reads the entire codebase and produces:
 - `docs/architecture.md` — system architecture overview
 - `docs/api-reference.md` — API documentation (if applicable)
 - `docs/setup-guide.md` — setup and usage guide
-- `docs/README.md` — project overview and quick start
+- `docs/README.md` — workspace overview and quick start
 
 Re-run anytime to regenerate documentation after changes.
 
 ### `cfcf reflect`
 
-Run the Reflection agent ad-hoc against the current state of a project.
+Run the Reflection agent ad-hoc against the current state of a workspace.
 Outside the iteration loop; does NOT modify `loop-state.json` and does
 NOT write an `iteration-log` (no iteration happened). Useful for a
 strategic health-check between loop runs, or after editing the Problem
@@ -470,7 +470,7 @@ operating mode.
 | `terminal-bell` | Writes the ASCII BEL character (`\a`) to server stderr — most terminals beep or flash | all |
 | `macos` | Native macOS Notification Center entry via `osascript` | macOS only |
 | `linux` | Native Linux desktop notification via `notify-send` (part of libnotify) | Linux only |
-| `log` | Appends a JSON Lines entry to `~/.cfcf/logs/<project>/notifications.log` — always-on audit trail | all |
+| `log` | Appends a JSON Lines entry to `~/.cfcf/logs/<workspace>/notifications.log` — always-on audit trail | all |
 
 ### Configuration
 
@@ -490,7 +490,7 @@ Configured via `cfcf init` or by editing the global config file directly:
 ```
 
 Set `enabled: false` to disable all notifications. Remove channels from
-a specific event's array to silence that event. Project config can
+a specific event's array to silence that event. Workspace config can
 override the global default.
 
 ### Notes
@@ -522,7 +522,7 @@ override the global default.
 cfcf init                                          # Configure agents and defaults
 cfcf server start                                  # Start the server
 
-# Per-project setup
+# Per-workspace setup
 cfcf workspace init --repo /path/to/repo --name my-app
 
 # Define the problem
@@ -532,7 +532,7 @@ cfcf workspace init --repo /path/to/repo --name my-app
 cfcf review --workspace my-app                       # Architect identifies gaps
 # Read cfcf-docs/architect-review.md, refine problem-pack/
 cfcf review --workspace my-app                       # Re-review after refinements
-                                                    # (re-review-aware on existing projects)
+                                                    # (re-review-aware on existing workspaces)
 
 # Start the dark factory loop
 cfcf run --workspace my-app

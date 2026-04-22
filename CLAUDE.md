@@ -22,7 +22,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 
 1. **Deterministic control, non-deterministic workers.** The orchestration loop is predictable code. LLMs do creative work inside agent processes. cfcf does plumbing.
 2. **Agent-agnostic.** Two adapters today (Claude Code, Codex). The `AgentAdapter` interface in `packages/core/src/types.ts` is the contract. No agent-specific code in core.
-3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<project>/` (too large, potentially contain PII/secrets). Agent-authored per-iteration changelogs live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` -- these are small, human-curated, safe to commit. `iteration-history.md` is rebuilt from those logs each iteration so it survives server restarts. Four per-iteration archive directories under `cfcf-docs/` preserve the full audit trail: `iteration-logs/` (backward-looking dev changelogs), `iteration-handoffs/` (forward-looking dev notes, v0.7.6), `iteration-reviews/` (judge verdicts), `reflection-reviews/` (reflection analyses). No external database.
+3. **All cfcf files live in the repo** under `cfcf-docs/`. Raw agent stdout/stderr logs go to `~/.cfcf/logs/<workspace>/` (too large, potentially contain PII/secrets). Agent-authored per-iteration changelogs live in the repo at `cfcf-docs/iteration-logs/iteration-N.md` -- these are small, human-curated, safe to commit. `iteration-history.md` is rebuilt from those logs each iteration so it survives server restarts. Four per-iteration archive directories under `cfcf-docs/` preserve the full audit trail: `iteration-logs/` (backward-looking dev changelogs), `iteration-handoffs/` (forward-looking dev notes, v0.7.6), `iteration-reviews/` (judge verdicts), `reflection-reviews/` (reflection analyses). No external database.
 4. **Signal files for machine-readable communication.** `cfcf-iteration-signals.json`, `cfcf-judge-signals.json`, `cfcf-architect-signals.json`, `cfcf-reflection-signals.json` complement human-readable Markdown docs.
 5. **Non-destructive plan rewrites.** Both the architect (re-review mode) and the reflection agent may rewrite `cfcf-docs/plan.md`, but cfcf validates each rewrite: completed items (`[x]`) and iteration-header numbers must survive. Destructive rewrites are auto-reverted to the pre-spawn snapshot. Logic lives in `packages/core/src/plan-validation.ts`.
 6. **Sentinel-based user-content preservation.** cfcf regenerates iteration-specific instructions for the dev agent every iteration, but only inside the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` block in `CLAUDE.md` / `AGENTS.md`. User content outside the markers is preserved byte-for-byte across iterations.
@@ -89,9 +89,9 @@ packages/
       reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
   web/src/
-    App.tsx              # Root router (dashboard / project / server)
-    pages/               # Dashboard, ProjectDetail, ServerInfo
-    components/          # Header, PhaseIndicator, ProjectHistory,
+    App.tsx              # Root router (dashboard / workspace / server)
+    pages/               # Dashboard, WorkspaceDetail, ServerInfo
+    components/          # Header, PhaseIndicator, WorkspaceHistory,
                          #   ArchitectReview, JudgeDetail, ReflectionDetail, …
     api.ts               # Client for all /api/* endpoints incl. /activity + /reflect
 problem-packs/           # Example Problem Pack definitions

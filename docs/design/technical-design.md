@@ -26,7 +26,7 @@ cfcf v0.1 runs agents as **local processes** in the user's normal development en
 | Concern | Container approach | Local process approach |
 |---------|-------------------|----------------------|
 | Agent authentication | Must inject API keys, SSH keys, agent CLI auth into container. Complex setup per agent. | Reuses user's existing authenticated agents. Zero setup. |
-| Git credentials | Must inject SSH keys or tokens. User must configure per-project. | Reuses user's existing git auth. |
+| Git credentials | Must inject SSH keys or tokens. User must configure per-workspace repo. | Reuses user's existing git auth. |
 | Docker dependency | Hard prerequisite. User must install and run Docker. | No dependency. Works immediately. |
 | Agent permissions | Container isolation means `--dangerously-skip-permissions` is safe. | Must use `--dangerously-skip-permissions` (or equivalent) with guardrails. |
 | Iteration speed | Container create/clone/teardown adds 10-30s per iteration. | Process start is near-instant. |
@@ -40,7 +40,7 @@ Without container isolation, cfcf relies on:
 
 1. **Agent permission flags**: `--dangerously-skip-permissions` for Claude Code, equivalent flags for other agents. This is required for unattended execution.
 2. **Git-based isolation**: cfcf works on a dedicated branch. If an iteration goes wrong, git reset/revert restores the previous state.
-3. **Working directory scoping**: The agent is instructed (via CLAUDE.md / equivalent) to only modify files within the project directory.
+3. **Working directory scoping**: The agent is instructed (via CLAUDE.md / equivalent) to only modify files within the workspace directory.
 4. **cfcf-managed files**: Files in `cfcf-docs/` that are marked read-only are protected by convention (agent instructions say "do not modify"). cfcf can verify post-iteration that read-only files weren't changed and warn/revert if they were.
 5. **User acknowledgment**: When starting to iterate, cfcf explicitly tells the user that the agent will run with elevated permissions and asks for confirmation.
 
@@ -65,7 +65,7 @@ The execution interface is designed so that swapping in a container backend does
 │  │  CLI     │◄───────────────►│         cfcf Server              │  │
 │  │  (cfcf)  │                 │         (Hono on Bun)            │  │
 │  └──────────┘                 │                                  │  │
-│                               │  Project | Iteration | Process   │  │
+│                               │  Workspace| Iteration | Process  │  │
 │  ┌──────────┐    HTTP/SSE     │  Manager | Controller | Manager  │  │
 │  │  Web GUI │◄───────────────►│  ─────────────────────────────── │  │
 │  │  (React) │  (embedded in   │  Review   | Document  | Judge    │  │
@@ -79,7 +79,7 @@ The execution interface is designed so that swapping in a container backend does
 │                               └──────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Project Working Directory    (git repo, local clone)        │   │
+│  │  Workspace Working Directory    (git repo, local clone)        │   │
 │  │    /path/to/project/                                         │   │
 │  │      src/                     (user's source code)           │   │
 │  │      cfcf-docs/               (cfcf-managed context files)   │   │
@@ -97,10 +97,10 @@ The execution interface is designed so that swapping in a container backend does
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  ~/.cfcf/logs/                (agent logs, too large for repo)│   │
-│  │    <project-id>/                                             │   │
+│  │    <workspace-id>/                                           │   │
 │  │      iteration-NNN-dev.log                                   │   │
 │  │      iteration-NNN-judge.log                                 │   │
-│  │      architect-NNN.log        (sequence-numbered per project)│   │
+│  │      architect-NNN.log        (sequence-numbered per workspace)│   │
 │  │      documenter-NNN.log                                      │   │
 │  │      notifications.log        (JSON Lines audit trail)       │   │
 │  └──────────────────────────────────────────────────────────────┘   │
@@ -120,9 +120,9 @@ The execution interface is designed so that swapping in a container backend does
 The central process. Always running on localhost. Manages everything.
 
 **Responsibilities:**
-- Exposes REST API for CLI (project CRUD, iteration lifecycle, configuration)
+- Exposes REST API for CLI (workspace CRUD, iteration lifecycle, configuration)
 - Exposes SSE endpoints for real-time event streaming (logs, status updates, alerts)
-- Manages project state and iteration state
+- Manages workspace state and iteration state
 - Orchestrates the iteration loop
 - Dispatches notifications
 - Serves the web GUI (future, not in Iteration 0)
@@ -170,7 +170,7 @@ interface WorkspaceConfig {
   judgeAgent: AgentConfig;         // Judge agent configuration
   architectAgent: AgentConfig;     // Solution Architect (pre-iteration review)
   documenterAgent: AgentConfig;    // Documenter (post-SUCCESS documentation)
-  maxIterations: number;           // Hard cap on iterations per project
+  maxIterations: number;           // Hard cap on iterations per workspace
   currentIteration: number;        // Current iteration number (monotonically increasing, starts at 0)
   pauseEvery: number;              // 0 = no pauses, N = pause every N iterations
   onStalled: 'continue' | 'stop' | 'alert'; // Behavior when judge says STALLED
@@ -187,7 +187,7 @@ interface AgentConfig {
 // - devAgent: writes code, runs tests (e.g., codex)
 // - judgeAgent: reviews iterations + opts in/out of reflection (e.g., claude-code)
 // - architectAgent: reviews Problem Pack pre-iteration; also runs re-review
-//                   mode on an existing project to append new iterations
+//                   mode on an existing workspace to append new iterations
 //                   non-destructively (e.g., claude-code with opus)
 // - reflectionAgent: cross-iteration strategic review after every iteration
 //                    (unless judge opts out + safeguard not yet hit);
@@ -220,7 +220,7 @@ interface ProcessManager {
 interface ProcessOptions {
   command: string;                 // e.g., "claude"
   args: string[];                  // e.g., ["--dangerously-skip-permissions", "-p", "..."]
-  cwd: string;                     // Project working directory
+  cwd: string;                     // Workspace working directory
   env?: Record<string, string>;    // Additional env vars
   logFile: string;                 // Where to write logs
 }
@@ -247,46 +247,46 @@ IDLE → PREPARING → EXECUTING_DEV → EXECUTING_JUDGE → DECIDING → PREPAR
 **Per-iteration flow:**
 
 ```typescript
-async function runIteration(project: Project, iterationNum: number): Promise<IterationResult> {
+async function runIteration(workspace: Workspace, iterationNum: number): Promise<IterationResult> {
   // 1. PREPARE
-  const context = await contextAssembler.assemble(project, iterationNum);
-  await contextAssembler.writeToRepo(project.repoPath, context);
+  const context = await contextAssembler.assemble(workspace, iterationNum);
+  await contextAssembler.writeToRepo(workspace.repoPath, context);
   // Writes: CLAUDE.md, cfcf-docs/iteration-history.md, cfcf-docs/judge-assessment.md, etc.
 
   // 2. EXECUTE DEV AGENT
   const devProc = await processManager.spawn({
     command: devAdapter.command,           // e.g., "claude"
     args: devAdapter.buildArgs(context),   // e.g., ["--dangerously-skip-permissions", "-p", "..."]
-    cwd: project.repoPath,
-    logFile: memoryLayer.logPath(project.id, iterationNum, 'dev'),
+    cwd: workspace.repoPath,
+    logFile: memoryLayer.logPath(workspace.id, iterationNum, 'dev'),
   });
   const logStream = processManager.streamLogs(devProc);
-  await logCollector.capture(logStream, project.id, iterationNum);
+  await logCollector.capture(logStream, workspace.id, iterationNum);
   const devExit = await processManager.waitForExit(devProc);
 
   // 3. COLLECT RESULTS
-  const handoff = await parseHandoffDocument(project.repoPath + '/cfcf-docs/iteration-handoff.md');
-  const signals = await parseSignalFile(project.repoPath + '/cfcf-docs/cfcf-iteration-signals.json');
-  const diff = await gitManager.getDiff(project.repoPath);
+  const handoff = await parseHandoffDocument(workspace.repoPath + '/cfcf-docs/iteration-handoff.md');
+  const signals = await parseSignalFile(workspace.repoPath + '/cfcf-docs/cfcf-iteration-signals.json');
+  const diff = await gitManager.getDiff(workspace.repoPath);
 
   // 4. COMMIT
-  await gitManager.commitAll(project.repoPath, `cfcf iteration ${iterationNum}`);
+  await gitManager.commitAll(workspace.repoPath, `cfcf iteration ${iterationNum}`);
   // Push to remote deferred -- only on success or on demand
 
   // 5. EXECUTE JUDGE AGENT
   const judgeProc = await processManager.spawn({
     command: judgeAdapter.command,          // e.g., "codex" (different agent)
-    args: judgeAdapter.buildArgs({ handoff, diff, project, iterationNum }),
-    cwd: project.repoPath,
-    logFile: memoryLayer.logPath(project.id, iterationNum, 'judge'),
+    args: judgeAdapter.buildArgs({ handoff, diff, workspace, iterationNum }),
+    cwd: workspace.repoPath,
+    logFile: memoryLayer.logPath(workspace.id, iterationNum, 'judge'),
   });
   await processManager.waitForExit(judgeProc);
   const judgeResult = await parseJudgeAssessment(
-    project.repoPath + '/cfcf-docs/iteration-reviews/iteration-' + iterationNum + '.md'
+    workspace.repoPath + '/cfcf-docs/iteration-reviews/iteration-' + iterationNum + '.md'
   );
 
   // 6. STORE
-  await memoryLayer.storeIteration(project.id, iterationNum, {
+  await memoryLayer.storeIteration(workspace.id, iterationNum, {
     handoff, judgeResult, diff, signals,
   });
 
@@ -299,7 +299,7 @@ async function runIteration(project: Project, iterationNum: number): Promise<Ite
 Builds and writes the context files into the repo before each iteration.
 
 **Inputs:**
-- Project Problem Pack (static files from user)
+- Workspace Problem Pack (static files from user)
 - Iteration history from memory layer
 - Previous judge assessment
 - User feedback (if any)
@@ -419,8 +419,8 @@ An external persistent memory layer (like `~/.cfcf/workspaces/...` or Cerefox) i
 // Simplified for v0.1 -- repo is the source of truth
 interface MemoryLayer {
   // Log storage (outside repo, under ~/.cfcf/)
-  storeAgentLogs(projectId: string, iterationNum: number, role: 'dev' | 'judge', logs: string): Promise<string>;
-  getAgentLogs(projectId: string, iterationNum: number, role: 'dev' | 'judge'): Promise<string>;
+  storeAgentLogs(workspaceId: string, iterationNum: number, role: 'dev' | 'judge', logs: string): Promise<string>;
+  getAgentLogs(workspaceId: string, iterationNum: number, role: 'dev' | 'judge'): Promise<string>;
 
   // Context assembly reads from repo files directly
   // No separate storage interface needed for v0.1
@@ -433,7 +433,7 @@ Alerts the user when attention is needed.
 
 **Trigger events:**
 - Iteration completed (configurable)
-- Project completed (success or failure)
+- Workspace completed (success or failure)
 - User input needed (detected via signal files)
 - Pause cadence reached
 
@@ -558,13 +558,13 @@ The cfcf server is a single Bun/Hono process. Agent processes are spawned as chi
 - Log streaming from child processes is natively async
 - Hono handles concurrent HTTP requests efficiently
 - SSE streaming is natively supported
-- Single project execution for v0.1 -- no concurrency concerns
+- Single workspace execution for v0.1 -- no concurrency concerns
 
 **Graceful degradation:** If the server is not running, `cfcf iterate` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. Useful for development and debugging.
 
-### 6.2 Future: Worker Threads for Multi-Project
+### 6.2 Future: Worker Threads for Multi-Workspace
 
-Each project's iteration loop could run in a Bun Worker thread. The main thread handles HTTP/SSE.
+Each workspace's iteration loop could run in a Bun Worker thread. The main thread handles HTTP/SSE.
 
 ---
 
@@ -624,9 +624,9 @@ cfcf mission control manages judge assessment files in the repo:
 ```typescript
 // --- Core types ---
 
-interface Project {
+interface Workspace {
   id: string;
-  config: ProjectConfig;
+  config: WorkspaceConfig;
   status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   currentIteration: number;
   maxIterations: number;
@@ -674,8 +674,8 @@ type CfcfEvent =
   | { type: 'iteration.log'; line: string; source: 'dev' | 'judge' }
   | { type: 'iteration.dev_completed'; iteration: number; exitCode: number }
   | { type: 'iteration.judge_completed'; iteration: number; determination: string }
-  | { type: 'project.paused'; reason: 'cadence' | 'anomaly' | 'user_input_needed'; questions?: string[] }
-  | { type: 'project.completed'; status: 'success' | 'failure' | 'stopped' }
+  | { type: 'workspace.paused'; reason: 'cadence' | 'anomaly' | 'user_input_needed'; questions?: string[] }
+  | { type: 'workspace.completed'; status: 'success' | 'failure' | 'stopped' }
   | { type: 'alert'; message: string };
 ```
 

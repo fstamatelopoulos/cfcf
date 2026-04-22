@@ -8,7 +8,7 @@ at the end of each iteration. File name: cfcf-docs/iteration-logs/iteration-N.md
 The cfcf harness reads these files to rebuild `iteration-history.md` each
 iteration (newest-first) and future roles (reflection) read them as
 clean, curated input. Do NOT put raw log output here -- those live in
-~/.cfcf/logs/<project>/iteration-NNN-*.log.
+~/.cfcf/logs/<workspace>/iteration-NNN-*.log.
 -->
 
 **Branch:** cfcf/iteration-N
