@@ -403,6 +403,46 @@ The iteration branch is preserved. You can review the code, then restart with `c
 
 ---
 
+## Clio — cross-workspace memory (item 5.7)
+
+Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md) for the full walkthrough; the commands are:
+
+```bash
+# Search
+cfcf clio search "flaky auth tests" [--project <name>] [--match-count 5] [--metadata '{"role":"reflection"}'] [--json]
+
+# Ingest a markdown doc (or pipe via --stdin)
+cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
+cat note.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Note"
+
+# Retrieve
+cfcf clio get <document-id> [--json]
+
+# Projects (grouping of workspaces by knowledge domain)
+cfcf clio projects [--json]
+cfcf clio project create <name> [--description "..."]
+cfcf clio project show <name-or-id>
+
+# Introspection
+cfcf clio stats [--json]
+```
+
+`cfcf memory` is a top-level alias that points at the same command tree — `cfcf memory search "..."` works identically.
+
+### Workspace ↔ Clio Project assignment
+
+```bash
+# At init time
+cfcf workspace init --repo <path> --name <name> --project <clio-project>   # flag-driven
+cfcf workspace init --repo <path> --name <name>                             # interactive pick
+
+# Later
+cfcf workspace set <name> --project <new-clio-project>                      # future ingests only
+cfcf workspace set <name> --project <new-clio-project> --migrate-history    # rekey historical docs too
+```
+
+---
+
 ## Configuration Storage
 
 cfcf stores configuration in the platform-standard directory:

@@ -9,6 +9,19 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added
+- **Clio (item 5.7) -- foundation layer (PR1 of 3).** New memory layer for cross-workspace knowledge. Ships FTS5-only keyword search against a local SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). Schema + migrations infrastructure + markdown chunker + HTTP + CLI surfaces. **No embedder yet; hybrid/semantic search arrives in PR2 with sqlite-vec + bge-small-en-v1.5.** No iteration-loop integration yet; that's PR3.
+  - **Schema** (`packages/core/src/clio/migrations/0001_initial.sql`): `clio_projects` (Cerefox-compatible domain grouping), `clio_documents` (content-hash-dedup'd), `clio_chunks` (partial-unique on current chunks; embedding columns declared but unpopulated), `clio_chunks_fts` (FTS5 virtual table with triggers excluding archived chunks), `clio_document_versions` + `clio_audit_log` (shapes land now so v2 doesn't need a migration), JSON-extract indexes on `metadata.workspace_id` / `role` / `artifact_type` / `tier` for cheap filter queries.
+  - **Migrations runner** (`packages/core/src/clio/db.ts`): `bun:sqlite` + WAL + FKs on + busy_timeout 5s. Each migration applies in a transaction so broken migrations roll back cleanly. Migrations are embedded via `import ... with { type: "text" }` so the compiled binary carries them.
+  - **Markdown chunker** (`packages/core/src/clio/chunking/markdown.ts`): 1:1 TS port of `cerefox/src/cerefox/chunking/markdown.py @2026-04` so the same input produces the same chunk boundaries as Cerefox. Heading-aware greedy accumulation across H1-H3; oversized sections paragraph-split; H4+ inlined.
+  - **`MemoryBackend` + `LocalClio`** (`packages/core/src/clio/backend/`): swap-point interface plus the default SQLite-backed impl. FTS5 MATCH via a sanitized operator-free user query, optional project + metadata filters via `json_extract`, BM25 ordering with score flipped to "higher = better" for downstream.
+  - **HTTP** (`packages/server/src/routes/clio.ts`): `GET /api/clio/projects`, `POST /api/clio/projects`, `GET /api/clio/projects/:idOrName`, `POST /api/clio/ingest`, `GET /api/clio/search`, `GET /api/clio/documents/:id`, `GET /api/clio/stats`, `PUT /api/workspaces/:id/clio-project`. Tests: 21 pass.
+  - **CLI** (`packages/cli/src/commands/clio.ts`): `cfcf clio search | ingest | get | projects | project create | project show | stats`. `cfcf memory` top-level alias. Every verb supports `--json` for raw output.
+  - **Workspace init** (`cfcf workspace init`): new `--project <clio-project>` flag. Interactive prompt on TTY when flag is omitted (lists existing Clio Projects, offers "new", offers "skip"). `--no-prompt` suppresses. Workspace config gains `clioProject?` + `clio?: { ingestPolicy? }` + `CfcfGlobalConfig.clio?: { ingestPolicy? }` (default `summaries-only`).
+  - **`cfcf workspace set <name> --project <new>`**: rewires a workspace's Clio Project assignment. Default affects only future ingests; `--migrate-history` re-keys existing Clio documents via a single SQL UPDATE.
+  - **On first start-up:** `~/.cfcf/clio.db` is created + migrations applied lazily on the first Clio HTTP or CLI call. Graceful shutdown flushes + closes the DB handle.
+  - **Not yet in PR1:** no embedder / no vector search (`mode=hybrid` / `semantic` are accepted but fall back to FTS); no iteration-loop auto-ingest; no `cfcf-docs/clio-relevant.md` preload; no `cfcf-docs/clio-guide.md` agent cue card. Those land in PR2 + PR3.
+
 ## [0.8.0] -- 2026-04-22
 
 **Breaking change**: cf²'s `project` noun is renamed to `workspace` everywhere. This is plan item 5.10 -- a prerequisite for Clio (item 5.7, the upcoming memory layer), which reserves the `Project` concept for Cerefox-aligned domain groupings of knowledge. Resolution: cf²'s "one managed git repo" entity becomes a **workspace**, and Clio's `Project` stays free to mean what Cerefox expects.

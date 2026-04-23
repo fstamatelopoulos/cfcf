@@ -818,6 +818,151 @@ Stop a running or paused loop.
 
 ---
 
+## Clio (cross-workspace memory, item 5.7)
+
+All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). PR1 ships FTS5 keyword search; PR2 will layer hybrid vector search on top without changing the API shape (clients pass `mode=hybrid` which today falls back to `fts`).
+
+### GET /api/clio/projects
+
+List all Clio Projects with document counts.
+
+**Response:** `200 OK`
+```json
+{
+  "projects": [
+    { "id": "<uuid>", "name": "cf-ecosystem", "description": "...", "metadata": {}, "createdAt": "...", "updatedAt": "...", "documentCount": 12 }
+  ]
+}
+```
+
+### POST /api/clio/projects
+
+Create a Clio Project.
+
+**Request body:**
+```json
+{ "name": "cf-ecosystem", "description": "optional" }
+```
+
+**Responses:** `201 Created` · `400` if `name` missing · `409` if name already exists (case-insensitive).
+
+### GET /api/clio/projects/:idOrName
+
+Fetch a single Clio Project by UUID or name (case-insensitive).
+
+**Responses:** `200 OK` with the ClioProject · `404` if not found.
+
+### POST /api/clio/ingest
+
+Ingest a Markdown document. Chunks the content via the heading-aware chunker, sha256-dedups by content, inserts document + chunks in one transaction.
+
+**Request body:**
+```json
+{
+  "project": "cf-ecosystem",            // name or id; auto-created if unknown (name only)
+  "title": "Document title",
+  "content": "# Markdown body\n\n...",
+  "source": "optional origin hint",
+  "metadata": { "role": "dev", "artifact_type": "iteration-log" },
+  "reviewStatus": "approved"
+}
+```
+
+**Responses:**
+- `201 Created` on a fresh ingest — returns `{ id, created: true, document, chunksInserted }`.
+- `200 OK` when the content_hash matches an existing document (idempotent no-op) — returns `{ id, created: false, document, chunksInserted: 0 }`.
+- `400` for missing required fields / empty title or content.
+
+### GET /api/clio/search
+
+Search. FTS5 keyword in v1.
+
+**Query params:**
+- `q` (required) — free-text query. Operator characters are stripped server-side, so clients don't need to escape.
+- `project` (optional) — Clio Project name or id. Scopes to that Project only.
+- `mode` (optional) — `"fts"` (default) · `"hybrid"` / `"semantic"` accepted but fall back to FTS in PR1.
+- `match_count` (optional) — max hits to return (default 10, cap 100).
+- `metadata` (optional) — JSON-encoded object for exact-match filtering against `clio_documents.metadata`, e.g. `metadata={"role":"reflection","tier":"semantic"}`.
+
+**Response:** `200 OK`
+```json
+{
+  "hits": [
+    {
+      "chunkId": "...",
+      "documentId": "...",
+      "chunkIndex": 2,
+      "title": "Architecture",
+      "content": "...",
+      "headingPath": ["Overview", "Architecture"],
+      "headingLevel": 2,
+      "score": 4.12,
+      "docTitle": "Auth service design",
+      "docSource": "user-ingest: /Users/.../design.md",
+      "docProjectId": "<uuid>",
+      "docProjectName": "cf-ecosystem",
+      "docMetadata": { "role": "dev" }
+    }
+  ],
+  "mode": "fts",
+  "totalMatches": 1
+}
+```
+
+**Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON.
+
+### GET /api/clio/documents/:id
+
+Fetch a document by UUID.
+
+**Responses:** `200 OK` with the ClioDocument · `404` if not found.
+
+### GET /api/clio/stats
+
+DB size, counts, active embedder (null in PR1), applied migrations.
+
+**Response:** `200 OK`
+```json
+{
+  "dbPath": "/Users/.../.cfcf/clio.db",
+  "dbSizeBytes": 65536,
+  "projectCount": 3,
+  "documentCount": 42,
+  "chunkCount": 156,
+  "migrations": ["0001_initial.sql @ 2026-04-22T21:30:00.000Z"],
+  "activeEmbedder": null
+}
+```
+
+### PUT /api/workspaces/:id/clio-project
+
+Rewire a workspace's Clio Project assignment. Backs the `cfcf workspace set --project` CLI.
+
+**Request body:**
+```json
+{
+  "project": "new-clio-project-name",
+  "migrateHistory": false
+}
+```
+
+- `project` (required) — new Clio Project name. Auto-created if it doesn't already exist. Refuses raw UUIDs to guard against accidental "create project named after a UUID" mistakes.
+- `migrateHistory` (optional, default `false`) — when `true`, re-keys all `clio_documents` currently in the workspace's old Project to the new Project via a single SQL UPDATE in a transaction.
+
+**Response:** `200 OK`
+```json
+{
+  "workspace": { /* full WorkspaceConfig with updated clioProject */ },
+  "migrated": 2
+}
+```
+
+`migrated` is the number of documents re-keyed (0 when `migrateHistory: false` or when the old Project had no docs).
+
+**Errors:** `404` if the workspace doesn't exist; `400` if `project` is missing; `400` if the new Project name is a UUID.
+
+---
+
 ## Server Lifecycle
 
 ### POST /api/shutdown
