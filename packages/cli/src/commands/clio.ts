@@ -224,43 +224,60 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── projects ──────────────────────────────────────────────────────────
-  root
-    .command("projects")
-    .description("List all Clio Projects")
-    .option("--json", "Print the raw list as JSON")
+  // ── project(s): list (default) / create / show ───────────────────────
+  // Both `cfcf clio project` and `cfcf clio projects` resolve to the same
+  // command group so either pluralisation works for every subcommand.
+  // Listing is the default action when no subcommand is given.
+  const projectCmd = root
+    .command("project")
+    .alias("projects")
+    .description("List / create / inspect Clio Projects. Default action: list.");
+
+  async function listProjects(opts: { json?: boolean }) {
+    if (!(await checkServer())) return;
+    const res = await get<ClioProjectListResponse>("/api/clio/projects");
+    if (!res.ok) {
+      console.error(`Failed to list Clio Projects: ${res.error}`);
+      process.exit(1);
+    }
+    const projects = res.data!.projects;
+    if (opts.json) {
+      console.log(JSON.stringify(projects, null, 2));
+      return;
+    }
+    if (projects.length === 0) {
+      console.log("No Clio Projects. Create one with: cfcf clio project create <name>");
+      return;
+    }
+    console.log(`${projects.length} Clio Project(s):`);
+    for (const p of projects) {
+      const desc = p.description ? ` — ${p.description}` : "";
+      const count = p.documentCount != null ? ` (${p.documentCount} doc${p.documentCount === 1 ? "" : "s"})` : "";
+      console.log(`  ${p.name}${count}${desc}`);
+      console.log(`    id: ${p.id}`);
+    }
+  }
+
+  // Default action (no subcommand) = list.
+  projectCmd
+    .option("--json", "Print the raw list as JSON (only used when no subcommand is given)")
     .action(async (opts) => {
-      if (!(await checkServer())) return;
-      const res = await get<ClioProjectListResponse>("/api/clio/projects");
-      if (!res.ok) {
-        console.error(`Failed to list Clio Projects: ${res.error}`);
-        process.exit(1);
-      }
-      const projects = res.data!.projects;
-      if (opts.json) {
-        console.log(JSON.stringify(projects, null, 2));
-        return;
-      }
-      if (projects.length === 0) {
-        console.log("No Clio Projects. Create one with: cfcf clio project create <name>");
-        return;
-      }
-      console.log(`${projects.length} Clio Project(s):`);
-      for (const p of projects) {
-        const desc = p.description ? ` — ${p.description}` : "";
-        const count = p.documentCount != null ? ` (${p.documentCount} doc${p.documentCount === 1 ? "" : "s"})` : "";
-        console.log(`  ${p.name}${count}${desc}`);
-        console.log(`    id: ${p.id}`);
-      }
+      await listProjects(opts);
     });
 
-  // ── project (create | show) ───────────────────────────────────────────
-  const projectCmd = root.command("project").description("Create / inspect Clio Projects");
+  // Explicit `list` subcommand too, in case users type it out.
+  projectCmd
+    .command("list")
+    .description("List all Clio Projects (same as `cfcf clio project` with no subcommand)")
+    .option("--json", "Print the raw list as JSON")
+    .action(async (opts) => {
+      await listProjects(opts);
+    });
 
   projectCmd
     .command("create <name>")
     .description("Create a new Clio Project")
-    .option("-d, --description <text>", "Optional description shown in `cfcf clio projects`")
+    .option("-d, --description <text>", "Optional description shown in `cfcf clio project`")
     .action(async (name: string, opts) => {
       if (!(await checkServer())) return;
       const res = await post<ClioProject>("/api/clio/projects", { name, description: opts.description });

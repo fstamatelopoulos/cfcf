@@ -62,6 +62,14 @@ export class LocalClio implements MemoryBackend {
   private readonly db: Database;
   private readonly ownsHandle: boolean;
   /**
+   * Path of the underlying DB file, captured at construction time.
+   * `null` for injected handles (tests) where we never learned the
+   * path. Used by `getDbPath()` so the singleton can check "is the
+   * file still there?" without issuing a query on a potentially-stale
+   * handle.
+   */
+  private readonly dbPath: string | null;
+  /**
    * Lazy-loaded embedder. Set on first ingest / search that needs one.
    * Can be overridden via the `embedder` constructor option for tests
    * that want a mock.
@@ -88,7 +96,12 @@ export class LocalClio implements MemoryBackend {
     if (opts.db) {
       this.db = opts.db;
       this.ownsHandle = false;
+      this.dbPath = null;
     } else {
+      // Resolve the path eagerly so we can answer getDbPath() even after
+      // the underlying file is deleted by a user (testing flows).
+      const { getClioDbPath } = require("../db.js") as typeof import("../db.js");
+      this.dbPath = opts.path ?? getClioDbPath();
       this.db = openClioDb({ path: opts.path });
       this.ownsHandle = true;
     }
@@ -1011,6 +1024,37 @@ export class LocalClio implements MemoryBackend {
 
   async close(): Promise<void> {
     if (this.ownsHandle) this.db.close();
+  }
+
+  /**
+   * Synchronous close, used by the singleton's self-heal path (which
+   * runs inside `getClioBackend()`, a sync function). `bun:sqlite`'s
+   * `db.close()` is itself sync so this is a thin wrapper.
+   */
+  closeSync(): void {
+    if (this.ownsHandle) {
+      try { this.db.close(); } catch { /* ignore -- underlying file may be gone */ }
+    }
+  }
+
+  /**
+   * Report the path of the underlying DB file. Returns `"(memory)"` for
+   * ephemeral / test DBs. Exposed so the singleton can check whether
+   * the file still exists on disk before returning a stale handle.
+   *
+   * Uses the path captured at construction time so it works even when
+   * the underlying file has been deleted out from under us (querying
+   * SQLite in that state can throw).
+   */
+  getDbPath(): string {
+    if (this.dbPath) return this.dbPath;
+    // Fallback: query SQLite. This is only used for injected handles
+    // where we don't know the path at construction time.
+    try {
+      return this.resolveDbPath() ?? "(memory)";
+    } catch {
+      return "(memory)";
+    }
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
