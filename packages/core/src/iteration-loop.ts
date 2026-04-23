@@ -40,6 +40,15 @@ import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
+import {
+  getClioBackend,
+  ingestReflectionAnalysis,
+  ingestArchitectReview,
+  ingestDecisionLogEntries,
+  ingestIterationSummary,
+  ingestRawIterationArtifacts,
+  writeClioRelevant,
+} from "./clio/index.js";
 import { randomBytes } from "crypto";
 
 // --- Loop State Types ---
@@ -689,6 +698,15 @@ async function runLoop(
       await gitManager.commitAll(workspace.repoPath, subject);
     }
 
+    // Clio ingest (item 5.7 PR3): auto-ingest architect-review.md as a
+    // semantic artifact whether or not the gate accepts. Failures are
+    // swallowed.
+    try {
+      await ingestArchitectReview(getClioBackend(), workspace, "loop", readiness);
+    } catch (err) {
+      console.warn(`[clio] pre-loop architect-review ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (blocked || reviewError) {
       // Gate rejected -- pause the loop. User edits problem pack, then
       // resumes, which will re-enter this block and re-review.
@@ -873,6 +891,18 @@ async function runLoop(
     };
 
     await writeContextToRepo(workspace.repoPath, ctx);
+
+    // Clio context preload (item 5.7 PR3): generate
+    // `cfcf-docs/clio-relevant.md` with top-k cross-workspace hits matched
+    // against this workspace's problem.md. Reads through the same backend
+    // used by auto-ingest. Failures are swallowed + the file is left
+    // un-generated for this iteration (agents still have all other Tier-2
+    // reads); we log a warning so it's visible in the server log.
+    try {
+      await writeClioRelevant(getClioBackend(), workspace, problemPack.problem);
+    } catch (err) {
+      console.warn(`[clio] clio-relevant.md generation failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // Generate agent instruction file
     const devAdapter = getAdapter(workspace.devAgent.adapter);
@@ -1099,6 +1129,19 @@ async function runJudgeAndDecide(
           await gitManager.commitAll(workspace.repoPath, subject);
         }
 
+        // Clio ingest (item 5.7 PR3): auto-ingest reflection-analysis.md as a
+        // semantic artifact. Failures are swallowed -- never break the loop.
+        try {
+          await ingestReflectionAnalysis(
+            getClioBackend(),
+            workspace,
+            iterationNum,
+            reflectRes.signals,
+          );
+        } catch (err) {
+          console.warn(`[clio] reflection-analysis ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
         // Reset the skip counter now that reflection has actually run.
         state.iterationsSinceLastReflection = 0;
       } catch (err) {
@@ -1118,6 +1161,39 @@ async function runJudgeAndDecide(
   // (The history event itself was already marked completed above, before
   // reflection ran, so the user-visible row flipped promptly.)
   iterRecord.completedAt = iterCompletedAt;
+
+  // --- Clio auto-ingest (item 5.7 PR3) ---
+  // Runs after reflection + before DECIDE. Respects the workspace's
+  // `clio.ingestPolicy`: "off" / "summaries-only" / "all". All hooks
+  // swallow errors -- Clio ingest failures never break a loop.
+  try {
+    const clio = getClioBackend();
+    // Raw per-iteration artifacts (policy=all only).
+    await ingestRawIterationArtifacts(clio, workspace, iterationNum);
+    // Tagged semantic decision-log entries (policy!=off).
+    await ingestDecisionLogEntries(clio, workspace, iterationNum);
+    // End-of-iteration summary: compact dev summary + judge verdict +
+    // reflection key_observation. Ingested under summaries-only + all.
+    let devSummary: string | null = null;
+    try {
+      const { readFile } = await import("fs/promises");
+      const iterLog = await readFile(
+        join(workspace.repoPath, "cfcf-docs", "iteration-logs", `iteration-${iterationNum}.md`),
+        "utf-8",
+      ).catch(() => "");
+      const m = iterLog.match(/^##\s+Summary\s*\n+([\s\S]*?)(?=\n##\s|\n#\s|$)/m);
+      if (m) devSummary = m[1].trim();
+    } catch { /* noop */ }
+    await ingestIterationSummary(clio, {
+      workspace,
+      iteration: iterationNum,
+      devSummary,
+      judgeSignals: judgeSignals ?? null,
+      reflectionSignals,
+    });
+  } catch (err) {
+    console.warn(`[clio] end-of-iteration ingest batch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // --- Decision-log size warning (item 5.6 U4) ---
   // Emit a notification once per loop run when the iteration counter

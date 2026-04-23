@@ -334,6 +334,15 @@ async function runReview(
       readiness: signals?.readiness,
       signals: signals ?? undefined,
     } as Partial<import("./workspace-history.js").ReviewHistoryEvent>);
+
+    // Clio ingest (item 5.7 PR3): auto-ingest user-invoked `cfcf review`
+    // architect-review.md. Failures are swallowed -- never break a review.
+    try {
+      const { getClioBackend, ingestArchitectReview } = await import("./clio/index.js");
+      await ingestArchitectReview(getClioBackend(), workspace, "manual", signals?.readiness);
+    } catch (err) {
+      console.warn(`[clio] manual architect-review ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   } finally {
     reviewProcessStore.delete(workspace.id);
     unregister();
