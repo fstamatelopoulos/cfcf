@@ -13,6 +13,14 @@ declare module "*.md" {
   export default content;
 }
 
+// Clio ships SQL migrations alongside its TypeScript code. Same
+// `with { type: "text" }` pattern as the Markdown templates -- the SQL
+// body is inlined into the build as a string.
+declare module "*.sql" {
+  const content: string;
+  export default content;
+}
+
 // All template JSON files are imported with `type: "text"` so they arrive
 // as strings, not parsed JSON. Declaring a module pattern for the templates
 // directory keeps the JSON elsewhere in the codebase behaving normally.
