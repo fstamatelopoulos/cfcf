@@ -25,6 +25,12 @@ function getCacheDir(): string {
   return join(homedir(), ".cfcf", "models");
 }
 
+function makeBar(pct: number, width = 20): string {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const filled = Math.round((clamped / 100) * width);
+  return `[${"█".repeat(filled)}${"░".repeat(width - filled)}]`;
+}
+
 /**
  * Lazy-load + configure the transformers runtime. Exported for tests
  * that want to reuse the same runtime handle.
@@ -82,9 +88,52 @@ export class OnnxEmbedder implements Embedder {
     process.stderr.write(
       `[clio] loading embedder "${this.entry.name}" from HuggingFace (~${this.entry.approxSizeMb} MB; first-run only)…\n`,
     );
+
+    // Progress callback for the model download. transformers.js calls
+    // this with per-file status updates. We render a minimal
+    // one-line-per-file progress bar on stderr so the user sees the
+    // download ticking rather than staring at a silent terminal for
+    // 60 seconds.
+    const progressState = new Map<string, { loaded: number; total: number; done: boolean; lastPct: number }>();
+    const progressCallback = (info: {
+      status?: string;
+      file?: string;
+      name?: string;
+      loaded?: number;
+      total?: number;
+      progress?: number;
+    }) => {
+      const file = info.file ?? info.name ?? "(unknown)";
+      if (info.status === "progress") {
+        const total = info.total ?? 0;
+        const loaded = info.loaded ?? 0;
+        const pct = total > 0 ? Math.floor((loaded / total) * 100) : 0;
+        const prior = progressState.get(file) ?? { loaded: 0, total: 0, done: false, lastPct: -1 };
+        // Only re-render when the percentage advances by ≥5 so we
+        // don't flood stderr.
+        if (pct >= prior.lastPct + 5 || pct === 100) {
+          const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
+          const bar = makeBar(pct);
+          process.stderr.write(
+            `[clio] ${bar} ${pct.toString().padStart(3)}%  ${mb(loaded)}/${mb(total)} MB  ${file}\n`,
+          );
+          progressState.set(file, { loaded, total, done: pct >= 100, lastPct: pct });
+        } else {
+          progressState.set(file, { ...prior, loaded, total });
+        }
+      } else if (info.status === "done") {
+        const prior = progressState.get(file);
+        if (prior && !prior.done) {
+          process.stderr.write(`[clio] ✓ ${file}\n`);
+          progressState.set(file, { ...prior, done: true, lastPct: 100 });
+        }
+      }
+    };
+
     const pipe = await transformers.pipeline(
       "feature-extraction",
       this.entry.hfModelId,
+      { progress_callback: progressCallback },
     );
     // Stash the callable pipeline. Cast through unknown because the real
     // type uses complex generics we don't need to reproduce here.

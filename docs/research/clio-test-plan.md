@@ -40,7 +40,8 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 
 ### Post-review refinements (commit `4932e1a`, 2026-04-23)
 
-- **`cfcf init` now prompts for embedder install.** Lists catalogue (default marked), accepts numeric pick or `S` to skip. Doesn't install during init; surfaces the install command in Next Steps.
+- **`cfcf init` pick-equals-install (refined 2026-04-22).** Catalogue prompt accepts a numeric pick or `S`. If a model is picked, `cfcf init` now downloads + activates it inline via a local `LocalClio` (no server needed). Pick is saved to `clio.preferredEmbedder` *before* the install attempt, so a network failure doesn't lose the preference — user can retry with `cfcf clio embedder install` (no arg, resolves from saved preference).
+- **Download progress bar** on stderr during the HF download: `[████░░░░░░] 45%  54.0/120.0 MB  model.onnx`. Throttled to ≥5% ticks per file (partial item 6.19).
 - **`--migrate-history` is workspace-scoped by default.** Filters by `metadata.workspace_id` so sibling workspaces' history stays put. New `--all-in-project` flag opts back into the wide sweep for Project-collapse scenarios.
 - **`cfcf clio reindex [--project <name>] [--force] [--batch-size <n>]`**: re-embeds chunks under the currently-active embedder. Idempotent; batched; per-batch transactions.
 - **`cfcf clio embedder set <name> --reindex`**: the canonical, safe embedder-switch flow. `--force` still available for recovery scenarios but with a visible degradation warning.
@@ -227,13 +228,12 @@ rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
 ```
 
 Three flows to cover:
-- **Pick the default (press Enter)**: Next Steps shows `cfcf clio embedder install bge-small-en-v1.5` as step 2, with the MB size annotation.
-- **Pick a specific embedder (e.g. "3")**: Next Steps shows that model in the install line.
-- **Skip (type "S")**: Next Steps omits the install line + adds a trailing "Clio: running in FTS-only mode" note with the install command for later.
+- **Pick the default (press Enter)**: init immediately downloads the model with a stderr progress bar; Next Steps shows "Clio ready: active embedder is bge-small-en-v1.5". `ls ~/.cfcf/models/` should show the cached model directory. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `bge-small-en-v1.5`.
+- **Pick a specific embedder (e.g. "3")**: same download-during-init flow but for the chosen model. Verify via `./cfcf-binary clio embedder active`.
+- **Skip (type "S")**: no download, no DB write to `clio_active_embedder`; Next Steps includes a "FTS-only mode" note with the install command.
+- **Network-failure during install**: (simulate by disconnecting wifi before picking a non-default model) init should continue, print the captured install error in a final "Install error (captured -- you can retry)" line, and have written `clio.preferredEmbedder: <picked>` to the config. Then `./cfcf-binary clio embedder install` (no arg) should resume from the saved preference.
 
-The init flow does NOT actually install the model (no server running yet; HF download would block). Verify via `ls ~/.cfcf/models/` — should be empty until the user runs the install command.
-
-Re-running `cfcf init --force` should re-prompt (can change the pick).
+Re-running `cfcf init --force` should re-prompt (can change the pick). If the current active embedder matches the new pick, the install is a no-op.
 
 ### 6. Embedder install (real ONNX path)
 
@@ -387,7 +387,7 @@ All of these are tracked as concrete items in `docs/plan.md` (6.15-6.19).
 - **Audit log not wired** (plan item 6.16). The `clio_audit_log` table exists (schema 0001) but nothing writes to it yet. Plan: port Cerefox's audit-log logic.
 - **Soft-delete + versioning not wired** (plan item 6.17). Table shapes exist (`deleted_at`, `clio_document_versions`), no writes yet. Plan: port Cerefox's `update_document_content` / `soft_delete` / `restore` logic.
 - **Web UI has no Clio surface** (plan item 6.18). No changes to the web UI in this feature.
-- **`cfcf init` Clio onboarding polish** (plan item 6.19). Current prompt is functional but could get better per-embedder descriptions, bandwidth warnings, and tighter integration with the installer (5.5) for pre-warming the model.
+- **`cfcf init` Clio onboarding polish** (plan item 6.19, now 🔄). Shipped on 2026-04-22: pick-equals-install inline download, stderr progress bar, `embedder install` without-arg resolves `clio.preferredEmbedder`. Still pending: bandwidth warning before download, post-install auto-verification, installer (5.5) pre-warm path.
 - **Manual ONNX e2e not in CI.** Validated with MockEmbedder + manual testing against HuggingFace model download.
 
 ---

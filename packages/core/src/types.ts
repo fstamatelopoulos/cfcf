@@ -117,6 +117,14 @@ export interface CfcfGlobalConfig {
 export interface ClioGlobalConfig {
   /** Default ingest policy applied to new workspaces. Defaults to "summaries-only". */
   ingestPolicy?: "summaries-only" | "all" | "off";
+  /**
+   * Embedder the user chose during `cfcf init` (or most recent
+   * `cfcf clio embedder install <name>`). Used as the default when the
+   * user runs `cfcf clio embedder install` with no arg -- lets the
+   * "re-run after init failed" path work without re-specifying the
+   * name. Cleared if the user opts to stay in FTS-only mode.
+   */
+  preferredEmbedder?: string;
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;

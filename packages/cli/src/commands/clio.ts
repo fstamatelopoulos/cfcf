@@ -337,7 +337,7 @@ function registerUnder(root: Command): void {
       console.log();
       console.log("● = currently active.");
       console.log();
-      console.log("Install + activate:  cfcf clio embedder install <name>");
+      console.log("Install + activate:  cfcf clio embedder install [name]  (name optional if set during `cfcf init`)");
       console.log("Switch active:       cfcf clio embedder set <name>");
     });
 
@@ -367,14 +367,39 @@ function registerUnder(root: Command): void {
     });
 
   embedderCmd
-    .command("install <name>")
-    .description("Install + activate an embedder. First call downloads the model files via HuggingFace (~100-500 MB; subsequent runs read from ~/.cfcf/models/).")
-    .option("--force", "Install even if chunks with the old embedder exist. Poisons the vector corpus -- use only after `cfcf clio reindex` (v2).")
-    .action(async (name: string, opts) => {
+    .command("install [name]")
+    .description(
+      "Install + activate an embedder. First call downloads the model files via " +
+      "HuggingFace (~20-430 MB depending on model; subsequent runs read from " +
+      "~/.cfcf/models/).\n\n" +
+      "If <name> is omitted, uses the embedder you picked during `cfcf init` " +
+      "(saved as clio.preferredEmbedder in the global config). Falls back to " +
+      "the catalogue default (bge-small-en-v1.5) when no preference has been " +
+      "set. Useful for retrying a failed init download or installing from a " +
+      "script that read the config itself.",
+    )
+    .option("--force", "Install even if chunks with the old embedder exist. Poisons the vector corpus -- use `cfcf clio embedder set --reindex` instead for a safe switch.")
+    .action(async (name: string | undefined, opts) => {
       if (!(await checkServer())) return;
+
+      // Resolve the embedder name: explicit arg > config preference >
+      // catalogue default. The CLI fetches the global config from the
+      // server so there's exactly one source of truth.
+      let resolvedName = name;
+      if (!resolvedName) {
+        const cfgRes = await get<{ clio?: { preferredEmbedder?: string } }>("/api/config");
+        if (cfgRes.ok && cfgRes.data?.clio?.preferredEmbedder) {
+          resolvedName = cfgRes.data.clio.preferredEmbedder;
+          console.log(`Using preferred embedder from config: ${resolvedName}`);
+        } else {
+          resolvedName = "bge-small-en-v1.5";
+          console.log(`No preferred embedder set; defaulting to ${resolvedName}.`);
+        }
+      }
+
       const res = await post<{ active: { name: string; dim: number; recommendedChunkMaxChars: number }; downloaded: boolean }>(
         "/api/clio/embedders/install",
-        { name, force: !!opts.force },
+        { name: resolvedName, force: !!opts.force },
       );
       if (!res.ok) {
         console.error(`Install failed: ${res.error}`);
