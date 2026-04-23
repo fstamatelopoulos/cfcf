@@ -121,6 +121,23 @@ Each milestone = one commit + push. No PR until the author does end-to-end testi
 - [ ] `Full test suite + build` — 309 → ~340ish tests, binary builds.
 - [ ] Ready for user testing.
 
+## Embedder ↔ chunk-size alignment (PR2 + docs)
+
+Small-context embedders (most open-source ones — bge-small ~512 tokens ≈ 2000 chars, MiniLM ~256 ≈ 1000 chars) will silently truncate content past their window. **Chunks must fit inside the active embedder's context window, or the chunk's tail is invisible to semantic search.** FTS5 is unaffected.
+
+Consequences baked into PR2 + docs:
+
+1. **Chunker becomes embedder-aware, and the chunk size is owned by the embedder manifest, not the user.** Each embedder entry in the catalogue declares its `recommendedChunkMaxChars` + `recommendedExpansionRadius` (e.g. `bge-small-en-v1.5` → 1800 / 2; `nomic-embed-text-v1.5` → 7000 / 1). `cfcf clio embedder install <name>` or `cfcf clio embedder set <name>` locks those values into the active embedder record in `~/.cfcf/clio.db`. The user does **not** see a `chunkMaxChars` knob in the standard cf² config -- getting it wrong would silently break search. If we do expose it anywhere (e.g. for advanced users / dogfooding), it must be (a) under a `clio.advanced.*` namespace in the config, (b) accompanied by a `WARNING: changing this poisons your vector corpus; re-embed after changing (cfcf clio reindex)` comment in the template, and (c) surfaced as an explicit warning on `cfcf clio stats` if the active value differs from the embedder's recommended value.
+2. **Embedder lock at install-time.** Switching embedders mid-life would poison the vector corpus (dims change, token-window change breaks old chunk boundaries). Design doc §6.4 already has `cfcf clio reindex` for this, but PR2 ships with a **stronger guardrail**: `cfcf clio embedder set <new>` refuses to proceed if the new embedder has a different dim than what's indexed, unless `--reindex` is passed (which re-embeds everything up-front, atomically). PR1 skips this entirely (no embedder yet); PR2 adds the gate.
+3. **Small-to-big parameters become tunable.** Smaller chunks → more neighbors needed for coherent context. Per-call `match_count` + `expansion_radius` (± N siblings) knobs on `cfcf clio search`, with per-embedder defaults: bge-small → expansion_radius=2; nomic → 1. Document the relationship in the user guide.
+4. **User-facing docs (clio-quickstart + cli-usage.md + CHANGELOG) must explain:**
+   - Which embedder is active and why it matters.
+   - That switching embedders requires a full reindex (or breaks search) — frame as "effectively immutable after first ingest" for the v1 mental model.
+   - How `chunkMaxChars` and `expansion_radius` trade off (smaller chunks = higher precision, less context per hit; larger chunks = lower precision, more context per hit).
+   - Recommended defaults per embedder with a table.
+
+Tracked as part of PR2 implementation. PR1 ships the chunker with a fixed 4000-char default (matching Cerefox); the embedder-aware plumbing lands with the embedder.
+
 ## Release target
 
 `v0.9.0` per the design doc (minor bump — Clio is a new core component).
