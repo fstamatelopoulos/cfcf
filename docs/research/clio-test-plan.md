@@ -38,6 +38,15 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 
 ### PR2 — Embeddings + hybrid search (commit `83f1361`)
 
+### Post-review refinements (commit `4932e1a`, 2026-04-23)
+
+- **`cfcf init` now prompts for embedder install.** Lists catalogue (default marked), accepts numeric pick or `S` to skip. Doesn't install during init; surfaces the install command in Next Steps.
+- **`--migrate-history` is workspace-scoped by default.** Filters by `metadata.workspace_id` so sibling workspaces' history stays put. New `--all-in-project` flag opts back into the wide sweep for Project-collapse scenarios.
+- **`cfcf clio reindex [--project <name>] [--force] [--batch-size <n>]`**: re-embeds chunks under the currently-active embedder. Idempotent; batched; per-batch transactions.
+- **`cfcf clio embedder set <name> --reindex`**: the canonical, safe embedder-switch flow. `--force` still available for recovery scenarios but with a visible degradation warning.
+
+
+
 - **Embedder catalogue** (`embedders/catalogue.ts`): 4 built-in models (bge-small, MiniLM, nomic long-context, bge-base). Each entry pins `recommendedChunkMaxChars` + `recommendedExpansionRadius` so chunk size + small-to-big radius track the model.
 - **ONNX embedder** via `@huggingface/transformers` (new dep). Lazy model download to `~/.cfcf/models/` on first `embed()` call. Progress line to stderr. Graceful fallback to FTS-only on load failure.
 - **Active-embedder tracking** (migration 0002, `embedders/store.ts`): single-row `clio_active_embedder` table. `setActiveEmbedder` refuses to switch when embeddings from the old model exist (force flag paired with v2 reindex).
@@ -54,16 +63,17 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 | `packages/server/src/routes/clio.test.ts` | **21 pass** | HTTP contract tests with isolated temp DB via `setClioBackend`. |
 | `packages/cli` | 2 pass | Unchanged. |
 | `packages/web` | 9 pass | Unchanged. |
-| **Total** | **368 tests** | All green. |
+| **Total** | **378 tests** | All green. |
 
 New Clio tests by file:
 - `packages/core/src/clio/db.test.ts` — 8 (schema + migrations).
 - `packages/core/src/clio/chunking/markdown.test.ts` — 12 (chunker port).
-- `packages/core/src/clio/backend/local-clio.test.ts` — 25 (FTS backend).
+- `packages/core/src/clio/backend/local-clio.test.ts` — 27 (FTS backend + workspace-scoped migrate).
 - `packages/core/src/clio/backend/local-clio-hybrid.test.ts` — 9 (hybrid + semantic + small-to-big; uses deterministic MockEmbedder).
+- `packages/core/src/clio/backend/local-clio-reindex.test.ts` — 7 (reindex scenarios: no-embedder / idempotent / backfill / model-switch / force / project-filter / unknown-project).
 - `packages/core/src/clio/embedders/store.test.ts` — 6 (active-embedder store).
 - `packages/core/src/clio/loop-ingest.test.ts` — 21 (auto-ingest hooks + clio-relevant generation).
-- `packages/server/src/routes/clio.test.ts` — 21 (HTTP routes end-to-end).
+- `packages/server/src/routes/clio.test.ts` — 22 (HTTP routes end-to-end; includes both workspace-scoped + all-in-project migrate flows).
 
 **Manual ONNX embedder testing is required** — the automated tests use a deterministic MockEmbedder to exercise the hybrid pipeline without pulling a ~120 MB model on every `bun test`. The real embedder round-trip (HuggingFace download → Transformers.js session → embed → cosine similarity) is part of the test plan below.
 
@@ -80,8 +90,8 @@ cd /Users/fotis/src/cfcf
 git status                                 # clean, on iteration-5/clio
 bun install                                # picks up @huggingface/transformers
 bun run typecheck                          # clean
-bun run test                               # all 368 pass (see Tests section above)
-bun run build                              # ~395ms compile, binary 64 MB
+bun run test                               # all 378 pass (see Tests section above)
+bun run build                              # ~333ms compile, binary 64 MB
 ```
 
 Clear Clio DB between runs when you want a clean slate:
@@ -152,22 +162,85 @@ cat /tmp/auth.md | ./cfcf-binary clio ingest --stdin --project cf-ecosystem --ti
 ./cfcf-binary workspace init --repo /tmp/cfcf-calc3 --name calc-test3 --no-prompt
 ./cfcf-binary workspace show calc-test3          # Clio Project: (none -- auto-routes to 'default' on first ingest)
 
-# Reassign without migrating history
+# Reassign without migrating history -- future ingests only
 ./cfcf-binary workspace set calc-test --project new-project-name
-# Expected: future ingests go to new-project-name; old cf-ecosystem docs stay put.
+# Expected: "Historical documents remain under "cf-ecosystem". Pass --migrate-history ..."
 
-# Reassign + migrate
+# Reassign + migrate: WORKSPACE-SCOPED by default (only this workspace's docs move)
 ./cfcf-binary workspace set calc-test --project final-project --migrate-history
-# Expected: prints "Re-keyed N historical document(s) to the new Project."
+# Expected: prints "Re-keyed N historical document(s) (docs tagged to workspace <ws-id>)."
+# Sibling workspaces in cf-ecosystem keep their docs there.
 
 ./cfcf-binary clio projects                      # confirm doc counts moved
 ```
 
-### 5. Embedder install (PR2 real ONNX path — untested in CI)
-
-This is the part I couldn't fully verify in the session — it requires a real HuggingFace download. Expect ~120 MB + ~30-60s on first run.
+**Corner cases for `--migrate-history`** (this is the most nuanced behavior):
 
 ```bash
+# Seed two workspaces sharing one Clio Project, with docs from each:
+./cfcf-binary workspace init --repo /tmp/cfcf-r1 --name sharedA --project shared-proj --no-prompt
+./cfcf-binary workspace init --repo /tmp/cfcf-r2 --name sharedB --project shared-proj --no-prompt
+
+# Ingest via each workspace (auto-tags metadata.workspace_id):
+# (Easiest way to do this is run a brief iteration on each -- see section 7.)
+# For a quick manual test, ingest directly via HTTP with a workspace_id:
+WSA_ID=$(./cfcf-binary workspace show sharedA | grep "^  ID:" | awk '{print $2}')
+WSB_ID=$(./cfcf-binary workspace show sharedB | grep "^  ID:" | awk '{print $2}')
+curl -s -X POST http://localhost:7233/api/clio/ingest \
+  -H "Content-Type: application/json" \
+  -d "{\"project\":\"shared-proj\",\"title\":\"A1\",\"content\":\"# A1\\n\\ndoc from sharedA\",\"metadata\":{\"workspace_id\":\"$WSA_ID\"}}"
+curl -s -X POST http://localhost:7233/api/clio/ingest \
+  -H "Content-Type: application/json" \
+  -d "{\"project\":\"shared-proj\",\"title\":\"A2\",\"content\":\"# A2\\n\\nsecond doc from sharedA\",\"metadata\":{\"workspace_id\":\"$WSA_ID\"}}"
+curl -s -X POST http://localhost:7233/api/clio/ingest \
+  -H "Content-Type: application/json" \
+  -d "{\"project\":\"shared-proj\",\"title\":\"B1\",\"content\":\"# B1\\n\\ndoc from sharedB\",\"metadata\":{\"workspace_id\":\"$WSB_ID\"}}"
+
+./cfcf-binary clio projects                      # shared-proj has 3 docs
+
+# Workspace-scoped migrate: sharedA's 2 docs move, sharedB's 1 doc stays.
+./cfcf-binary workspace set sharedA --project sharedA-only --migrate-history
+./cfcf-binary clio projects                      # shared-proj: 1, sharedA-only: 2
+
+# The wide-sweep flag: moves EVERY doc regardless of workspace. Only for
+# collapsing Projects.
+./cfcf-binary workspace set sharedB --project sharedA-only --migrate-history --all-in-project
+./cfcf-binary clio projects                      # shared-proj: 0, sharedA-only: 3
+
+# --all-in-project requires --migrate-history; the CLI should reject the
+# combo otherwise:
+./cfcf-binary workspace set sharedA --project foo --all-in-project
+# Expected error: "--all-in-project has no effect without --migrate-history."
+```
+
+### 5. `cfcf init` (embedder prompt + Next Steps)
+
+```bash
+# Fresh install
+rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
+./cfcf-binary init
+# Walk through the existing agent + permission prompts, then:
+# At the "Clio memory layer" step, you should see:
+#   - an explanation of FTS vs. hybrid/semantic modes,
+#   - a list of 4 embedders with "★" next to bge-small-en-v1.5,
+#   - prompt: "Embedder choice (1-4 / S) [1]:"
+```
+
+Three flows to cover:
+- **Pick the default (press Enter)**: Next Steps shows `cfcf clio embedder install bge-small-en-v1.5` as step 2, with the MB size annotation.
+- **Pick a specific embedder (e.g. "3")**: Next Steps shows that model in the install line.
+- **Skip (type "S")**: Next Steps omits the install line + adds a trailing "Clio: running in FTS-only mode" note with the install command for later.
+
+The init flow does NOT actually install the model (no server running yet; HF download would block). Verify via `ls ~/.cfcf/models/` — should be empty until the user runs the install command.
+
+Re-running `cfcf init --force` should re-prompt (can change the pick).
+
+### 6. Embedder install (real ONNX path)
+
+Requires a real HuggingFace download on first run. Expect ~120 MB + ~30-60s on first install.
+
+```bash
+./cfcf-binary server start
 ./cfcf-binary clio embedder list                 # no active marker
 ./cfcf-binary clio embedder active               # "No active embedder."
 
@@ -183,12 +256,42 @@ This is the part I couldn't fully verify in the session — it requires a real H
 ls -la ~/.cfcf/models/                           # transformers.js cache populated
 ```
 
-Likely failure modes worth exercising:
-- No network: install should fail loud + fall back to FTS-only.
-- Install a second embedder while embeddings exist: `cfcf clio embedder set all-MiniLM-L6-v2` should refuse with a clear error pointing at `--force` or reindex.
-- `--force`: should warn in the CLI help text and switch (will poison vector search until re-ingest).
+Failure modes to exercise:
+- **No network**: install should fail loudly with a clear error; subsequent searches fall back to FTS automatically.
+- **Refuse switch with existing embeddings, no flag**: after ingesting something, `cfcf clio embedder set all-MiniLM-L6-v2` should refuse with a message pointing at `--reindex` or `--force`.
+- **`--reindex` flow (canonical)**: `cfcf clio embedder set all-MiniLM-L6-v2 --reindex` should switch + re-embed everything atomically. Prints the reindex stats line.
+- **`--force` (recovery only)**: `cfcf clio embedder set <x> --force` should succeed but print the "vector search degraded until you run cfcf clio reindex" warning. Running `cfcf clio reindex` afterwards should clean it up.
+- **`--reindex` and `--force` together**: CLI should reject with "Pass either --reindex or --force, not both."
 
-### 6. Hybrid + semantic search (PR2, requires installed embedder)
+### 7. `cfcf clio reindex` (direct invocations)
+
+```bash
+# Happy path: idempotent when nothing has changed.
+./cfcf-binary clio reindex
+# Expected: "re-embedded: 0, skipped: <chunk-count>"
+
+# Force re-embed everything (useful after model update within the same slug).
+./cfcf-binary clio reindex --force
+
+# Scope to one Clio Project.
+./cfcf-binary clio reindex --project cf-ecosystem
+
+# Unknown project -> zero stats, no error.
+./cfcf-binary clio reindex --project this-project-does-not-exist
+
+# No embedder installed -> clear error message pointing at install command.
+./cfcf-binary clio embedder install bge-small-en-v1.5   # (undo a fresh DB)
+# (cannot fully test "no embedder" without nuking the active-embedder row;
+#  can inspect via `sqlite3 ~/.cfcf/clio.db "DELETE FROM clio_active_embedder"`)
+
+# Batch size override (bigger = faster, more RAM).
+./cfcf-binary clio reindex --force --batch-size 64
+
+# JSON output for scripting.
+./cfcf-binary clio reindex --json | jq .
+```
+
+### 8. Hybrid + semantic search (requires installed embedder)
 
 ```bash
 # Seed a small corpus
@@ -213,7 +316,7 @@ Verify `score` values in the JSON output are positive numbers (they are the RRF 
 
 Check that hits include multiple chunks of context (small-to-big) — each hit's `content` should be larger than an individual chunk.
 
-### 7. Loop integration (PR3) — requires a running iteration loop
+### 9. Loop integration — requires a running iteration loop
 
 Easiest reproducer: run a single iteration against the calc example.
 
@@ -248,11 +351,11 @@ Corner cases:
 - `workspace.clio.ingestPolicy = "all"`: iteration-log + handoff + judge-assessment all get ingested.
 - Make the Clio backend fail mid-iteration (e.g. `chmod 000 ~/.cfcf/clio.db`): the iteration must complete successfully + logs should show `[clio] ... failed: ...` warnings but no error.
 
-### 8. Web UI
+### 10. Web UI
 
 The web UI wasn't modified as part of this feature — status tab should continue to show iteration / review / document / reflection history as before. There are no Clio-specific web surfaces in this PR (deferred: a "Clio" tab showing recent ingests + search box is a candidate follow-up).
 
-### 9. Config surface round-trips
+### 11. Config surface round-trips
 
 ```bash
 ./cfcf-binary config show          # shows clio.ingestPolicy if set
@@ -260,14 +363,16 @@ The web UI wasn't modified as part of this feature — status tab should continu
 # Or via PUT /api/config body {"clio": {"ingestPolicy": "summaries-only"}}
 ```
 
-### 10. Binary smoke (compiled)
+### 12. Binary smoke (compiled)
 
 ```bash
 bun run build
 ./cfcf-binary --version           # 0.8.0 (bumped to 0.9.0 when the PR merges)
 ./cfcf-binary clio --help          # every subcommand shows help
 ./cfcf-binary clio embedder --help
-./cfcf-binary workspace set --help
+./cfcf-binary clio reindex --help
+./cfcf-binary workspace set --help # exercises --migrate-history + --all-in-project help text
+./cfcf-binary init --help
 ```
 
 Consider running the binary from a fresh directory (`cd /tmp && /path/to/cfcf-binary server start`) to confirm the no-repo code path still works with the new deps.
@@ -276,11 +381,13 @@ Consider running the binary from a fresh directory (`cd /tmp && /path/to/cfcf-bi
 
 ## Known limitations / deferred
 
-- **sqlite-vec not integrated.** PR2 uses brute-force cosine in TS, which is fine at the design-doc's <100k chunk scale. sqlite-vec (HNSW) is a future optimisation. The Bun-on-macOS `loadExtension` quirk blocks dropping in sqlite-vec as a loadable extension; addressed via `Database.setCustomSQLite()` or `better-sqlite3` when we get there.
-- **`cfcf clio reindex` not shipped.** The `--force` flag on `embedder set` is a placeholder for the v2 reindex flow.
-- **Audit log not wired.** The `clio_audit_log` table exists (schema 0001) but nothing writes to it yet. v2.
-- **Soft-delete + versioning not wired.** Same: table shapes exist, but `deleted_at` + `clio_document_versions` are unused. v2.
-- **Web UI has no Clio surface.** Planned follow-up.
+All of these are tracked as concrete items in `docs/plan.md` (6.15-6.19).
+
+- **sqlite-vec not integrated** (plan item 6.15). PR2 uses brute-force cosine in TS; fine at the design-doc's <100k chunk scale. Bun-on-macOS `loadExtension` quirk deferred to the installer work (5.5) — plan is for the installer to ship a pinned SQLite + sqlite-vec per-platform and wire it via `Database.setCustomSQLite()`.
+- **Audit log not wired** (plan item 6.16). The `clio_audit_log` table exists (schema 0001) but nothing writes to it yet. Plan: port Cerefox's audit-log logic.
+- **Soft-delete + versioning not wired** (plan item 6.17). Table shapes exist (`deleted_at`, `clio_document_versions`), no writes yet. Plan: port Cerefox's `update_document_content` / `soft_delete` / `restore` logic.
+- **Web UI has no Clio surface** (plan item 6.18). No changes to the web UI in this feature.
+- **`cfcf init` Clio onboarding polish** (plan item 6.19). Current prompt is functional but could get better per-embedder descriptions, bandwidth warnings, and tighter integration with the installer (5.5) for pre-warming the model.
 - **Manual ONNX e2e not in CI.** Validated with MockEmbedder + manual testing against HuggingFace model download.
 
 ---
@@ -306,8 +413,9 @@ Sorted roughly by reading order:
 9. `packages/core/src/iteration-loop.ts` — wiring points (search for "Clio" comments).
 10. `packages/core/src/context-assembler.ts` — Tier-2 read list update.
 11. `packages/server/src/routes/clio.ts` — HTTP surface.
-12. `packages/cli/src/commands/clio.ts` — CLI surface.
-13. `packages/cli/src/commands/workspace.ts` — `--project` flag + interactive picker + `workspace set`.
-14. `packages/core/src/templates/clio-guide.md` — agent cue card.
-15. `docs/guides/clio-quickstart.md` + `docs/guides/cli-usage.md` + `docs/api/server-api.md` — docs.
-16. Tests: `packages/core/src/clio/**/*.test.ts` + `packages/server/src/routes/clio.test.ts`.
+12. `packages/cli/src/commands/clio.ts` — CLI surface (includes `reindex` + `embedder set --reindex`).
+13. `packages/cli/src/commands/workspace.ts` — `--project` flag + interactive picker + `workspace set --migrate-history [--all-in-project]`.
+14. `packages/cli/src/commands/init.ts` — `cfcf init` flow including the Clio embedder prompt step.
+15. `packages/core/src/templates/clio-guide.md` — agent cue card.
+16. `docs/guides/clio-quickstart.md` + `docs/guides/cli-usage.md` + `docs/api/server-api.md` — docs.
+17. Tests: `packages/core/src/clio/**/*.test.ts` + `packages/server/src/routes/clio.test.ts`.
