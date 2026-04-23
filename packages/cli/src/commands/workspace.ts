@@ -224,14 +224,27 @@ export function registerWorkspaceCommands(program: Command): void {
     });
 
   // `cfcf workspace set` — rewire workspace's Clio Project assignment
-  // (item 5.7, §12.1 Q1). Future `--migrate-history` re-keys existing
-  // Clio documents from the old Project to the new one.
+  // (item 5.7, §12.1 Q1). `--migrate-history` re-keys this workspace's
+  // historical Clio documents into the new Project; add
+  // `--all-in-project` to additionally sweep every sibling workspace's
+  // docs out of the old Project too (rare; for collapsing an empty
+  // Project into another).
   workspace
     .command("set <name>")
     .description(
-      "Modify a workspace's configuration. Today: change the Clio Project assignment. " +
-      "Use --migrate-history to also re-key historical Clio documents to the new Project " +
-      "(default: only future ingests are affected).",
+      "Modify a workspace's configuration. Today: change the Clio Project assignment.\n" +
+      "\n" +
+      "Default: future cf²-auto ingests route to the new Project; existing\n" +
+      "documents stay under the old one (audit-faithful, no schema change).\n" +
+      "\n" +
+      "With --migrate-history: additionally re-keys this workspace's past docs\n" +
+      "(filtered by metadata.workspace_id) into the new Project. Sibling\n" +
+      "workspaces sharing the old Project are NOT touched.\n" +
+      "\n" +
+      "With --migrate-history --all-in-project: re-keys every doc currently\n" +
+      "in the old Project into the new one regardless of which workspace\n" +
+      "produced it. Use this when you're collapsing a Project into another\n" +
+      "(you understand you're moving sibling workspaces' memory too).",
     )
     .requiredOption(
       "--project <clio-project>",
@@ -239,12 +252,19 @@ export function registerWorkspaceCommands(program: Command): void {
     )
     .option(
       "--migrate-history",
-      "Re-key all Clio documents currently routed through this workspace's old Project " +
-      "to the new Project. Safe by default (no schema change), audited, idempotent.",
+      "Re-key this workspace's historical Clio documents from the old Project to the new one (filtered by metadata.workspace_id).",
+    )
+    .option(
+      "--all-in-project",
+      "Only with --migrate-history: widen the re-key to every document in the old Project, not just this workspace's. Use only when collapsing Projects.",
     )
     .action(async (name, opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
+        process.exit(1);
+      }
+      if (opts.allInProject && !opts.migrateHistory) {
+        console.error("--all-in-project has no effect without --migrate-history. Add --migrate-history or remove --all-in-project.");
         process.exit(1);
       }
 
@@ -261,6 +281,7 @@ export function registerWorkspaceCommands(program: Command): void {
         {
           project: opts.project,
           migrateHistory: !!opts.migrateHistory,
+          allInProject: !!opts.allInProject,
         },
       );
 
@@ -271,9 +292,10 @@ export function registerWorkspaceCommands(program: Command): void {
 
       console.log(`Workspace ${w.name}: Clio Project ${oldProject} → ${res.data!.workspace.clioProject}`);
       if (opts.migrateHistory) {
-        console.log(`  Re-keyed ${res.data!.migrated ?? 0} historical document(s) to the new Project.`);
+        const scope = opts.allInProject ? "all docs in old Project" : `docs tagged to workspace ${w.id}`;
+        console.log(`  Re-keyed ${res.data!.migrated ?? 0} historical document(s) (${scope}).`);
       } else {
-        console.log(`  Historical documents remain under "${oldProject}". Pass --migrate-history to re-key them.`);
+        console.log(`  Historical documents remain under "${oldProject}". Pass --migrate-history to re-key this workspace's docs.`);
       }
     });
 }

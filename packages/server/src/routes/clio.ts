@@ -174,7 +174,8 @@ export function registerClioRoutes(app: Hono): void {
   });
 
   app.post("/api/clio/embedders/set", async (c) => {
-    const body = await c.req.json<{ name?: string; force?: boolean }>().catch(() => ({}) as { name?: string; force?: boolean });
+    const body = await c.req.json<{ name?: string; force?: boolean; reindex?: boolean }>()
+      .catch(() => ({}) as { name?: string; force?: boolean; reindex?: boolean });
     if (!body.name) return c.json({ error: "name is required" }, 400);
     const entry = findEmbedderEntry(body.name);
     if (!entry) return c.json({ error: `Unknown embedder "${body.name}"` }, 400);
@@ -184,8 +185,37 @@ export function registerClioRoutes(app: Hono): void {
       return c.json({ error: "Active Clio backend doesn't support embedders" }, 400);
     }
     try {
-      const record = await backend.installActiveEmbedder(entry, { force: !!body.force, loadNow: false });
-      return c.json({ active: record });
+      // `--reindex` implies force: we're about to re-embed everything
+      // anyway, so allow the switch past the guardrail.
+      const record = await backend.installActiveEmbedder(entry, {
+        force: !!body.force || !!body.reindex,
+        loadNow: !!body.reindex, // pre-warm the model if we're about to use it
+      });
+      let reindexResult = null;
+      if (body.reindex) {
+        reindexResult = await backend.reindex();
+      }
+      return c.json({ active: record, reindex: reindexResult });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  app.post("/api/clio/reindex", async (c) => {
+    const body = await c.req.json<{ project?: string; force?: boolean; batchSize?: number }>()
+      .catch(() => ({}) as { project?: string; force?: boolean; batchSize?: number });
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support reindex" }, 400);
+    }
+    try {
+      const result = await backend.reindex({
+        project: body.project,
+        force: !!body.force,
+        batchSize: body.batchSize,
+      });
+      return c.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 400);
@@ -208,7 +238,7 @@ export function registerClioRoutes(app: Hono): void {
       (await getWorkspace(id)) ?? (await findWorkspaceByName(id));
     if (!workspace) return c.json({ error: "Workspace not found" }, 404);
 
-    let body: { project?: string; migrateHistory?: boolean };
+    let body: { project?: string; migrateHistory?: boolean; allInProject?: boolean };
     try {
       body = await c.req.json<typeof body>();
     } catch {
@@ -232,12 +262,18 @@ export function registerClioRoutes(app: Hono): void {
       return c.json({ error: message }, 400);
     }
 
-    // Migrate historical docs if requested.
+    // Migrate historical docs if requested. Scope: by default, only this
+    // workspace's own docs move (filtered by metadata.workspace_id); with
+    // `allInProject=true` every doc in the old Clio Project is rekeyed.
     let migrated = 0;
     if (body.migrateHistory && oldName) {
       const oldProject = await backend.getProject(oldName);
       if (oldProject) {
-        migrated = await backend.migrateDocumentsBetweenProjects(oldProject.id, newProject.id);
+        migrated = await backend.migrateDocumentsBetweenProjects(
+          oldProject.id,
+          newProject.id,
+          body.allInProject ? { allInProject: true } : { workspaceId: workspace.id },
+        );
       }
     }
 

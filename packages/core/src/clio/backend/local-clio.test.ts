@@ -294,7 +294,7 @@ describe("LocalClio.stats", () => {
 });
 
 describe("LocalClio.migrateDocumentsBetweenProjects", () => {
-  it("re-keys all docs from one project to another", async () => {
+  it("allInProject=true re-keys every doc in the old Project", async () => {
     const clio = makeClio();
     const a = await clio.createProject({ name: "src-project" });
     const b = await clio.createProject({ name: "dst-project" });
@@ -304,7 +304,7 @@ describe("LocalClio.migrateDocumentsBetweenProjects", () => {
     await clio.ingest({ project: "src-project", title: "B", content: "# B\n\nbeta content beta" });
     await clio.ingest({ project: "src-project", title: "C", content: "# C\n\ngamma content gamma" });
 
-    const moved = await clio.migrateDocumentsBetweenProjects(a.id, b.id);
+    const moved = await clio.migrateDocumentsBetweenProjects(a.id, b.id, { allInProject: true });
     expect(moved).toBe(3);
 
     const srcList = await clio.listProjects();
@@ -315,10 +315,65 @@ describe("LocalClio.migrateDocumentsBetweenProjects", () => {
     await clio.close();
   });
 
+  it("workspaceId filter moves only that workspace's docs, leaving siblings alone", async () => {
+    const clio = makeClio();
+    const src = await clio.createProject({ name: "src-p" });
+    const dst = await clio.createProject({ name: "dst-p" });
+
+    // Three docs tagged to workspace ws-A, two to ws-B. All in src-p.
+    await clio.ingest({
+      project: "src-p", title: "A1",
+      content: "# A1\n\nalpha content",
+      metadata: { workspace_id: "ws-A" },
+    });
+    await clio.ingest({
+      project: "src-p", title: "A2",
+      content: "# A2\n\nalpha 2 content",
+      metadata: { workspace_id: "ws-A" },
+    });
+    await clio.ingest({
+      project: "src-p", title: "A3",
+      content: "# A3\n\nalpha 3 content",
+      metadata: { workspace_id: "ws-A" },
+    });
+    await clio.ingest({
+      project: "src-p", title: "B1",
+      content: "# B1\n\nbeta content",
+      metadata: { workspace_id: "ws-B" },
+    });
+    await clio.ingest({
+      project: "src-p", title: "B2",
+      content: "# B2\n\nbeta 2 content",
+      metadata: { workspace_id: "ws-B" },
+    });
+
+    const moved = await clio.migrateDocumentsBetweenProjects(src.id, dst.id, { workspaceId: "ws-A" });
+    expect(moved).toBe(3);
+
+    const after = await clio.listProjects();
+    const srcCount = after.find((p) => p.id === src.id)?.documentCount ?? -1;
+    const dstCount = after.find((p) => p.id === dst.id)?.documentCount ?? -1;
+    // ws-B docs still in src (2), ws-A docs in dst (3).
+    expect(srcCount).toBe(2);
+    expect(dstCount).toBe(3);
+    await clio.close();
+  });
+
+  it("refuses to run when neither workspaceId nor allInProject is set", async () => {
+    const clio = makeClio();
+    const src = await clio.createProject({ name: "s" });
+    const dst = await clio.createProject({ name: "d" });
+    // Pass an empty opts object explicitly (the TS signature allows it
+    // but the runtime guard refuses to proceed without at least one
+    // scoping flag).
+    await expect(clio.migrateDocumentsBetweenProjects(src.id, dst.id, {})).rejects.toThrow(/workspaceId or allInProject/);
+    await clio.close();
+  });
+
   it("is a noop when from === to", async () => {
     const clio = makeClio();
     const p = await clio.createProject({ name: "p1" });
-    const moved = await clio.migrateDocumentsBetweenProjects(p.id, p.id);
+    const moved = await clio.migrateDocumentsBetweenProjects(p.id, p.id, { allInProject: true });
     expect(moved).toBe(0);
     await clio.close();
   });

@@ -315,19 +315,39 @@ describe("PUT /api/workspaces/:id/clio-project", () => {
     expect(newOne?.documentCount).toBe(0);
   });
 
-  it("migrates historical docs when migrateHistory=true", async () => {
+  it("migrates historical docs (workspace-scoped by default) when migrateHistory=true", async () => {
     const app = createApp();
     const w = await seedWorkspace(app, "wsB");
 
+    // Two docs tagged to wsB (the workspace being switched). A third
+    // doc is in the same src-proj but belongs to a sibling workspace
+    // and must NOT move.
     await app.request("/api/clio/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: "src-proj", title: "X", content: "# X\n\nctx alpha" }),
+      body: JSON.stringify({
+        project: "src-proj", title: "X",
+        content: "# X\n\nctx alpha",
+        metadata: { workspace_id: w.id },
+      }),
     });
     await app.request("/api/clio/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: "src-proj", title: "Y", content: "# Y\n\nctx beta" }),
+      body: JSON.stringify({
+        project: "src-proj", title: "Y",
+        content: "# Y\n\nctx beta",
+        metadata: { workspace_id: w.id },
+      }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "src-proj", title: "Z-sibling",
+        content: "# Z\n\nsibling workspace's doc",
+        metadata: { workspace_id: "sibling-ws" },
+      }),
     });
     await app.request(`/api/workspaces/${w.id}/clio-project`, {
       method: "PUT",
@@ -343,14 +363,58 @@ describe("PUT /api/workspaces/:id/clio-project", () => {
     expect(switchRes.status).toBe(200);
     const body = await switchRes.json();
     expect(body.workspace.clioProject).toBe("dst-proj");
+    // Only wsB's two docs moved; sibling's doc stayed in src-proj.
     expect(body.migrated).toBe(2);
 
     const listRes = await app.request("/api/clio/projects");
     const listBody = await listRes.json();
     const src = listBody.projects.find((p: { name: string; documentCount?: number }) => p.name === "src-proj");
     const dst = listBody.projects.find((p: { name: string; documentCount?: number }) => p.name === "dst-proj");
-    expect(src?.documentCount).toBe(0);
+    expect(src?.documentCount).toBe(1);   // sibling doc still there
     expect(dst?.documentCount).toBe(2);
+  });
+
+  it("migrates ALL docs in the old Project when allInProject=true", async () => {
+    const app = createApp();
+    const w = await seedWorkspace(app, "wsCollapse");
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "old-p", title: "Mine",
+        content: "# Mine\n\nmy doc",
+        metadata: { workspace_id: w.id },
+      }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "old-p", title: "Sib",
+        content: "# Sib\n\nsibling doc",
+        metadata: { workspace_id: "another-ws" },
+      }),
+    });
+    await app.request(`/api/workspaces/${w.id}/clio-project`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "old-p" }),
+    });
+
+    const switchRes = await app.request(`/api/workspaces/${w.id}/clio-project`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "new-p", migrateHistory: true, allInProject: true }),
+    });
+    const body = await switchRes.json();
+    expect(body.migrated).toBe(2);
+
+    const listRes = await app.request("/api/clio/projects");
+    const listBody = await listRes.json();
+    const old = listBody.projects.find((p: { name: string; documentCount?: number }) => p.name === "old-p");
+    const neu = listBody.projects.find((p: { name: string; documentCount?: number }) => p.name === "new-p");
+    expect(old?.documentCount).toBe(0);
+    expect(neu?.documentCount).toBe(2);
   });
 
   it("rejects missing project field", async () => {

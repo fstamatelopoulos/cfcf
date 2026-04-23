@@ -370,19 +370,80 @@ function registerUnder(root: Command): void {
 
   embedderCmd
     .command("set <name>")
-    .description("Switch the active embedder. Refuses when existing chunks have embeddings from a different model (prevents vector-corpus poisoning) unless --force.")
-    .option("--force", "Switch even if embeddings from another model exist. DO NOT USE without running reindex first.")
+    .description(
+      "Switch the active embedder.\n" +
+      "\n" +
+      "Default: refuses when existing chunks have embeddings from a different\n" +
+      "model -- a naive switch would leave those chunks invisible to vector\n" +
+      "search since their embeddings are in the old model's space.\n" +
+      "\n" +
+      "With --reindex: switches + re-embeds every existing chunk under the\n" +
+      "new model in one atomic pass. Safe, supported, recommended.\n" +
+      "\n" +
+      "With --force: switches without reindex. Vector search will be\n" +
+      "effectively broken for pre-switch chunks until you run\n" +
+      "`cfcf clio reindex`. Reserved for recovery scenarios.",
+    )
+    .option("--reindex", "Switch + re-embed every existing chunk under the new model. Preferred over --force.")
+    .option("--force", "Switch without reindex. Only for recovery; vector search is degraded until you run `cfcf clio reindex`.")
     .action(async (name: string, opts) => {
       if (!(await checkServer())) return;
-      const res = await post<{ active: { name: string; dim: number } }>(
+      if (opts.force && opts.reindex) {
+        console.error("Pass either --reindex or --force, not both. --reindex is the safe path.");
+        process.exit(1);
+      }
+      const res = await post<{ active: { name: string; dim: number }; reindex?: { chunksReembedded: number; chunksSkipped: number; documentsTouched: number; elapsedMs: number } | null }>(
         "/api/clio/embedders/set",
-        { name, force: !!opts.force },
+        { name, force: !!opts.force, reindex: !!opts.reindex },
       );
       if (!res.ok) {
         console.error(`Set failed: ${res.error}`);
         process.exit(1);
       }
       console.log(`Active embedder: ${res.data!.active.name} (dim=${res.data!.active.dim})`);
+      if (res.data!.reindex) {
+        const r = res.data!.reindex;
+        console.log(`Reindex: re-embedded ${r.chunksReembedded} chunk(s) across ${r.documentsTouched} document(s) in ${r.elapsedMs}ms.`);
+      } else if (opts.force) {
+        console.log("WARNING: --force used without --reindex. Vector search will be degraded for pre-switch chunks until you run `cfcf clio reindex`.");
+      }
+    });
+
+  root
+    .command("reindex")
+    .description(
+      "Re-embed chunks under the currently-active embedder. Idempotent: chunks already matching the active embedder+dim are skipped. Pair with `cfcf clio embedder set --reindex` for the canonical embedder-switch flow.",
+    )
+    .option("-p, --project <name>", "Restrict to one Clio Project")
+    .option("--force", "Re-embed every chunk even if it already matches the active embedder")
+    .option("--batch-size <n>", "Embedder batch size (default 32)", (v) => parseInt(v, 10))
+    .option("--json", "Emit the raw JSON result")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const res = await post<{ embedder: string; embeddingDim: number; chunksScanned: number; chunksReembedded: number; chunksSkipped: number; documentsTouched: number; elapsedMs: number }>(
+        "/api/clio/reindex",
+        {
+          project: opts.project,
+          force: !!opts.force,
+          batchSize: opts.batchSize,
+        },
+      );
+      if (!res.ok) {
+        console.error(`Reindex failed: ${res.error}`);
+        process.exit(1);
+      }
+      const r = res.data!;
+      if (opts.json) {
+        console.log(JSON.stringify(r, null, 2));
+        return;
+      }
+      console.log(`Reindex complete:`);
+      console.log(`  embedder:        ${r.embedder} (dim=${r.embeddingDim})`);
+      console.log(`  chunks scanned:  ${r.chunksScanned}`);
+      console.log(`  re-embedded:     ${r.chunksReembedded}`);
+      console.log(`  skipped:         ${r.chunksSkipped} (already matching)`);
+      console.log(`  docs touched:    ${r.documentsTouched}`);
+      console.log(`  elapsed:         ${r.elapsedMs}ms`);
     });
 
   // ── stats ─────────────────────────────────────────────────────────────

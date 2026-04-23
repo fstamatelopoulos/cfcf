@@ -23,7 +23,7 @@ import type {
   SearchHit,
   ClioStats,
 } from "../types.js";
-import type { MemoryBackend } from "./types.js";
+import type { MemoryBackend, ReindexOptions, ReindexResult } from "./types.js";
 import {
   getActiveEmbedder,
   embeddingToBlob,
@@ -844,21 +844,167 @@ export class LocalClio implements MemoryBackend {
 
   // ── Migration helper ───────────────────────────────────────────────────
 
-  async migrateDocumentsBetweenProjects(fromProjectId: string, toProjectId: string): Promise<number> {
+  async migrateDocumentsBetweenProjects(
+    fromProjectId: string,
+    toProjectId: string,
+    opts: { workspaceId?: string; allInProject?: boolean } = {},
+  ): Promise<number> {
     if (fromProjectId === toProjectId) return 0;
+
+    // Scope: by default we only move docs tagged with the given
+    // workspace_id. `allInProject` preserves the old "move everything"
+    // behaviour for the rare case where the user genuinely wants to
+    // collapse an old Clio Project into a new one.
+    if (!opts.allInProject && !opts.workspaceId) {
+      throw new Error(
+        "migrateDocumentsBetweenProjects: either workspaceId or allInProject must be set",
+      );
+    }
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.db.prepare(
-        `UPDATE clio_documents SET project_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-          WHERE project_id = ?`,
-      ).run(toProjectId, fromProjectId);
+      let result;
+      if (opts.allInProject) {
+        result = this.db.prepare(
+          `UPDATE clio_documents
+              SET project_id = ?,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE project_id = ?`,
+        ).run(toProjectId, fromProjectId);
+      } else {
+        result = this.db.prepare(
+          `UPDATE clio_documents
+              SET project_id = ?,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE project_id = ?
+              AND json_extract(metadata, '$.workspace_id') = ?`,
+        ).run(toProjectId, fromProjectId, opts.workspaceId!);
+      }
       this.db.exec("COMMIT");
       return Number(result.changes);
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
     }
+  }
+
+  // ── Reindex ────────────────────────────────────────────────────────────
+
+  async reindex(opts: ReindexOptions = {}): Promise<ReindexResult> {
+    const started = Date.now();
+    const embedder = await this.getEmbedder();
+    if (!embedder) {
+      throw new Error(
+        "reindex: no active embedder. Install one first with `cfcf clio embedder install <name>`.",
+      );
+    }
+    const batchSize = Math.max(1, Math.min(opts.batchSize ?? 32, 256));
+
+    // Resolve optional project filter.
+    let projectFilterId: string | null = null;
+    if (opts.project) {
+      const p = await this.getProject(opts.project);
+      if (!p) {
+        return {
+          embedder: embedder.name,
+          embeddingDim: embedder.dim,
+          chunksScanned: 0,
+          chunksReembedded: 0,
+          chunksSkipped: 0,
+          documentsTouched: 0,
+          elapsedMs: Date.now() - started,
+        };
+      }
+      projectFilterId = p.id;
+    }
+
+    // Find the chunk universe we care about.
+    const filterSql = projectFilterId
+      ? ` AND d.project_id = ?`
+      : "";
+    const skipSql = opts.force
+      ? ""
+      : ` AND (c.embedder IS NULL OR c.embedder != ? OR c.embedding_dim != ? OR c.embedding IS NULL)`;
+    const bindings: (string | number)[] = [];
+    if (projectFilterId) bindings.push(projectFilterId);
+    if (!opts.force) {
+      bindings.push(embedder.name);
+      bindings.push(embedder.dim);
+    }
+
+    // Total count (before filter) for the progress UI.
+    const totalBindings: (string | number)[] = [];
+    if (projectFilterId) totalBindings.push(projectFilterId);
+    const totalRow = this.db.query<{ n: number }, (string | number)[]>(
+      `SELECT COUNT(*) AS n
+         FROM clio_chunks c
+         JOIN clio_documents d ON c.document_id = d.id
+        WHERE c.version_id IS NULL
+          AND d.deleted_at IS NULL
+          ${filterSql}`,
+    ).get(...totalBindings);
+    const chunksScanned = totalRow?.n ?? 0;
+
+    // Pull the chunks needing re-embedding. Streamed in ID-ordered
+    // pages so we don't hold the full set in memory for huge corpora.
+    const pageSql = `
+      SELECT c.id, c.content, c.document_id
+        FROM clio_chunks c
+        JOIN clio_documents d ON c.document_id = d.id
+       WHERE c.version_id IS NULL
+         AND d.deleted_at IS NULL
+         ${filterSql}
+         ${skipSql}
+       ORDER BY c.id
+    `;
+    const pending = this.db.query<
+      { id: string; content: string; document_id: string },
+      (string | number)[]
+    >(pageSql).all(...bindings);
+
+    let chunksReembedded = 0;
+    const touchedDocs = new Set<string>();
+
+    for (let i = 0; i < pending.length; i += batchSize) {
+      const batch = pending.slice(i, i + batchSize);
+      const vectors = await embedder.embed(batch.map((b) => b.content));
+      const blobs = vectors.map((v) => embeddingToBlob(v));
+
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const upd = this.db.prepare(
+          `UPDATE clio_chunks
+              SET embedding = ?,
+                  embedder = ?,
+                  embedding_dim = ?,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE id = ?`,
+        );
+        for (let j = 0; j < batch.length; j++) {
+          upd.run(blobs[j], embedder.name, embedder.dim, batch[j].id);
+          touchedDocs.add(batch[j].document_id);
+          chunksReembedded++;
+        }
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+
+      if (opts.onProgress) {
+        opts.onProgress({ processed: Math.min(i + batchSize, pending.length), total: pending.length });
+      }
+    }
+
+    return {
+      embedder: embedder.name,
+      embeddingDim: embedder.dim,
+      chunksScanned,
+      chunksReembedded,
+      chunksSkipped: chunksScanned - chunksReembedded,
+      documentsTouched: touchedDocs.size,
+      elapsedMs: Date.now() - started,
+    };
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────

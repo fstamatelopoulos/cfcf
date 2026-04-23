@@ -16,6 +16,8 @@ import {
   getAdapterNames,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_PAUSE_EVERY,
+  EMBEDDER_CATALOGUE,
+  DEFAULT_EMBEDDER_NAME,
 } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { createInterface } from "readline";
@@ -285,17 +287,76 @@ export function registerInitCommand(program: Command): void {
       }
       config.permissionsAcknowledged = true;
 
-      // Step 4: Save config
+      // Step 4: Clio memory-layer onboarding (item 5.7, 2026-04-23).
+      // We don't actually install the embedder here (the install call
+      // needs a running server + the HF download takes ~30-60s), but we
+      // collect the user's preference + surface a reminder in Next
+      // Steps. Deferring the actual install to `cfcf clio embedder
+      // install` keeps `cfcf init` predictable + offline-safe.
+      console.log();
+      console.log("Clio memory layer");
+      console.log("=================");
+      console.log("Clio is cfcf's cross-workspace memory: cf² agents ingest curated");
+      console.log("lessons (reflection analyses, architect reviews, decision-log");
+      console.log("entries) after each iteration so sibling workspaces can query");
+      console.log("them. Two modes:");
+      console.log();
+      console.log("  * FTS keyword search -- works immediately, no setup.");
+      console.log("  * Hybrid + semantic vector search -- requires an embedder model.");
+      console.log("    Model is downloaded on demand from HuggingFace (~20-430 MB depending");
+      console.log("    on choice) and cached to ~/.cfcf/models/.");
+      console.log();
+      console.log("You can install an embedder now, skip + stay in FTS-only mode, or");
+      console.log("install later via `cfcf clio embedder install <name>`.");
+      console.log();
+      console.log("Available embedders:");
+      EMBEDDER_CATALOGUE.forEach((e, i) => {
+        const mark = e.name === DEFAULT_EMBEDDER_NAME ? "★" : " ";
+        console.log(`  ${mark} ${i + 1}) ${e.name.padEnd(26)}  dim=${e.dim.toString().padStart(4)}  ~${e.approxSizeMb.toString().padStart(4)} MB`);
+        console.log(`       ${e.description}`);
+      });
+      console.log("     S) Skip -- Clio runs in FTS-only mode until you install one.");
+      console.log();
+      const embedderPick = await prompt(
+        `Embedder choice (1-${EMBEDDER_CATALOGUE.length} / S)`,
+        String(EMBEDDER_CATALOGUE.findIndex((e) => e.name === DEFAULT_EMBEDDER_NAME) + 1),
+      );
+      let embedderToInstall: string | null = null;
+      const pickTrim = embedderPick.trim().toUpperCase();
+      if (pickTrim === "S" || pickTrim === "SKIP") {
+        embedderToInstall = null;
+      } else {
+        const idx = parseInt(pickTrim, 10);
+        if (!isNaN(idx) && idx >= 1 && idx <= EMBEDDER_CATALOGUE.length) {
+          embedderToInstall = EMBEDDER_CATALOGUE[idx - 1].name;
+        } else {
+          console.log(`Unrecognised choice "${embedderPick}"; defaulting to skip. You can install an embedder later.`);
+        }
+      }
+
+      // Step 5: Save config
       await writeConfig(config);
       console.log();
       console.log(`Configuration saved to: ${getConfigPath()}`);
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
-      console.log("  2. Create a workspace:  cfcf workspace init --repo <path> --name <name>");
-      console.log("  3. Populate problem-pack/problem.md and success.md with your problem definition");
-      console.log("  4. Review with:         cfcf review --workspace <name>  (optional)");
-      console.log("  5. Launch development:  cfcf run --workspace <name>");
+      if (embedderToInstall) {
+        console.log(`  2. Install the embedder: cfcf clio embedder install ${embedderToInstall}`);
+        console.log(`                          (~${EMBEDDER_CATALOGUE.find((e) => e.name === embedderToInstall)?.approxSizeMb ?? "?"} MB, one-time download)`);
+        console.log("  3. Create a workspace:  cfcf workspace init --repo <path> --name <name>");
+        console.log("  4. Populate problem-pack/problem.md and success.md with your problem definition");
+        console.log("  5. Review with:         cfcf review --workspace <name>  (optional)");
+        console.log("  6. Launch development:  cfcf run --workspace <name>");
+      } else {
+        console.log("  2. Create a workspace:  cfcf workspace init --repo <path> --name <name>");
+        console.log("  3. Populate problem-pack/problem.md and success.md with your problem definition");
+        console.log("  4. Review with:         cfcf review --workspace <name>  (optional)");
+        console.log("  5. Launch development:  cfcf run --workspace <name>");
+        console.log();
+        console.log("  Clio: running in FTS-only keyword-search mode (no embedder installed).");
+        console.log("        Install one later with:  cfcf clio embedder install bge-small-en-v1.5");
+      }
       console.log();
     });
 }
