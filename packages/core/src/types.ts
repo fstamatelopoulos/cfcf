@@ -106,6 +106,17 @@ export interface CfcfGlobalConfig {
    *   - "needs_refinement_or_blocked":  stop on anything but READY
    */
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
+  /**
+   * Global Clio defaults (item 5.7). Each workspace inherits these unless
+   * it has its own `clio` override on `WorkspaceConfig`. See
+   * `docs/design/clio-memory-layer.md` §5.2.
+   */
+  clio?: ClioGlobalConfig;
+}
+
+export interface ClioGlobalConfig {
+  /** Default ingest policy applied to new workspaces. Defaults to "summaries-only". */
+  ingestPolicy?: "summaries-only" | "all" | "off";
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;
@@ -191,6 +202,35 @@ export interface WorkspaceConfig {
   status?: WorkspaceStatus;
   /** Per-workspace notification override (defaults to global config) */
   notifications?: NotificationConfig;
+  /**
+   * Clio Project assignment (item 5.7). Name of the Clio Project this
+   * workspace contributes memories to. Undefined → auto-route to the
+   * named `"default"` Project on first ingest (user confirms the first
+   * time). See `docs/design/clio-memory-layer.md` §2 for the
+   * workspace-vs-Project distinction.
+   */
+  clioProject?: string;
+  /**
+   * Per-workspace Clio configuration override (item 5.7). When unset the
+   * workspace inherits the global `CfcfGlobalConfig.clio` defaults.
+   */
+  clio?: ClioWorkspaceConfig;
+}
+
+export interface ClioWorkspaceConfig {
+  /**
+   * Controls which artifacts cf² auto-ingests at iteration boundaries.
+   * See `docs/design/clio-memory-layer.md` §5.2.
+   *   - "summaries-only" (default): curated signal -- reflection-analysis,
+   *     architect-review, tagged decision-log entries, cfcf-generated
+   *     iteration-summary. Good for cross-workspace transfer.
+   *   - "all": above + every iteration-log, every iteration-handoff, every
+   *     judge-assessment, every decision-log append. High-signal
+   *     workspaces / dogfooding.
+   *   - "off": no cfcf-auto ingest. User + agents can still push via
+   *     `cfcf clio ingest` / `POST /api/clio/ingest` on demand.
+   */
+  ingestPolicy?: "summaries-only" | "all" | "off";
 }
 
 // --- Server Communication ---

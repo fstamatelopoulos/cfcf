@@ -1,15 +1,24 @@
 /**
- * Workspace management commands: init, list, show, delete.
+ * Workspace management commands: init, list, show, delete, set.
  */
 
 import type { Command } from "commander";
 import { resolve, join } from "path";
 import { mkdir, writeFile, access } from "fs/promises";
-import { post, get } from "../client.js";
+import { post, get, put } from "../client.js";
 import { isServerReachable } from "../client.js";
 import { createInterface } from "readline";
 import type { WorkspaceConfig } from "@cfcf/core";
 import { formatAgent } from "../format.js";
+
+// ── Clio Project types (mirrors packages/core/src/clio/types.ts; kept here
+// ── to avoid the CLI importing the Clio backend) ────────────────────────
+interface ClioProjectListItem {
+  id: string;
+  name: string;
+  description?: string;
+  documentCount?: number;
+}
 
 export function registerWorkspaceCommands(program: Command): void {
   const workspace = program
@@ -21,6 +30,15 @@ export function registerWorkspaceCommands(program: Command): void {
     .description("Initialize a new cfcf workspace")
     .requiredOption("--repo <path>", "Path to the git repository")
     .requiredOption("--name <name>", "Workspace name")
+    .option(
+      "--project <clio-project>",
+      "Clio Project (cross-workspace memory grouping) this workspace belongs to. " +
+      "Skip to pick interactively, or leave unset to auto-route to 'default'.",
+    )
+    .option(
+      "--no-prompt",
+      "Skip all interactive prompts. Workspace is created with whatever is passed via flags.",
+    )
     .action(async (opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
@@ -29,9 +47,18 @@ export function registerWorkspaceCommands(program: Command): void {
 
       const repoPath = resolve(opts.repo);
 
+      // If no --project flag + interactive TTY + --no-prompt not set, ask
+      // the user which Clio Project to attach to. This matches the design
+      // doc §12.1 Q4 ("strongly suggested interactive nudge").
+      let clioProject: string | undefined = opts.project;
+      if (clioProject === undefined && opts.prompt !== false && process.stdin.isTTY) {
+        clioProject = await promptForClioProject();
+      }
+
       const res = await post<WorkspaceConfig>("/api/workspaces", {
         name: opts.name,
         repoPath,
+        clioProject,
       });
 
       if (!res.ok) {
@@ -63,13 +90,14 @@ export function registerWorkspaceCommands(program: Command): void {
 
       console.log();
       console.log(`Workspace created: ${w.name}`);
-      console.log(`  ID:         ${w.id}`);
-      console.log(`  Repo:       ${w.repoPath}`);
-      console.log(`  Dev:        ${formatAgent(w.devAgent)}`);
-      console.log(`  Judge:      ${formatAgent(w.judgeAgent)}`);
-      console.log(`  Architect:  ${formatAgent(w.architectAgent)}`);
-      console.log(`  Documenter: ${formatAgent(w.documenterAgent)}`);
-      console.log(`  Max iters:  ${w.maxIterations}`);
+      console.log(`  ID:             ${w.id}`);
+      console.log(`  Repo:           ${w.repoPath}`);
+      console.log(`  Clio Project:   ${w.clioProject ?? "(none — will auto-route to 'default' on first ingest)"}`);
+      console.log(`  Dev:            ${formatAgent(w.devAgent)}`);
+      console.log(`  Judge:          ${formatAgent(w.judgeAgent)}`);
+      console.log(`  Architect:      ${formatAgent(w.architectAgent)}`);
+      console.log(`  Documenter:     ${formatAgent(w.documenterAgent)}`);
+      console.log(`  Max iters:      ${w.maxIterations}`);
       console.log();
       console.log("Next steps:");
       console.log(`  1. Edit problem-pack/problem.md with your problem definition`);
@@ -102,7 +130,8 @@ export function registerWorkspaceCommands(program: Command): void {
 
       console.log(`${workspaces.length} workspace(s):\n`);
       for (const w of workspaces) {
-        console.log(`  ${w.name} (${w.id})`);
+        const projectLabel = w.clioProject ? `  [Clio: ${w.clioProject}]` : "";
+        console.log(`  ${w.name} (${w.id})${projectLabel}`);
         console.log(`    Repo:  ${w.repoPath}`);
         console.log(`    Dev: ${formatAgent(w.devAgent)}  Judge: ${formatAgent(w.judgeAgent)}  Architect: ${formatAgent(w.architectAgent)}  Documenter: ${formatAgent(w.documenterAgent)}`);
         console.log();
@@ -128,6 +157,8 @@ export function registerWorkspaceCommands(program: Command): void {
       console.log(`Workspace: ${w.name}`);
       console.log(`  ID:             ${w.id}`);
       console.log(`  Repo:           ${w.repoPath}`);
+      console.log(`  Clio Project:   ${w.clioProject ?? "(none — auto-routes to 'default' on first ingest)"}`);
+      console.log(`  Clio policy:    ${w.clio?.ingestPolicy ?? "(inherit global)"}`);
       console.log(`  Dev agent:         ${formatAgent(w.devAgent)}`);
       console.log(`  Judge agent:       ${formatAgent(w.judgeAgent)}`);
       console.log(`  Architect:         ${formatAgent(w.architectAgent)}`);
@@ -191,4 +222,116 @@ export function registerWorkspaceCommands(program: Command): void {
         process.exit(1);
       }
     });
+
+  // `cfcf workspace set` — rewire workspace's Clio Project assignment
+  // (item 5.7, §12.1 Q1). Future `--migrate-history` re-keys existing
+  // Clio documents from the old Project to the new one.
+  workspace
+    .command("set <name>")
+    .description(
+      "Modify a workspace's configuration. Today: change the Clio Project assignment. " +
+      "Use --migrate-history to also re-key historical Clio documents to the new Project " +
+      "(default: only future ingests are affected).",
+    )
+    .requiredOption(
+      "--project <clio-project>",
+      "New Clio Project name. Auto-created if it doesn't exist.",
+    )
+    .option(
+      "--migrate-history",
+      "Re-key all Clio documents currently routed through this workspace's old Project " +
+      "to the new Project. Safe by default (no schema change), audited, idempotent.",
+    )
+    .action(async (name, opts) => {
+      if (!(await isServerReachable())) {
+        console.error("cfcf server is not running. Start it with: cfcf server start");
+        process.exit(1);
+      }
+
+      const lookup = await get<WorkspaceConfig>(`/api/workspaces/${encodeURIComponent(name)}`);
+      if (!lookup.ok) {
+        console.error(`Workspace not found: ${name}`);
+        process.exit(1);
+      }
+      const w = lookup.data!;
+      const oldProject = w.clioProject ?? "(unset)";
+
+      const res = await put<{ workspace: WorkspaceConfig; migrated?: number }>(
+        `/api/workspaces/${w.id}/clio-project`,
+        {
+          project: opts.project,
+          migrateHistory: !!opts.migrateHistory,
+        },
+      );
+
+      if (!res.ok) {
+        console.error(`Failed to set Clio Project: ${res.error}`);
+        process.exit(1);
+      }
+
+      console.log(`Workspace ${w.name}: Clio Project ${oldProject} → ${res.data!.workspace.clioProject}`);
+      if (opts.migrateHistory) {
+        console.log(`  Re-keyed ${res.data!.migrated ?? 0} historical document(s) to the new Project.`);
+      } else {
+        console.log(`  Historical documents remain under "${oldProject}". Pass --migrate-history to re-key them.`);
+      }
+    });
+}
+
+/**
+ * Interactive Clio Project picker for `cfcf workspace init` when --project
+ * is not passed. Lists existing Projects + offers "new" + offers "skip".
+ */
+async function promptForClioProject(): Promise<string | undefined> {
+  // Pull the list of existing Clio Projects via the server.
+  const res = await get<{ projects: ClioProjectListItem[] }>("/api/clio/projects");
+  const existing = res.ok && res.data ? res.data.projects : [];
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string) => new Promise<string>((r) => rl.question(q, r));
+
+  console.log();
+  console.log("Clio Project assignment (cross-workspace memory)");
+  console.log("─".repeat(50));
+  console.log("Workspaces can share memory through a Clio Project -- a named grouping");
+  console.log("of workspaces in related domains (e.g. 'backend-services' for a bunch of");
+  console.log("TypeScript API repos, or 'cf-ecosystem' for cf² + Clio + Cerefox code).");
+  console.log("Searches made inside this workspace see cross-workspace knowledge from");
+  console.log("siblings in the same Project; workspaces in different Projects stay");
+  console.log("isolated by default.");
+  console.log();
+
+  if (existing.length === 0) {
+    console.log("No Clio Projects exist yet.");
+    const answer = await ask(
+      "Create a new one for this workspace? (enter a name, or press Enter to skip and use 'default'): ",
+    );
+    rl.close();
+    const trimmed = answer.trim();
+    return trimmed || undefined;
+  }
+
+  console.log("Existing Clio Projects:");
+  existing.forEach((p, i) => {
+    const desc = p.description ? ` — ${p.description}` : "";
+    const count = p.documentCount != null ? ` (${p.documentCount} doc${p.documentCount === 1 ? "" : "s"})` : "";
+    console.log(`  ${i + 1}) ${p.name}${count}${desc}`);
+  });
+  console.log(`  N) Create a new Project`);
+  console.log(`  S) Skip (route to 'default' Project on first ingest)`);
+
+  const answer = (await ask("Pick one [1-" + existing.length + " / N / S]: ")).trim();
+  const asNum = parseInt(answer, 10);
+  if (!isNaN(asNum) && asNum >= 1 && asNum <= existing.length) {
+    rl.close();
+    return existing[asNum - 1].name;
+  }
+  if (answer.toLowerCase() === "n") {
+    const newName = (await ask("New Clio Project name: ")).trim();
+    rl.close();
+    return newName || undefined;
+  }
+  // "S", empty, or anything else -> skip
+  rl.close();
+  return undefined;
 }

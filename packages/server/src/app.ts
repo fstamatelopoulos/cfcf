@@ -12,6 +12,7 @@ import { cors } from "hono/cors";
 import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
+import { registerClioRoutes } from "./routes/clio.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -218,6 +219,7 @@ export function createApp() {
       documenterAgent?: { adapter: string; model?: string };
       maxIterations?: number;
       pauseEvery?: number;
+      clioProject?: string;
     }>();
 
     if (!body.name || !body.repoPath) {
@@ -1027,6 +1029,12 @@ export function createApp() {
       }
     });
   });
+
+  // --- Clio (item 5.7) ---
+  // Memory layer for cross-workspace knowledge. All routes live under
+  // /api/clio/* plus the PUT /api/workspaces/:id/clio-project handler for
+  // `cfcf workspace set --project`. Implementation in routes/clio.ts.
+  registerClioRoutes(app);
 
   // --- Static file serving (Web GUI) ---
   //
