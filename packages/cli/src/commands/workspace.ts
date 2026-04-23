@@ -47,6 +47,24 @@ export function registerWorkspaceCommands(program: Command): void {
 
       const repoPath = resolve(opts.repo);
 
+      // Validate the repo path client-side BEFORE prompting so the user
+      // doesn't walk through the Clio Project picker only to find out
+      // the repo doesn't exist. Server re-validates in POST /api/workspaces.
+      try {
+        await access(repoPath);
+      } catch {
+        console.error(`Repo path not found: ${repoPath}`);
+        console.error(`Tip: make sure the directory exists and is a git repository (run 'git init' if it isn't yet).`);
+        process.exit(1);
+      }
+      try {
+        await access(join(repoPath, ".git"));
+      } catch {
+        console.error(`Not a git repository: ${repoPath}`);
+        console.error(`Tip: run 'git init' inside the directory, or pick a path that already has a .git/ folder.`);
+        process.exit(1);
+      }
+
       // If no --project flag + interactive TTY + --no-prompt not set, ask
       // the user which Clio Project to attach to. This matches the design
       // doc §12.1 Q4 ("strongly suggested interactive nudge").
