@@ -80,20 +80,42 @@ cfcf clio get <document-id>           # fetch a document by id
 - **Clio DB**: `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). Cross-workspace state, same tier as `~/.cfcf/logs/`.
 - **Workspace Clio assignment**: `clioProject` on the workspace config at `<cfcf-config-dir>/workspaces/<id>/config.json`. `cfcf workspace show <name>` prints it.
 
-## What PR1 ships vs. what's coming
+## Capabilities today
 
-| Capability | PR1 (today) | PR2 | PR3 |
-|---|---|---|---|
-| FTS5 keyword search | ✅ | ✅ | ✅ |
-| Vector / hybrid search | ❌ (falls back to FTS) | ✅ sqlite-vec + bge-small + RRF | ✅ |
-| Small-to-big chunk expansion | ❌ | ✅ | ✅ |
-| Embedder install / switch (`cfcf clio embedder ...`) | ❌ | ✅ | ✅ |
-| Iteration-loop auto-ingest (reflect, architect, decision-log, iteration-summary) | ❌ | ❌ | ✅ |
-| `cfcf-docs/clio-relevant.md` preload into agent context | ❌ | ❌ | ✅ |
-| `cfcf-docs/clio-guide.md` agent cue card | ❌ | ❌ | ✅ |
-| `cfcf clio reindex` | ❌ | v2 | v2 |
-| Audit log + versioning + soft-delete | ❌ (table shapes present) | v2 | v2 |
-| Remote Cerefox backend | ❌ | ❌ | v3+ |
+| Capability | Status |
+|---|---|
+| FTS5 keyword search | ✅ works out of the box |
+| Vector + hybrid (RRF) search | ✅ once an embedder is installed |
+| Small-to-big chunk expansion | ✅ |
+| Embedder install / list / set | ✅ (`cfcf clio embedder install bge-small-en-v1.5`) |
+| Iteration-loop auto-ingest (reflect, architect, decision-log, iteration-summary) | ✅ |
+| `cfcf-docs/clio-relevant.md` preload into agent context | ✅ |
+| `cfcf-docs/clio-guide.md` agent cue card | ✅ |
+| `cfcf clio reindex` | v2 |
+| Audit log + versioning + soft-delete | table shapes present; full v2 |
+| Remote Cerefox backend | v3+ |
+
+## Turning on hybrid search
+
+FTS keyword search works immediately with no setup. For hybrid + semantic search, install an embedder:
+
+```bash
+# Downloads the model (~120 MB) from HuggingFace on first run.
+# Cached to ~/.cfcf/models/ so subsequent runs start cold-load-free.
+cfcf clio embedder install bge-small-en-v1.5
+
+# Confirm:
+cfcf clio embedder active
+
+# Now hybrid search works:
+cfcf clio search "flaky auth tests" --mode hybrid
+```
+
+**Switching embedders is a destructive operation.** Each chunk's embedding is tied to the model that produced it; swapping models invalidates every existing embedding. `cfcf clio embedder set <other>` refuses to proceed when existing chunks have embeddings from the current model, unless `--force`. The supported recovery path (reindex-then-switch) ships in v2. For now: **pick an embedder at install time and stay on it**.
+
+## Embedder ↔ chunk-size alignment
+
+The chunker's chunk size is owned by the embedder manifest, not user config. `bge-small-en-v1.5` ships with a 1800-char chunk target + ±2 neighbor small-to-big expansion. `nomic-embed-text-v1.5` ships with 7000 chars + ±1. These numbers are tuned so each chunk fits within the model's context window + the small-to-big expansion gives agents coherent passages. Do not try to override them via config.
 
 ## Design references
 

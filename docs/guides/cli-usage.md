@@ -408,8 +408,10 @@ The iteration branch is preserved. You can review the code, then restart with `c
 Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md) for the full walkthrough; the commands are:
 
 ```bash
-# Search
-cfcf clio search "flaky auth tests" [--project <name>] [--match-count 5] [--metadata '{"role":"reflection"}'] [--json]
+# Search (modes: fts | hybrid | semantic. Hybrid/semantic require an
+# active embedder -- see `cfcf clio embedder install`. Without one,
+# both fall back to fts.)
+cfcf clio search "flaky auth tests" [--mode hybrid] [--project <name>] [--match-count 5] [--metadata '{"role":"reflection"}'] [--json]
 
 # Ingest a markdown doc (or pipe via --stdin)
 cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
@@ -422,6 +424,12 @@ cfcf clio get <document-id> [--json]
 cfcf clio projects [--json]
 cfcf clio project create <name> [--description "..."]
 cfcf clio project show <name-or-id>
+
+# Embedder (controls hybrid/semantic search)
+cfcf clio embedder list                    # catalogue with active marker
+cfcf clio embedder active                  # current active embedder (or "none")
+cfcf clio embedder install bge-small-en-v1.5   # downloads + activates (first run only)
+cfcf clio embedder set <name>              # switch (blocked when old embeddings exist unless --force)
 
 # Introspection
 cfcf clio stats [--json]

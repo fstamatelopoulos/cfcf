@@ -20,7 +20,7 @@
     "dev:cli": "bun run packages/cli/src/index.ts",
     "typecheck": "tsc --noEmit",
     "build:web": "cd packages/web && bun run build && cd ../.. && bun run scripts/embed-web-dist.ts",
-    "build": "bun run build:web && bun build packages/cli/src/index.ts --compile --outfile cfcf-binary"
+    "build": "bun run build:web && bun build packages/cli/src/index.ts --compile --external @huggingface/transformers --external onnxruntime-node --external sharp --outfile cfcf-binary"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

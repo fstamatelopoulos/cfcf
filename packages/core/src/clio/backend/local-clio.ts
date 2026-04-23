@@ -24,6 +24,14 @@ import type {
   ClioStats,
 } from "../types.js";
 import type { MemoryBackend } from "./types.js";
+import {
+  getActiveEmbedder,
+  embeddingToBlob,
+  blobToEmbedding,
+  cosineSimilarity,
+  type Embedder,
+  type ActiveEmbedderRecord,
+} from "../embedders/index.js";
 import { statSync } from "fs";
 
 const DEFAULT_MATCH_COUNT = 10;
@@ -32,16 +40,51 @@ const FTS_CANDIDATE_MULTIPLIER = 5;
 // UUID v4 pattern (loose). Used to distinguish "project id" from "project name".
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Row shape returned by the candidate-fetching queries in hybrid / semantic search. */
+interface VectorCandidateRow {
+  chunk_id: string;
+  document_id: string;
+  chunk_index: number;
+  chunk_title: string | null;
+  content: string;
+  heading_path: string;
+  heading_level: number | null;
+  embedding: Uint8Array | null;
+  doc_title: string;
+  doc_source: string;
+  doc_project_id: string;
+  doc_project_name: string;
+  doc_metadata: string;
+  bm25_rank: number;
+}
+
 export class LocalClio implements MemoryBackend {
   private readonly db: Database;
   private readonly ownsHandle: boolean;
+  /**
+   * Lazy-loaded embedder. Set on first ingest / search that needs one.
+   * Can be overridden via the `embedder` constructor option for tests
+   * that want a mock.
+   */
+  private embedder: Embedder | null = null;
+  private embedderFactory: ((record: ActiveEmbedderRecord) => Promise<Embedder>) | null = null;
 
   /**
    * Construct a LocalClio. By default it opens (and migrates) the DB at
    * `CFCF_CLIO_DB` or `~/.cfcf/clio.db`. Tests can pass their own
    * already-opened Database via `opts.db` to use an isolated temp DB.
+   *
+   * `opts.embedder` lets callers inject an Embedder directly (skipping
+   * the active-embedder table lookup). `opts.embedderFactory` lets
+   * callers customise how an active record is instantiated -- the
+   * default is makeOnnxEmbedder(name).
    */
-  constructor(opts: { db?: Database; path?: string } = {}) {
+  constructor(opts: {
+    db?: Database;
+    path?: string;
+    embedder?: Embedder;
+    embedderFactory?: (record: ActiveEmbedderRecord) => Promise<Embedder>;
+  } = {}) {
     if (opts.db) {
       this.db = opts.db;
       this.ownsHandle = false;
@@ -49,6 +92,77 @@ export class LocalClio implements MemoryBackend {
       this.db = openClioDb({ path: opts.path });
       this.ownsHandle = true;
     }
+    if (opts.embedder) this.embedder = opts.embedder;
+    if (opts.embedderFactory) this.embedderFactory = opts.embedderFactory;
+  }
+
+  /**
+   * Resolve the active Embedder, if one is installed. Returns null when
+   * no embedder is active (FTS-only mode). Caches the resolved instance
+   * for the lifetime of the backend.
+   */
+  private async getEmbedder(): Promise<Embedder | null> {
+    if (this.embedder) return this.embedder;
+    const record = getActiveEmbedder(this.db);
+    if (!record) return null;
+    try {
+      if (this.embedderFactory) {
+        this.embedder = await this.embedderFactory(record);
+      } else {
+        // Default factory: load ONNX via transformers.js. Imported lazily
+        // so tests that don't need it aren't paying the 30 MB cost.
+        const { makeOnnxEmbedder } = await import("../embedders/onnx-embedder.js");
+        this.embedder = makeOnnxEmbedder(record.name);
+      }
+      return this.embedder;
+    } catch (err) {
+      // Falling back to FTS-only mode on embedder init failure is better
+      // than a hard error -- the user still gets useful search.
+      console.warn(
+        `[clio] failed to load embedder "${record.name}": ${err instanceof Error ? err.message : String(err)}. Falling back to FTS-only search.`,
+      );
+      this.embedder = null;
+      return null;
+    }
+  }
+
+  /**
+   * Inject a pre-built Embedder. Used by the CLI's `embedder set` path
+   * after install completes successfully so we don't pay the cold-load
+   * cost twice.
+   */
+  setEmbedder(e: Embedder | null): void {
+    this.embedder = e;
+  }
+
+  /**
+   * Read the active-embedder record. Exposed on the backend so HTTP +
+   * CLI can surface it without reaching into private state.
+   */
+  getActiveEmbedderRecord(): ActiveEmbedderRecord | null {
+    return getActiveEmbedder(this.db);
+  }
+
+  /**
+   * Persist an embedder as active + invalidate the cached Embedder so
+   * the next search reloads. Validates corpus-compat via setActiveEmbedder.
+   * Pass `force` only after a reindex (v2+).
+   */
+  async installActiveEmbedder(
+    entry: import("../embedders/catalogue.js").EmbedderEntry,
+    opts: { force?: boolean; loadNow?: boolean } = {},
+  ): Promise<ActiveEmbedderRecord> {
+    const { setActiveEmbedder } = await import("../embedders/store.js");
+    const record = setActiveEmbedder(this.db, entry, { force: opts.force });
+    // Invalidate the cached embedder so next access reloads under the
+    // new identity. If the caller wants to warm the model now, re-enter
+    // getEmbedder() -- this is what install does so the first search
+    // doesn't pay the download cost.
+    this.embedder = null;
+    if (opts.loadNow) {
+      await this.getEmbedder();
+    }
+    return record;
   }
 
   // ── Projects ───────────────────────────────────────────────────────────
@@ -177,11 +291,35 @@ export class LocalClio implements MemoryBackend {
       };
     }
 
-    const chunks = chunkMarkdown(req.content);
+    // Use embedder-aware chunk size when an embedder is active; fall back
+    // to the Cerefox default when not.
+    const embedder = await this.getEmbedder();
+    const chunkOpts = embedder
+      ? { maxChunkChars: embedder.recommendedChunkMaxChars }
+      : undefined;
+    const chunks = chunkMarkdown(req.content, chunkOpts);
     const docId = randomUUID();
     const now = new Date().toISOString();
     const metadata = JSON.stringify(req.metadata ?? {});
     const totalChars = req.content.length;
+
+    // Compute embeddings up front (outside the transaction). Embedding
+    // is the slow part; we don't want to hold a write lock during it.
+    let embeddings: Uint8Array[] | null = null;
+    if (embedder && chunks.length > 0) {
+      try {
+        const texts = chunks.map((c) => c.content);
+        const vectors = await embedder.embed(texts);
+        embeddings = vectors.map((v) => embeddingToBlob(v));
+      } catch (err) {
+        // Embedding failure downgrades to FTS-only for this document.
+        // Chunks still index in FTS5; vector search just won't match them.
+        console.warn(
+          `[clio] embedder failed for "${req.title}" -- ingesting without embeddings: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        embeddings = null;
+      }
+    }
 
     // All-or-nothing: document + chunks insert in one transaction.
     this.db.exec("BEGIN IMMEDIATE");
@@ -208,10 +346,12 @@ export class LocalClio implements MemoryBackend {
       const insertChunk = this.db.prepare(`
         INSERT INTO clio_chunks
           (id, document_id, chunk_index, heading_path, heading_level, title,
-           content, char_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           content, char_count, embedding, embedder, embedding_dim, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const chunk of chunks) {
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const emb = embeddings ? embeddings[i] : null;
         insertChunk.run(
           randomUUID(),
           docId,
@@ -221,6 +361,9 @@ export class LocalClio implements MemoryBackend {
           chunk.title || null,
           chunk.content,
           chunk.charCount,
+          emb,
+          embedder ? embedder.name : null,
+          embedder ? embedder.dim : null,
           now,
           now,
         );
@@ -262,11 +405,9 @@ export class LocalClio implements MemoryBackend {
     if (!req.query || !req.query.trim()) {
       throw new Error("search: query is empty");
     }
-    const mode = req.mode ?? "fts";
-    // PR1 supports FTS only. Hybrid/semantic fall back to FTS with a note
-    // in the response (the server layer is responsible for warning callers).
-    if (mode !== "fts" && mode !== "hybrid" && mode !== "semantic") {
-      throw new Error(`search: unknown mode "${mode}"`);
+    const requestedMode = req.mode ?? "fts";
+    if (requestedMode !== "fts" && requestedMode !== "hybrid" && requestedMode !== "semantic") {
+      throw new Error(`search: unknown mode "${requestedMode}"`);
     }
     const matchCount = Math.max(1, Math.min(req.matchCount ?? DEFAULT_MATCH_COUNT, 100));
 
@@ -275,17 +416,35 @@ export class LocalClio implements MemoryBackend {
     let projectFilterId: string | null = null;
     if (req.project) {
       const p = await this.getProject(req.project);
-      if (!p) return { hits: [], mode: "fts", totalMatches: 0 };
+      if (!p) return { hits: [], mode: requestedMode === "semantic" ? "semantic" : requestedMode === "hybrid" ? "hybrid" : "fts", totalMatches: 0 };
       projectFilterId = p.id;
     }
 
-    // Translate an FTS5 MATCH query. We quote the user's query so
-    // tokenizer-unfriendly characters don't break the parser -- wrapping
-    // in double quotes makes it a phrase query, so we also include a
-    // fallback pass with individual tokens to keep the feel close to
-    // websearch_to_tsquery semantics.
-    const matchExpr = buildFtsMatchExpression(req.query);
+    // Route by mode. Callers asking for hybrid/semantic get the better
+    // path when an embedder is installed; otherwise fall back to FTS so
+    // the user still gets useful results.
+    let embedder: Embedder | null = null;
+    if (requestedMode === "hybrid" || requestedMode === "semantic") {
+      embedder = await this.getEmbedder();
+    }
 
+    if (requestedMode === "semantic" && embedder) {
+      return await this.searchSemantic(req, embedder, matchCount, projectFilterId);
+    }
+    if (requestedMode === "hybrid" && embedder) {
+      return await this.searchHybrid(req, embedder, matchCount, projectFilterId);
+    }
+
+    // FTS path (default, or fallback when no embedder is active).
+    return await this.searchFts(req, matchCount, projectFilterId);
+  }
+
+  /**
+   * FTS-only search. Same shape as the PR1 query, moved into its own
+   * method so hybrid/semantic can reuse the candidate-fetching logic.
+   */
+  private async searchFts(req: SearchRequest, matchCount: number, projectFilterId: string | null): Promise<SearchResponse> {
+    const matchExpr = buildFtsMatchExpression(req.query);
     const candidateCount = matchCount * FTS_CANDIDATE_MULTIPLIER;
 
     // Build metadata filter fragment: we AND json_extract checks onto the
@@ -386,6 +545,274 @@ export class LocalClio implements MemoryBackend {
     return { hits, mode: "fts", totalMatches: hits.length };
   }
 
+  /**
+   * Pure-vector (semantic) search. Computes a query embedding, then scans
+   * candidate chunks (same project/metadata filters + current chunks
+   * only) and ranks by cosine similarity. Brute-force KNN -- fine for
+   * the design doc's expected scale (<100k chunks per DB).
+   */
+  private async searchSemantic(
+    req: SearchRequest,
+    embedder: Embedder,
+    matchCount: number,
+    projectFilterId: string | null,
+  ): Promise<SearchResponse> {
+    const queryVector = (await embedder.embed([req.query]))[0];
+    const candidates = this.fetchVectorCandidates(req, projectFilterId, embedder);
+
+    const scored: Array<{ row: VectorCandidateRow; score: number }> = [];
+    for (const row of candidates) {
+      const v = blobToEmbedding(new Uint8Array(row.embedding as Uint8Array), embedder.dim);
+      scored.push({ row, score: cosineSimilarity(queryVector, v) });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, matchCount);
+
+    const hits = top.map((x) => this.vectorRowToHit(x.row, x.score));
+    const expandedHits = this.expandSmallToBig(hits, embedder.dim > 768 ? 1 : 2);
+
+    return { hits: expandedHits, mode: "semantic", totalMatches: hits.length };
+  }
+
+  /**
+   * Hybrid search: Reciprocal Rank Fusion (RRF) of FTS top-N + vector
+   * top-N. Matches the design doc's §4.3 formula:
+   *   score(d) = sum over engines: 1 / (k + rank_engine(d))
+   * with k = 60.
+   */
+  private async searchHybrid(
+    req: SearchRequest,
+    embedder: Embedder,
+    matchCount: number,
+    projectFilterId: string | null,
+  ): Promise<SearchResponse> {
+    const RRF_K = 60;
+    const candidateCount = Math.max(matchCount * 5, 30);
+
+    // Run FTS candidates (same filters as searchFts but raw ranks).
+    const ftsRows = this.fetchFtsCandidates(req, projectFilterId, candidateCount);
+    // Run vector candidates.
+    const queryVector = (await embedder.embed([req.query]))[0];
+    const vecRows = this.fetchVectorCandidates(req, projectFilterId, embedder);
+    const vecRanked = vecRows
+      .map((row) => ({
+        row,
+        score: cosineSimilarity(
+          queryVector,
+          blobToEmbedding(new Uint8Array(row.embedding as Uint8Array), embedder.dim),
+        ),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, candidateCount);
+
+    // Build an id -> rank map for each engine so fusion is cheap.
+    const ftsRank = new Map<string, number>();
+    ftsRows.forEach((r, i) => ftsRank.set(r.chunk_id, i + 1));
+    const vecRank = new Map<string, number>();
+    vecRanked.forEach(({ row }, i) => vecRank.set(row.chunk_id, i + 1));
+
+    const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
+    // Seed with whichever engine produced each candidate; take the first
+    // sighting as the canonical row.
+    for (const r of ftsRows) {
+      const rrf = 1 / (RRF_K + (ftsRank.get(r.chunk_id) ?? 1));
+      fused.set(r.chunk_id, { row: r, score: rrf });
+    }
+    for (const { row } of vecRanked) {
+      const extra = 1 / (RRF_K + (vecRank.get(row.chunk_id) ?? 1));
+      const cur = fused.get(row.chunk_id);
+      if (cur) {
+        cur.score += extra;
+      } else {
+        fused.set(row.chunk_id, { row, score: extra });
+      }
+    }
+
+    const ordered = Array.from(fused.values()).sort((a, b) => b.score - a.score);
+    const top = ordered.slice(0, matchCount);
+    const hits = top.map(({ row, score }) => this.vectorRowToHit(row, score));
+    const expandedHits = this.expandSmallToBig(hits, embedder.dim > 768 ? 1 : 2);
+
+    return { hits: expandedHits, mode: "hybrid", totalMatches: ordered.length };
+  }
+
+  /**
+   * Small-to-big expansion: for each hit chunk, attach the concatenated
+   * content of its sibling chunks within `radius` positions in the same
+   * document. Siblings don't replace the chunk -- they augment the
+   * `content` field so the passage reads naturally.
+   *
+   * Implementation note: we only expand `content`, not the top-level
+   * chunk id / score. Downstream consumers still see the hit as "one
+   * chunk" in the UI.
+   */
+  private expandSmallToBig(hits: SearchHit[], radius: number): SearchHit[] {
+    if (radius <= 0 || hits.length === 0) return hits;
+
+    // Group hit chunk indices by document so we can batch the lookup.
+    const byDoc = new Map<string, Set<number>>();
+    for (const h of hits) {
+      const lo = Math.max(0, h.chunkIndex - radius);
+      const hi = h.chunkIndex + radius;
+      const set = byDoc.get(h.documentId) ?? new Set<number>();
+      for (let i = lo; i <= hi; i++) set.add(i);
+      byDoc.set(h.documentId, set);
+    }
+
+    // Fetch all the sibling contents in one query per document.
+    const neighbors = new Map<string, Map<number, string>>();
+    for (const [docId, indices] of byDoc.entries()) {
+      const placeholders = Array.from(indices).map(() => "?").join(",");
+      const rows = this.db.query<{ chunk_index: number; content: string }, (string | number)[]>(
+        `SELECT chunk_index, content FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL AND chunk_index IN (${placeholders})`,
+      ).all(docId, ...Array.from(indices));
+      const m = new Map<number, string>();
+      for (const r of rows) m.set(r.chunk_index, r.content);
+      neighbors.set(docId, m);
+    }
+
+    return hits.map((h) => {
+      const docN = neighbors.get(h.documentId);
+      if (!docN) return h;
+      const parts: string[] = [];
+      for (let i = h.chunkIndex - radius; i <= h.chunkIndex + radius; i++) {
+        const body = docN.get(i);
+        if (body) parts.push(body);
+      }
+      // Deduplicate the hit itself so we don't emit "chunk + chunk".
+      const expanded = parts.join("\n\n");
+      return {
+        ...h,
+        content: expanded || h.content,
+      };
+    });
+  }
+
+  // ── Candidate fetchers (reused by semantic + hybrid) ──────────────────
+
+  private fetchFtsCandidates(
+    req: SearchRequest,
+    projectFilterId: string | null,
+    candidateCount: number,
+  ): VectorCandidateRow[] {
+    const matchExpr = buildFtsMatchExpression(req.query);
+    const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
+
+    const sql = `
+      SELECT c.id AS chunk_id,
+             c.document_id,
+             c.chunk_index,
+             c.title AS chunk_title,
+             c.content,
+             c.heading_path,
+             c.heading_level,
+             c.embedding,
+             d.title AS doc_title,
+             d.source AS doc_source,
+             d.project_id AS doc_project_id,
+             p.name AS doc_project_name,
+             d.metadata AS doc_metadata,
+             bm25(clio_chunks_fts) AS bm25_rank
+        FROM clio_chunks_fts f
+        JOIN clio_chunks c ON c.rowid = f.rowid
+        JOIN clio_documents d ON c.document_id = d.id
+        JOIN clio_projects p ON d.project_id = p.id
+       WHERE clio_chunks_fts MATCH ?
+         AND c.version_id IS NULL
+         AND d.deleted_at IS NULL
+         ${projectFilterId ? "AND d.project_id = ?" : ""}
+         ${metaWhere}
+       ORDER BY bm25_rank ASC
+       LIMIT ?
+    `;
+    const bindings: (string | number | boolean)[] = [matchExpr];
+    if (projectFilterId) bindings.push(projectFilterId);
+    bindings.push(...metaBindings);
+    bindings.push(candidateCount);
+
+    return this.db.query<VectorCandidateRow, (string | number | boolean)[]>(sql).all(...bindings);
+  }
+
+  /**
+   * Fetch every current chunk that matches the project + metadata filter
+   * and has an embedding for the active embedder. No prefilter by query
+   * text -- brute-force KNN over the candidate set. For the design doc's
+   * <100k chunk scale this is sub-second.
+   */
+  private fetchVectorCandidates(
+    req: SearchRequest,
+    projectFilterId: string | null,
+    embedder: Embedder,
+  ): VectorCandidateRow[] {
+    const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
+
+    const sql = `
+      SELECT c.id AS chunk_id,
+             c.document_id,
+             c.chunk_index,
+             c.title AS chunk_title,
+             c.content,
+             c.heading_path,
+             c.heading_level,
+             c.embedding,
+             d.title AS doc_title,
+             d.source AS doc_source,
+             d.project_id AS doc_project_id,
+             p.name AS doc_project_name,
+             d.metadata AS doc_metadata,
+             0 AS bm25_rank
+        FROM clio_chunks c
+        JOIN clio_documents d ON c.document_id = d.id
+        JOIN clio_projects p ON d.project_id = p.id
+       WHERE c.version_id IS NULL
+         AND d.deleted_at IS NULL
+         AND c.embedding IS NOT NULL
+         AND c.embedder = ?
+         ${projectFilterId ? "AND d.project_id = ?" : ""}
+         ${metaWhere}
+    `;
+    const bindings: (string | number | boolean)[] = [embedder.name];
+    if (projectFilterId) bindings.push(projectFilterId);
+    bindings.push(...metaBindings);
+
+    return this.db.query<VectorCandidateRow, (string | number | boolean)[]>(sql).all(...bindings);
+  }
+
+  private buildMetadataFilter(metadata?: Record<string, string | number | boolean>): { metaWhere: string; metaBindings: (string | number | boolean)[] } {
+    const metaClauses: string[] = [];
+    const metaBindings: (string | number | boolean)[] = [];
+    if (metadata && typeof metadata === "object") {
+      for (const [k, v] of Object.entries(metadata)) {
+        metaClauses.push(`json_extract(d.metadata, ?) = ?`);
+        metaBindings.push(`$.${k}`);
+        metaBindings.push(v as string | number | boolean);
+      }
+    }
+    return {
+      metaWhere: metaClauses.length ? ` AND ${metaClauses.join(" AND ")}` : "",
+      metaBindings,
+    };
+  }
+
+  private vectorRowToHit(row: VectorCandidateRow, score: number): SearchHit {
+    return {
+      chunkId: row.chunk_id,
+      documentId: row.document_id,
+      chunkIndex: row.chunk_index,
+      title: row.chunk_title,
+      content: row.content,
+      headingPath: parseJsonArray(row.heading_path),
+      headingLevel: row.heading_level,
+      score,
+      docTitle: row.doc_title,
+      docSource: row.doc_source,
+      docProjectId: row.doc_project_id,
+      docProjectName: row.doc_project_name,
+      docMetadata: parseJsonObject(row.doc_metadata),
+    };
+  }
+
   // ── Stats ──────────────────────────────────────────────────────────────
 
   async stats(): Promise<ClioStats> {
@@ -399,6 +826,7 @@ export class LocalClio implements MemoryBackend {
       if (dbPath) dbSizeBytes = statSync(dbPath).size;
     } catch { /* DB is ephemeral / in-memory */ }
 
+    const active = getActiveEmbedder(this.db);
     return {
       dbPath: dbPath ?? "(memory)",
       dbSizeBytes,
@@ -406,8 +834,11 @@ export class LocalClio implements MemoryBackend {
       documentCount,
       chunkCount,
       migrations: listAppliedMigrations(this.db),
-      // PR2 populates this.
-      activeEmbedder: null,
+      activeEmbedder: active ? {
+        name: active.name,
+        dim: active.dim,
+        recommendedChunkMaxChars: active.recommendedChunkMaxChars,
+      } : null,
     };
   }
 

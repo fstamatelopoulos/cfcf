@@ -291,6 +291,100 @@ function registerUnder(root: Command): void {
       if (p.documentCount != null) console.log(`  documents:    ${p.documentCount}`);
     });
 
+  // ── embedder ──────────────────────────────────────────────────────────
+  const embedderCmd = root
+    .command("embedder")
+    .description("Manage the Clio embedder (PR2: install / set / active / list). See `cfcf clio embedder list`.");
+
+  embedderCmd
+    .command("list")
+    .description("List supported embedders from the catalogue, marking the active one.")
+    .option("--json", "Emit JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const res = await get<{ catalogue: Array<{ name: string; dim: number; approxSizeMb: number; description: string; recommendedChunkMaxChars: number; recommendedExpansionRadius: number; active: boolean }> }>("/api/clio/embedders");
+      if (!res.ok) {
+        console.error(`Failed to list embedders: ${res.error}`);
+        process.exit(1);
+      }
+      const list = res.data!.catalogue;
+      if (opts.json) {
+        console.log(JSON.stringify(list, null, 2));
+        return;
+      }
+      for (const e of list) {
+        const marker = e.active ? "●" : " ";
+        console.log(` ${marker} ${e.name.padEnd(28)}  dim=${String(e.dim).padStart(4)}  ~${String(e.approxSizeMb).padStart(4)} MB  chunk=${String(e.recommendedChunkMaxChars).padStart(5)}  expand=±${e.recommendedExpansionRadius}`);
+        console.log(`    ${e.description}`);
+      }
+      console.log();
+      console.log("● = currently active.");
+      console.log();
+      console.log("Install + activate:  cfcf clio embedder install <name>");
+      console.log("Switch active:       cfcf clio embedder set <name>");
+    });
+
+  embedderCmd
+    .command("active")
+    .description("Show the currently-active embedder (or \"none\" if none is installed).")
+    .option("--json", "Emit JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const res = await get<ClioStats>("/api/clio/stats");
+      if (!res.ok) {
+        console.error(`Failed to fetch Clio stats: ${res.error}`);
+        process.exit(1);
+      }
+      const active = res.data!.activeEmbedder;
+      if (opts.json) {
+        console.log(JSON.stringify(active, null, 2));
+        return;
+      }
+      if (!active) {
+        console.log("No active embedder. Install one:");
+        console.log("  cfcf clio embedder install bge-small-en-v1.5");
+        console.log("Until then, Clio runs in FTS-only keyword-search mode.");
+      } else {
+        console.log(`Active: ${active.name} (dim=${active.dim}, chunk=${active.recommendedChunkMaxChars} chars)`);
+      }
+    });
+
+  embedderCmd
+    .command("install <name>")
+    .description("Install + activate an embedder. First call downloads the model files via HuggingFace (~100-500 MB; subsequent runs read from ~/.cfcf/models/).")
+    .option("--force", "Install even if chunks with the old embedder exist. Poisons the vector corpus -- use only after `cfcf clio reindex` (v2).")
+    .action(async (name: string, opts) => {
+      if (!(await checkServer())) return;
+      const res = await post<{ active: { name: string; dim: number; recommendedChunkMaxChars: number }; downloaded: boolean }>(
+        "/api/clio/embedders/install",
+        { name, force: !!opts.force },
+      );
+      if (!res.ok) {
+        console.error(`Install failed: ${res.error}`);
+        process.exit(1);
+      }
+      const a = res.data!.active;
+      console.log(`Active embedder: ${a.name} (dim=${a.dim}, chunk=${a.recommendedChunkMaxChars} chars)`);
+      console.log(res.data!.downloaded ? "Model downloaded + cached to ~/.cfcf/models/." : "Model already cached -- no download needed.");
+    });
+
+  embedderCmd
+    .command("set <name>")
+    .description("Switch the active embedder. Refuses when existing chunks have embeddings from a different model (prevents vector-corpus poisoning) unless --force.")
+    .option("--force", "Switch even if embeddings from another model exist. DO NOT USE without running reindex first.")
+    .action(async (name: string, opts) => {
+      if (!(await checkServer())) return;
+      const res = await post<{ active: { name: string; dim: number } }>(
+        "/api/clio/embedders/set",
+        { name, force: !!opts.force },
+      );
+      if (!res.ok) {
+        console.error(`Set failed: ${res.error}`);
+        process.exit(1);
+      }
+      console.log(`Active embedder: ${res.data!.active.name} (dim=${res.data!.active.dim})`);
+    });
+
   // ── stats ─────────────────────────────────────────────────────────────
   root
     .command("stats")

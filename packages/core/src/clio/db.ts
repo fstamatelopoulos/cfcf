@@ -18,6 +18,7 @@ import { mkdirSync, existsSync } from "fs";
 // file contents as a string at build time (same pattern as templates.ts).
 // Order of execution is the order of this array.
 import migration_0001_initial from "./migrations/0001_initial.sql" with { type: "text" };
+import migration_0002_active_embedder from "./migrations/0002_active_embedder.sql" with { type: "text" };
 
 export interface ClioMigration {
   /** Filename used as a unique key in the `clio_migrations` tracking table. */
@@ -28,6 +29,7 @@ export interface ClioMigration {
 
 const MIGRATIONS: ClioMigration[] = [
   { filename: "0001_initial.sql", sql: migration_0001_initial },
+  { filename: "0002_active_embedder.sql", sql: migration_0002_active_embedder },
 ];
 
 /**

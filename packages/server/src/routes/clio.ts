@@ -16,6 +16,9 @@ import {
   updateWorkspace,
   type IngestRequest,
   type SearchRequest,
+  EMBEDDER_CATALOGUE,
+  findEmbedderEntry,
+  LocalClio,
 } from "@cfcf/core";
 
 export function registerClioRoutes(app: Hono): void {
@@ -131,6 +134,62 @@ export function registerClioRoutes(app: Hono): void {
     const doc = await backend.getDocument(id);
     if (!doc) return c.json({ error: "Document not found" }, 404);
     return c.json(doc);
+  });
+
+  // ── Embedder catalogue + install + set (PR2) ─────────────────────────
+
+  app.get("/api/clio/embedders", async (c) => {
+    const backend = getClioBackend();
+    const active = backend instanceof LocalClio ? backend.getActiveEmbedderRecord() : null;
+    const catalogue = EMBEDDER_CATALOGUE.map((e) => ({
+      name: e.name,
+      dim: e.dim,
+      approxSizeMb: e.approxSizeMb,
+      description: e.description,
+      recommendedChunkMaxChars: e.recommendedChunkMaxChars,
+      recommendedExpansionRadius: e.recommendedExpansionRadius,
+      active: active?.name === e.name,
+    }));
+    return c.json({ catalogue });
+  });
+
+  app.post("/api/clio/embedders/install", async (c) => {
+    const body = await c.req.json<{ name?: string; force?: boolean }>().catch(() => ({}) as { name?: string; force?: boolean });
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+    const entry = findEmbedderEntry(body.name);
+    if (!entry) return c.json({ error: `Unknown embedder "${body.name}". Run 'cfcf clio embedder list' to see supported embedders.` }, 400);
+
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support local embedders" }, 400);
+    }
+
+    try {
+      const record = await backend.installActiveEmbedder(entry, { force: !!body.force, loadNow: true });
+      return c.json({ active: record, downloaded: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.post("/api/clio/embedders/set", async (c) => {
+    const body = await c.req.json<{ name?: string; force?: boolean }>().catch(() => ({}) as { name?: string; force?: boolean });
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+    const entry = findEmbedderEntry(body.name);
+    if (!entry) return c.json({ error: `Unknown embedder "${body.name}"` }, 400);
+
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support embedders" }, 400);
+    }
+    try {
+      const record = await backend.installActiveEmbedder(entry, { force: !!body.force, loadNow: false });
+      return c.json({ active: record });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
   });
 
   // ── Stats ────────────────────────────────────────────────────────────

@@ -31,10 +31,11 @@ describe("openClioDb", () => {
     const path = makeTempDbPath();
     const db = openClioDb({ path });
 
-    // Applied migrations list: should have exactly the initial one
+    // Applied migrations list: every embedded migration has been run.
     const applied = listAppliedMigrations(db);
-    expect(applied.length).toBe(1);
+    expect(applied.length).toBeGreaterThanOrEqual(2);
     expect(applied[0]).toContain("0001_initial.sql");
+    expect(applied[1]).toContain("0002_active_embedder.sql");
 
     // Core tables exist
     const tables = db.query<{ name: string }, []>(
