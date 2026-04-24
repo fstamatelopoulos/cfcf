@@ -355,6 +355,12 @@ export function registerInitCommand(program: Command): void {
       // failed download (retryable via `cfcf clio embedder install`).
       let embedderInstalled = false;
       let installError: string | null = null;
+      // Post-install verification snapshot from clio.db (item 6.19).
+      // Populated only when install succeeds -- confirms the DB reflects
+      // what we think we installed (catches the theoretical case where
+      // installActiveEmbedder returns OK but the active-embedder row is
+      // absent / mismatched).
+      let verifiedActive: { name: string; dim: number; recommendedChunkMaxChars: number } | null = null;
       if (embedderPicked) {
         const entry = findEmbedderEntry(embedderPicked);
         if (!entry) {
@@ -371,7 +377,20 @@ export function registerInitCommand(program: Command): void {
           try {
             clio = new LocalClio();
             await clio.installActiveEmbedder(entry, { force: false, loadNow: true });
+            const record = clio.getActiveEmbedderRecord();
+            if (!record || record.name !== entry.name) {
+              throw new Error(
+                `post-install check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
+              );
+            }
+            verifiedActive = {
+              name: record.name,
+              dim: record.dim,
+              recommendedChunkMaxChars: record.recommendedChunkMaxChars,
+            };
             embedderInstalled = true;
+            console.log();
+            console.log(`✓ Clio ready: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
           } catch (err) {
             installError = err instanceof Error ? err.message : String(err);
           } finally {
@@ -385,8 +404,8 @@ export function registerInitCommand(program: Command): void {
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
-      if (embedderInstalled) {
-        console.log(`       (Clio ready: active embedder is ${embedderPicked})`);
+      if (embedderInstalled && verifiedActive) {
+        console.log(`       (Clio ready: ${verifiedActive.name}, dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
       } else if (installError) {
         console.log(`  2. Retry embedder install (download failed above): cfcf clio embedder install`);
         console.log(`       (your pick "${embedderPicked}" is saved; rerun from a network-connected shell)`);

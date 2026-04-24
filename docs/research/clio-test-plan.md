@@ -41,7 +41,8 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 ### Post-review refinements (commit `4932e1a`, 2026-04-23)
 
 - **`cfcf init` pick-equals-install (refined 2026-04-22).** Catalogue prompt accepts a numeric pick or `S`. If a model is picked, `cfcf init` now downloads + activates it inline via a local `LocalClio` (no server needed). Pick is saved to `clio.preferredEmbedder` *before* the install attempt, so a network failure doesn't lose the preference — user can retry with `cfcf clio embedder install` (no arg, resolves from saved preference).
-- **Download progress bar** on stderr during the HF download: `[████░░░░░░] 45%  54.0/120.0 MB  model.onnx`. Throttled to ≥5% ticks per file (partial item 6.19).
+- **Download progress bar** on stderr during the HF download: `[████░░░░░░] 45%  54.0/120.0 MB  model.onnx`. Throttled to ≥5% ticks per file (item 6.19).
+- **Pre-download bandwidth hint + post-install auto-verification (item 6.19 remainder, 2026-04-22).** The loading line now carries a size + ETA (`~140 MB; est. 22s-2m at 50-10 Mbps`). Install reads `clio_active_embedder` back and fails hard if it doesn't match the chosen entry; on success prints `✓ Clio ready: <name> (dim=N, chunk=N chars)`.
 - **`--migrate-history` is workspace-scoped by default.** Filters by `metadata.workspace_id` so sibling workspaces' history stays put. New `--all-in-project` flag opts back into the wide sweep for Project-collapse scenarios.
 - **`cfcf clio reindex [--project <name>] [--force] [--batch-size <n>]`**: re-embeds chunks under the currently-active embedder. Idempotent; batched; per-batch transactions.
 - **`cfcf clio embedder set <name> --reindex`**: the canonical, safe embedder-switch flow. `--force` still available for recovery scenarios but with a visible degradation warning.

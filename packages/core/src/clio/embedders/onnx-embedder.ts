@@ -85,8 +85,16 @@ export class OnnxEmbedder implements Embedder {
     // `pipeline("feature-extraction", ...)` returns a FeatureExtractionPipeline.
     // transformers.js loads the model + tokenizer from the HF hub on first
     // use; subsequent calls are cached to disk (see loadTransformers()).
+    // Bandwidth hint lets the user decide whether to wait or cancel before
+    // the download starts. We anchor the ETA at two realistic link speeds
+    // (50 Mbps "good home broadband" / 10 Mbps "slow café wifi") so a
+    // single number doesn't mislead in either direction.
+    const mb = this.entry.approxSizeMb;
+    const fastSec = Math.round((mb * 8) / 50);
+    const slowSec = Math.round((mb * 8) / 10);
+    const fmt = (s: number) => (s < 60 ? `${s}s` : `${Math.round(s / 60)}m`);
     process.stderr.write(
-      `[clio] loading embedder "${this.entry.name}" from HuggingFace (~${this.entry.approxSizeMb} MB; first-run only)…\n`,
+      `[clio] loading embedder "${this.entry.name}" from HuggingFace (~${mb} MB; est. ${fmt(fastSec)}-${fmt(slowSec)} at 50-10 Mbps; first-run only)…\n`,
     );
 
     // Progress callback for the model download. transformers.js calls
