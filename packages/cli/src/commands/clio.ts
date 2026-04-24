@@ -9,6 +9,7 @@ import type { Command } from "commander";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 import { isServerReachable, post, get } from "../client.js";
+import { DEFAULT_EMBEDDER_NAME } from "@cfcf/core";
 import type {
   ClioProject,
   ClioDocument,
@@ -359,7 +360,7 @@ function registerUnder(root: Command): void {
       }
       if (!active) {
         console.log("No active embedder. Install one:");
-        console.log("  cfcf clio embedder install bge-small-en-v1.5");
+        console.log(`  cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME}`);
         console.log("Until then, Clio runs in FTS-only keyword-search mode.");
       } else {
         console.log(`Active: ${active.name} (dim=${active.dim}, chunk=${active.recommendedChunkMaxChars} chars)`);
@@ -374,7 +375,7 @@ function registerUnder(root: Command): void {
       "~/.cfcf/models/).\n\n" +
       "If <name> is omitted, uses the embedder you picked during `cfcf init` " +
       "(saved as clio.preferredEmbedder in the global config). Falls back to " +
-      "the catalogue default (bge-small-en-v1.5) when no preference has been " +
+      `the catalogue default (${DEFAULT_EMBEDDER_NAME}) when no preference has been ` +
       "set. Useful for retrying a failed init download or installing from a " +
       "script that read the config itself.",
     )
@@ -392,7 +393,7 @@ function registerUnder(root: Command): void {
           resolvedName = cfgRes.data.clio.preferredEmbedder;
           console.log(`Using preferred embedder from config: ${resolvedName}`);
         } else {
-          resolvedName = "bge-small-en-v1.5";
+          resolvedName = DEFAULT_EMBEDDER_NAME;
           console.log(`No preferred embedder set; defaulting to ${resolvedName}.`);
         }
       }
@@ -511,7 +512,7 @@ function registerUnder(root: Command): void {
       console.log(`  projects:        ${s.projectCount}`);
       console.log(`  documents:       ${s.documentCount}`);
       console.log(`  chunks:          ${s.chunkCount}`);
-      console.log(`  active embedder: ${s.activeEmbedder ? s.activeEmbedder.name : "(none — PR2 will bundle bge-small-en-v1.5)"}`);
+      console.log(`  active embedder: ${s.activeEmbedder ? s.activeEmbedder.name : `(none — install one: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`}`);
       console.log(`  migrations:`);
       for (const m of s.migrations) console.log(`    ${m}`);
     });

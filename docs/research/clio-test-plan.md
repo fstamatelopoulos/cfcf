@@ -223,12 +223,12 @@ rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
 # Walk through the existing agent + permission prompts, then:
 # At the "Clio memory layer" step, you should see:
 #   - an explanation of FTS vs. hybrid/semantic modes,
-#   - a list of 4 embedders with "★" next to bge-small-en-v1.5,
+#   - a list of 4 embedders with "★" next to nomic-embed-text-v1.5 (the new default),
 #   - prompt: "Embedder choice (1-4 / S) [1]:"
 ```
 
 Three flows to cover:
-- **Pick the default (press Enter)**: init immediately downloads the model with a stderr progress bar; Next Steps shows "Clio ready: active embedder is bge-small-en-v1.5". `ls ~/.cfcf/models/` should show the cached model directory. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `bge-small-en-v1.5`.
+- **Pick the default (press Enter)**: init immediately downloads the model (~140 MB) with a stderr progress bar; Next Steps shows "Clio ready: active embedder is nomic-embed-text-v1.5". `ls ~/.cfcf/models/` should show the cached model directory. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `nomic-embed-text-v1.5`.
 - **Pick a specific embedder (e.g. "3")**: same download-during-init flow but for the chosen model. Verify via `./cfcf-binary clio embedder active`.
 - **Skip (type "S")**: no download, no DB write to `clio_active_embedder`; Next Steps includes a "FTS-only mode" note with the install command.
 - **Network-failure during install**: (simulate by disconnecting wifi before picking a non-default model) init should continue, print the captured install error in a final "Install error (captured -- you can retry)" line, and have written `clio.preferredEmbedder: <picked>` to the config. Then `./cfcf-binary clio embedder install` (no arg) should resume from the saved preference.

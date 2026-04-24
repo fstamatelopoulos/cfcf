@@ -3,11 +3,15 @@
  *
  * Single source of truth for the embedders Clio knows about. Each entry
  * declares the HuggingFace model id, dimension, recommended chunk-size,
- * and recommended small-to-big expansion radius. PR2 ships with one
- * default (bge-small) and the catalogue entries for alternatives; users
- * pick one at install time via `cfcf clio embedder set <name>`. Actual
- * downloading + loading is handled by @huggingface/transformers from the
- * HuggingFace model hub; we only declare identity here.
+ * and recommended small-to-big expansion radius. The current default is
+ * `nomic-embed-text-v1.5`: its 8k token context comfortably fits the
+ * Cerefox chunker's default 4k-token effective chunk window, so design
+ * docs + iteration logs embed as one coherent passage rather than being
+ * split across many small chunks. Users can still pick a lighter model
+ * (bge-small / MiniLM) at install time via
+ * `cfcf clio embedder set <name>`. Actual downloading + loading is
+ * handled by @huggingface/transformers from the HuggingFace model hub;
+ * we only declare identity here.
  *
  * Design-doc §6 + `docs/research/clio-implementation-decisions.md`:
  *   - Chunk size + expansion radius are owned by the embedder manifest,
@@ -51,7 +55,7 @@ export const EMBEDDER_CATALOGUE: EmbedderEntry[] = [
     recommendedChunkMaxChars: 1800,
     recommendedExpansionRadius: 2,
     approxSizeMb: 120,
-    description: "Default. BAAI bge-small-en-v1.5, 384 dims, ~512 token context. Good retrieval quality for its size, MIT licence.",
+    description: "Compact. BAAI bge-small-en-v1.5, 384 dims, ~512 token context. Good retrieval quality for its size, MIT licence. Pick this over the default when disk space / RAM is tight.",
   },
   {
     name: "all-MiniLM-L6-v2",
@@ -69,7 +73,7 @@ export const EMBEDDER_CATALOGUE: EmbedderEntry[] = [
     recommendedChunkMaxChars: 7000,
     recommendedExpansionRadius: 1,
     approxSizeMb: 140,
-    description: "Long-context. Nomic Embed Text v1.5, 768 dims, ~8k token context. Best for long design docs with fewer, larger chunks.",
+    description: "Default. Nomic Embed Text v1.5, 768 dims, ~8k token context. Comfortably fits the Cerefox chunker's 4k-token effective window, so long design docs and iteration logs embed as one coherent passage.",
   },
   {
     name: "bge-base-en-v1.5",
@@ -82,7 +86,7 @@ export const EMBEDDER_CATALOGUE: EmbedderEntry[] = [
   },
 ];
 
-export const DEFAULT_EMBEDDER_NAME = "bge-small-en-v1.5";
+export const DEFAULT_EMBEDDER_NAME = "nomic-embed-text-v1.5";
 
 export function findEmbedderEntry(name: string): EmbedderEntry | undefined {
   return EMBEDDER_CATALOGUE.find((e) => e.name === name);

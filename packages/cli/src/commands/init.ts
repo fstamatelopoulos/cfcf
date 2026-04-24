@@ -391,7 +391,7 @@ export function registerInitCommand(program: Command): void {
         console.log(`  2. Retry embedder install (download failed above): cfcf clio embedder install`);
         console.log(`       (your pick "${embedderPicked}" is saved; rerun from a network-connected shell)`);
       } else {
-        console.log(`       (Clio: FTS-only mode -- install an embedder later with: cfcf clio embedder install bge-small-en-v1.5)`);
+        console.log(`       (Clio: FTS-only mode -- install an embedder later with: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`);
       }
       const nextStep = embedderInstalled || !installError ? 2 : 3;
       console.log(`  ${nextStep}. Create a workspace:   cfcf workspace init --repo <path> --name <name>`);
