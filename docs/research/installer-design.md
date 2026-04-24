@@ -86,7 +86,7 @@ The confusion in the earlier draft was collapsing "where the script is hosted" w
 
 |   | Install script | Release tarballs |
 |---|---|---|
-| **Phase 0** (local dev) | Served from `python3 -m http.server` on localhost | Built manually on the dev's laptop, served from the same localhost dir |
+| **Phase 0** (local dev) | Served from `bun run scripts/serve-dist.ts` on localhost | Built manually on the dev's laptop, served from the same localhost dir |
 | **Phase 1** (private CI) | Uploaded as a release asset to the private `cfcf` repo; users download via `gh release download` (needs a PAT) | Uploaded by CI to private `cfcf` repo releases |
 | **Phase 2** (public releases repo) | Served from `https://raw.githubusercontent.com/<user>/cfcf-releases/main/install.sh` — anonymous `curl` works | Uploaded by CI to `cfcf-releases` public repo; anonymous download via `https://github.com/<user>/cfcf-releases/releases/latest/download/<file>` |
 | **Phase 3** (vanity domain) | `https://cerefox.org/install` → HTTP-302 → Phase 2 URL | Same as Phase 2; `cfcf-releases` is still the real origin |
@@ -185,6 +185,22 @@ Given that, the three externalized native deps (`@huggingface/transformers`, `on
 | **Total per tarball** | **~150 MB** |
 
 Acceptable for a local LLM-tool install.
+
+**What's bundled vs. lazy (confirmation, 2026-04-22 follow-up):**
+
+Everything cfcf needs to **run** ships in the tarball. The only intentional lazy-download is the embedder model:
+
+| Ships in the tarball | Lazy-downloaded after install |
+|---|---|
+| `cfcf` binary (Bun runtime embedded) | Embedder model weights (~20-430 MB depending on catalogue pick; goes to `~/.cfcf/models/` on first use per 5.7) |
+| `bin/node_modules/` (transformers, onnxruntime-node, sharp, all transitive deps) | Future: user-chosen alternate embedder if they `cfcf clio embedder install <other>` |
+| `native/libsqlite3.<ext>` (our pinned build with loadExtension enabled) | |
+| `native/sqlite-vec.<ext>` (fetched in release CI at build time, not at install time) | |
+| `MANIFEST`, `LICENSE`, `uninstall.sh` | |
+
+Consequence: a user with no network after install can still `cfcf init`, skip the embedder, and run cfcf in FTS-only mode. All DB / agent-orchestration / Clio-keyword-search paths work offline. Only semantic-search hybrid mode requires the later one-time embedder download. That's the intentional boundary.
+
+6.19's pending `--with-embedder <name>` flag on `install.sh` would collapse even the embedder download into the initial install for users who want a truly one-shot "ready to go" experience. Tracked separately; not in 5.5.
 
 **Windows story in v1 vs. follow-up:**
 
@@ -401,14 +417,51 @@ Running it produces `dist/cfcf-darwin-arm64-0.0.0-dev.tar.gz` + `.sha256`.
 
 ### 5.2 Local HTTP server
 
-```bash
-cd dist
-python3 -m http.server 8080
-# install.sh sits alongside the tarball so we can serve it too
-cp ../scripts/install.sh .
+We already require Bun as a dev prereq, so we stay in-ecosystem rather than reaching for `python3 -m http.server`. New `scripts/serve-dist.ts` (~20 lines, uses `Bun.serve`):
+
+```ts
+// scripts/serve-dist.ts — Phase-0 local file server for installer testing.
+// Usage: bun run scripts/serve-dist.ts [port]
+import { file } from "bun";
+import { resolve, join, normalize } from "node:path";
+
+const port = Number(process.argv[2] ?? 8080);
+const root = resolve("dist");
+
+Bun.serve({
+  port,
+  async fetch(req) {
+    const url = new URL(req.url);
+    // Prevent path traversal outside dist/.
+    const target = normalize(join(root, url.pathname));
+    if (!target.startsWith(root)) return new Response("forbidden", { status: 403 });
+    const f = file(target);
+    if (!(await f.exists())) return new Response("not found", { status: 404 });
+    return new Response(f);
+  },
+});
+
+console.log(`[serve-dist] http://localhost:${port}/  (root: ${root})`);
 ```
 
-(`install.sh` has to be in `dist/` for localhost to serve it; we'll cp or symlink.)
+Phase-0 sequence from the repo root:
+
+```bash
+# 1. Build the per-platform tarball into dist/.
+bun run scripts/build-release-tarball.sh 0.0.0-dev
+#   → dist/cfcf-<platform>-0.0.0-dev.tar.gz + .sha256
+
+# 2. Put install.sh + SHA256SUMS + MANIFEST.txt where the server will
+#    find them (mirrors the real release layout).
+cp scripts/install.sh dist/
+cp dist/cfcf-*-0.0.0-dev.tar.gz.sha256 dist/SHA256SUMS
+echo "cfcf: 0.0.0-dev" > dist/MANIFEST.txt
+
+# 3. Serve.
+bun run scripts/serve-dist.ts
+```
+
+Leave that terminal running; use another for the install step (§5.3).
 
 ### 5.3 Install from localhost
 
@@ -774,7 +827,11 @@ EOF
 
 (Already sketched in §5.1. Calls the five scripts above in order and tars the result.)
 
-### 8.7 `scripts/uninstall.sh`
+### 8.7 `scripts/serve-dist.ts`
+
+(Inlined in §5.2. Bun-based local HTTP server for Phase-0 testing.)
+
+### 8.8 `scripts/uninstall.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -1092,7 +1149,7 @@ A `docs/release-checklist.md` (new) with:
 
 | Phase | Goal | Hosting | Who builds the tarball | Blocker resolution |
 |---|---|---|---|---|
-| 0 | Validate install.sh end-to-end on a dev laptop | `python3 -m http.server` on localhost | `scripts/build-release-tarball.sh` on dev machine | None — works today |
+| 0 | Validate install.sh end-to-end on a dev laptop | `bun run scripts/serve-dist.ts` on localhost | `scripts/build-release-tarball.sh` on dev machine | None — works today |
 | 1 | Validate release.yml on the private `cfcf` repo | GitHub Releases on `cfcf` (private); download via PAT for external test VMs | GitHub Actions | None |
 | 2 | First user-facing shape | Public `cfcf-releases` repo (Releases + raw install.sh); anonymous curl works | GitHub Actions (either mirrors to the public repo, or the workflow runs directly there) | **Decide: open-source cfcf itself, or create a dedicated public `cfcf-releases` repo.** |
 | 3 | Vanity URL | `cerefox.org/install` → HTTP-302 → Phase 2 URL | Unchanged | Paid domain ownership |
@@ -1136,7 +1193,7 @@ When 5.5 gets scheduled (possibly immediately after this doc):
 5. [ ] Add `scripts/stage-runtime-deps.sh` + `scripts/resolve-runtime-deps.js` (§8.4). Test locally: after running, check `node_modules/onnxruntime-node/bin/napi-v*/` contains the native addon for the current platform.
 6. [ ] Add `scripts/write-manifest.sh` (§8.5). Smoke-test: output parses as key:value.
 7. [ ] Add `scripts/build-release-tarball.sh` (§5.1, §8.6). Run locally → produces `dist/cfcf-<platform>-0.0.0-dev.tar.gz`.
-8. [ ] Add `scripts/install.sh` (§9). Phase 0 smoke: `python3 -m http.server` in `dist/`, run installer with `CFCF_BASE_URL=http://localhost:8080 CFCF_VERSION=0.0.0-dev`, confirm `~/.cfcf/bin/cfcf --version` works. Confirm `cfcf clio stats` opens the DB against the custom libsqlite3 (use a temp `CFCF_CONFIG_DIR` so the real one isn't touched).
+8. [ ] Add `scripts/install.sh` (§9). Phase 0 smoke: `bun run scripts/serve-dist.ts` in `dist/`, run installer with `CFCF_BASE_URL=http://localhost:8080 CFCF_VERSION=0.0.0-dev`, confirm `~/.cfcf/bin/cfcf --version` works. Confirm `cfcf clio stats` opens the DB against the custom libsqlite3 (use a temp `CFCF_CONFIG_DIR` so the real one isn't touched).
 9. [ ] Add `scripts/uninstall.sh` (§8.7). Run it after the Phase 0 install; confirm clean removal (honour the `CFCF_INSTALL_DIR` override to avoid wiping the real `~/.cfcf/`).
 10. [ ] Update `cfcf --version` to read `~/.cfcf/MANIFEST` (§11.2).
 11. [ ] Add `.github/workflows/release.yml` (§6.1). Smoke-test with a pre-release tag (`v0.9.0-rc.1`) on a fork or a test branch.
