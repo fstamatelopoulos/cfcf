@@ -106,7 +106,8 @@ export function registerInitCommand(program: Command): void {
       console.log("Configuration");
       console.log("-------------");
 
-      console.log(`Available agents: ${available.join(", ")}`);
+      console.log("Detected agents:");
+      available.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
       console.log();
       console.log("Four agent roles (each independently configurable):");
       console.log("  - Dev agent: writes code, runs tests");
@@ -115,40 +116,33 @@ export function registerInitCommand(program: Command): void {
       console.log("  - Documenter agent: produces final polished documentation");
       console.log();
 
+      // Pick an agent by number against the detected list. Returns the
+      // chosen adapter name; never returns an unsupported value (loops
+      // until the user types something valid OR accepts the default).
+      // Default index = position of `defaultName` in `available`, or 1.
+      // `defaultName` is the value that came from createDefaultConfig --
+      // e.g. claude-code if both are detected -- so pressing Enter keeps
+      // the conventional pick.
+      async function pickAgent(role: string, defaultName: string): Promise<string> {
+        if (available.length === 1) return available[0];
+        const defaultIdx = Math.max(available.indexOf(defaultName), 0) + 1;
+        while (true) {
+          const raw = await prompt(`${role} agent (1-${available.length})`, String(defaultIdx));
+          const n = parseInt(raw, 10);
+          if (!Number.isNaN(n) && n >= 1 && n <= available.length) {
+            return available[n - 1];
+          }
+          console.log(`  Invalid choice "${raw}". Enter a number 1-${available.length}.`);
+        }
+      }
+
       if (available.length > 1) {
-        const devChoice = await prompt(
-          "Dev agent",
-          config.devAgent.adapter,
-        );
-        if (available.includes(devChoice)) {
-          config.devAgent.adapter = devChoice;
-        }
-
-        const judgeChoice = await prompt(
-          "Judge agent",
-          config.judgeAgent.adapter,
-        );
-        if (available.includes(judgeChoice)) {
-          config.judgeAgent.adapter = judgeChoice;
-        }
-
-        const architectChoice = await prompt(
-          "Architect agent",
-          config.architectAgent.adapter,
-        );
-        if (available.includes(architectChoice)) {
-          config.architectAgent.adapter = architectChoice;
-        }
-
-        const documenterChoice = await prompt(
-          "Documenter agent",
-          config.documenterAgent.adapter,
-        );
-        if (available.includes(documenterChoice)) {
-          config.documenterAgent.adapter = documenterChoice;
-        }
+        config.devAgent.adapter        = await pickAgent("Dev",        config.devAgent.adapter);
+        config.judgeAgent.adapter      = await pickAgent("Judge",      config.judgeAgent.adapter);
+        config.architectAgent.adapter  = await pickAgent("Architect",  config.architectAgent.adapter);
+        config.documenterAgent.adapter = await pickAgent("Documenter", config.documenterAgent.adapter);
       } else {
-        console.log(`Using ${available[0]} for all roles.`);
+        console.log(`Only one agent detected (${available[0]}); using for all roles.`);
         config.devAgent.adapter = available[0];
         config.judgeAgent.adapter = available[0];
         config.architectAgent.adapter = available[0];

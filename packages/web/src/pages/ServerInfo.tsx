@@ -401,6 +401,51 @@ export function ServerInfo() {
             )}
           </FormSection>
 
+          {/* Clio (item 5.7). Currently surfaces only defaultSearchMode --
+              the field that's relevant to people every day. preferredEmbedder
+              + ingestPolicy will come later under 6.18 along with the
+              full Clio web tab. */}
+          <FormSection title="Clio memory layer">
+            <table className="config-display__table">
+              <tbody>
+                <tr>
+                  <th>Default search mode</th>
+                  <td>
+                    <select
+                      value={draft.clio?.defaultSearchMode ?? "auto"}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const value = e.target.value as
+                          | "auto" | "fts" | "semantic" | "hybrid";
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), defaultSearchMode: value },
+                        });
+                        setSavedAt(null);
+                      }}
+                    >
+                      <option value="auto">auto (hybrid if embedder active, else fts)</option>
+                      <option value="fts">fts (keyword only)</option>
+                      <option value="semantic">semantic (vector only)</option>
+                      <option value="hybrid">hybrid (RRF over both)</option>
+                    </select>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Used when <code>cfcf clio search</code> is invoked without an explicit <code>--mode</code> flag (or when <code>/api/clio/search</code> is called without <code>?mode=</code>). Per-call overrides always win.
+                    </div>
+                  </td>
+                </tr>
+                {draft.clio?.preferredEmbedder && (
+                  <tr>
+                    <th>Preferred embedder</th>
+                    <td style={{ color: "var(--color-text-muted)" }}>
+                      <code>{draft.clio.preferredEmbedder}</code> (set during <code>cfcf init</code>; change with <code>cfcf clio embedder install &lt;name&gt;</code>)
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </FormSection>
+
           <div
             style={{
               display: "flex",
