@@ -125,6 +125,17 @@ export interface ClioGlobalConfig {
    * name. Cleared if the user opts to stay in FTS-only mode.
    */
   preferredEmbedder?: string;
+  /**
+   * Default search mode used by `cfcf clio search` (and by anyone
+   * hitting `/api/clio/search` without an explicit `mode` query param).
+   * Defaults to `"auto"`, which resolves at search time:
+   *   - active embedder present → "hybrid" (RRF over FTS + vector)
+   *   - no active embedder       → "fts"
+   * Set to a concrete value (`fts`, `semantic`, `hybrid`) to force that
+   * mode regardless of embedder state. Per-call `mode` (CLI flag /
+   * query param) still wins when set.
+   */
+  defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;

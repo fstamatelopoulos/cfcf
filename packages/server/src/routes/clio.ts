@@ -14,6 +14,7 @@ import {
   getWorkspace,
   findWorkspaceByName,
   updateWorkspace,
+  readConfig,
   type IngestRequest,
   type SearchRequest,
   EMBEDDER_CATALOGUE,
@@ -97,7 +98,29 @@ export function registerClioRoutes(app: Hono): void {
       return c.json({ error: "q is required" }, 400);
     }
     const project = c.req.query("project") || undefined;
-    const mode = (c.req.query("mode") as SearchRequest["mode"]) || "fts";
+    // Resolve the search mode in this order (most specific wins):
+    //   1. Explicit ?mode= query param  (per-call override; CLI's --mode)
+    //   2. clio.defaultSearchMode in the global config
+    //      - "auto" (the default) checks the active-embedder row:
+    //          present → "hybrid", absent → "fts"
+    //      - concrete values (fts/semantic/hybrid) bypass the auto check
+    //   3. Hard fallback "fts" if config can't be read for any reason.
+    let mode: SearchRequest["mode"] = (c.req.query("mode") as SearchRequest["mode"]) || undefined;
+    if (!mode) {
+      try {
+        const config = await readConfig();
+        const configured = config?.clio?.defaultSearchMode ?? "auto";
+        if (configured === "auto") {
+          const backend = getClioBackend();
+          const active = backend instanceof LocalClio ? backend.getActiveEmbedderRecord() : null;
+          mode = active ? "hybrid" : "fts";
+        } else {
+          mode = configured;
+        }
+      } catch {
+        mode = "fts";
+      }
+    }
     const matchCountStr = c.req.query("match_count");
     const matchCount = matchCountStr ? parseInt(matchCountStr, 10) : undefined;
     if (matchCountStr && (isNaN(matchCount as number) || (matchCount as number) < 1)) {

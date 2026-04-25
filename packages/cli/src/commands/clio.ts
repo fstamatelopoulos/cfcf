@@ -35,8 +35,16 @@ function registerUnder(root: Command): void {
   // ── search ────────────────────────────────────────────────────────────
   root
     .command("search <query...>")
-    .description("Search Clio for documents matching <query> (FTS keyword search in v1)")
+    .description(
+      "Search Clio for documents matching <query>. Mode resolution order: " +
+      "explicit --mode > clio.defaultSearchMode in global config > 'auto' " +
+      "(hybrid if an embedder is active, fts otherwise).",
+    )
     .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option(
+      "--mode <mode>",
+      "Search mode: 'fts' (keyword), 'semantic' (vector cosine), or 'hybrid' (RRF over both). Omit to use the configured default.",
+    )
     .option("-n, --match-count <n>", "Max number of hits to return (default 10)", (v) => parseInt(v, 10))
     .option(
       "-m, --metadata <json>",
@@ -55,6 +63,13 @@ function registerUnder(root: Command): void {
       const qs = new URLSearchParams();
       qs.set("q", q);
       if (opts.project) qs.set("project", opts.project);
+      if (opts.mode) {
+        if (!["fts", "semantic", "hybrid"].includes(opts.mode)) {
+          console.error(`search: --mode must be one of fts | semantic | hybrid (got: ${opts.mode})`);
+          process.exit(1);
+        }
+        qs.set("mode", opts.mode);
+      }
       if (opts.matchCount) qs.set("match_count", String(opts.matchCount));
       if (opts.metadata) {
         try {
