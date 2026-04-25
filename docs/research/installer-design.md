@@ -829,40 +829,117 @@ mv "$tmp"/vec0.* "$OUT_DIR/sqlite-vec.${ext}"
 
 ### 8.4 `scripts/stage-runtime-deps.sh`
 
+The runtime-deps staging is the single most failure-prone step in the build, so it gets explicit verification. Three threats it must defend against:
+
+1. **Bun's untrusted-deps default skips postinstalls** → `onnxruntime-node`'s install script never runs → published npm tarball's bundled binaries (whatever arch they happen to be) are all you get. Defended via `trustedDependencies` in the staging package.json (see line `"trustedDependencies": [...]` below).
+2. **Bun's `.bun/` content-addressed layout produces symlinks** → naive `cp -r` of `node_modules/` ships dangling symlinks pointing at paths that don't exist on the user's machine. Defended via `--linker hoisted` (flat layout, no `.bun/` indirection) + `cp -RL` (dereference symlinks).
+3. **Postinstall silently picks the wrong arch** → script ran, but downloaded the build host's arch instead of the matrix leg's target arch. Mostly impossible because the matrix leg IS native to its target, but assert it anyway via the post-install verification block at the bottom.
+
 ```bash
 #!/usr/bin/env bash
-# Run `bun install --production` into a clean dir, producing a minimal
-# node_modules/ containing just the runtime deps (the three we externalise
-# plus their transitive native addons).
-# Usage: stage-runtime-deps.sh <out-node-modules-dir>
+# Stage the three externalised runtime deps for tarball inclusion.
+# Output: a flat node_modules/ directory containing onnxruntime-node,
+# sharp, @huggingface/transformers, all transitive deps, and the
+# arch-specific native addons FOR THE CURRENT MACHINE'S PLATFORM.
+#
+# This script MUST run on a runner of the target architecture
+# (release CI matrix arranges this); postinstalls download whatever
+# arch process.platform / process.arch report at run time.
+#
+# Usage: stage-runtime-deps.sh <out-node-modules-dir> <platform>
 set -euo pipefail
 OUT="$1"
+PLATFORM="$2"          # darwin-arm64 | darwin-x64 | linux-x64
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# 1. Compose a fresh package.json with the same version pins used by
+#    packages/core (resolve-runtime-deps.js does the substitution).
+#    trustedDependencies forces Bun to RUN the postinstall scripts of
+#    onnxruntime-node + sharp; without this Bun silently skips them
+#    and we ship a node_modules/ that's missing the native binary.
 cat > "$tmp/package.json" <<'EOF'
 {
   "name": "cfcf-runtime-deps",
   "version": "0.0.0",
   "private": true,
   "dependencies": {
-    "@huggingface/transformers": "<pinned in packages/core/package.json>",
-    "onnxruntime-node": "<pinned>",
-    "sharp": "<pinned>"
-  }
+    "@huggingface/transformers": "<resolved>",
+    "onnxruntime-node": "<resolved>",
+    "sharp": "<resolved>"
+  },
+  "trustedDependencies": ["onnxruntime-node", "sharp"]
 }
 EOF
-
-# Resolve the exact versions our core package uses so release + dev are in sync
 scripts/resolve-runtime-deps.js "$tmp/package.json"
 
-(cd "$tmp" && bun install --production --frozen-lockfile)
+# 2. Install with the hoisted linker so node_modules/ is a flat tree
+#    rather than the default isolated layout (which symlinks into
+#    .bun/<pkg>@<ver>/node_modules/<pkg>). Hoisted means we can copy
+#    the whole tree without ending up with broken symlinks pointing
+#    into the build host's content-addressed cache.
+(cd "$tmp" && bun install --production --frozen-lockfile --linker hoisted)
 
+# 3. Copy the staged tree into the output dir, dereferencing any
+#    remaining symlinks (-L). cp -RL preserves directory structure
+#    + follows symlinks; rsync would also work and is sometimes
+#    faster on macOS.
 mkdir -p "$OUT"
-cp -r "$tmp/node_modules/." "$OUT/"
+cp -RL "$tmp/node_modules/." "$OUT/"
+
+# 4. Verification: assert the platform-specific native binaries
+#    exist at the expected paths. If they don't, FAIL THE BUILD --
+#    a missing-binary error never reaches end users this way.
+echo "[stage-runtime-deps] verifying native binaries for $PLATFORM..."
+
+# Map our platform → the path components onnxruntime-node uses.
+case "$PLATFORM" in
+  darwin-arm64) ort_os=darwin; ort_arch=arm64;  ext=node ;;
+  darwin-x64)   ort_os=darwin; ort_arch=x64;    ext=node ;;
+  linux-x64)    ort_os=linux;  ort_arch=x64;    ext=node ;;
+  windows-x64)  ort_os=win32;  ort_arch=x64;    ext=node ;;
+  *) echo "Unsupported platform: $PLATFORM" >&2; exit 1 ;;
+esac
+
+ort_binding="$OUT/onnxruntime-node/bin/napi-v6/${ort_os}/${ort_arch}/onnxruntime_binding.${ext}"
+if [[ ! -f "$ort_binding" ]]; then
+  echo "FAIL: missing $ort_binding" >&2
+  echo "      onnxruntime-node's postinstall didn't produce the expected file." >&2
+  echo "      Check: was trustedDependencies honoured? (bun install logs should show" >&2
+  echo "      'running postinstall script' for onnxruntime-node)" >&2
+  exit 1
+fi
+echo "[stage-runtime-deps] ✓ onnxruntime-node binding: $ort_binding"
+
+# sharp uses npm's optional-platform-packages pattern. Each
+# @img/sharp-<platform> sub-package contains lib/sharp-<platform>.node.
+# The presence of the right sub-package is the check.
+sharp_pkg_name=""
+case "$PLATFORM" in
+  darwin-arm64) sharp_pkg_name="@img/sharp-darwin-arm64" ;;
+  darwin-x64)   sharp_pkg_name="@img/sharp-darwin-x64" ;;
+  linux-x64)    sharp_pkg_name="@img/sharp-linux-x64" ;;
+  windows-x64)  sharp_pkg_name="@img/sharp-win32-x64" ;;
+esac
+if [[ ! -d "$OUT/$sharp_pkg_name" ]]; then
+  echo "FAIL: missing $OUT/$sharp_pkg_name" >&2
+  echo "      sharp's optional platform package didn't install." >&2
+  exit 1
+fi
+echo "[stage-runtime-deps] ✓ sharp platform package: $sharp_pkg_name"
+
+# Pure-JS package: just the directory has to exist.
+if [[ ! -d "$OUT/@huggingface/transformers" ]]; then
+  echo "FAIL: missing $OUT/@huggingface/transformers" >&2
+  exit 1
+fi
+echo "[stage-runtime-deps] ✓ @huggingface/transformers"
+
+echo "[stage-runtime-deps] all native deps verified for $PLATFORM"
 ```
 
-A tiny helper `scripts/resolve-runtime-deps.js` reads `packages/core/package.json`, pulls the three version pins, and writes them into the temp `package.json` so staging is always in lockstep.
+`scripts/resolve-runtime-deps.js` reads `packages/core/package.json`, pulls the three version pins, and writes them into the temp `package.json` so staging is always in lockstep with what dev mode uses.
 
 ### 8.5 `scripts/write-manifest.sh`
 
@@ -1170,6 +1247,69 @@ built: 2026-04-22T18:00:00Z
 
 Nice-to-have; not blocking. Could land with 6.15 since that's when the sqlite-vec story gets real.
 
+### 11.4 `cfcf clio embedder check-deps` + friendly module-not-found wrapping
+
+Two pieces, both belt-and-braces against the same class of bug (native deps missing or arch-mismatched on the user's machine):
+
+**`cfcf clio embedder check-deps`** — a tiny new CLI subcommand that just `await import`s the three runtime deps and prints the result:
+
+```ts
+// packages/cli/src/commands/clio.ts (sketch)
+embedderCmd
+  .command("check-deps")
+  .description(
+    "Verify the runtime deps (@huggingface/transformers + onnxruntime-node + sharp) " +
+    "load correctly on this machine. Useful for diagnosing 'Cannot find module' or " +
+    "missing-native-binary errors after an install."
+  )
+  .action(async () => {
+    const deps = ["@huggingface/transformers", "onnxruntime-node", "sharp"];
+    let ok = true;
+    for (const name of deps) {
+      try {
+        await import(name);
+        console.log(`✓ ${name}`);
+      } catch (err) {
+        ok = false;
+        console.error(`✗ ${name}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    process.exit(ok ? 0 : 1);
+  });
+```
+
+This is the canonical probe used by:
+- The release CI's `smoke-tarball.sh` (§13.2 layer 2) — fails the build if any leg's tarball can't load its own deps.
+- Users debugging a broken install (`cfcf clio embedder check-deps` is the first thing the `docs/guides/installing.md` troubleshooting section tells them to run).
+- The `cfcf doctor` command from §11.3 once it lands.
+
+**Friendly wrapper** in `local-clio.ts` (or wherever the dynamic import of `@huggingface/transformers` happens) — catches `Cannot find module` / `MODULE_NOT_FOUND` errors and re-throws with a CFCF-specific message:
+
+```ts
+async function loadTransformers(): Promise<typeof import("@huggingface/transformers")> {
+  try {
+    return await import("@huggingface/transformers");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Cannot find module") || msg.includes("MODULE_NOT_FOUND")) {
+      throw new Error(
+        `Failed to load @huggingface/transformers. This usually means the runtime ` +
+        `node_modules/ is missing or the platform-specific native binary (for ` +
+        `${process.platform}-${process.arch}) didn't install. Try:\n` +
+        `  1. cfcf clio embedder check-deps   (diagnose which dep is missing)\n` +
+        `  2. Re-install cfcf via the installer (it ships colocated native deps)\n` +
+        `Original error: ${msg}`,
+      );
+    }
+    throw err;
+  }
+}
+```
+
+Both pieces are small (≤30 lines each) and ship in 5.5. They mean:
+- A misbuilt tarball is caught by CI before reaching users (via check-deps in smoke-tarball).
+- A user whose install somehow drifted (manually deleted `node_modules/`, partial upgrade, etc.) gets a self-explanatory error rather than a raw Bun stack trace.
+
 ---
 
 ## 12. Docs + README updates
@@ -1208,14 +1348,71 @@ Should inherit this doc; mentioned explicitly in the 5.5 plan row.
 
 ### 13.2 Integration (per-platform, runs in release CI)
 
-At the end of the `build` matrix leg, before upload:
+Per-platform integration tests run in two layers:
 
-1. Untar the produced tarball into a clean dir.
-2. Run `./cfcf --version` — must print the expected version.
-3. Run `./cfcf clio stats` against a fresh `CFCF_CONFIG_DIR=$tmp` — must create a DB and exit 0.
-4. Run a script that opens the DB and calls `PRAGMA library_version;` — must return our pinned version, not the system's.
+**Layer 1 — staging-time verification** (inside `stage-runtime-deps.sh` itself, §8.4): asserts the platform-specific `onnxruntime_binding.node`, `@img/sharp-<platform>` package, and `@huggingface/transformers` directory all exist at the expected paths. Fails the build immediately if Bun's postinstall didn't pull the right native binaries — the most common failure mode.
 
-If any step fails, the leg fails and no release is published.
+**Layer 2 — end-to-end smoke** (after tarball assembly, before upload). Implemented as `scripts/smoke-tarball.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Untar the just-built tarball into a temp dir and exercise it like
+# a fresh user install would. If anything fails, fail the build leg.
+# Usage: smoke-tarball.sh <tarball-path> <platform>
+set -euo pipefail
+TARBALL="$1"
+PLATFORM="$2"
+
+stage="$(mktemp -d)"
+trap 'rm -rf "$stage"' EXIT
+
+tar xzf "$TARBALL" -C "$stage"
+root="$(echo "$stage"/cfcf-*)"        # the unpacked tree
+
+# 1. cfcf --version: smoke that the binary loads + can print its
+#    MANIFEST. If the colocated node_modules/ isn't wired correctly
+#    this surfaces immediately.
+"$root/bin/cfcf" --version
+
+# 2. cfcf clio stats with an isolated config dir (don't touch any
+#    real ~/.cfcf/). This is the integration test for the SQLite
+#    custom-lib wiring + Clio init path.
+isolated="$(mktemp -d)"
+CFCF_CONFIG_DIR="$isolated/config" CFCF_LOGS_DIR="$isolated/logs" \
+  HOME="$isolated" "$root/bin/cfcf" clio stats
+
+# 3. SQLite version pin: open the just-created clio.db and confirm
+#    PRAGMA library_version returns our pinned 3.46.0, not whatever
+#    the system shipped. Catches a missed Database.setCustomSQLite()
+#    call.
+expected_sqlite="3.46.0"          # keep in sync with build-sqlite.sh
+got="$(HOME="$isolated" "$root/bin/cfcf" clio stats --json | \
+       jq -r '.sqliteVersion // empty')"
+if [[ "$got" != "$expected_sqlite" ]]; then
+  echo "FAIL: expected SQLite $expected_sqlite, got '$got'" >&2
+  exit 1
+fi
+
+# 4. Native deps load smoke: trigger a code path that imports
+#    @huggingface/transformers + onnxruntime-node. Without setting
+#    up a real embedder we can't call .embed(), but loading the
+#    module itself proves the colocated node_modules/ + native
+#    addons resolve. Use --check-deps (TODO: add to cli) which
+#    just imports + reports.
+"$root/bin/cfcf" clio embedder check-deps    # exits 0 on success
+
+echo "[smoke-tarball] all checks passed for $PLATFORM"
+```
+
+(`cfcf clio embedder check-deps` is a small new subcommand that imports `@huggingface/transformers` + `onnxruntime-node` + `sharp` and prints "OK" — see §11.4. It's the canonical "are my native deps wired correctly?" probe.)
+
+Hooked into `release.yml` (§6.1) as a step between build and upload-artifact:
+
+```yaml
+- run: scripts/smoke-tarball.sh dist/cfcf-${{ matrix.platform }}-${{ github.ref_name }}.tar.gz ${{ matrix.platform }}
+```
+
+If any layer-1 or layer-2 check fails, the leg fails and no release is published. **A user never gets a tarball where the binary can't load its own deps.**
 
 ### 13.3 Manual smoke (per release)
 
@@ -1238,6 +1435,30 @@ A `docs/release-checklist.md` (new) with:
 | 4 | Windows | Adds `install.ps1` + `cfcf-windows-x64-<version>.zip` | GitHub Actions (adds windows-latest to the matrix) | Windows-native build tooling (MSVC on the runner) |
 
 Each phase is a proper subset of the next — nothing built in an earlier phase gets thrown away.
+
+---
+
+## 14a. darwin-x64 (Intel Mac) support — open question (2026-04-25)
+
+Discovered while debugging the 2026-04-25 dev-mode failure: **`onnxruntime-node@1.24.3` does not ship a darwin-x64 binary.** The package's `bin/napi-v6/` directory contains binaries for:
+
+- `linux/x64`, `linux/arm64`
+- `darwin/arm64` only (no `darwin/x64`)
+- `win32/x64`, `win32/arm64`
+
+Microsoft dropped Intel-Mac binaries from npm-published builds at some version (TBD which — pre-1.18 still had them, post-1.20 definitely doesn't). The postinstall script (`script/install.js`) only handles CUDA-EP downloads; it does NOT fetch CPU binaries — those are expected to be bundled in the npm tarball and just aren't.
+
+This affects 5.5 directly because the installer's darwin-x64 leg has nothing valid to ship. Three options to decide before building 5.5:
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. Pin onnxruntime-node to a version that still has darwin-x64** (likely ≤1.18.x; verify) | Keeps Intel-Mac users supported | Older ORT means older transformers.js compatibility window; we'd need to verify the embedder catalogue still works against that ORT version. May force pin of `@huggingface/transformers` too |
+| **B. Drop darwin-x64 from the v1 platform matrix** | Cleanest design; no version-pinning headaches | Excludes Intel-Mac users entirely (they can run cfcf in a Linux container or in WSL-equivalent, but that's a real footgun) |
+| **C. Ship darwin-x64 with FTS-only Clio mode** | Intel-Mac users get cfcf, just without semantic search | Two binaries with different feature surfaces complicates docs + support; may surprise users |
+
+**Decision required before 5.5 implementation begins.** Until then, the design doc assumes the matrix is `darwin-arm64`, `darwin-x64`, `linux-x64` (option A); each option changes §6.1 (release matrix), §8.4 (verification block), §13.1 (smoke tests), and `docs/guides/installing.md`.
+
+Recommendation: investigate option A first. Find the latest onnxruntime-node version that still bundles darwin-x64; if it's recent enough to pair with a current `@huggingface/transformers`, pin that pair across both `packages/core/package.json` and the staging script. If option A's compatibility window is too narrow (e.g., we'd need ORT < 1.10), fall back to option B and explicitly document Intel Mac as unsupported in v1.
 
 ---
 
