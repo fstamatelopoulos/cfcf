@@ -353,18 +353,14 @@ export function registerInitCommand(program: Command): void {
       // Step 6: Install the embedder now (if picked). Happens AFTER
       // config write so the preferred-embedder record survives a
       // failed download (retryable via `cfcf clio embedder install`).
-      // 2026-04-25 update: init NO LONGER triggers the HF download. Two
-      // reasons:
-      //   1. multi-minute download mid-`cfcf init` is a surprise wait;
-      //      users expect init to be conversational.
-      //   2. the planned installer (5.5) will cover pre-warm via
-      //      `--with-embedder`, which is the right place for "ship this
-      //      machine fully ready" semantics.
-      // So init only writes the active-embedder DB row + saves the
-      // preference. The next Clio call (search / ingest / explicit
-      // `cfcf clio embedder install`) triggers the lazy download via
-      // OnnxEmbedder.ensurePipeline().
-      let embedderConfigured = false;
+      // 2026-04-25: init DOES trigger the HF download (loadNow: true)
+      // and the underlying loadNow now actually warms the pipeline
+      // (Embedder.warmup() added the same day; the previous loadNow
+      // implementation only constructed the embedder shell). When this
+      // returns successfully the model is on disk in ~/.cfcf/models/,
+      // active in the DB, and the inference pipeline is materialised --
+      // first `cfcf clio search` is instant.
+      let embedderInstalled = false;
       let installError: string | null = null;
       let verifiedActive: { name: string; dim: number; recommendedChunkMaxChars: number } | null = null;
       if (embedderPicked) {
@@ -372,17 +368,18 @@ export function registerInitCommand(program: Command): void {
         if (!entry) {
           installError = `Unknown embedder "${embedderPicked}" (catalogue mismatch?)`;
         } else {
+          console.log();
+          console.log(`Installing embedder: ${entry.name} (~${entry.approxSizeMb} MB download)`);
+          console.log("First run only; subsequent uses read from ~/.cfcf/models/.");
+          console.log();
           let clio: LocalClio | null = null;
           try {
             clio = new LocalClio();
-            // loadNow: false -- we DO want the active-embedder row
-            // (so subsequent commands know what to use), we DO NOT
-            // want the HF download right now.
-            await clio.installActiveEmbedder(entry, { force: false, loadNow: false });
+            await clio.installActiveEmbedder(entry, { force: false, loadNow: true });
             const record = clio.getActiveEmbedderRecord();
             if (!record || record.name !== entry.name) {
               throw new Error(
-                `post-config check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
+                `post-install check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
               );
             }
             verifiedActive = {
@@ -390,11 +387,9 @@ export function registerInitCommand(program: Command): void {
               dim: record.dim,
               recommendedChunkMaxChars: record.recommendedChunkMaxChars,
             };
-            embedderConfigured = true;
+            embedderInstalled = true;
             console.log();
-            console.log(`✓ Clio configured: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
-            console.log(`   Model files (~${entry.approxSizeMb} MB) will download on first Clio search / ingest.`);
-            console.log(`   To pre-cache now: cfcf clio embedder install`);
+            console.log(`✓ Clio ready: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
           } catch (err) {
             installError = err instanceof Error ? err.message : String(err);
           } finally {
@@ -408,15 +403,15 @@ export function registerInitCommand(program: Command): void {
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
-      if (embedderConfigured && verifiedActive) {
-        console.log(`       (Clio configured: ${verifiedActive.name}; model downloads on first use, or pre-cache via 'cfcf clio embedder install')`);
+      if (embedderInstalled && verifiedActive) {
+        console.log(`       (Clio ready: ${verifiedActive.name}, dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
       } else if (installError) {
-        console.log(`  2. Retry embedder configuration (failed above): cfcf clio embedder install`);
-        console.log(`       (your pick "${embedderPicked}" is saved)`);
+        console.log(`  2. Retry embedder install (download failed above): cfcf clio embedder install`);
+        console.log(`       (your pick "${embedderPicked}" is saved; rerun from a network-connected shell)`);
       } else {
-        console.log(`       (Clio: FTS-only mode -- configure an embedder later with: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`);
+        console.log(`       (Clio: FTS-only mode -- install an embedder later with: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`);
       }
-      const nextStep = embedderConfigured || !installError ? 2 : 3;
+      const nextStep = embedderInstalled || !installError ? 2 : 3;
       console.log(`  ${nextStep}. Create a workspace:   cfcf workspace init --repo <path> --name <name>`);
       console.log(`  ${nextStep + 1}. Populate problem-pack/problem.md and success.md with your problem definition`);
       console.log(`  ${nextStep + 2}. Review with:          cfcf review --workspace <name>  (optional)`);
