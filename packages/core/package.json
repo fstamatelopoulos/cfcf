@@ -9,6 +9,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "3.8.1"
   }
 }

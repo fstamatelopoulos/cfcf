@@ -894,6 +894,9 @@ cp -RL "$tmp/node_modules/." "$OUT/"
 echo "[stage-runtime-deps] verifying native binaries for $PLATFORM..."
 
 # Map our platform → the path components onnxruntime-node uses.
+# IMPORTANT: napi-v3 is correct for onnxruntime-node 1.21.0 (the version
+# we pin per §14a so darwin-x64 gets a binary). Bump to napi-v6 if/when
+# we move to ORT-node 1.22+.
 case "$PLATFORM" in
   darwin-arm64) ort_os=darwin; ort_arch=arm64;  ext=node ;;
   darwin-x64)   ort_os=darwin; ort_arch=x64;    ext=node ;;
@@ -902,7 +905,8 @@ case "$PLATFORM" in
   *) echo "Unsupported platform: $PLATFORM" >&2; exit 1 ;;
 esac
 
-ort_binding="$OUT/onnxruntime-node/bin/napi-v6/${ort_os}/${ort_arch}/onnxruntime_binding.${ext}"
+ort_napi_dir="napi-v3"          # matches ORT-node 1.21.x; bump if pin changes
+ort_binding="$OUT/onnxruntime-node/bin/${ort_napi_dir}/${ort_os}/${ort_arch}/onnxruntime_binding.${ext}"
 if [[ ! -f "$ort_binding" ]]; then
   echo "FAIL: missing $ort_binding" >&2
   echo "      onnxruntime-node's postinstall didn't produce the expected file." >&2
@@ -1438,27 +1442,83 @@ Each phase is a proper subset of the next — nothing built in an earlier phase 
 
 ---
 
-## 14a. darwin-x64 (Intel Mac) support — open question (2026-04-25)
+## 14a. darwin-x64 (Intel Mac) support — DECIDED 2026-04-25
 
-Discovered while debugging the 2026-04-25 dev-mode failure: **`onnxruntime-node@1.24.3` does not ship a darwin-x64 binary.** The package's `bin/napi-v6/` directory contains binaries for:
+**Decision: Option A. Pin `@huggingface/transformers@3.8.1` + `onnxruntime-node@1.21.0`.** Intel Mac is fully supported with native ORT performance — same code path as every other platform, no degradation, no platform-conditional logic.
 
-- `linux/x64`, `linux/arm64`
-- `darwin/arm64` only (no `darwin/x64`)
-- `win32/x64`, `win32/arm64`
+### Background
 
-Microsoft dropped Intel-Mac binaries from npm-published builds at some version (TBD which — pre-1.18 still had them, post-1.20 definitely doesn't). The postinstall script (`script/install.js`) only handles CUDA-EP downloads; it does NOT fetch CPU binaries — those are expected to be bundled in the npm tarball and just aren't.
+Discovered while debugging dev-mode failure: `onnxruntime-node@1.24.3` ships binaries for linux/x64, linux/arm64, darwin/arm64, win32/x64, win32/arm64 — **but not darwin/x64**. Microsoft dropped Intel-Mac builds starting with 1.24.x (Feb 2026). 1.23.2 (Nov 2025) was the last version to include them. The postinstall script (`script/install.js`) only handles CUDA-EP downloads; CPU binaries are bundled in the published npm tarball and simply aren't there for darwin-x64 in 1.24+.
 
-This affects 5.5 directly because the installer's darwin-x64 leg has nothing valid to ship. Three options to decide before building 5.5:
+### Investigation summary
 
-| Option | Pros | Cons |
+| onnxruntime-node version | darwin-x64? | release date |
 |---|---|---|
-| **A. Pin onnxruntime-node to a version that still has darwin-x64** (likely ≤1.18.x; verify) | Keeps Intel-Mac users supported | Older ORT means older transformers.js compatibility window; we'd need to verify the embedder catalogue still works against that ORT version. May force pin of `@huggingface/transformers` too |
-| **B. Drop darwin-x64 from the v1 platform matrix** | Cleanest design; no version-pinning headaches | Excludes Intel-Mac users entirely (they can run cfcf in a Linux container or in WSL-equivalent, but that's a real footgun) |
-| **C. Ship darwin-x64 with FTS-only Clio mode** | Intel-Mac users get cfcf, just without semantic search | Two binaries with different feature surfaces complicates docs + support; may surprise users |
+| 1.18.0 → 1.23.2 | ✅ | May 2024 → Nov 2025 |
+| 1.24.1 → 1.24.3 | ❌ | Feb 2026 → Mar 2026 |
 
-**Decision required before 5.5 implementation begins.** Until then, the design doc assumes the matrix is `darwin-arm64`, `darwin-x64`, `linux-x64` (option A); each option changes §6.1 (release matrix), §8.4 (verification block), §13.1 (smoke tests), and `docs/guides/installing.md`.
+`@huggingface/transformers` pins onnxruntime-node exactly. Version mapping:
 
-Recommendation: investigate option A first. Find the latest onnxruntime-node version that still bundles darwin-x64; if it's recent enough to pair with a current `@huggingface/transformers`, pin that pair across both `packages/core/package.json` and the staging script. If option A's compatibility window is too narrow (e.g., we'd need ORT < 1.10), fall back to option B and explicitly document Intel Mac as unsupported in v1.
+| transformers version | onnxruntime-node | darwin-x64? |
+|---|---|---|
+| 3.7.x → 3.8.1 (last 3.x) | 1.21.0 | ✅ |
+| 4.0.0 → 4.2.0 (current) | 1.24.3 | ❌ |
+
+So the natural pin pair is **transformers 3.8.1 + onnxruntime-node 1.21.0**. cfcf only uses `pipeline("feature-extraction", ...)` — that API has been stable since 2.x, so the 4.x → 3.8.1 downgrade has no functional impact for us.
+
+### End-to-end verification (2026-04-25, Intel Mac, Bun 1.3.12)
+
+Ran the real `LocalClio.installActiveEmbedder({ loadNow: true })` path with the new pin. Result:
+
+- HF download: `bge-small-en-v1.5` (127 MB) downloaded successfully with the `cfcf` progress bar.
+- Pipeline warmup completed.
+- `embed(["hello world", "fox"])` returned 2 × 384-dim vectors in **21 ms** — full native speed, no WASM fallback, no degradation.
+- Model files landed at `~/.cfcf/models/Xenova/bge-small-en-v1.5/`.
+
+### Implications for 5.5 implementation
+
+The per-platform release matrix stays the same: `darwin-arm64`, `darwin-x64`, `linux-x64` for v1. All three legs use the same pinned versions, all three produce equivalent tarballs. No platform-conditional code in the installer or in cfcf. The §8.4 staging script's verification block still asserts the platform-specific native binary is present — for darwin-x64 that means `node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/onnxruntime_binding.node` (note: 1.21.0 uses `napi-v3`, not `napi-v6` like 1.24.x — adjust the path map in the verification block).
+
+### Trade-offs accepted
+
+- We're a few minor versions behind the latest transformers.js. Any feature added in 4.0.0+ is unavailable until Microsoft brings darwin-x64 back OR we drop Intel Mac support. cfcf's actual API surface (`pipeline("feature-extraction", ...)`, mean pooling, normalization) is identical between 3.x and 4.x, so no functional impact today. We'll re-evaluate if a future cfcf feature requires a newer transformers.
+
+- ORT-node 1.21.0 (March 2025) is ~14 months old. ONNX format compatibility within an ORT generation is excellent; no model from our catalogue should fail. If an embedder we add later requires ORT-node 1.24+ specifically (unlikely), we'd revisit.
+
+- We're tied to whatever transformers 3.8.1 supports for embedder model formats. The current catalogue (bge-small, MiniLM, nomic, bge-base) all work; verified for bge-small in the 2026-04-25 probe.
+
+### Option B / C / D — superseded
+
+- **Option B (drop Intel Mac)**: rejected. Option A gives Intel Mac users full functionality; no reason to exclude them.
+- **Option C (FTS-only on darwin-x64)**: kept as a fallback in the existing `LocalClio.getEmbedder()` graceful-degradation path. If for any reason the embedder fails to load on a particular install, Clio still works for keyword search. Not the primary darwin-x64 story.
+- **Option D (WASM via onnxruntime-web)**: investigated 2026-04-25; documented in §14b as a deferred research note. Not needed now that A works.
+
+## 14b. Option D (WASM-via-onnxruntime-web) — investigated 2026-04-25, deferred
+
+This section captures what we learned probing whether transformers.js can be coerced into using its bundled `onnxruntime-web` instead of `onnxruntime-node`. Captured here so a future contributor doesn't repeat the same investigation.
+
+### What works
+
+- `onnxruntime-web/webgpu` loads cleanly in Bun on Intel Mac. `InferenceSession`, `Tensor`, `env` all functional. WASM ORT in Node-via-Bun is feasible at the runtime level.
+- transformers.js exposes a `globalThis[Symbol.for("onnxruntime")]` injection point. Setting it before transformers loads makes transformers prefer the injected ORT.
+
+### What doesn't work without significant patching
+
+- transformers.js's `onnx.js` does `import * as ONNX_NODE from "onnxruntime-node"` at module load. This evaluates onnxruntime-node's `binding.js`, which calls `require('../bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node')` at top level. On darwin-x64 in 1.24.x this throws `MODULE_NOT_FOUND` and the entire transformers module fails to load.
+
+- Even after stubbing `binding.js` so the import doesn't throw + setting `ORT_SYMBOL`, the `if (ORT_SYMBOL in globalThis)` branch in onnx.js does NOT populate `supportedDevices` / `defaultDevices`. Calls to `pipeline()` then fail with `Unsupported device: "cpu". Should be one of: .` (empty list).
+
+- Even after patching the bundle to populate `supportedDevices` / `defaultDevices`, the next failure is that transformers.js bundles the **browser** version of ORT-web (`ort.webgpu.bundle.min.mjs`), which loads models via `fetch(URL)`. When transformers passes it a local file path, it errors `ERR_INVALID_URL`. There is no built-in WASM-on-Node code path in transformers.js as of 4.2.0.
+
+### What it would cost to make Option D work
+
+Either (a) vendor/fork transformers.js with a Node-aware WASM loader (substantial, ongoing maintenance burden), or (b) roll our own embedder using `onnxruntime-web/node` + a standalone tokenizer (several hundred LOC we'd own). Estimated 1-2 weeks of dev time.
+
+### Why we deferred
+
+Option A (the version pin) gives Intel Mac users full native performance with zero new code. Option D adds complexity for a worse user experience (WASM is 2-5x slower than native ORT). If Microsoft adds darwin-x64 back to a future ORT release, the version-pin path naturally becomes obsolete and we'd just bump versions. If they don't, and Intel Mac becomes important enough that staying behind on transformers.js is a real cost, *then* Option D becomes worth the engineering investment.
+
+Until then: A wins.
 
 ---
 
