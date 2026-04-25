@@ -136,6 +136,30 @@ export function registerClioRoutes(app: Hono): void {
     return c.json(doc);
   });
 
+  // List documents (newest-first, optional ?project=, ?limit=, ?offset=).
+  // Powers `cfcf clio docs list`. Soft-deleted docs are excluded.
+  app.get("/api/clio/documents", async (c) => {
+    const project = c.req.query("project") || undefined;
+    const limitStr = c.req.query("limit");
+    const offsetStr = c.req.query("offset");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    const offset = offsetStr ? parseInt(offsetStr, 10) : undefined;
+    if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
+      return c.json({ error: "limit must be a positive integer" }, 400);
+    }
+    if (offsetStr && (isNaN(offset as number) || (offset as number) < 0)) {
+      return c.json({ error: "offset must be a non-negative integer" }, 400);
+    }
+    const backend = getClioBackend();
+    try {
+      const docs = await backend.listDocuments({ project, limit, offset });
+      return c.json({ documents: docs });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
   // ── Embedder catalogue + install + set (PR2) ─────────────────────────
 
   app.get("/api/clio/embedders", async (c) => {

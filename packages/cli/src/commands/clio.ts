@@ -225,6 +225,59 @@ function registerUnder(root: Command): void {
       }
     });
 
+  // ── docs: list ────────────────────────────────────────────────────────
+  // Browse what's actually in Clio. Useful for "what did I ingest the
+  // other day?" + dogfooding the iteration-loop's auto-ingest hooks.
+  // No `docs show` because `cfcf clio get <id>` already covers that.
+  const docsCmd = root
+    .command("docs")
+    .description("Browse Clio documents (list, etc.)");
+
+  docsCmd
+    .command("list")
+    .description("List Clio documents (newest first). Soft-deleted docs are excluded.")
+    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option("-n, --limit <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
+    .option("--offset <n>", "Pagination offset (default 0)", (v) => parseInt(v, 10))
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const qs = new URLSearchParams();
+      if (opts.project) qs.set("project", opts.project);
+      if (opts.limit) qs.set("limit", String(opts.limit));
+      if (opts.offset) qs.set("offset", String(opts.offset));
+      const url = qs.toString() ? `/api/clio/documents?${qs.toString()}` : "/api/clio/documents";
+      const res = await get<{ documents: ClioDocument[] }>(url);
+      if (!res.ok) {
+        console.error(`docs list failed: ${res.error}`);
+        process.exit(1);
+      }
+      const docs = res.data!.documents;
+      if (opts.json) {
+        console.log(JSON.stringify(docs, null, 2));
+        return;
+      }
+      if (docs.length === 0) {
+        console.log("No documents." + (opts.project ? ` (project: ${opts.project})` : ""));
+        return;
+      }
+      console.log(`${docs.length} document(s)${opts.project ? ` in project '${opts.project}'` : ""}:`);
+      console.log();
+      for (const d of docs) {
+        const role = (d.metadata?.role as string | undefined) ?? "-";
+        const type = (d.metadata?.artifact_type as string | undefined) ?? "-";
+        const wsId = (d.metadata?.workspace_id as string | undefined) ?? "-";
+        // First line: title + id-prefix + project. Compact, scannable.
+        console.log(`  ${d.title}`);
+        console.log(`    id=${d.id.slice(0, 8)}…  project=${d.projectId.slice(0, 8)}…  chunks=${d.chunkCount}  chars=${d.totalChars}`);
+        console.log(`    role=${role}  type=${type}  workspace=${wsId === "-" ? "-" : wsId.slice(0, 8) + "…"}`);
+        console.log(`    source=${d.source}`);
+        console.log(`    created=${d.createdAt}`);
+        console.log();
+      }
+      console.log(`Tip: cfcf clio get <id> for full metadata; pass --json for the raw records.`);
+    });
+
   // ── project(s): list (default) / create / show ───────────────────────
   // Both `cfcf clio project` and `cfcf clio projects` resolve to the same
   // command group so either pluralisation works for every subcommand.

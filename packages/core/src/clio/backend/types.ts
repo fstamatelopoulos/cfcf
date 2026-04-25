@@ -33,6 +33,13 @@ export interface MemoryBackend {
   // ── Documents ─────────────────────────────────────────────────────────
   ingest(req: IngestRequest): Promise<IngestResult>;
   getDocument(id: string): Promise<ClioDocument | null>;
+  /**
+   * List documents, newest-first, optionally scoped to one Clio Project.
+   * Soft-deleted documents are excluded. `limit` defaults to 50 to keep
+   * the response compact for the CLI; pagination via `offset`. Used by
+   * `cfcf clio docs list`.
+   */
+  listDocuments(opts?: { project?: string; limit?: number; offset?: number }): Promise<ClioDocument[]>;
 
   // ── Search ────────────────────────────────────────────────────────────
   search(req: SearchRequest): Promise<SearchResponse>;

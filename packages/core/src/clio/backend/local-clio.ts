@@ -418,6 +418,37 @@ export class LocalClio implements MemoryBackend {
     return this.mapDocument(row);
   }
 
+  async listDocuments(opts: { project?: string; limit?: number; offset?: number } = {}): Promise<ClioDocument[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    let projectId: string | null = null;
+    if (opts.project) {
+      // Resolve name → id; if neither name nor id matches, return empty.
+      const proj = await this.getProject(opts.project);
+      if (!proj) return [];
+      projectId = proj.id;
+    }
+    const sql = projectId
+      ? `SELECT * FROM clio_documents WHERE deleted_at IS NULL AND project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      : `SELECT * FROM clio_documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    const bindings: (string | number)[] = projectId ? [projectId, limit, offset] : [limit, offset];
+    const rows = this.db.query<{
+      id: string;
+      project_id: string;
+      title: string;
+      source: string;
+      content_hash: string;
+      metadata: string;
+      review_status: string;
+      chunk_count: number;
+      total_chars: number;
+      created_at: string;
+      updated_at: string;
+      deleted_at: string | null;
+    }, (string | number)[]>(sql).all(...bindings);
+    return rows.map((r) => this.mapDocument(r));
+  }
+
   // ── Search ─────────────────────────────────────────────────────────────
 
   async search(req: SearchRequest): Promise<SearchResponse> {

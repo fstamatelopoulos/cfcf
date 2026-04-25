@@ -302,11 +302,17 @@ for i in 1 2 3; do
 done
 ./cfcf-binary clio ingest /tmp/auth.md --project cf-ecosystem --title "Original"
 
-# Search in all three modes
-./cfcf-binary clio search "token refresh" --mode fts
-./cfcf-binary clio search "token refresh" --mode semantic
-./cfcf-binary clio search "token refresh" --mode hybrid
-./cfcf-binary clio search "token refresh" --mode hybrid --match-count 3 --json | jq .
+# Search. NOTE (2026-04-25): the CLI's `cfcf clio search` does NOT
+# expose --mode yet; it always runs in FTS mode (the server's default).
+# To exercise the hybrid + semantic paths shipped in 5.7 PR2 today,
+# hit the HTTP endpoint directly via curl:
+./cfcf-binary clio search "token refresh"      # CLI: FTS-only
+curl -s "http://localhost:7654/api/clio/search?q=token+refresh&mode=fts"      | jq .
+curl -s "http://localhost:7654/api/clio/search?q=token+refresh&mode=semantic" | jq .
+curl -s "http://localhost:7654/api/clio/search?q=token+refresh&mode=hybrid"   | jq .
+curl -s "http://localhost:7654/api/clio/search?q=token+refresh&mode=hybrid&match_count=3" | jq .
+# Wiring --mode through the CLI is a small follow-up (~10 LoC). Track
+# under the post-5.5 Clio refinement bucket.
 
 # Hybrid should rank "Auth gotcha" (shares 'flaky' + 'yields' + 'auth') and the
 # repeated Doc-i docs reasonably. Output ordering shouldn't change across runs
