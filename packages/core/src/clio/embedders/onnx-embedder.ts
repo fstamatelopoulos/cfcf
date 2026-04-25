@@ -138,10 +138,16 @@ export class OnnxEmbedder implements Embedder {
       }
     };
 
+    // Build pipeline opts. `dtype` (e.g. "q8") selects which ONNX file is
+    // downloaded -- see catalogue's per-entry comment. Omitted → transformers
+    // picks the default (fp32 in Node), which means the full unquantized
+    // model.onnx (often much larger than the catalogue's `approxSizeMb`).
+    const pipelineOpts: Record<string, unknown> = { progress_callback: progressCallback };
+    if (this.entry.dtype) pipelineOpts.dtype = this.entry.dtype;
     const pipe = await transformers.pipeline(
       "feature-extraction",
       this.entry.hfModelId,
-      { progress_callback: progressCallback },
+      pipelineOpts,
     );
     // Stash the callable pipeline. Cast through unknown because the real
     // type uses complex generics we don't need to reproduce here.

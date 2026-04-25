@@ -42,6 +42,17 @@ export interface EmbedderEntry {
   approxSizeMb: number;
   /** Human-readable one-liner. */
   description: string;
+  /**
+   * ONNX dtype passed to transformers.js `pipeline(...)`. Selects which
+   * variant of the model is downloaded (e.g. `q8` → `onnx/model_quantized.onnx`,
+   * `fp32` → `onnx/model.onnx`). Defaults to whatever transformers.js picks
+   * for the runtime (fp32 in Node). Set to `q8` when the upstream repo
+   * publishes both variants and we want the smaller / faster one. Most
+   * Xenova mirrors have only the quantized variant under `model.onnx` so
+   * this option is irrelevant; nomic-ai/nomic-embed-text-v1.5 publishes
+   * BOTH and the unquantized one is 522 MB — hence the explicit q8 there.
+   */
+  dtype?: "fp32" | "fp16" | "q8" | "int8" | "uint8" | "bnb4" | "q4" | "q4f16";
 }
 
 /**
@@ -68,7 +79,16 @@ export const EMBEDDER_CATALOGUE: EmbedderEntry[] = [
   },
   {
     name: "nomic-embed-text-v1.5",
-    hfModelId: "Xenova/nomic-embed-text-v1.5",
+    // Switched from Xenova/nomic-embed-text-v1.5 → nomic-ai/nomic-embed-text-v1.5
+    // on 2026-04-25 because the Xenova mirror went 401-gated. The official
+    // nomic-ai repo has the same ONNX layout (config.json + tokenizer.json +
+    // tokenizer_config.json + onnx/model.onnx + onnx/model_quantized.onnx) so
+    // transformers.js loads it identically -- with one wrinkle: the official
+    // repo defaults to the unquantized 522 MB model.onnx; the Xenova mirror
+    // had baked the quantized variant in as the default. We explicitly
+    // request dtype:"q8" to keep the ~140 MB footprint.
+    hfModelId: "nomic-ai/nomic-embed-text-v1.5",
+    dtype: "q8",
     dim: 768,
     recommendedChunkMaxChars: 7000,
     recommendedExpansionRadius: 1,
