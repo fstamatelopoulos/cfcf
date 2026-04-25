@@ -56,6 +56,29 @@ Same architecture, with the threshold sourced via the standard cfcf precedence c
 
 **What this fixes for the user:** noise queries against a one-doc corpus now return zero hits in hybrid mode (the vector candidate gets dropped at the threshold; no FTS match to bypass it). Real queries that share keywords with the doc still hit via the FTS branch, immune to the threshold. Real semantically-close queries that don't share keywords still hit via the vector branch *if* their cosine clears the threshold.
 
+**Part 3 — Why we missed this in the original PR2 port (retrospective).**
+
+Four reasons, in order of weight, captured so future ports don't repeat the mistake:
+
+1. **The threshold lives in Python, not SQL.** PR2 ported the SQL / RPC layer 1:1 — BM25 retrieval, vector cosine, RRF fusion, small-to-big expansion. The threshold is enforced in Cerefox's Python `Searcher` class that *wraps* the RPC call, not in the RPC itself. Copying "the hybrid algorithm" got the engine but missed the post-filter sitting in the wrapper.
+
+2. **Tests used mocks, not realistic noise.** All 16 hybrid/semantic tests use `MockEmbedder` with deterministic token-hash vectors against a hand-curated corpus. There is no "irrelevant query against a small corpus" test — exactly the case that exposes a missing noise floor. One realistic test would have caught this on day one.
+
+3. **Design-doc framing.** Both `docs/design/clio-memory-layer.md` and `docs/research/clio-implementation-decisions.md` emphasize the *fusion algorithm* (RRF k=60, small-to-big radius) as the noteworthy thing about hybrid search. The threshold appears only in Cerefox's `docs/guides/configuration.md` under *Retrieval* — a one-line config knob, easy to read as plumbing rather than algorithm.
+
+4. **RRF's small scores hide the symptom.** RRF outputs look small to a human (best hit ≈ `1/61 ≈ 0.016`), so a stray `[0.016]` next to a noisy hit looks like a low-confidence result, not a bug. Without a threshold to *drop* noise candidates, every irrelevant query's nearest-cosine chunk got that same `0.016` and appeared as a legitimate hit. Only surfaced because the user had a one-document corpus.
+
+**Lesson — port the wrapper-layer invariants too, not just the engine.** When porting from a system that's been used in anger, tightening rules added later (filters, retries, rate limits, validation guards) are usually load-bearing in ways that don't show up in algorithm diagrams. A literal port of the engine misses them.
+
+**Commitment — maintain Cerefox ↔ cfcf-Clio parity at the `MemoryBackend` boundary.** Cerefox is the OSS shared-agent-memory system; cfcf-Clio is the local-only embedded variant. We want the two to remain interchangeable behind the existing `MemoryBackend` interface so a future `CerefoxRemote` adapter can swap in for `LocalClio` with no caller-side change. Concretely:
+
+- **Search semantics** must match (mode names, threshold semantics, FTS-bypass rule, small-to-big expansion). New retrieval features land in both with the same surface — or are explicitly scoped as local-only with a documented rationale.
+- **Schema field names** must map 1:1 where possible (e.g. `clio_documents` mirrors `cerefox_documents`; `metadata` is JSONB / TEXT-JSON in both with the same well-known keys: `workspace_id`, `role`, `artifact_type`, `tier`).
+- **Defaults must align unless intentionally different**. The 0.5 threshold here is the right call (Cerefox parity); when we deviate (e.g. our chunker's per-embedder `recommendedChunkMaxChars` overrides Cerefox's flat 4000-char default), the deviation is a documented design choice, not drift.
+- **Future Cerefox-side improvements should be evaluated for cfcf inclusion.** Items currently mirrored or planned to mirror: audit log (Cerefox `cerefox_log_usage` → Clio v2 6.16), soft-delete + versioning (Cerefox snapshot RPC → Clio v2 6.17), metadata-key discovery (Cerefox `list_metadata_keys` → not yet planned but should be), retention config (Cerefox `cerefox_requestor_enforcement_config` → Clio v2 6.17 retention).
+
+This parity isn't free — every Cerefox change becomes a "should we mirror this?" decision. But the cost of letting them drift is high: when a future user wants to swap in `CerefoxRemote` for cross-machine sharing, every divergence is a behavior surprise. Document the deviations explicitly in this log when they happen.
+
 ### 2026-04-25 -- Clio embedders: model-source, version pinning, and platform support
 
 **Findings during dogfooding the Clio embedder install path on Intel Mac (`darwin-x64`). Multiple non-obvious issues had to be resolved before init worked end-to-end. Capturing them here so the same investigations don't get repeated.**
@@ -64,7 +87,18 @@ Same architecture, with the threshold sourced via the standard cfcf precedence c
 
 **2. `nomic-ai/nomic-embed-text-v1.5` defaults to the unquantized 522 MB model.** The Xenova mirror baked the quantized variant in as the default `model.onnx`; the official repo publishes both `model.onnx` (522 MB, fp32) and `model_quantized.onnx` (~130 MB, q8) and defaults to the bigger one. Without an explicit hint, `transformers.pipeline()` picks fp32, balloning the install. **Fix**: added a `dtype` field to `EmbedderEntry`; nomic gets `dtype: "q8"` to force the quantized variant. Other catalogue entries (Xenova mirrors) don't need it because their quantized model is the only one published. **Lesson**: when adding a new embedder to the catalogue, check both ONNX variants on the upstream repo and decide explicitly which to download via `dtype`.
 
-**3. `onnxruntime-node` 1.24.x dropped Intel Mac support.** Microsoft stopped publishing `darwin-x64` binaries in npm tarballs starting 1.24.1 (Feb 2026). 1.23.2 (Nov 2025) was the last version with Intel Mac. `@huggingface/transformers` 4.x pins ORT-node 1.24.x — meaning shipping transformers 4.x means dropping Intel Mac users. **Decision**: pinned `@huggingface/transformers@3.8.1` (last 3.x; pins ORT-node 1.21.0, which has full platform coverage). Trade-off: a few minor versions behind latest transformers; cfcf only uses the long-stable `pipeline("feature-extraction", ...)` API so no functional impact. We'll re-evaluate the pin if a future cfcf feature requires 4.x specifically. **Investigation captured in [`docs/research/installer-design.md`](research/installer-design.md) §14a.**
+**3. `onnxruntime-node` 1.24.x dropped Intel Mac support.** Microsoft stopped publishing `darwin-x64` binaries in npm tarballs starting 1.24.1 (Feb 2026). 1.23.2 (Nov 2025) was the last version with Intel Mac. `@huggingface/transformers` 4.x pins ORT-node 1.24.x — meaning shipping transformers 4.x means dropping Intel Mac users. **Decision**: pinned `@huggingface/transformers@3.8.1` (last 3.x; pins ORT-node 1.21.0, which has full platform coverage). Trade-off: a few minor versions behind latest transformers; cfcf only uses the long-stable `pipeline("feature-extraction", ...)` API so no functional impact today.
+
+**Exit criteria — when we would drop `darwin-x64` (or revisit this pin):** the pin is a load-bearing-but-soft commitment, not permanent. We'll reconsider when *any* of the following becomes true:
+
+- A cfcf feature requires a transformers.js 4.x-only API (e.g. a model architecture not supported by 3.8.1, or a new pipeline type we want to use).
+- A security advisory lands against ORT-node 1.21.0 or transformers.js 3.8.1 with no patch backport.
+- The Intel-Mac user population genuinely shrinks to "the original developer's daily-driver laptop" and continued darwin-x64 testing isn't paying for itself.
+- Microsoft restores Intel-Mac binaries in a future ORT-node release (in which case we just bump versions).
+
+If we do drop, the path is: bump transformers + ORT-node to current, drop `darwin-x64` from the installer's release matrix (`installer-design.md` §6.1), and document the change here + in `installer-design.md` §14a. The graceful-degradation FTS-only fallback already in `LocalClio.getEmbedder()` means existing Intel-Mac users wouldn't get hard-broken — they'd just lose semantic search, with a clear on-screen explanation and the option to switch to the linux-x64 tarball under WSL / Docker / Lima.
+
+**Investigation captured in [`docs/research/installer-design.md`](research/installer-design.md) §14a.**
 
 **4. WASM-via-`onnxruntime-web` (Option D) is not a quick fix.** Probed during the same investigation as a way to support whatever-platform-Microsoft-drops-next without version pinning. Result: `transformers.js` bundles the **browser** ORT-web build, which loads models via `fetch(URL)` — when Node passes it a local file path, it errors `ERR_INVALID_URL`. There's no built-in WASM-on-Node code path. Making it work would require either vendoring/forking transformers.js or rolling our own embedder using `onnxruntime-web/node` + a separate tokenizer (~1-2 weeks). **Decision**: deferred. If Microsoft permanently stays off `darwin-x64` AND staying behind on transformers becomes a real cost, revisit. Until then, the version pin (item 3) is the answer. **Investigation captured in `installer-design.md` §14b.**
 
