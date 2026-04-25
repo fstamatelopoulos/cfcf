@@ -86,13 +86,13 @@ export const EMBEDDER_CATALOGUE: EmbedderEntry[] = [
     // transformers.js loads it identically -- with one wrinkle: the official
     // repo defaults to the unquantized 522 MB model.onnx; the Xenova mirror
     // had baked the quantized variant in as the default. We explicitly
-    // request dtype:"q8" to keep the ~140 MB footprint.
+    // request dtype:"q8" to keep the ~130 MB footprint (measured 130.9 MB).
     hfModelId: "nomic-ai/nomic-embed-text-v1.5",
     dtype: "q8",
     dim: 768,
     recommendedChunkMaxChars: 7000,
     recommendedExpansionRadius: 1,
-    approxSizeMb: 140,
+    approxSizeMb: 130,
     description: "Default. Nomic Embed Text v1.5, 768 dims, ~8k token context. Comfortably fits the Cerefox chunker's 4k-token effective window, so long design docs and iteration logs embed as one coherent passage.",
   },
   {

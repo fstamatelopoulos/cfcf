@@ -42,7 +42,7 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 
 - **`cfcf init` pick-equals-install (refined 2026-04-22).** Catalogue prompt accepts a numeric pick or `S`. If a model is picked, `cfcf init` now downloads + activates it inline via a local `LocalClio` (no server needed). Pick is saved to `clio.preferredEmbedder` *before* the install attempt, so a network failure doesn't lose the preference — user can retry with `cfcf clio embedder install` (no arg, resolves from saved preference).
 - **Download progress bar** on stderr during the HF download: `[████░░░░░░] 45%  54.0/120.0 MB  model.onnx`. Throttled to ≥5% ticks per file (item 6.19).
-- **Pre-download bandwidth hint + post-install auto-verification (item 6.19 remainder, 2026-04-22).** The loading line now carries a size + ETA (`~140 MB; est. 22s-2m at 50-10 Mbps`). Install reads `clio_active_embedder` back and fails hard if it doesn't match the chosen entry; on success prints `✓ Clio ready: <name> (dim=N, chunk=N chars)`.
+- **Pre-download bandwidth hint + post-install auto-verification (item 6.19 remainder, 2026-04-22).** The loading line now carries a size + ETA (`~130 MB; est. 21s-1m at 50-10 Mbps` for the default nomic embedder). Install reads `clio_active_embedder` back and fails hard if it doesn't match the chosen entry; on success prints `✓ Clio ready: <name> (dim=N, chunk=N chars)`.
 - **`--migrate-history` is workspace-scoped by default.** Filters by `metadata.workspace_id` so sibling workspaces' history stays put. New `--all-in-project` flag opts back into the wide sweep for Project-collapse scenarios.
 - **`cfcf clio reindex [--project <name>] [--force] [--batch-size <n>]`**: re-embeds chunks under the currently-active embedder. Idempotent; batched; per-batch transactions.
 - **`cfcf clio embedder set <name> --reindex`**: the canonical, safe embedder-switch flow. `--force` still available for recovery scenarios but with a visible degradation warning.
@@ -229,7 +229,7 @@ rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
 ```
 
 Three flows to cover:
-- **Pick the default (press Enter)**: init immediately downloads the model (~140 MB) with a stderr progress bar; Next Steps shows "Clio ready: active embedder is nomic-embed-text-v1.5". `ls ~/.cfcf/models/` should show the cached model directory. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `nomic-embed-text-v1.5`.
+- **Pick the default (press Enter)**: init immediately downloads the model (~130 MB, q8-quantized variant) with a stderr progress bar; Next Steps shows "Clio ready: active embedder is nomic-embed-text-v1.5". `ls ~/.cfcf/models/` should show the cached model directory under `nomic-ai/nomic-embed-text-v1.5/`. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `nomic-embed-text-v1.5`.
 - **Pick a specific embedder (e.g. "3")**: same download-during-init flow but for the chosen model. Verify via `./cfcf-binary clio embedder active`.
 - **Skip (type "S")**: no download, no DB write to `clio_active_embedder`; Next Steps includes a "FTS-only mode" note with the install command.
 - **Network-failure during install**: (simulate by disconnecting wifi before picking a non-default model) init should continue, print the captured install error in a final "Install error (captured -- you can retry)" line, and have written `clio.preferredEmbedder: <picked>` to the config. Then `./cfcf-binary clio embedder install` (no arg) should resume from the saved preference.
