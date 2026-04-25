@@ -2,7 +2,7 @@
 
 Clio is cf²'s **cross-workspace memory layer**. Every role agent (dev, judge, architect, reflection, documenter) can write knowledge into Clio at iteration boundaries; every role agent can search it during a run. Workspaces that share a **Clio Project** see each other's memory; workspaces in different Projects stay isolated.
 
-This quickstart covers what's in cf² today (item 5.7 PR1). Embeddings + hybrid search land in PR2; iteration-loop auto-ingest + context preload lands in PR3.
+This quickstart covers Clio as of v0.9.0 (item 5.7, fully shipped). Three logical sub-PRs landed on the same branch: PR1 (FTS + chunker + CRUD + CLI), PR2 (embedders + hybrid RRF search), PR3 (iteration-loop auto-ingest + context preload).
 
 ## Mental model
 
@@ -53,8 +53,19 @@ Content is **sha256-dedup'd** across the whole DB — re-ingesting the same file
 ## Search
 
 ```bash
-# Keyword search across every Clio Project (FTS5 in v1).
+# Search using the configured default mode (auto: hybrid if an embedder
+# is active, else fts).
 cfcf clio search "flaky async auth tests"
+
+# Force a specific mode.
+cfcf clio search "flaky async auth tests" --mode hybrid     # RRF fusion of FTS + vector
+cfcf clio search "flaky async auth tests" --mode semantic   # vector cosine only
+cfcf clio search "flaky async auth tests" --mode fts        # keyword only
+
+# Tune the noise floor (raw cosine threshold for the vector branch in
+# hybrid + every result in semantic; FTS-matched chunks bypass it in
+# hybrid). Default 0.5 (Cerefox parity); lower = wider recall.
+cfcf clio search "auth" --min-score 0.4
 
 # Scope to one Project.
 cfcf clio search "retrieval patterns" --project cf-ecosystem --match-count 5
@@ -71,6 +82,8 @@ cfcf clio search "auth" --json | jq '.hits[0].docTitle'
 ```bash
 cfcf clio projects                    # list all Clio Projects + doc counts
 cfcf clio project show cf-ecosystem   # description, doc count, timestamps
+cfcf clio docs list                   # list documents (newest first; --project, --limit, --json)
+cfcf clio docs list --project cf-ecosystem
 cfcf clio stats                       # DB size, counts, active embedder, migrations
 cfcf clio get <document-id>           # fetch a document by id
 ```
@@ -85,33 +98,49 @@ cfcf clio get <document-id>           # fetch a document by id
 | Capability | Status |
 |---|---|
 | FTS5 keyword search | ✅ works out of the box |
-| Vector + hybrid (RRF) search | ✅ once an embedder is installed |
+| Vector + hybrid (RRF) search | ✅ once an embedder is installed (default: nomic-embed-text-v1.5 q8) |
+| Cerefox-style cosine threshold (`--min-score`, `clio.minSearchScore`) | ✅ default 0.5; FTS-matched chunks bypass in hybrid |
 | Small-to-big chunk expansion | ✅ |
-| Embedder install / list / set | ✅ (`cfcf clio embedder install bge-small-en-v1.5`) |
+| Embedder install / list / set / **set --reindex** | ✅ (default `cfcf clio embedder install` resolves from `clio.preferredEmbedder`) |
+| `cfcf clio reindex` | ✅ idempotent, batched, per-Project; pair with `embedder set --reindex` for safe model switches |
+| `cfcf clio docs list` | ✅ (newest first; `--project`, `--limit`, `--offset`) |
 | Iteration-loop auto-ingest (reflect, architect, decision-log, iteration-summary) | ✅ |
 | `cfcf-docs/clio-relevant.md` preload into agent context | ✅ |
 | `cfcf-docs/clio-guide.md` agent cue card | ✅ |
-| `cfcf clio reindex` | v2 |
-| Audit log + versioning + soft-delete | table shapes present; full v2 |
-| Remote Cerefox backend | v3+ |
+| Web UI Clio settings (default search mode, min score, preferred embedder readout) | ✅ on the Server Info page |
+| Audit log + versioning + soft-delete | table shapes present; full impl tracked under 6.16/6.17 |
+| sqlite-vec HNSW (replaces brute-force cosine) | tracked under 6.15; needs the 5.5 installer infra |
+| Web UI Clio tab (browse projects + docs in the GUI) | tracked under 6.18 |
+| Remote Cerefox backend (`MemoryBackend` interface ready) | future iteration |
 
 ## Turning on hybrid search
 
-FTS keyword search works immediately with no setup. For hybrid + semantic search, install an embedder:
+FTS keyword search works immediately with no setup. `cfcf init` (default flow) prompts you to pick an embedder and downloads it inline — by the time init exits, hybrid + semantic search are ready.
+
+If you skipped the embedder during init, you can install one later:
 
 ```bash
-# Downloads the model (~120 MB) from HuggingFace on first run.
-# Cached to ~/.cfcf/models/ so subsequent runs start cold-load-free.
-cfcf clio embedder install bge-small-en-v1.5
+# Downloads the model from HuggingFace on first run; cached to
+# ~/.cfcf/models/ so subsequent runs start cold-load-free.
+# No-arg form picks up clio.preferredEmbedder from the global config
+# (set during init); falls back to the catalogue default.
+cfcf clio embedder install
+cfcf clio embedder install nomic-embed-text-v1.5     # explicit
 
 # Confirm:
 cfcf clio embedder active
 
-# Now hybrid search works:
-cfcf clio search "flaky auth tests" --mode hybrid
+# Now hybrid search is the auto default:
+cfcf clio search "flaky auth tests"                  # mode = hybrid
 ```
 
-**Switching embedders is a destructive operation.** Each chunk's embedding is tied to the model that produced it; swapping models invalidates every existing embedding. `cfcf clio embedder set <other>` refuses to proceed when existing chunks have embeddings from the current model, unless `--force`. The supported recovery path (reindex-then-switch) ships in v2. For now: **pick an embedder at install time and stay on it**.
+**Switching embedders requires a reindex.** Each chunk's embedding is tied to the model that produced it; swapping models invalidates every existing embedding. The safe path is:
+
+```bash
+cfcf clio embedder set bge-small-en-v1.5 --reindex   # atomic switch + re-embed every chunk
+```
+
+`--reindex` re-embeds existing chunks under the new model in batched transactions. The legacy `--force` flag still exists for recovery scenarios but prints a warning about degraded vector search until you separately run `cfcf clio reindex`. **Default to `--reindex`.**
 
 ## Embedder ↔ chunk-size alignment
 
@@ -124,6 +153,14 @@ The chunker's chunk size is owned by the embedder manifest, not user config. `bg
 - Implementation decisions made during the build: [`docs/research/clio-implementation-decisions.md`](../research/clio-implementation-decisions.md)
 - Cerefox (upstream schema + chunker): [github.com/fstamatelopoulos/cerefox](https://github.com/fstamatelopoulos/cerefox)
 
-## A note on embedders (coming in PR2)
+## Search modes + the threshold (in detail)
 
-When PR2 lands, the active embedder (default: `bge-small-en-v1.5`, 384 dims) will be **locked at install time**. Switching embedders after ingestion poisons the vector corpus (dimension mismatch + token-window differences break old chunk boundaries). PR2 gates `cfcf clio embedder set <new>` with a full-reindex requirement, and the chunk-size default is picked by the embedder's manifest, not by user config. You don't have to think about this in PR1 — there's no embedder yet — but it's why the user guide will grow an "embedder effectively immutable after first ingest" section.
+`cfcf clio search` (and `GET /api/clio/search`) resolve the search mode in this order:
+
+1. Per-call `--mode` flag (`?mode=` query param).
+2. `clio.defaultSearchMode` in the global config — settable via the web UI's "Clio memory layer" section or by editing the config file.
+3. `auto` (the built-in default), which resolves at request time: active embedder present → `hybrid`; absent → `fts`.
+
+Set `clio.defaultSearchMode` to a concrete value (`fts` / `semantic` / `hybrid`) only if you want to force that mode regardless of embedder state — useful for FTS-only setups that want predictable behaviour.
+
+The `min-score` threshold (`--min-score` flag, `?min_score=` query param, `clio.minSearchScore` config) is the cosine floor for the **vector branch** of hybrid search and for **every** result of semantic search. FTS-matched chunks in hybrid mode bypass it (they've already proven keyword relevance). Default 0.5 — calibrated for OpenAI's embedders by Cerefox; cfcf inherits the same default but bge-small / nomic-q8 may need tuning. Lower for wider recall, higher for stricter precision. See [`docs/decisions-log.md`](../decisions-log.md) entry "Hybrid search threshold (Cerefox port)" for rationale.

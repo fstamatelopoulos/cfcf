@@ -820,7 +820,7 @@ Stop a running or paused loop.
 
 ## Clio (cross-workspace memory, item 5.7)
 
-All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). PR1 ships FTS5 keyword search; PR2 will layer hybrid vector search on top without changing the API shape (clients pass `mode=hybrid` which today falls back to `fts`).
+All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). As of v0.9.0: FTS5 keyword search + ONNX-embedder hybrid (RRF) + semantic (cosine) search, all behind the same shape — clients pick via `mode`. Default mode is `auto` (hybrid if an embedder is active, else fts).
 
 ### GET /api/clio/projects
 
@@ -875,12 +875,16 @@ Ingest a Markdown document. Chunks the content via the heading-aware chunker, sh
 
 ### GET /api/clio/search
 
-Search. FTS5 keyword in v1.
+Hybrid / semantic / FTS search.
 
 **Query params:**
-- `q` (required) — free-text query. Operator characters are stripped server-side, so clients don't need to escape.
+- `q` (required) — free-text query. FTS operator characters are stripped server-side, so clients don't need to escape.
 - `project` (optional) — Clio Project name or id. Scopes to that Project only.
-- `mode` (optional) — `"fts"` (default) · `"hybrid"` / `"semantic"` accepted but fall back to FTS in PR1.
+- `mode` (optional) — `"fts"` · `"hybrid"` · `"semantic"`. When omitted, the server resolves in this order:
+  - `clio.defaultSearchMode` from the global config (`auto` | concrete value),
+  - `auto` (hybrid if `clio_active_embedder` row exists, else fts).
+  Hybrid + semantic require an active embedder; calling them without one returns a 400.
+- `min_score` (optional) — cosine threshold (0.0–1.0) for the **vector branch** of hybrid (FTS-matched chunks bypass) and for **every** result of semantic. Per-call value wins over `clio.minSearchScore` in the global config; absent both, default 0.5 (Cerefox parity). Ignored for `mode=fts`.
 - `match_count` (optional) — max hits to return (default 10, cap 100).
 - `metadata` (optional) — JSON-encoded object for exact-match filtering against `clio_documents.metadata`, e.g. `metadata={"role":"reflection","tier":"semantic"}`.
 
@@ -911,11 +915,89 @@ Search. FTS5 keyword in v1.
 
 **Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON.
 
+### GET /api/clio/documents
+
+List documents, newest first. Soft-deleted docs are excluded.
+
+**Query params:**
+- `project` (optional) — Clio Project name or id. When unknown, returns an empty list.
+- `limit` (optional, default 50, cap 500).
+- `offset` (optional, default 0).
+
+**Response:** `200 OK`
+```json
+{ "documents": [ { /* ClioDocument */ }, ... ] }
+```
+
+**Errors:** `400` for non-positive `limit`, negative `offset`, or invalid params.
+
 ### GET /api/clio/documents/:id
 
 Fetch a document by UUID.
 
 **Responses:** `200 OK` with the ClioDocument · `404` if not found.
+
+### GET /api/clio/embedders
+
+Catalogue of supported embedders + active marker.
+
+**Response:** `200 OK`
+```json
+{
+  "catalogue": [
+    { "name": "nomic-embed-text-v1.5", "dim": 768, "approxSizeMb": 130, "recommendedChunkMaxChars": 7000, "recommendedExpansionRadius": 1, "description": "...", "active": true },
+    { "name": "bge-small-en-v1.5", "dim": 384, "approxSizeMb": 120, "recommendedChunkMaxChars": 1800, "recommendedExpansionRadius": 2, "description": "...", "active": false }
+  ]
+}
+```
+
+### POST /api/clio/embedders/install
+
+Install + activate an embedder. Triggers the HuggingFace download via `@huggingface/transformers` and caches to `~/.cfcf/models/`. With `loadNow: true` (default in CLI / init flows), warmup also materialises the inference pipeline so the next search is instant.
+
+**Request body:**
+```json
+{ "name": "nomic-embed-text-v1.5", "force": false }
+```
+
+**Responses:** `200 OK` with `{ active: { name, dim, recommendedChunkMaxChars }, downloaded: true|false }` · `400` for unknown name · `409` when existing embeddings would be invalidated and `force` is not set.
+
+### POST /api/clio/embedders/set
+
+Switch the active embedder. Pair `--reindex` (CLI flag → server `reindex: true` body field) for the safe, atomic switch + re-embed flow. `force` without reindex is degraded — vector search is broken until a separate `cfcf clio reindex` runs.
+
+**Request body:**
+```json
+{ "name": "bge-small-en-v1.5", "force": false, "reindex": true }
+```
+
+**Responses:** `200 OK` with `{ active: {...}, reindex: { chunksReembedded, chunksSkipped, documentsTouched, elapsedMs } | null }` · `400` for invalid `name` · `409` when corpus exists and neither `reindex` nor `force` is set.
+
+### POST /api/clio/reindex
+
+Re-embed chunks under the currently-active embedder. Idempotent: chunks whose `embedder` + `embedding_dim` already match the active embedder are skipped unless `force: true`.
+
+**Request body:**
+```json
+{ "project": "cf-ecosystem", "force": false, "batchSize": 32 }
+```
+
+All fields optional. Without `project`, every document in the DB is processed.
+
+**Response:** `200 OK`
+```json
+{
+  "embedder": "nomic-embed-text-v1.5",
+  "embeddingDim": 768,
+  "chunksScanned": 1234,
+  "chunksReembedded": 980,
+  "chunksSkipped": 254,
+  "documentsTouched": 56,
+  "elapsedMs": 18420
+}
+```
+
+**Errors:** `400` when no embedder is active.
 
 ### GET /api/clio/stats
 

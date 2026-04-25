@@ -408,16 +408,23 @@ The iteration branch is preserved. You can review the code, then restart with `c
 Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md) for the full walkthrough; the commands are:
 
 ```bash
-# Search (modes: fts | hybrid | semantic. Hybrid/semantic require an
-# active embedder -- see `cfcf clio embedder install`. Without one,
-# both fall back to fts.)
-cfcf clio search "flaky auth tests" [--mode hybrid] [--project <name>] [--match-count 5] [--metadata '{"role":"reflection"}'] [--json]
+# Search. Modes: fts | hybrid | semantic. Default mode is auto:
+#   - active embedder present → hybrid (RRF over FTS + vector)
+#   - no active embedder      → fts
+# Override per-call with --mode, or set clio.defaultSearchMode in the
+# global config (visible + editable in the Web UI's Server Info page).
+cfcf clio search "flaky auth tests"
+cfcf clio search "flaky auth tests" --mode hybrid                # force a mode
+cfcf clio search "flaky auth tests" --min-score 0.4              # widen vector recall (default 0.5)
+cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
+                                    --metadata '{"role":"reflection"}' --json
 
 # Ingest a markdown doc (or pipe via --stdin)
 cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
 cat note.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Note"
 
-# Retrieve
+# Browse / retrieve
+cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--json]   # newest first
 cfcf clio get <document-id> [--json]
 
 # Projects (grouping of workspaces by knowledge domain)
@@ -425,11 +432,19 @@ cfcf clio projects [--json]
 cfcf clio project create <name> [--description "..."]
 cfcf clio project show <name-or-id>
 
-# Embedder (controls hybrid/semantic search)
-cfcf clio embedder list                    # catalogue with active marker
-cfcf clio embedder active                  # current active embedder (or "none")
-cfcf clio embedder install bge-small-en-v1.5   # downloads + activates (first run only)
-cfcf clio embedder set <name>              # switch (blocked when old embeddings exist unless --force)
+# Embedder (controls hybrid/semantic search). Default model installed
+# during cfcf init is nomic-embed-text-v1.5 (q8, 768d, 8k token context).
+cfcf clio embedder list                            # catalogue with active marker
+cfcf clio embedder active                          # current active embedder (or "none")
+cfcf clio embedder install                         # uses clio.preferredEmbedder from config
+cfcf clio embedder install nomic-embed-text-v1.5   # explicit
+cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks
+cfcf clio embedder set <name> --force              # recovery only; degrades vector search until reindex
+
+# Re-embed existing chunks under the active embedder. Idempotent
+# (skips chunks already matching). Pair with `embedder set --reindex`
+# for the canonical switch flow.
+cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [--json]
 
 # Introspection
 cfcf clio stats [--json]
