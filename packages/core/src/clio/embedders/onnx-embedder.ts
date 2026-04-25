@@ -149,6 +149,17 @@ export class OnnxEmbedder implements Embedder {
     process.stderr.write(`[clio] embedder ready.\n`);
   }
 
+  /**
+   * Force the model to download + materialise the inference pipeline now.
+   * Without this, OnnxEmbedder defers all I/O to the first `embed()` call
+   * (so `installActiveEmbedder({ loadNow: true })` would silently skip the
+   * download and the user's first `cfcf clio search` pays the multi-minute
+   * cost mid-query).
+   */
+  async warmup(): Promise<void> {
+    await this.ensurePipeline();
+  }
+
   async embed(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
     await this.ensurePipeline();

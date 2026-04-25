@@ -186,9 +186,9 @@ Given that, the three externalized native deps (`@huggingface/transformers`, `on
 
 Acceptable for a local LLM-tool install.
 
-**What's bundled vs. lazy (confirmation, 2026-04-22 follow-up):**
+**What's bundled vs. lazy (confirmation, 2026-04-22 follow-up; refined 2026-04-25):**
 
-Everything cfcf needs to **run** ships in the tarball. The only intentional lazy-download is the embedder model:
+Everything cfcf needs to **run** ships in the tarball. The only intentional lazy-download is the embedder model. Note (2026-04-25): `cfcf init` is now also config-only — it does not pre-download the model. The installer's `--with-embedder` flag (§10 / 6.19) becomes the canonical "ship this machine fully ready" path; without it, the embedder downloads lazily on the first `cfcf clio search` / `ingest` call. Users who want explicit control can run `cfcf clio embedder install` post-init, which downloads immediately.
 
 | Ships in the tarball | Lazy-downloaded after install |
 |---|---|

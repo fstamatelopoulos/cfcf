@@ -21,6 +21,16 @@ export interface Embedder {
   embed(texts: string[]): Promise<Float32Array[]>;
 
   /**
+   * Force the underlying model to load NOW (download from HF if not
+   * cached, materialise the inference pipeline). Without this, OnnxEmbedder
+   * defers all I/O to the first `embed()` call, which means
+   * `installActiveEmbedder({ loadNow: true })` would otherwise silently
+   * skip the download. Optional because in-memory test embedders don't
+   * have anything to warm.
+   */
+  warmup?(): Promise<void>;
+
+  /**
    * Release native resources. Callers don't usually need this, but the
    * shutdown path does.
    */

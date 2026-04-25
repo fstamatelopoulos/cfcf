@@ -168,12 +168,18 @@ export class LocalClio implements MemoryBackend {
     const { setActiveEmbedder } = await import("../embedders/store.js");
     const record = setActiveEmbedder(this.db, entry, { force: opts.force });
     // Invalidate the cached embedder so next access reloads under the
-    // new identity. If the caller wants to warm the model now, re-enter
-    // getEmbedder() -- this is what install does so the first search
-    // doesn't pay the download cost.
+    // new identity. When `loadNow` is true the caller wants the model
+    // download to happen NOW (not lazily on first search) -- that means
+    // both constructing the embedder shell AND warming its pipeline.
+    // Without the warmup() call the OnnxEmbedder.ensurePipeline() path
+    // is skipped and no HF download is triggered, which is the bug that
+    // shipped with the initial pick-equals-install change (2026-04-22).
     this.embedder = null;
     if (opts.loadNow) {
-      await this.getEmbedder();
+      const e = await this.getEmbedder();
+      if (e?.warmup) {
+        await e.warmup();
+      }
     }
     return record;
   }
