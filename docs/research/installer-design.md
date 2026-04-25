@@ -47,58 +47,57 @@ Behind the scenes the installer must:
 4. Unpack into `~/.cfcf/` (layout in §7).
 5. Symlink `~/.cfcf/bin/cfcf` → `/usr/local/bin/cfcf` (or print a PATH-update instruction if that path isn't writable).
 6. Smoke-test `cfcf --version`.
-7. **Hand off to `cfcf init`** — either interactive (the user typed the curl one-liner in their terminal and is sitting there) or non-interactive (the installer was driven by a fleet-provisioning script with answers passed via flags). See §1.1 for the design.
-8. Print a "next steps" hint pointing at workspace creation.
+7. **Print "installation complete" + wait for Enter (interactive only).** When the user presses Enter, exec `~/.cfcf/bin/cfcf init`. Setting `CFCF_SKIP_INIT=1` skips the prompt + handoff entirely. See §1.1.
+8. After `cfcf init` returns (or is skipped), print a "next steps" hint pointing at workspace creation.
 
 **Out of scope for the installer:**
 
-- Embedder model download as a separate step — `cfcf init` (run by the installer in step 7) already downloads + activates + warms the user-picked embedder when one is selected. The previously-mentioned `--with-embedder=<name>` flag becomes the **non-interactive** equivalent: a way for fleet-provisioning scripts to say "run init with the default agent + this embedder" without a human at the prompt. Not a separate download path.
+- Embedder model download as a separate step — `cfcf init` (run by the installer in step 7) already downloads + activates + warms the user-picked embedder when one is selected. No `--with-embedder` flag needed on the installer; init handles it.
 - Installing agent CLIs (`claude-code`, `codex`, git) — those are third-party tools with their own install paths. The installer prints their install URLs on first-run if missing.
 - Auto-update (`cfcf self-update` is future work — see §10).
 
-### 1.1 The `cfcf init` hand-off — interactive vs. non-interactive
+### 1.1 The `cfcf init` hand-off — interactive only (decision 2026-04-25)
 
-`cfcf init` today is fully interactive: it asks ~10 questions (agent picks, model picks, max iterations, pause cadence, autoReviewSpecs, autoDocumenter, notifications, embedder pick, permissions ack). For an installer running in two contexts:
-
-- **Interactive context** (user typed `curl | bash` in their terminal): installer execs `cfcf init` directly. User answers the questions normally. End state: cfcf is installed, configured, embedder downloaded + active + warmed.
-- **Non-interactive context** (fleet provisioning, CI, devcontainer post-create script): installer needs to pass answers via flags or env vars. `cfcf init` doesn't currently support that.
-
-**Design decision (2026-04-25): add `--non-interactive` mode to `cfcf init`.** New flags map onto each prompt:
+`cfcf init` is fully interactive: ~10 questions (agent picks, model picks, max iterations, pause cadence, autoReviewSpecs, autoDocumenter, notifications, embedder pick, permissions ack). The installer assumes a human is at the keyboard and chains directly into init at the end of the install:
 
 ```
-cfcf init --non-interactive \
-  --dev-agent claude-code [--dev-model opus] \
-  --judge-agent codex [--judge-model o3] \
-  --architect-agent claude-code [--architect-model opus] \
-  --documenter-agent claude-code [--documenter-model sonnet] \
-  --reflection-agent claude-code [--reflection-model opus] \
-  --reflect-safeguard-after 3 \
-  --max-iterations 50 \
-  --pause-every 0 \
-  --auto-review-specs \
-  --readiness-gate blocked \
-  --auto-documenter \
-  --notifications \
-  --embedder nomic-embed-text-v1.5 \      # or --no-embedder for FTS-only
-  --acknowledge-permissions               # required; refusing aborts
+[cfcf] cfcf v0.9.0 installed at ~/.cfcf/.
+[cfcf] symlinked /usr/local/bin/cfcf
+[cfcf] smoke test: cfcf 0.9.0 (bun 1.3.x, sqlite 3.46.0+vec0.1.6)
+
+[cfcf] Installation complete.
+       Next: cfcf init walks you through agent + embedder + permission setup.
+       Press Enter to run it now, or Ctrl-C to exit and run `cfcf init` yourself later.
 ```
 
-Behaviour:
+The script then waits for Enter and execs `cfcf init`. End state after init returns: agents configured, embedder downloaded + active + warmed (per the 2026-04-25 init behaviour), permissions acknowledged.
 
-- All flag defaults match the interactive defaults (so `cfcf init --non-interactive --acknowledge-permissions` works with zero other flags).
-- Missing required answers (e.g., no agent detected) → exit non-zero with a clear message.
-- `--acknowledge-permissions` is required — there is no "default to yes" for the permission ack because the user must consciously consent in either mode.
-- `--embedder` and `--no-embedder` are mutually exclusive; either one acceptable, neither defaults to the catalogue default *for non-interactive only* (in interactive mode pressing Enter at the prompt picks the default).
-- Equivalent env vars (`CFCF_INIT_DEV_AGENT`, etc.) for callers that prefer env over flags. Flag wins if both set.
+**The `</dev/tty` wrinkle.** When the user runs `curl -fsSL ... | bash`, the script's stdin is the curl pipe, not the terminal — so a plain `read` returns immediately with empty input. Standard installer pattern (rustup, nvm) is to read from `/dev/tty` directly:
 
-Installer's role:
+```bash
+# Wrong -- reads from the curl pipe (empty), exec'd immediately:
+read -r -p "Press Enter to continue: "
 
-- If running interactively (stdin is a TTY): `exec ~/.cfcf/bin/cfcf init`.
-- If running non-interactively (stdin is not a TTY, or `CFCF_INSTALLER_NONINTERACTIVE=1` is set): `exec ~/.cfcf/bin/cfcf init --non-interactive ...flags`. The installer surfaces a few env vars users can set before running it (e.g. `CFCF_EMBEDDER`, `CFCF_DEV_AGENT`) and translates them to flags.
+# Right -- reads from the actual terminal even when stdin is a pipe:
+read -r -p "Press Enter to continue: " </dev/tty
+```
 
-This is a separate item from 5.5 itself — track as **5.5a `cfcf init --non-interactive` mode**, blocker for any fleet/devcontainer use of the installer. Pure interactive use of the installer doesn't need it.
+Same trick applies if anything in the installer ever needs input. `cfcf init` itself uses `node:readline` which already opens `/dev/tty` correctly when run as a fresh process, so the install script's `exec ~/.cfcf/bin/cfcf init` works without further plumbing.
 
-### 1.2 Server-coexistence during `cfcf init`
+**What about non-interactive provisioning?** Out of scope for now (no concrete demand). If/when fleet provisioning, devcontainer post-create, or CI installs become a real use case, the path is to add a `--non-interactive` mode to `cfcf init` (with per-prompt flags + env vars) and an `--unattended` flag to the install script that picks the non-interactive branch automatically when stdin isn't a TTY. Sketched below for whoever picks it up — not built or tracked as a current plan item:
+
+> _Future:_ `cfcf init --non-interactive --dev-agent claude-code --embedder nomic-embed-text-v1.5 --acknowledge-permissions [...]`. All defaults match the interactive defaults so the minimal invocation has only the agent + permission ack as required. `--acknowledge-permissions` always required (no silent yes for permission ack). Equivalent env vars (`CFCF_INIT_*`) for callers that prefer env over flags. Install script detects `! -t 0` and uses this branch with values pulled from env, exiting non-zero if required answers are missing.
+
+### 1.2 Skipping the init handoff entirely
+
+Power users may want the binary on disk without running init right now (e.g. they want to inspect `~/.cfcf/` first, or they're scripting). The script supports `CFCF_SKIP_INIT=1` (or `--skip-init` flag) which prints next-steps and exits without launching init. The `</dev/tty` read is also skipped under that flag so the script is fully unattended.
+
+```bash
+CFCF_SKIP_INIT=1 curl -fsSL ... | bash
+# → installs binary, prints "Run cfcf init when ready", exits 0.
+```
+
+### 1.3 Server-coexistence during `cfcf init`
 
 Whether `cfcf server` is running while the installer triggers `cfcf init`:
 
@@ -1023,21 +1022,40 @@ fi
 echo "[cfcf] smoke test"
 "$CFCF_INSTALL_DIR/bin/cfcf" --version
 
-# ── Next steps ────────────────────────────────────────────────────────
+# ── Optional: refuse if cfcf server is already running ────────────────
+# (per §1.3 -- a running server caches active embedder + config in
+# memory and won't pick up the new install's reconfigure cleanly.)
+if pgrep -f "cfcf server" >/dev/null 2>&1; then
+  echo "[cfcf] cfcf server is currently running."
+  echo "[cfcf] Stop it before continuing so init's config takes effect:"
+  echo "         cfcf server stop"
+  exit 1
+fi
+
+# ── Hand off to cfcf init (interactive, unless CFCF_SKIP_INIT) ───────
 cat <<EOF
 
-[cfcf] installed successfully.
-
-Next:
-  cfcf init
-    Walks you through interactive setup (detects agents, picks
-    embedder, configures Clio memory layer).
-
-  cfcf --help
-    Reference on every subcommand.
-
-Uninstall with: $CFCF_INSTALL_DIR/uninstall.sh
+[cfcf] cfcf $version installed at $CFCF_INSTALL_DIR.
+[cfcf] Next: cfcf init walks you through agent + embedder + permissions.
 EOF
+
+if [[ -z "${CFCF_SKIP_INIT:-}" ]]; then
+  echo "[cfcf] Press Enter to run 'cfcf init' now, or Ctrl-C to exit and run it later."
+  # </dev/tty so the read sees the actual terminal even when stdin is
+  # the curl pipe (rustup/nvm pattern).
+  read -r _ </dev/tty || true
+  echo "[cfcf] launching cfcf init..."
+  exec "$CFCF_INSTALL_DIR/bin/cfcf" init
+else
+  cat <<EOF
+
+[cfcf] CFCF_SKIP_INIT set; not launching cfcf init.
+       When you're ready: cfcf init
+
+       cfcf --help                for command reference
+       $CFCF_INSTALL_DIR/uninstall.sh   to uninstall
+EOF
+fi
 ```
 
 ### 9.1 Error-path behaviour
@@ -1257,13 +1275,12 @@ When 5.5 gets scheduled (possibly immediately after this doc):
 5. [ ] Add `scripts/stage-runtime-deps.sh` + `scripts/resolve-runtime-deps.js` (§8.4). Test locally: after running, check `node_modules/onnxruntime-node/bin/napi-v*/` contains the native addon for the current platform.
 6. [ ] Add `scripts/write-manifest.sh` (§8.5). Smoke-test: output parses as key:value.
 7. [ ] Add `scripts/build-release-tarball.sh` (§5.1, §8.6). Run locally → produces `dist/cfcf-<platform>-0.0.0-dev.tar.gz`.
-8. [ ] Add `scripts/install.sh` (§9). Includes the running-server check from §1.2. Phase 0 smoke: `bun run scripts/serve-dist.ts` in `dist/`, run installer with `CFCF_BASE_URL=http://localhost:8080 CFCF_VERSION=0.0.0-dev`, confirm `~/.cfcf/bin/cfcf --version` works. Confirm `cfcf clio stats` opens the DB against the custom libsqlite3 (use a temp `CFCF_CONFIG_DIR` so the real one isn't touched).
+8. [ ] Add `scripts/install.sh` (§9). Includes the running-server check from §1.3 + the interactive `cfcf init` handoff from §1.1 (read from `</dev/tty` so `curl | bash` works). Phase 0 smoke: `bun run scripts/serve-dist.ts` in `dist/`, run installer with `CFCF_BASE_URL=http://localhost:8080 CFCF_VERSION=0.0.0-dev`, confirm the press-Enter prompt fires, init runs interactively, post-init `~/.cfcf/bin/cfcf --version` works. Also smoke `CFCF_SKIP_INIT=1 ... | bash` to verify the unattended power-user path skips the handoff cleanly.
 9. [ ] Add `scripts/uninstall.sh` (§8.7). Run it after the Phase 0 install; confirm clean removal (honour the `CFCF_INSTALL_DIR` override to avoid wiping the real `~/.cfcf/`).
 10. [ ] Update `cfcf --version` to read `~/.cfcf/MANIFEST` (§11.2).
 11. [ ] Add `.github/workflows/release.yml` (§6.1). Smoke-test with a pre-release tag (`v0.9.0-rc.1`) on a fork or a test branch.
 12. [ ] Write `docs/guides/installing.md` (§12.1) + update `README.md` (§12.2).
-13. [ ] **Item 5.5a — `cfcf init --non-interactive` mode (§1.1).** Required for the installer's non-interactive code path (fleet provisioning, devcontainer post-create, scripted CI installs). Pure-interactive installer use doesn't need it; can land separately. Track as its own row in plan.md.
-14. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 + the optional `--embedder` flag on `cfcf init --non-interactive`).
+13. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 — the installer execs `cfcf init` and init handles the embedder download).
 
 ### 16.3 Order rationale
 
