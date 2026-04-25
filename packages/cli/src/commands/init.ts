@@ -400,14 +400,40 @@ export function registerInitCommand(program: Command): void {
         }
       }
 
+      // Classify the install error so the message + retry hint match
+      // the actual failure mode. Three buckets:
+      //   - module-resolution: the @huggingface/transformers JS package
+      //     couldn't be loaded from disk. Almost always a dev-mode issue
+      //     (running the compiled binary from a path where the upward
+      //     node_modules walk doesn't find the externalised deps). The
+      //     real installer (5.5) ships a colocated node_modules/ next to
+      //     the binary so end users never see this.
+      //   - network: the JS package loaded fine, but transformers.js
+      //     couldn't reach HuggingFace (offline / proxy / DNS / 403).
+      //     Retrying from a network-connected shell is the right advice.
+      //   - other: anything else -- print the raw error.
+      const errorClass = installError ? classifyInstallError(installError) : null;
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
       if (embedderInstalled && verifiedActive) {
         console.log(`       (Clio ready: ${verifiedActive.name}, dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
-      } else if (installError) {
-        console.log(`  2. Retry embedder install (download failed above): cfcf clio embedder install`);
+      } else if (errorClass === "module-resolution") {
+        console.log(`  2. Fix the module path, then re-run: cfcf init --force`);
+        console.log(`       This is a dev-mode issue: the binary couldn't load the JS`);
+        console.log(`       package '@huggingface/transformers' from disk. The HF`);
+        console.log(`       download did NOT happen. Three workarounds:`);
+        console.log(`         (a) NODE_PATH=$(realpath packages/core/node_modules) ./cfcf-binary init --force`);
+        console.log(`         (b) (cd packages/core && /full/path/to/cfcf-binary init --force)`);
+        console.log(`         (c) bun run dev:cli init --force`);
+        console.log(`       Real-installer users (item 5.5) won't hit this -- the`);
+        console.log(`       installer ships node_modules/ colocated with the binary.`);
+      } else if (errorClass === "network") {
+        console.log(`  2. Retry embedder install (HF download failed): cfcf clio embedder install`);
         console.log(`       (your pick "${embedderPicked}" is saved; rerun from a network-connected shell)`);
+      } else if (installError) {
+        console.log(`  2. Retry embedder install: cfcf clio embedder install`);
+        console.log(`       (your pick "${embedderPicked}" is saved)`);
       } else {
         console.log(`       (Clio: FTS-only mode -- install an embedder later with: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`);
       }
@@ -423,8 +449,41 @@ export function registerInitCommand(program: Command): void {
       console.log("    cfcf server stop && cfcf server start");
       if (installError) {
         console.log();
-        console.log(`Install error (captured -- you can retry): ${installError}`);
+        const label = errorClass === "module-resolution"
+          ? "Install error (dev-mode module-resolution -- see step 2 above)"
+          : errorClass === "network"
+          ? "Install error (network/HuggingFace failure -- see step 2 above)"
+          : "Install error (captured -- you can retry)";
+        console.log(`${label}: ${installError}`);
       }
       console.log();
     });
+}
+
+/**
+ * Classify an embedder-install error so init can show a useful retry
+ * hint. We can't tell from a single string with 100% confidence, but
+ * the keyword heuristics catch the two common cases (Bun/Node module
+ * resolution failure for the externalised JS package, and
+ * transformers.js's network/HF failures).
+ */
+function classifyInstallError(message: string): "module-resolution" | "network" | "other" {
+  const m = message.toLowerCase();
+  // Bun's ResolveMessage / Node's MODULE_NOT_FOUND wording.
+  if (m.includes("cannot find module") || m.includes("resolvemessage") || m.includes("module_not_found")) {
+    return "module-resolution";
+  }
+  // transformers.js / fetch failures during the HF download.
+  if (
+    m.includes("enotfound") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("certificate") ||
+    m.includes("huggingface") ||
+    m.includes("fetch failed") ||
+    m.includes("network")
+  ) {
+    return "network";
+  }
+  return "other";
 }
