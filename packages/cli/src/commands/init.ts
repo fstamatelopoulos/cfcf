@@ -416,6 +416,11 @@ export function registerInitCommand(program: Command): void {
       console.log(`  ${nextStep + 1}. Populate problem-pack/problem.md and success.md with your problem definition`);
       console.log(`  ${nextStep + 2}. Review with:          cfcf review --workspace <name>  (optional)`);
       console.log(`  ${nextStep + 3}. Launch development:   cfcf run --workspace <name>`);
+      console.log();
+      console.log("Note: if cfcf server is currently running, restart it so the new");
+      console.log("config + active embedder take effect (the server caches both at");
+      console.log("startup):");
+      console.log("    cfcf server stop && cfcf server start");
       if (installError) {
         console.log();
         console.log(`Install error (captured -- you can retry): ${installError}`);
