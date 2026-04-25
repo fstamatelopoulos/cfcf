@@ -98,11 +98,55 @@ export class OnnxEmbedder implements Embedder {
     );
 
     // Progress callback for the model download. transformers.js calls
-    // this with per-file status updates. We render a minimal
-    // one-line-per-file progress bar on stderr so the user sees the
-    // download ticking rather than staring at a silent terminal for
-    // 60 seconds.
-    const progressState = new Map<string, { loaded: number; total: number; done: boolean; lastPct: number }>();
+    // this with per-file status updates. We render a single in-place
+    // progress line that overwrites itself (\r + ANSI clear-EOL) instead
+    // of a new line per tick. Only stderr renders are TTY-aware; if
+    // stderr isn't a TTY (CI, log redirection) we fall back to one
+    // line per file's final state so logs stay readable.
+    //
+    // Two shapes of upstream events this has to survive:
+    //   1. Known content-length: total stays constant, loaded grows.
+    //      Standard percentage bar.
+    //   2. Unknown content-length (Bun + some CDN responses): each event
+    //      reports total === loaded with growing values. Without special
+    //      handling, every event looks like "100%" with a different size
+    //      and we'd spam the terminal -- which is exactly what the
+    //      previous implementation did. We detect this via the `total`
+    //      growing across events and render an indeterminate bar
+    //      (fixed-width 50% pulse + "?? MB" so the user knows it's
+    //      streaming) updated at most every ~250ms.
+    type FileState = {
+      loaded: number;
+      total: number;
+      done: boolean;
+      indeterminate: boolean;     // total kept growing → unknown size
+      lastRenderAt: number;       // ms timestamp of last stderr write
+      lastRenderedPct: number;    // for the determinate path's 5% throttle
+    };
+    const progressState = new Map<string, FileState>();
+    let activeFile: string | null = null;        // file currently on the in-place line
+    const isTty = !!process.stderr.isTTY;
+    const RENDER_INTERVAL_MS = 250;
+
+    const renderInPlace = (line: string): void => {
+      if (isTty) {
+        // \r + ANSI clear-EOL; previous line's tail is wiped no matter
+        // how short the new one is.
+        process.stderr.write(`\r\x1b[K${line}`);
+      } else {
+        // No TTY: append-only, but still useful as a coarse log.
+        process.stderr.write(`${line}\n`);
+      }
+    };
+    const finalizeLine = (): void => {
+      if (isTty && activeFile !== null) {
+        process.stderr.write("\n");
+      }
+      activeFile = null;
+    };
+
+    const fmtMb = (n: number) => (n / 1024 / 1024).toFixed(1);
+
     const progressCallback = (info: {
       status?: string;
       file?: string;
@@ -112,29 +156,66 @@ export class OnnxEmbedder implements Embedder {
       progress?: number;
     }) => {
       const file = info.file ?? info.name ?? "(unknown)";
+      const now = Date.now();
+
       if (info.status === "progress") {
         const total = info.total ?? 0;
         const loaded = info.loaded ?? 0;
-        const pct = total > 0 ? Math.floor((loaded / total) * 100) : 0;
-        const prior = progressState.get(file) ?? { loaded: 0, total: 0, done: false, lastPct: -1 };
-        // Only re-render when the percentage advances by ≥5 so we
-        // don't flood stderr.
-        if (pct >= prior.lastPct + 5 || pct === 100) {
-          const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
-          const bar = makeBar(pct);
-          process.stderr.write(
-            `[clio] ${bar} ${pct.toString().padStart(3)}%  ${mb(loaded)}/${mb(total)} MB  ${file}\n`,
-          );
-          progressState.set(file, { loaded, total, done: pct >= 100, lastPct: pct });
-        } else {
-          progressState.set(file, { ...prior, loaded, total });
+        const prior = progressState.get(file) ?? {
+          loaded: 0, total: 0, done: false,
+          indeterminate: false, lastRenderAt: 0, lastRenderedPct: -1,
+        };
+        // Heuristic: if total grew since last event, the upstream is
+        // streaming with unknown final size. Stick that file in
+        // indeterminate mode until status="done".
+        const indeterminate = prior.indeterminate || (prior.total > 0 && total > prior.total) || total === loaded;
+        const next: FileState = {
+          loaded, total, done: false,
+          indeterminate, lastRenderAt: prior.lastRenderAt, lastRenderedPct: prior.lastRenderedPct,
+        };
+
+        // Switch the active in-place line to this file if needed.
+        if (activeFile !== file) {
+          finalizeLine();
+          activeFile = file;
         }
+
+        if (indeterminate) {
+          // Time-throttled spinner-style progress with just the byte count.
+          if (now - prior.lastRenderAt >= RENDER_INTERVAL_MS) {
+            renderInPlace(
+              `[clio] [streaming...]  ${fmtMb(loaded)} MB  ${file}`,
+            );
+            next.lastRenderAt = now;
+          }
+        } else if (total > 0) {
+          const pct = Math.floor((loaded / total) * 100);
+          // TTY: fine-grained updates every 250ms feel snappy because they
+          // overwrite in place. Non-TTY (CI / log redirect): each render
+          // is its own line in the log, so we want strictly 5% steps to
+          // avoid noise. The time-based fallback only fires under TTY.
+          const stepBumped = pct >= prior.lastRenderedPct + 5;
+          const timeBumped = isTty
+            && now - prior.lastRenderAt >= RENDER_INTERVAL_MS
+            && pct !== prior.lastRenderedPct;
+          if (stepBumped || timeBumped) {
+            renderInPlace(
+              `[clio] ${makeBar(pct)} ${pct.toString().padStart(3)}%  ${fmtMb(loaded)}/${fmtMb(total)} MB  ${file}`,
+            );
+            next.lastRenderedPct = pct;
+            next.lastRenderAt = now;
+          }
+        }
+
+        progressState.set(file, next);
       } else if (info.status === "done") {
         const prior = progressState.get(file);
-        if (prior && !prior.done) {
-          process.stderr.write(`[clio] ✓ ${file}\n`);
-          progressState.set(file, { ...prior, done: true, lastPct: 100 });
-        }
+        // Finalize the in-place line for this file (newline) and emit a
+        // tick so the user sees the file as completed in the scrollback.
+        if (activeFile === file) finalizeLine();
+        const finalSize = prior ? fmtMb(prior.loaded) : "?";
+        process.stderr.write(`[clio] ✓ ${file}  (${finalSize} MB)\n`);
+        if (prior) progressState.set(file, { ...prior, done: true });
       }
     };
 
