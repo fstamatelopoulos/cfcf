@@ -45,6 +45,11 @@ function registerUnder(root: Command): void {
       "--mode <mode>",
       "Search mode: 'fts' (keyword), 'semantic' (vector cosine), or 'hybrid' (RRF over both). Omit to use the configured default.",
     )
+    .option(
+      "--min-score <n>",
+      "Minimum cosine (0.0-1.0) for vector-only hybrid candidates / all semantic results. FTS-matched hybrid chunks always pass. Omit to use clio.minSearchScore from config (default 0.5).",
+      (v) => parseFloat(v),
+    )
     .option("-n, --match-count <n>", "Max number of hits to return (default 10)", (v) => parseInt(v, 10))
     .option(
       "-m, --metadata <json>",
@@ -69,6 +74,13 @@ function registerUnder(root: Command): void {
           process.exit(1);
         }
         qs.set("mode", opts.mode);
+      }
+      if (opts.minScore !== undefined) {
+        if (isNaN(opts.minScore) || opts.minScore < 0 || opts.minScore > 1) {
+          console.error(`search: --min-score must be a number in [0, 1] (got: ${opts.minScore})`);
+          process.exit(1);
+        }
+        qs.set("min_score", String(opts.minScore));
       }
       if (opts.matchCount) qs.set("match_count", String(opts.matchCount));
       if (opts.metadata) {

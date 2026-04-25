@@ -84,6 +84,7 @@ export interface GlobalConfig {
     ingestPolicy?: "summaries-only" | "all" | "off";
     preferredEmbedder?: string;
     defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
+    minSearchScore?: number;
   };
 }
 

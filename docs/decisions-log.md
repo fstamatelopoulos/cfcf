@@ -19,6 +19,43 @@
 
 ## Log
 
+### 2026-04-25 -- Hybrid search threshold (Cerefox port)
+
+**Symptom that surfaced this:** with a single ingested document in Clio, every irrelevant query returned that one doc as a "match" with a tiny RRF score (`[0.016]` was the user's experience). Vector-only candidates with near-zero cosine were being fused into the result set instead of dropped, so an empty-corpus result set (the right answer) became a one-result noisy set.
+
+**Part 1 — Cerefox precedent (the prior decision being mirrored).**
+
+Cerefox uses `CEREFOX_MIN_SEARCH_SCORE = 0.50` as a cosine-similarity floor on the vector branch of search. Documented in `docs/guides/configuration.md` under *Retrieval*; the live behaviour:
+
+- In **hybrid search**: chunks that matched the FTS keyword operator (`@@`) always pass through regardless of vector score. The threshold filters only vector-only candidates.
+- In **semantic search**: every result is filtered by cosine ≥ threshold.
+- In **FTS search**: threshold ignored entirely.
+
+The 0.50 default was calibrated for OpenAI `text-embedding-3-small`. Cerefox's published guidance:
+
+| Score | Meaning (text-embedding-3-small) |
+|-------|---|
+| 0.0 – 0.20 | Noise floor — unrelated content |
+| 0.20 – 0.45 | Weak / tangential — same domain, different topic |
+| 0.45 – 0.70 | Genuine match — related concepts, paraphrases |
+| 0.70 – 1.0  | Near-duplicate / direct answer |
+
+Recommended: 0.50 for general use, 0.40 for wider recall on small corpora, 0.70 for high precision. Disabling (0.0) is explicitly *not* recommended.
+
+**Part 2 — cfcf Clio adaptation (what we actually shipped).**
+
+Same architecture, with the threshold sourced via the standard cfcf precedence chain instead of a single env var:
+
+1. **Per-call**: `--min-score` flag on `cfcf clio search` / `?min_score=` on `/api/clio/search`.
+2. **Per-config**: `clio.minSearchScore` in the global config (editable via the web UI's "Clio memory layer" section).
+3. **Default**: `0.5` (matching Cerefox's default; plugged in at the server route when neither call nor config sets it).
+
+`SearchRequest.minScore` carries the resolved value into `LocalClio`. `searchSemantic` filters all candidates by raw cosine before slicing to `matchCount`. `searchHybrid` filters only the vector-only branch — FTS-matched chunks always pass the fusion step regardless of cosine, exactly mirroring the Cerefox behaviour.
+
+**Calibration caveat (cfcf-specific):** Cerefox's 0.50 was tuned for `text-embedding-3-small`. cfcf ships with `bge-small-en-v1.5` (Xenova, 384d) and the new default `nomic-embed-text-v1.5` (q8, 768d). Different models produce different cosine-similarity distributions: bge-style models tend to score unrelated content somewhat higher than OpenAI's models do, and nomic's q8-quantized embeddings have their own profile. The 0.5 default may need recalibration once we have empirical data from a non-trivial corpus. The user-tunable knob means we don't have to wait for the recalibration to ship — users can dial `clio.minSearchScore` or pass `--min-score` per call. A future Clio v2 item should add per-embedder default thresholds to the catalogue.
+
+**What this fixes for the user:** noise queries against a one-doc corpus now return zero hits in hybrid mode (the vector candidate gets dropped at the threshold; no FTS match to bypass it). Real queries that share keywords with the doc still hit via the FTS branch, immune to the threshold. Real semantically-close queries that don't share keywords still hit via the vector branch *if* their cosine clears the threshold.
+
 ### 2026-04-25 -- Clio embedders: model-source, version pinning, and platform support
 
 **Findings during dogfooding the Clio embedder install path on Intel Mac (`darwin-x64`). Multiple non-obvious issues had to be resolved before init worked end-to-end. Capturing them here so the same investigations don't get repeated.**

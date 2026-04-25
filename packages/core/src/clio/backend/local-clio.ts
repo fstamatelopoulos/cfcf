@@ -615,8 +615,15 @@ export class LocalClio implements MemoryBackend {
       const v = blobToEmbedding(new Uint8Array(row.embedding as Uint8Array), embedder.dim);
       scored.push({ row, score: cosineSimilarity(queryVector, v) });
     }
-    scored.sort((a, b) => b.score - a.score);
-    const top = scored.slice(0, matchCount);
+    // Threshold filter (Cerefox port; see decisions-log 2026-04-25).
+    // Drops noise-floor matches that would otherwise show up as "hits"
+    // simply because the corpus is small. Caller-supplied minScore wins;
+    // backend default 0 means "no filter" (the route layer plugs in 0.5
+    // when neither call nor config sets a value).
+    const minScore = req.minScore ?? 0;
+    const filtered = minScore > 0 ? scored.filter((x) => x.score >= minScore) : scored;
+    filtered.sort((a, b) => b.score - a.score);
+    const top = filtered.slice(0, matchCount);
 
     const hits = top.map((x) => this.vectorRowToHit(x.row, x.score));
     const expandedHits = this.expandSmallToBig(hits, embedder.dim > 768 ? 1 : 2);
@@ -660,11 +667,20 @@ export class LocalClio implements MemoryBackend {
     ftsRows.forEach((r, i) => ftsRank.set(r.chunk_id, i + 1));
     const vecRank = new Map<string, number>();
     vecRanked.forEach(({ row }, i) => vecRank.set(row.chunk_id, i + 1));
+    // Raw cosine per chunk; we need this to apply the threshold to the
+    // vector-only branch below.
+    const vecCosine = new Map<string, number>();
+    vecRanked.forEach(({ row, score }) => vecCosine.set(row.chunk_id, score));
+    const minScore = req.minScore ?? 0;
 
     const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
     // Seed with whichever engine produced each candidate; take the first
     // sighting as the canonical row.
     for (const r of ftsRows) {
+      // FTS-matched chunks ALWAYS pass through, regardless of vector
+      // score (matches Cerefox's threshold semantics: the threshold
+      // only filters vector-only candidates). See decisions-log
+      // 2026-04-25 "Hybrid search threshold".
       const rrf = 1 / (RRF_K + (ftsRank.get(r.chunk_id) ?? 1));
       fused.set(r.chunk_id, { row: r, score: rrf });
     }
@@ -672,8 +688,14 @@ export class LocalClio implements MemoryBackend {
       const extra = 1 / (RRF_K + (vecRank.get(row.chunk_id) ?? 1));
       const cur = fused.get(row.chunk_id);
       if (cur) {
+        // Already from FTS — boost via co-occurrence regardless of
+        // cosine. The FTS match already attests relevance.
         cur.score += extra;
       } else {
+        // Vector-only candidate — apply the threshold here. Below the
+        // floor we drop the candidate entirely rather than fusing it
+        // into the result set with a tiny RRF score.
+        if (minScore > 0 && (vecCosine.get(row.chunk_id) ?? 0) < minScore) continue;
         fused.set(row.chunk_id, { row, score: extra });
       }
     }

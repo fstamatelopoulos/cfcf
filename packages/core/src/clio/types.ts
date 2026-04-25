@@ -91,6 +91,21 @@ export interface SearchRequest {
    * e.g. `{ workspace_id: "calc-abc", role: "reflection" }`.
    */
   metadata?: Record<string, string | number | boolean>;
+  /**
+   * Minimum cosine similarity (raw, before RRF fusion) for the
+   * **vector-only** branch. Ported from Cerefox's `CEREFOX_MIN_SEARCH_SCORE`
+   * (see decisions-log.md 2026-04-25 entry "Hybrid search threshold").
+   * Semantics:
+   *   - "hybrid": chunks that matched the FTS keyword operator pass
+   *     through regardless. Vector-only candidates whose raw cosine is
+   *     below `minScore` are dropped before RRF fusion.
+   *   - "semantic": every result is filtered.
+   *   - "fts": ignored.
+   * Per-call value (CLI `--min-score` / query param `min_score`) wins
+   * over `clio.minSearchScore` in the global config; absent both, the
+   * default 0.5 is used at the server route.
+   */
+  minScore?: number;
 }
 
 export interface SearchHit {

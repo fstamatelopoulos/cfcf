@@ -139,9 +139,32 @@ export function registerClioRoutes(app: Hono): void {
       }
     }
 
+    // Minimum cosine similarity for the vector-only branch (hybrid) /
+    // every result (semantic). Resolution order, like search mode:
+    //   1. ?min_score= query param (per-call)
+    //   2. clio.minSearchScore in the global config
+    //   3. built-in default 0.5 (Cerefox parity)
+    // Pure FTS is unaffected -- LocalClio's searchFts ignores minScore.
+    let minScore: number | undefined;
+    const minScoreStr = c.req.query("min_score");
+    if (minScoreStr !== undefined) {
+      const n = parseFloat(minScoreStr);
+      if (isNaN(n) || n < 0 || n > 1) {
+        return c.json({ error: "min_score must be a number in [0, 1]" }, 400);
+      }
+      minScore = n;
+    }
+    if (minScore === undefined) {
+      try {
+        const config = await readConfig();
+        minScore = config?.clio?.minSearchScore;
+      } catch { /* fall through */ }
+    }
+    if (minScore === undefined) minScore = 0.5;
+
     try {
       const backend = getClioBackend();
-      const res = await backend.search({ query: q, project, matchCount, mode, metadata });
+      const res = await backend.search({ query: q, project, matchCount, mode, metadata, minScore });
       return c.json(res);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

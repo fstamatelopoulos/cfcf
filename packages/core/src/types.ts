@@ -136,6 +136,16 @@ export interface ClioGlobalConfig {
    * query param) still wins when set.
    */
   defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
+  /**
+   * Minimum cosine similarity (raw, 0.0–1.0) for the vector-only branch
+   * of hybrid search and for every result of semantic search. Ported
+   * from Cerefox's `CEREFOX_MIN_SEARCH_SCORE`. Defaults to 0.5 when
+   * unset. FTS-matched chunks bypass this filter in hybrid mode (the
+   * threshold only filters vector-only candidates). Per-call values
+   * win over this config. See `docs/decisions-log.md` 2026-04-25
+   * "Hybrid search threshold" for rationale + calibration notes.
+   */
+  minSearchScore?: number;
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;

@@ -434,6 +434,32 @@ export function ServerInfo() {
                     </div>
                   </td>
                 </tr>
+                <tr>
+                  <th>Min search score</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={draft.clio?.minSearchScore ?? 0.5}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseFloat(e.target.value);
+                        if (!Number.isFinite(n) || n < 0 || n > 1) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), minSearchScore: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "5rem" }}
+                    />
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Cosine threshold for the vector-only branch of hybrid search and for every semantic result. FTS-matched chunks in hybrid mode bypass this filter. Default 0.5; lower for wider recall, higher for stricter precision. Per-call <code>--min-score</code> always wins.
+                    </div>
+                  </td>
+                </tr>
                 {draft.clio?.preferredEmbedder && (
                   <tr>
                     <th>Preferred embedder</th>
