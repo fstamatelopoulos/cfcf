@@ -1,63 +1,50 @@
 #!/usr/bin/env bash
 #
-# Remove a cfcf install.
+# Uninstall cfcf.
 #
-# Usage:  uninstall.sh             (interactive, asks before deleting user data)
-#         CFCF_FORCE=1 uninstall.sh   (no prompt; rm -rf and exit)
+# Per docs/research/installer-design.md §3.3 + §4. The npm-format install
+# shape means uninstalling cfcf itself is a one-liner: `bun remove -g
+# @cerefox/cfcf-cli`. Per-platform native package + transitive runtime
+# deps come along for free. User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`,
+# platform config dir, workspace `cfcf-docs/`) is intentionally NOT
+# touched -- removing those is a separate manual decision.
 #
-# Env:
-#   CFCF_INSTALL_DIR   default: ~/.cfcf  (where the tarball was extracted)
-#   CFCF_SYMLINK_DIR   default: /usr/local/bin (where the symlink lives)
-#   CFCF_FORCE         if set, skip the interactive confirmation
-#
-# What gets removed:
-#   - the symlink at $CFCF_SYMLINK_DIR/cfcf
-#   - the entire $CFCF_INSTALL_DIR (binary, native libs, models cache,
-#     clio.db, logs)
-#
-# What does NOT get removed:
-#   - the platform-specific config dir (~/Library/Application Support/cfcf
-#     on macOS, $XDG_CONFIG_HOME/cfcf on Linux). Run
-#     `cfcf config show --path` BEFORE uninstall to find it; remove
-#     manually if desired.
-#   - any cfcf-docs/ inside your workspaces. Those are committed git
-#     artifacts and are explicitly preserved.
+# Usage:  uninstall.sh             (interactive, prints what stays + asks)
+#         CFCF_FORCE=1 uninstall.sh   (no prompt; just runs bun remove)
 
 set -euo pipefail
 
-INSTALL_DIR="${CFCF_INSTALL_DIR:-$HOME/.cfcf}"
-SYMLINK_DIR="${CFCF_SYMLINK_DIR:-/usr/local/bin}"
-SYMLINK="$SYMLINK_DIR/cfcf"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "[cfcf-uninstall] Bun not found on PATH. cfcf is installed via Bun's"
+  echo "[cfcf-uninstall] global package manager; install Bun to remove it,"
+  echo "[cfcf-uninstall] or run: rm -rf \"\$HOME/.bun/install/global/node_modules/@cerefox/cfcf-cli\""
+  exit 1
+fi
 
-# Refuse to delete obviously-wrong targets so a misset env var doesn't
-# rm -rf $HOME or similar.
-case "$INSTALL_DIR" in
-  ""|"/"|"$HOME") echo "[cfcf-uninstall] refusing to operate on '$INSTALL_DIR'"; exit 1 ;;
-esac
+cat <<'EOF'
+[cfcf-uninstall] About to run: bun remove -g @cerefox/cfcf-cli
 
-echo "[cfcf-uninstall] would remove:"
-echo "  - $SYMLINK  (symlink, if present)"
-echo "  - $INSTALL_DIR  (binary, native libs, embedder models, clio.db, logs)"
-echo
+What this removes:
+  - the cfcf CLI + its bundled JS
+  - the per-platform @cerefox/cfcf-native-<platform> package
+  - the runtime deps (@huggingface/transformers, onnxruntime-node, sharp)
+
+What this does NOT remove (preserved on purpose):
+  - ~/.cfcf/clio.db    -- your cross-workspace memory
+  - ~/.cfcf/logs/      -- agent stdout/stderr archives
+  - the cfcf config file (run `cfcf config show --path` BEFORE uninstall to find it)
+  - cfcf-docs/ directories inside any workspace -- those are committed git artifacts
+
+EOF
 
 if [[ -z "${CFCF_FORCE:-}" ]]; then
-  read -r -p "Proceed? This deletes your local Clio DB + agent logs. [y/N] " ans </dev/tty
+  read -r -p "Proceed? [y/N] " ans </dev/tty
   case "$ans" in
     y|Y|yes|YES) ;;
     *) echo "[cfcf-uninstall] aborted."; exit 0 ;;
   esac
 fi
 
-if [[ -L "$SYMLINK" || -e "$SYMLINK" ]]; then
-  rm -f "$SYMLINK" 2>/dev/null || sudo rm -f "$SYMLINK"
-  echo "[cfcf-uninstall] removed symlink $SYMLINK"
-fi
-
-if [[ -d "$INSTALL_DIR" ]]; then
-  rm -rf "$INSTALL_DIR"
-  echo "[cfcf-uninstall] removed $INSTALL_DIR"
-fi
-
+bun remove -g @cerefox/cfcf-cli
 echo "[cfcf-uninstall] done."
-echo "[cfcf-uninstall] Note: cfcf's config file at the platform-specific config dir was NOT removed."
-echo "[cfcf-uninstall] Run 'cfcf config show --path' (before uninstalling) to find it; rm manually if desired."
+echo "[cfcf-uninstall] If you also want to delete your data: rm -rf ~/.cfcf"

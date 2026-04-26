@@ -24,8 +24,7 @@ if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") {
 }
 
 import { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -57,20 +56,21 @@ if (process.env.CFCF_INTERNAL_SERVE === "1") {
 }
 
 /**
- * `cfcf --version` output. Reads `<install-dir>/MANIFEST` when available
- * (5.5 installer drops it at the install root; the binary lives at
- * `<install-dir>/bin/cfcf` so we look one level up from process.execPath).
- * In dev mode (no installer), falls back to just the VERSION constant.
+ * `cfcf --version` output. Resolves the installed package's package.json
+ * via `require.resolve("@cerefox/cfcf-cli/package.json")` so the version
+ * shown matches what the user actually installed (not the in-repo
+ * VERSION constant). Dev mode (workspace package is named `@cfcf/cli`,
+ * not `@cerefox/cfcf-cli`) falls back to the VERSION constant from core.
  */
 function buildVersionString(): string {
   try {
-    const manifestPath = join(dirname(process.execPath), "..", "MANIFEST");
-    if (existsSync(manifestPath)) {
-      // MANIFEST starts with `cfcf:   <version>` so the cfcf line is
-      // already there. Return it as-is; commander prints it verbatim.
-      return readFileSync(manifestPath, "utf8").trimEnd();
-    }
-  } catch { /* fall through to bare-VERSION default */ }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require("node:module") as typeof import("node:module");
+    const req = createRequire(import.meta.url);
+    const pkgJsonPath = req.resolve("@cerefox/cfcf-cli/package.json");
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+    if (typeof pkg.version === "string") return pkg.version;
+  } catch { /* not the installed shape; fall through */ }
   return VERSION;
 }
 
