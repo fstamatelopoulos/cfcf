@@ -18,12 +18,20 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
 
 ## Prerequisites
 
-- **[Node.js](https://nodejs.org/)** v20+ (required for AI agent CLIs)
-- **[Bun](https://bun.sh/)** v1.3+ (runtime and toolchain)
-- **[Git](https://git-scm.com/)** (required for iteration branch management)
-- At least one supported AI coding agent:
+### For end users (running cfcf via the installer)
+
+- **[Git](https://git-scm.com/)** — required for iteration branch management
+- At least one supported AI coding agent (cfcf detects what's installed during `cfcf init`):
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
   - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
+
+That's it. The cfcf binary is Bun-compiled and ships with its own runtime + colocated `node_modules/` + custom SQLite + sqlite-vec — no Bun, Node, or npm needed on the target machine. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + the local / file-URL install paths.
+
+### For developers (building from source)
+
+- **[Node.js](https://nodejs.org/)** v20+ — for tooling that the dev workflow shells out to
+- **[Bun](https://bun.sh/)** v1.3+ — runtime and toolchain (`bun install`, `bun test`, `bun build --compile`)
+- Git + the agent CLIs above.
 
 ### Install Node.js
 
