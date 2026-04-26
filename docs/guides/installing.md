@@ -1,8 +1,8 @@
 # Installing cfcf
 
-cf² ships a standalone binary per platform plus colocated runtime deps + native libs (custom SQLite + sqlite-vec). The installer downloads + verifies + drops everything under `~/.cfcf/`.
+cfcf ships as a standard npm-format package: `@cerefox/cfcf-cli`. The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/cfcf-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs.
 
-**Prerequisites** — that's it: `git`. Everything else (Bun runtime, Node, npm) is bundled in the tarball; you don't need them on your machine.
+**Prerequisites** — `git` + `bun` ≥ 1.3 (the curl-bash installer below installs Bun for you if it's missing).
 
 ## Quick install
 
@@ -10,98 +10,78 @@ cf² ships a standalone binary per platform plus colocated runtime deps + native
 curl -fsSL https://<host>/install.sh | bash
 ```
 
-Replace `<host>` with the hosting URL the project announces — see [Where the install URL points](#where-the-install-url-points) below for the current shape. The default URL in the script targets a public `cfcf-releases` repo when one is set up; until then, use the `CFCF_BASE_URL` override (see [Local install](#local-install)).
+Replace `<host>` with the hosting URL the project announces. Today (cfcf private), this is the `cfcf-releases` GitHub repo's [Release page]; once cfcf goes public, it becomes `bun install -g @cerefox/cfcf-cli` (no curl-bash needed).
 
 The script:
 
-1. Detects your platform (darwin-arm64, darwin-x64, linux-x64).
-2. Downloads `cfcf-<platform>-<version>.tar.gz` + `SHA256SUMS`.
-3. Verifies the checksum.
-4. Unpacks into `~/.cfcf/` (binary at `~/.cfcf/bin/cfcf`, runtime deps at `~/.cfcf/bin/node_modules/`, custom SQLite + sqlite-vec at `~/.cfcf/native/`).
-5. Symlinks `~/.cfcf/bin/cfcf` → `/usr/local/bin/cfcf` (or prints a PATH hint if that location isn't writable).
-6. On macOS, strips the `com.apple.quarantine` xattr so Gatekeeper doesn't block the unsigned binary.
-7. Prompts you to press Enter to run `cfcf init`, then hands off interactively. Set `CFCF_SKIP_INIT=1` to skip the handoff.
+1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
+2. Resolves the requested version (`CFCF_VERSION=latest` follows GitHub's release-redirect; an explicit tag is honoured verbatim).
+3. Runs `bun install -g <tarball-URL>`. Bun fetches the cfcf tarball + the platform-specific `@cerefox/cfcf-native-<platform>` package + the runtime deps (transformers, ORT-node, sharp).
+4. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
+
+## Direct install (no wrapper)
+
+If Bun is already on your machine, you can skip `install.sh` entirely and let Bun do the work:
+
+```bash
+bun install -g <tarball-URL>           # e.g. https://github.com/.../cfcf-0.10.0.tgz
+# or, once cfcf is on npmjs.com:
+bun install -g @cerefox/cfcf-cli
+```
+
+This is identical to what `install.sh` does after the Bun bootstrap.
 
 ## Local install (no GitHub, no public URL)
 
-The install script is hosting-agnostic — it works against any HTTP server or even a local `file://` URL. Useful when you've been handed a tarball out-of-band (e.g. via Dropbox, a shared drive, or another machine).
+The install script accepts any HTTP server or `file://` URL via `CFCF_BASE_URL`. Useful when you've been handed a tarball out-of-band.
 
 ```bash
-# 1. Drop the tarball + sha + install.sh into a directory.
+# 1. Drop the cfcf + native tarballs + install.sh into a directory.
 ls dist/
-# cfcf-darwin-arm64-v0.10.0.tar.gz
-# SHA256SUMS
+# cfcf-0.10.0.tgz
+# cerefox-cfcf-native-darwin-arm64-0.10.0.tgz
 # install.sh
 
-# 2a. Local server option (see below); from another shell:
+# 2a. Local server option:
+bun run scripts/serve-dist.ts 8080     # in another shell
 CFCF_BASE_URL=http://localhost:8080 \
 CFCF_VERSION=v0.10.0 \
   bash dist/install.sh
 
-# 2b. file:// option — no server, just direct disk read.
-CFCF_BASE_URL=file://$(pwd)/dist \
-CFCF_VERSION=v0.10.0 \
-  bash dist/install.sh
+# 2b. Or hand the tarball directly to bun (skips install.sh entirely):
+bun install -g ./dist/cfcf-0.10.0.tgz
 ```
 
-cfcf developers running Phase-0 tests can spin up the local server with the bundled helper:
-
-```bash
-bun run scripts/serve-dist.ts 8080
-# serves dist/ over http://localhost:8080/
-```
-
-## Manual install
-
-If you want to inspect the tarball or skip the script entirely:
-
-```bash
-# Download + verify
-curl -fsSLO https://<host>/cfcf-darwin-arm64-v0.10.0.tar.gz
-curl -fsSLO https://<host>/SHA256SUMS
-sha256sum -c <(grep cfcf-darwin-arm64-v0.10.0.tar.gz SHA256SUMS)   # macOS: shasum -a 256
-
-# Unpack
-mkdir -p ~/.cfcf
-tar xzf cfcf-darwin-arm64-v0.10.0.tar.gz -C ~/.cfcf --strip-components=1
-
-# macOS only: bypass Gatekeeper for the unsigned binary
-xattr -d com.apple.quarantine ~/.cfcf/bin/cfcf 2>/dev/null || true
-find ~/.cfcf -name "*.node" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || true
-find ~/.cfcf -name "*.dylib" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || true
-
-# Add to PATH (or symlink)
-ln -sf ~/.cfcf/bin/cfcf /usr/local/bin/cfcf
-
-# Configure
-cfcf init
-```
+For the file:// path, `CFCF_VERSION` must be set explicitly (no "latest" symlink convention exists for file URLs).
 
 ## What gets installed
 
+`bun install -g` lays everything out under your Bun global prefix (default: `~/.bun/install/global/`). The tree:
+
+```
+$HOME/.bun/install/global/node_modules/
+├── @cerefox/cfcf-cli/                   # the CLI package
+│   ├── package.json
+│   ├── bin/cfcf.js                      # shebang stub
+│   └── dist/cfcf.js                     # bundled JS (~1 MB)
+├── @cerefox/cfcf-native-<platform>/     # only the matching one is installed
+│   ├── libsqlite3.<dylib|so|dll>
+│   └── sqlite-vec.<dylib|so|dll>
+├── @huggingface/transformers/           # runtime deps, fetched from npmjs.com
+├── onnxruntime-node/
+└── sharp/
+```
+
+User data lives separately under `~/.cfcf/`:
+
 ```
 ~/.cfcf/
-├── bin/
-│   ├── cfcf                       # Bun-compiled standalone binary
-│   └── node_modules/              # colocated runtime deps (transformers + ORT-node + sharp)
-├── native/
-│   ├── libsqlite3.<dylib|so|dll>  # pinned SQLite with loadExtension enabled
-│   └── sqlite-vec.<dylib|so|dll>  # vec0 extension for hybrid search
-├── MANIFEST                       # version pins (cfcf, bun, sqlite, sqlite-vec, deps)
-├── uninstall.sh                   # see below
-└── (created on first use)
-    ├── clio.db                    # Clio cross-workspace memory
-    ├── models/                    # downloaded embedder models
-    └── logs/                      # per-workspace agent logs
+├── clio.db                   # cross-workspace memory (Clio)
+├── logs/                     # per-workspace agent stdout/stderr
+└── models/                   # downloaded embedder models (lazy on first use)
 ```
 
-`cfcf --version` prints the full MANIFEST so you can verify exactly which versions are running.
-
-## Where the install URL points
-
-The default `CFCF_BASE_URL` in `install.sh` targets the future public `cfcf-releases` repo's GitHub Releases. Until that repo is set up, the install URL has to be overridden. For released tarballs hosted anywhere — GitHub Releases on the cfcf repo, Dropbox, S3, an internal mirror — the install script works the same way; only `CFCF_BASE_URL` changes.
-
-Future plan: when `cfcf-releases` becomes a public GitHub repo, GitHub Pages on it can host a simple landing page with the install one-liner; search-indexed by Google for free.
+Run `cfcf doctor` after install to verify all 11 health checks pass.
 
 ## Upgrading
 
@@ -110,86 +90,72 @@ The simplest path is `cfcf self-update`:
 ```bash
 cfcf self-update                        # check + interactive upgrade
 cfcf self-update --check                # check only; print latest vs current
-cfcf self-update --yes                  # non-interactive (CI / scripts)
-cfcf self-update --version v0.11.0      # install a specific tag instead of latest
+cfcf self-update --yes                  # non-interactive
+cfcf self-update --version v0.11.0      # install a specific tag
 ```
 
-It reads `~/.cfcf/MANIFEST` for the current version, fetches the latest from the configured release URL, and re-runs the installer in upgrade mode if a newer version is available. Same-version → "already on latest" + exit.
+Internally this runs `bun install -g <new-tarball-URL>`. Bun's package manager handles the swap atomically — if the install fails, the previous version stays intact.
 
-If you'd rather invoke the installer directly:
-
-```bash
-curl -fsSL https://<host>/install.sh | CFCF_VERSION=v0.11.0 bash
-```
-
-Either way, the unpack overwrites `bin/` + `native/` + `MANIFEST` but **leaves your data alone** — `~/.cfcf/clio.db`, `~/.cfcf/models/`, and `~/.cfcf/logs/` survive upgrades intact. Schema migrations (Clio DB, workspace configs, global config) apply lazily on next read.
+User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is **never touched** by the install/upgrade flow. Only the npm package contents change.
 
 ## Uninstalling
 
 ```bash
-~/.cfcf/uninstall.sh                   # interactive
-CFCF_FORCE=1 ~/.cfcf/uninstall.sh      # no-prompt
+bun remove -g @cerefox/cfcf-cli         # one-liner
+
+# Or via the wrapper (interactive, prints what gets preserved):
+~/.cfcf/uninstall.sh                    # if you have it locally; otherwise just run the bun command
 ```
 
-Removes the binary, native libs, embedder models cache, Clio DB, and logs. Does **not** remove the platform-specific config dir (`~/Library/Application Support/cfcf/` on macOS; `$XDG_CONFIG_HOME/cfcf/` on Linux). Run `cfcf config show --path` before uninstalling to find it; remove manually if desired.
+`bun remove -g` cleans up the cfcf package + the platform-native package + the runtime deps. Your `~/.cfcf/` data dir is preserved on purpose; delete it manually with `rm -rf ~/.cfcf` if you want a clean wipe.
+
+The platform-specific config dir (`~/Library/Application Support/cfcf/` on macOS; `$XDG_CONFIG_HOME/cfcf/` on Linux) is also preserved. Find it with `cfcf config show --path` *before* uninstalling.
 
 ## Troubleshooting
 
-### macOS: "cfcf can't be opened because it is from an unidentified developer"
-
-The install script strips the `com.apple.quarantine` xattr automatically. If you bypassed the script (manual install) you can do it yourself:
-
-```bash
-xattr -d com.apple.quarantine ~/.cfcf/bin/cfcf
-```
-
-Apple Developer signing ($99/yr) would remove this dialog entirely; deferred indefinitely (see [`docs/research/installer-design.md`](../research/installer-design.md) §15 "Signing macOS binary").
-
 ### "cfcf: command not found" after install
 
-The symlink at `/usr/local/bin/cfcf` couldn't be created (path not writable). Add `~/.cfcf/bin` to your PATH:
+Bun's global bin (`~/.bun/bin/`) isn't on PATH. Add it:
 
 ```bash
-echo 'export PATH="$HOME/.cfcf/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 exec $SHELL
 ```
 
-### `Cannot find module '@huggingface/transformers'`
+### `cfcf doctor` reports "@cerefox/cfcf-native-<platform>: not installed"
 
-The colocated `node_modules/` next to the binary is missing or moved. Re-run the installer to repopulate:
+`bun install -g` skipped the platform package because the npm registry didn't have it (private-distribution path during the cfcf-private phase: only the GitHub Release artefact has it). Install it manually:
 
 ```bash
-curl -fsSL https://<host>/install.sh | bash
+bun install -g <tarball-URL>/cerefox-cfcf-native-<platform>-<version>.tgz
 ```
 
-If you're a dev running the in-tree binary directly (`./cfcf-binary`, not `~/.cfcf/bin/cfcf`), Bun's `--compile` resolver only walks from the binary's location — your in-tree `cfcf-binary` doesn't have a colocated `node_modules/`. Use `bun run dev:cli <args>` instead during development. See `docs/decisions-log.md` 2026-04-25 entry "Clio embedders" item 7 for full background.
+Or re-run `install.sh` against the Release URL — it pulls the right one for your platform.
+
+### `Cannot find module '@huggingface/transformers'`
+
+A network blip during install. Reinstall:
+
+```bash
+bun install -g @cerefox/cfcf-cli       # or the tarball URL
+```
 
 ### sqlite-vec / hybrid search doesn't work
 
-`cfcf clio embedder list` should show the active embedder; `cfcf --version` should show non-empty `sqlite-vec` + `sqlite` lines. If `sqlite-vec` reports `unknown` in the MANIFEST, the install is partial — re-run the installer.
-
-### Server is already running
-
-The install script refuses to proceed if a `cfcf server` process is detected. Stop it first:
-
-```bash
-cfcf server stop
-```
-
-Then re-run install. (The server caches active embedder + config in memory at startup; reinstalling without restart leaves it stale.)
+`cfcf doctor` will flag the issue. The most common cause is a missing `@cerefox/cfcf-native-<platform>` package — see two items up.
 
 ## Platform support
 
 | Platform | Status |
 |---|---|
 | darwin-arm64 (Apple Silicon) | ✅ |
-| darwin-x64 (Intel Mac) | ✅ — kept first-class via the transformers 3.8.1 + ORT-node 1.21.0 pin (see `docs/decisions-log.md`) |
+| darwin-x64 (Intel Mac) | ✅ — kept first-class via the transformers 3.8.1 + ORT-node 1.21.0 pin |
 | linux-x64 (glibc, Ubuntu 20.04+) | ✅ |
 | linux-x64 (musl, Alpine) | ❌ — out of scope until requested |
-| windows-x64 | 📅 follow-up phase. v1 ships only the Mac + Linux installer. Use WSL on Windows for now. |
+| windows-x64 | 📅 follow-up phase. v1 ships Mac + Linux only. Use WSL on Windows. |
 
 ## See also
 
 - [`docs/research/installer-design.md`](../research/installer-design.md) — full design + decisions
-- [`docs/decisions-log.md`](../decisions-log.md) — version-pin rationale, exit criteria for revisiting Intel Mac support
-- [`docs/guides/clio-quickstart.md`](clio-quickstart.md) — Clio memory layer (the heavyweight feature the installer's complexity is in service of)
+- [`docs/decisions-log.md`](../decisions-log.md) — Bun-runtime requirement rationale + 2026-04-26 pivot to npm-format distribution
+- [`docs/guides/clio-quickstart.md`](clio-quickstart.md) — the Clio memory layer
