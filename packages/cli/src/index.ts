@@ -7,6 +7,8 @@
  */
 
 import { Command } from "commander";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -35,6 +37,24 @@ if (process.env.CFCF_INTERNAL_SERVE === "1") {
   runCli();
 }
 
+/**
+ * `cfcf --version` output. Reads `<install-dir>/MANIFEST` when available
+ * (5.5 installer drops it at the install root; the binary lives at
+ * `<install-dir>/bin/cfcf` so we look one level up from process.execPath).
+ * In dev mode (no installer), falls back to just the VERSION constant.
+ */
+function buildVersionString(): string {
+  try {
+    const manifestPath = join(dirname(process.execPath), "..", "MANIFEST");
+    if (existsSync(manifestPath)) {
+      // MANIFEST starts with `cfcf:   <version>` so the cfcf line is
+      // already there. Return it as-is; commander prints it verbatim.
+      return readFileSync(manifestPath, "utf8").trimEnd();
+    }
+  } catch { /* fall through to bare-VERSION default */ }
+  return VERSION;
+}
+
 function runCli(): void {
 
 const program = new Command();
@@ -42,7 +62,7 @@ const program = new Command();
 program
   .name("cfcf")
   .description("Cerefox Code Factory (cf²) -- AI coding agent orchestration")
-  .version(VERSION);
+  .version(buildVersionString());
 
 registerServerCommands(program);
 registerInitCommand(program);

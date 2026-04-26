@@ -5,8 +5,13 @@
  * Clio Project. Path can be overridden via `CFCF_CLIO_DB` (same pattern as
  * `CFCF_CONFIG_DIR` / `CFCF_LOGS_DIR`).
  *
- * Uses Bun's built-in `bun:sqlite` driver, which ships FTS5. PR1 doesn't
- * need `loadExtension` (no sqlite-vec yet) -- that's PR2's concern.
+ * Uses Bun's built-in `bun:sqlite` driver, which ships FTS5. The optional
+ * `applyCustomSqlite()` helper redirects bun:sqlite at the libsqlite3 the
+ * 5.5 installer ships in `~/.cfcf/native/` — same engine on every
+ * platform, with `loadExtension` enabled. Required for 6.15's sqlite-vec
+ * integration on macOS where Apple's system SQLite has loadExtension
+ * compiled out. No-ops gracefully in dev mode (no `~/.cfcf/native/`)
+ * which is fine for everything Clio v1 does.
  */
 
 import { Database } from "bun:sqlite";
@@ -43,6 +48,88 @@ export function getClioDbPath(): string {
 }
 
 /**
+ * Resolve the directory where the installer drops `libsqlite3.<ext>`
+ * + `sqlite-vec.<ext>`. Defaults to `~/.cfcf/native/`; override via
+ * `CFCF_NATIVE_DIR` (mostly used by integration tests).
+ */
+export function getCfcfNativeDir(): string {
+  if (process.env.CFCF_NATIVE_DIR) return process.env.CFCF_NATIVE_DIR;
+  return join(homedir(), ".cfcf", "native");
+}
+
+/**
+ * Map process.platform → the dynamic-library suffix that the installer
+ * uses for both libsqlite3 and sqlite-vec.
+ */
+function dlExt(): string {
+  switch (process.platform) {
+    case "darwin": return ".dylib";
+    case "win32":  return ".dll";
+    default:       return ".so";
+  }
+}
+
+/**
+ * sqlite-vec's loadable extension — full path under `~/.cfcf/native/`.
+ * Used by 6.15's sqlite-vec integration; exposed here so Clio's eventual
+ * `db.loadExtension(...)` call has a single source of truth for the
+ * path. The `entryPoint` is sqlite-vec's actual init symbol — the
+ * filename-based default that bun:sqlite computes (`sqlite3_sqlitevec_init`)
+ * doesn't match (the symbol is `sqlite3_vec_init`), so callers must pass
+ * the entry point explicitly.
+ */
+export function getSqliteVecPath(): { path: string; entryPoint: string } | null {
+  const dir = getCfcfNativeDir();
+  const path = join(dir, `sqlite-vec${dlExt()}`);
+  if (!existsSync(path)) return null;
+  return { path, entryPoint: "sqlite3_vec_init" };
+}
+
+let customSqliteApplied = false;
+
+/**
+ * Point bun:sqlite at the pinned `libsqlite3` shipped by the 5.5
+ * installer. Required on macOS for `db.loadExtension(...)` to work
+ * (Apple's system SQLite has SQLITE_OMIT_LOAD_EXTENSION compiled in).
+ * Also gives every platform the same SQLite version so behavioural
+ * differences (FTS5 tokeniser internals, UPSERT semantics, etc.) don't
+ * sneak in.
+ *
+ * Idempotent: only the first call has effect; subsequent calls are
+ * no-ops. **Must run before the first `new Database(...)`** — Bun's
+ * runtime resolves the SQLite library lazily but binds it to the
+ * first-opened DB, so a late call after a prior open is silently
+ * ignored.
+ *
+ * Silent no-op when `~/.cfcf/native/libsqlite3.<ext>` is absent:
+ *   - dev mode (no installer ever ran)
+ *   - user manually deleted `~/.cfcf/native/`
+ *   - new install where Database has somehow been opened before this
+ *     hook ran (programmer error worth surfacing — but still
+ *     non-fatal here; the call site just gets system SQLite back,
+ *     which works for everything Clio v1 does)
+ */
+export function applyCustomSqlite(): void {
+  if (customSqliteApplied) return;
+  customSqliteApplied = true;
+  const path = join(getCfcfNativeDir(), `libsqlite3${dlExt()}`);
+  if (!existsSync(path)) return;
+  try {
+    Database.setCustomSQLite(path);
+  } catch (err) {
+    // Surface to stderr but don't throw -- system SQLite is the
+    // safe fallback. Clio v1 features (FTS5, JSON1) are in every
+    // SQLite build; only sqlite-vec (6.15) requires loadExtension
+    // enabled, and 6.15 will error loudly itself if loadExtension
+    // doesn't work.
+    process.stderr.write(
+      `[clio] warning: setCustomSQLite("${path}") failed: ${err instanceof Error ? err.message : String(err)}\n` +
+      `[clio] falling back to system SQLite. sqlite-vec features will be disabled until reinstall.\n`,
+    );
+  }
+}
+
+/**
  * Open the Clio DB, ensuring the parent directory exists and all
  * pending migrations have been applied. Callers should cache the
  * returned handle for the process lifetime rather than reopening.
@@ -51,6 +138,7 @@ export function getClioDbPath(): string {
  * temp DBs).
  */
 export function openClioDb(opts?: { path?: string }): Database {
+  applyCustomSqlite();           // no-op when no installer is present
   const path = opts?.path ?? getClioDbPath();
   const dir = dirname(path);
   if (!existsSync(dir)) {
