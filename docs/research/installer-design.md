@@ -125,7 +125,7 @@ fi
 
 **Decision: tag on `main` → release workflow → standard GitHub Release with all assets.**
 
-- **Trigger:** `on: push: tags: ['v*.*.*', 'v*.*.*-rc.*']`. Semver-formatted tags only. Tags not matching the pattern do not trigger. Tags must be pushed from `main` (the workflow verifies via `git merge-base --is-ancestor <tag-sha> origin/main`; fails loudly if not). This keeps releases off random feature branches.
+- **Trigger:** `workflow_dispatch` only (decided 2026-04-26). Manual run via the GitHub Actions UI or `gh workflow run release.yml -f tag=v0.10.0`. The workflow takes a `tag` input + an optional `prerelease` flag. Tag must already exist + be reachable from `main` (verified in the first job). Tagging is a separate developer act — pushing a tag never triggers a release. See §6.1 for the full YAML.
 - **Matrix:** `darwin-arm64`, `darwin-x64`, `linux-x64` for v1; `windows-x64` follow-up (Phase 4). Each matrix leg runs on a native runner (macOS for darwin, Ubuntu for linux, Windows-latest for windows) to avoid cross-compile headaches with the native deps.
 - **Artifacts per leg** (all uploaded to the release):
   - `cfcf-<platform>-<version>.tar.gz` — the bundle (§7).
@@ -211,9 +211,11 @@ linux:   -shared -fPIC                                       -o libsqlite3.so
 windows: /LD                                                 /Fe:sqlite3.dll
 ```
 
-Pinned version for v1: **SQLite 3.46.0** (released 2024-05-23, stable, confirmed working with sqlite-vec 0.1.x at design time). Bump in lockstep with sqlite-vec compatibility.
+**Version pin policy (decided 2026-04-26):** SQLite + sqlite-vec versions are **explicitly pinned per cfcf release**. Constants live in `scripts/build-sqlite.sh` + `scripts/fetch-sqlite-vec.sh`, are recorded in each tarball's `MANIFEST.txt`, and are bumped intentionally per cfcf release after verifying compatibility (sqlite-vec's CHANGELOG documents the minimum SQLite it expects). Bumping is a deliberate human act, not an automatic "use whatever's latest" build-time lookup — that would let a sqlite-vec breaking change silently land in a cfcf release.
 
-Pinned version of sqlite-vec for v1: **v0.1.6** (or whatever is latest stable when 5.5 ships). Verify compatibility: the sqlite-vec README documents the minimum SQLite version it expects. Our 3.46.0 pin covers any sub-v1 sqlite-vec release.
+Starting pins (verified 2026-04-26):
+- **SQLite 3.53.0** (latest stable; amalgamation at `https://sqlite.org/2026/sqlite-amalgamation-3530000.zip`). For reference, Bun's bundled `bun:sqlite` reports 3.43.2 — the custom-SQLite path gives us a 10-version-newer engine + extension-loading where Apple's system lib disables it.
+- **sqlite-vec 0.1.9** (latest stable; assets at `https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-{macos-aarch64,macos-x86_64,linux-x86_64,windows-x86_64}.tar.gz`). 0.1.9 added metadata columns + partition-key support to vec0; backwards-compatible with the earlier 0.1.x API our 6.15 work targets.
 
 **Why not just use bun's system SQLite everywhere?** Three reasons:
 
@@ -559,31 +561,54 @@ Phase 1 is "same thing, but CI built the tarball and uploaded it to a GitHub Rel
 
 ### 6.1 File: `.github/workflows/release.yml`
 
+**Trigger: `workflow_dispatch` only** (decided 2026-04-26). Tagging and releasing are deliberately separated — a tag is a developer milestone marker; a release is an explicit publishing act. No tag push ever creates a release. Run via the GitHub Actions UI ("Run workflow" button) or `gh workflow run release.yml -f tag=v0.10.0`.
+
 ```yaml
 name: release
 on:
-  push:
-    tags: ['v*.*.*', 'v*.*.*-rc.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to build from (e.g. v0.10.0). The tag must already exist on the repo and be reachable from main.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark this as a prerelease (does not become "latest").'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write      # gh release create
   actions: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
-  # ── sanity: tag must be reachable from main ────────────────────────
+  # ── sanity: tag must exist + be reachable from main ────────────────
   verify:
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: Verify tag is on main
+      - name: Resolve tag → sha + verify on main
+        id: resolve
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "Tag $GITHUB_REF_NAME is not on main"; exit 1; }
+          if ! git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag '${{ inputs.tag }}' does not exist. Tag locally + push first."
+            exit 1
+          fi
+          sha="$(git rev-parse "refs/tags/${{ inputs.tag }}^{}")"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          git fetch origin main --depth=0
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::Tag '${{ inputs.tag }}' (sha $sha) is not on main."
+            exit 1
+          fi
 
   # ── per-platform build ──────────────────────────────────────────────
   build:
@@ -595,7 +620,7 @@ jobs:
           - os: macos-14          # arm64 runner
             platform: darwin-arm64
             bun-target: bun-darwin-arm64
-          - os: macos-13          # x64 runner
+          - os: macos-13          # x64 runner (Intel; runner availability tracked in §15)
             platform: darwin-x64
             bun-target: bun-darwin-x64
           - os: ubuntu-latest
@@ -604,22 +629,28 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}     # build from the tagged commit, not HEAD
       - uses: oven-sh/setup-bun@v1
         with: { bun-version: 1.3.x }
       - run: bun install
 
       # full tarball produced by the same script Phase 0 uses
-      - run: scripts/build-release-tarball.sh "${{ github.ref_name }}"
+      - run: scripts/build-release-tarball.sh "${{ inputs.tag }}"
         env:
           PLATFORM: ${{ matrix.platform }}
           BUN_TARGET: ${{ matrix.bun-target }}
 
+      # smoke-test the tarball (untar + run cfcf --version + check-deps)
+      - run: scripts/smoke-tarball.sh "dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz" "${{ matrix.platform }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: cfcf-${{ matrix.platform }}
+          retention-days: 14         # short window: artifacts only used during the release run
           path: |
-            dist/cfcf-${{ matrix.platform }}-${{ github.ref_name }}.tar.gz
-            dist/cfcf-${{ matrix.platform }}-${{ github.ref_name }}.tar.gz.sha256
+            dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz
+            dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz.sha256
 
   # ── assemble SHA256SUMS + publish release ──────────────────────────
   release:
@@ -627,6 +658,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -639,41 +672,37 @@ jobs:
           rm -- *.sha256
 
       - name: Write MANIFEST.txt
-        run: scripts/write-manifest.sh "${{ github.ref_name }}" > dist/MANIFEST.txt
+        run: scripts/write-manifest.sh "${{ inputs.tag }}" > dist/MANIFEST.txt
 
       - name: Copy install scripts
         run: |
           cp scripts/install.sh dist/
           # install.ps1 added in Phase 4
 
-      - name: Determine prerelease flag
-        id: prerelease
-        run: |
-          if [[ "${{ github.ref_name }}" == *-rc.* ]]; then
-            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=--latest" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create GitHub Release
         env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          flag="--latest"
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then flag="--prerelease"; fi
+          gh release create "${{ inputs.tag }}" \
+            --title "${{ inputs.tag }}" \
             --generate-notes \
             --verify-tag \
-            ${{ steps.prerelease.outputs.flag }} \
+            $flag \
             dist/*.tar.gz dist/SHA256SUMS dist/MANIFEST.txt dist/install.sh
 ```
 
 ### 6.2 Flow
 
-1. Developer lands changes on `main` and runs `git tag v0.9.0 && git push origin v0.9.0`.
-2. `release.yml` triggers on the tag.
-3. `verify` job confirms the tag is on `main`.
-4. `build` matrix (three legs) runs `scripts/build-release-tarball.sh` on each platform. Each leg uploads its tarball + sha256 as a workflow artifact.
-5. `release` job downloads all artifacts, assembles `SHA256SUMS`, generates `MANIFEST.txt`, calls `gh release create` with all assets including `install.sh`.
-6. Result: a GitHub Release at `https://github.com/<user>/cfcf/releases/tag/v0.9.0` with all assets attached.
+1. Developer lands changes on `main`, batches commits, pushes when ready.
+2. Tag locally + push: `git tag -a v0.10.0 -m "..." && git push origin v0.10.0`. **No CI runs from this step.** The tag is just a marker.
+3. When ready to publish a release: open the GitHub Actions UI → "release" workflow → "Run workflow" → enter `v0.10.0` as the `tag` input. Or `gh workflow run release.yml -f tag=v0.10.0`.
+4. `verify` job resolves the tag → sha and confirms reachability from `main` (rejects tags from feature branches, force-pushed tags pointing off-tree, etc.).
+5. `build` matrix (three legs) checks out the tagged commit + runs `scripts/build-release-tarball.sh` per platform + smoke-tests the result.
+6. `release` job downloads all artifacts, assembles `SHA256SUMS`, generates `MANIFEST.txt`, calls `gh release create` with all assets including `install.sh`.
+7. Result: a GitHub Release at `https://github.com/<host>/<repo>/releases/tag/v0.10.0` with all assets attached.
+
+**Why workflow_dispatch only:** tag-pushed triggers conflate "milestone marker" with "publish a release," so accidental tags become accidental releases. Manual dispatch keeps the act of releasing explicit. The user explicitly raised this on 2026-04-26 after observing the v0.9.0 milestone tag (no binaries shipped) — that distinction is hard to preserve under tag-trigger.
 
 ### 6.3 The "latest" pointer
 
@@ -1524,15 +1553,11 @@ Until then: A wins.
 
 ## 15. Open questions
 
-- **SQLite version pin** (currently proposed `3.46.0`). Verify against sqlite-vec `0.1.6` release notes for minimum compatible version at build time.
-- **sqlite-vec version pin** (currently proposed `0.1.6`). Check for a newer stable when building.
-- **Signing macOS binary.** Unsigned binaries trigger Gatekeeper: "can't be opened because it is from an unidentified developer." Options:
-  - **(a)** install script runs `xattr -d com.apple.quarantine ~/.cfcf/bin/cfcf` after unpack (works; feels hacky).
-  - **(b)** Apple Developer signing ($99/yr) + notarisation. Proper fix; also enables Gatekeeper to whitelist us.
-  - **(c)** ship instructions, tell users to right-click → Open once.
-  - **v1 proposed:** (a). (b) when the tool has real users.
+- **SQLite version pin** (currently `3.46.0`). Re-verify against sqlite-vec's compatibility note when bumping for a future release.
+- **sqlite-vec version pin** (currently `0.1.6`). Same: bump intentionally, in lockstep with SQLite if needed.
+- **Signing macOS binary.** **DECIDED 2026-04-26: option (a)** — install script runs `xattr -d com.apple.quarantine ~/.cfcf/bin/cfcf` after unpack. Apple Developer signing ($99/yr) deferred indefinitely; Gatekeeper bypass is documented in `docs/guides/installing.md`'s troubleshooting section as the expected first-run experience.
 - **Linux distro coverage.** The generic `linux-x64` tarball assumes glibc ≥ 2.31 (what Ubuntu 20.04 ships). Musl (Alpine) is separate. Out of scope until someone asks.
-- **Phase 2 hosting choice.** Open-source `cfcf` vs. standalone `cfcf-releases` repo. Install script works identically in both cases.
+- **Phase 2 hosting choice.** **DEFERRED 2026-04-26.** v1 ships only the build pipeline + tarballs + install.sh. Distribution channel is left open — user shares tarballs out-of-band (Dropbox, S3, locally-served via `scripts/serve-dist.ts`, or eventually a public `cfcf-releases` repo with optional GitHub Pages landing page). The install script is **hosting-agnostic via `CFCF_BASE_URL`** so no code change is required when we pick a channel — we just publish the assets there + tell users which URL to point at. Future GitHub Pages on `cfcf-releases` would give us a free public landing page (search-indexed by Google) with the install one-liner; that's a follow-up phase, not part of 5.5.
 - **Auto-update** (`cfcf self-update`). §10.2 sketches it; decide whether to land with 5.5 or later.
 
 ---
