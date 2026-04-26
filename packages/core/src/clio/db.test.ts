@@ -6,11 +6,11 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Database } from "bun:sqlite";
-import { openClioDb, runMigrations, listAppliedMigrations, type ClioMigration } from "./db.js";
+import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, getSqliteVecPath, type ClioMigration } from "./db.js";
 
 const tempDirs: string[] = [];
 function makeTempDbPath(): string {
@@ -128,6 +128,64 @@ describe("openClioDb", () => {
     expect(tables).toHaveLength(1);
 
     db.close();
+  });
+});
+
+describe("applyCustomSqlite + getSqliteVecPath", () => {
+  // The 5.5 installer drops a custom libsqlite3 + sqlite-vec under
+  // ~/.cfcf/native/. These tests verify the dev-mode no-op + the
+  // file-present path. The "actually call setCustomSQLite" path is
+  // exercised by the build-release-tarball.sh smoke test (a real
+  // libsqlite3 there); unit tests run with no installer present.
+  it("applyCustomSqlite is a silent no-op when ~/.cfcf/native/ is absent", () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), "cfcf-no-native-"));
+    tempDirs.push(fakeDir);
+    process.env.CFCF_NATIVE_DIR = fakeDir;        // pointed at empty dir
+    try {
+      // Should not throw, should not error.
+      expect(() => applyCustomSqlite()).not.toThrow();
+      // Subsequent open works against system SQLite as usual.
+      const db = openClioDb({ path: makeTempDbPath() });
+      expect(db.query("SELECT sqlite_version() AS v").get()).toBeTruthy();
+      db.close();
+    } finally {
+      delete process.env.CFCF_NATIVE_DIR;
+    }
+  });
+
+  it("getSqliteVecPath returns null when sqlite-vec isn't staged", () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), "cfcf-no-vec-"));
+    tempDirs.push(fakeDir);
+    process.env.CFCF_NATIVE_DIR = fakeDir;
+    try {
+      expect(getSqliteVecPath()).toBeNull();
+    } finally {
+      delete process.env.CFCF_NATIVE_DIR;
+    }
+  });
+
+  it("getSqliteVecPath surfaces the path + entryPoint when the lib is present", () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), "cfcf-fake-vec-"));
+    tempDirs.push(fakeDir);
+    // Drop a fake .dylib/.so/.dll matching the platform. We don't
+    // verify the file is a valid library here -- 6.15's loadExtension
+    // is what fails loudly when the bytes are bad. We're testing the
+    // resolution layer.
+    const ext =
+      process.platform === "darwin" ? ".dylib" :
+      process.platform === "win32"  ? ".dll"  : ".so";
+    const fakeLib = join(fakeDir, `sqlite-vec${ext}`);
+    writeFileSync(fakeLib, "fake bytes");
+
+    process.env.CFCF_NATIVE_DIR = fakeDir;
+    try {
+      const got = getSqliteVecPath();
+      expect(got).not.toBeNull();
+      expect(got!.path).toBe(fakeLib);
+      expect(got!.entryPoint).toBe("sqlite3_vec_init");
+    } finally {
+      delete process.env.CFCF_NATIVE_DIR;
+    }
   });
 });
 

@@ -37,7 +37,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 bun install              # Install all workspace dependencies
 bun run test             # Run all tests (packages sequentially)
 bun run typecheck        # TypeScript type checking
-bun run build            # Compile self-contained binary
+bun run build            # Build npm-format CLI tarball (dist/cfcf-X.Y.Z.tgz)
 bun run dev:server       # Start server in dev mode (with watch)
 bun run dev:cli          # Run CLI directly
 ```

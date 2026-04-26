@@ -55,7 +55,7 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 - **Hybrid search** in `LocalClio.search`: mode=`"fts"` (default), `"semantic"` (pure vector), `"hybrid"` (RRF fusion k=60 over FTS top-N + vector top-N). Brute-force cosine over candidate set (no sqlite-vec extension yet; design doc §4.1 says it's fine at our scale).
 - **Small-to-big expansion**: each hit's `content` is expanded inline with its ±N siblings using the active embedder's recommended radius.
 - **Embedder CLI**: `cfcf clio embedder {list,active,install,set}` (+ `--force` + `--json`). HTTP: `GET /api/clio/embedders`, `POST /api/clio/embedders/install`, `POST /api/clio/embedders/set`.
-- **Build** (`package.json`): `bun build --compile` now passes `--external @huggingface/transformers --external onnxruntime-node --external sharp` so the native-binding packages don't blow up the compiler. Binary stays lean (~64 MB); transformers is installed via node_modules on the host.
+- **Build** (during the Clio iteration; superseded in v0.10.0): originally `bun build --compile` with `--external @huggingface/transformers --external onnxruntime-node --external sharp` so the native-binding packages didn't blow up the compiler. Binary stayed lean (~64 MB); transformers was installed via node_modules on the host. Item 5.5 (v0.10.0) replaced this with the npm-format `bun build` (no `--compile`); same external set carries over but the bundled JS now ships as `@cerefox/cfcf-cli`.
 
 ### Tests
 
@@ -105,24 +105,24 @@ rm -f ~/.cfcf/clio.db ~/.cfcf/clio.db-wal ~/.cfcf/clio.db-shm
 ### 1. Core: DB + migrations
 
 ```bash
-./cfcf-binary server start
-./cfcf-binary clio stats
+cfcf server start
+cfcf clio stats
 # Expected: DB at ~/.cfcf/clio.db, 0 docs/chunks/projects, migrations=[0001_initial.sql, 0002_active_embedder.sql]
 ```
 
 Corner cases:
-- `CFCF_CLIO_DB=/tmp/foo.db ./cfcf-binary clio stats` → creates /tmp/foo.db.
+- `CFCF_CLIO_DB=/tmp/foo.db cfcf clio stats` → creates /tmp/foo.db.
 - Delete clio.db mid-run → next CLI call recreates on first read via `getClioBackend()` (server holds a stale handle, but `bun:sqlite` handles file removal gracefully on first lock attempt).
 
 ### 2. Projects (CRUD)
 
 ```bash
-./cfcf-binary clio projects                          # empty
-./cfcf-binary clio project create cf-ecosystem --description "cf² + Clio + Cerefox code"
-./cfcf-binary clio projects                          # shows cf-ecosystem
-./cfcf-binary clio project show cf-ecosystem
-./cfcf-binary clio project create cf-ecosystem       # should fail with 409
-./cfcf-binary clio project create CF-Ecosystem       # should fail (case-insensitive uniqueness)
+cfcf clio projects                          # empty
+cfcf clio project create cf-ecosystem --description "cf² + Clio + Cerefox code"
+cfcf clio projects                          # shows cf-ecosystem
+cfcf clio project show cf-ecosystem
+cfcf clio project create cf-ecosystem       # should fail with 409
+cfcf clio project create CF-Ecosystem       # should fail (case-insensitive uniqueness)
 ```
 
 ### 3. Ingest + dedup + FTS search
@@ -130,64 +130,64 @@ Corner cases:
 ```bash
 # Small doc
 echo "# Auth design\n\nUse real-time yields instead of fake-timers for auth flakes." > /tmp/auth.md
-./cfcf-binary clio ingest /tmp/auth.md --project cf-ecosystem --title "Auth gotcha" --artifact-type design-guideline --tier semantic --tags auth
+cfcf clio ingest /tmp/auth.md --project cf-ecosystem --title "Auth gotcha" --artifact-type design-guideline --tier semantic --tags auth
 
 # Re-ingest same file: should say "Already in Clio (content_hash match)"
-./cfcf-binary clio ingest /tmp/auth.md --project cf-ecosystem --title "Auth gotcha"
+cfcf clio ingest /tmp/auth.md --project cf-ecosystem --title "Auth gotcha"
 
 # Stdin ingest
-cat /tmp/auth.md | ./cfcf-binary clio ingest --stdin --project cf-ecosystem --title "Pipe ingest"
+cat /tmp/auth.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Pipe ingest"
 
 # Search
-./cfcf-binary clio search "real-time yields"
-./cfcf-binary clio search "flaky tests" --project cf-ecosystem
-./cfcf-binary clio search "auth" --metadata '{"role":"design-guideline"}'       # should be 0 hits (wrong key)
-./cfcf-binary clio search "auth" --metadata '{"artifact_type":"design-guideline"}'
-./cfcf-binary clio search "!!! )( *" --project cf-ecosystem                     # operator chars stripped; no crash
-./cfcf-binary clio search ""                                                     # rejected
-./cfcf-binary clio search "xyz" --match-count 0                                  # clamped to 1
-./cfcf-binary clio search "xyz" --match-count 9999                               # clamped to 100
+cfcf clio search "real-time yields"
+cfcf clio search "flaky tests" --project cf-ecosystem
+cfcf clio search "auth" --metadata '{"role":"design-guideline"}'       # should be 0 hits (wrong key)
+cfcf clio search "auth" --metadata '{"artifact_type":"design-guideline"}'
+cfcf clio search "!!! )( *" --project cf-ecosystem                     # operator chars stripped; no crash
+cfcf clio search ""                                                     # rejected
+cfcf clio search "xyz" --match-count 0                                  # clamped to 1
+cfcf clio search "xyz" --match-count 9999                               # clamped to 100
 ```
 
 ### 4. Workspace ↔ Clio Project assignment
 
 ```bash
 # Init workspace with --project flag
-./cfcf-binary workspace init --repo /tmp/cfcf-calc --name calc-test --project cf-ecosystem
-./cfcf-binary workspace show calc-test           # Clio Project: cf-ecosystem
+cfcf workspace init --repo /tmp/cfcf-calc --name calc-test --project cf-ecosystem
+cfcf workspace show calc-test           # Clio Project: cf-ecosystem
 
 # Init without flag in a TTY -- should pick interactively
-./cfcf-binary workspace init --repo /tmp/cfcf-calc2 --name calc-test2
+cfcf workspace init --repo /tmp/cfcf-calc2 --name calc-test2
 # Expected: prompt lists existing Projects + "N) create new" + "S) skip"
 
 # Init with --no-prompt in a TTY -- should skip without asking
-./cfcf-binary workspace init --repo /tmp/cfcf-calc3 --name calc-test3 --no-prompt
-./cfcf-binary workspace show calc-test3          # Clio Project: (none -- auto-routes to 'default' on first ingest)
+cfcf workspace init --repo /tmp/cfcf-calc3 --name calc-test3 --no-prompt
+cfcf workspace show calc-test3          # Clio Project: (none -- auto-routes to 'default' on first ingest)
 
 # Reassign without migrating history -- future ingests only
-./cfcf-binary workspace set calc-test --project new-project-name
+cfcf workspace set calc-test --project new-project-name
 # Expected: "Historical documents remain under "cf-ecosystem". Pass --migrate-history ..."
 
 # Reassign + migrate: WORKSPACE-SCOPED by default (only this workspace's docs move)
-./cfcf-binary workspace set calc-test --project final-project --migrate-history
+cfcf workspace set calc-test --project final-project --migrate-history
 # Expected: prints "Re-keyed N historical document(s) (docs tagged to workspace <ws-id>)."
 # Sibling workspaces in cf-ecosystem keep their docs there.
 
-./cfcf-binary clio projects                      # confirm doc counts moved
+cfcf clio projects                      # confirm doc counts moved
 ```
 
 **Corner cases for `--migrate-history`** (this is the most nuanced behavior):
 
 ```bash
 # Seed two workspaces sharing one Clio Project, with docs from each:
-./cfcf-binary workspace init --repo /tmp/cfcf-r1 --name sharedA --project shared-proj --no-prompt
-./cfcf-binary workspace init --repo /tmp/cfcf-r2 --name sharedB --project shared-proj --no-prompt
+cfcf workspace init --repo /tmp/cfcf-r1 --name sharedA --project shared-proj --no-prompt
+cfcf workspace init --repo /tmp/cfcf-r2 --name sharedB --project shared-proj --no-prompt
 
 # Ingest via each workspace (auto-tags metadata.workspace_id):
 # (Easiest way to do this is run a brief iteration on each -- see section 7.)
 # For a quick manual test, ingest directly via HTTP with a workspace_id:
-WSA_ID=$(./cfcf-binary workspace show sharedA | grep "^  ID:" | awk '{print $2}')
-WSB_ID=$(./cfcf-binary workspace show sharedB | grep "^  ID:" | awk '{print $2}')
+WSA_ID=$(cfcf workspace show sharedA | grep "^  ID:" | awk '{print $2}')
+WSB_ID=$(cfcf workspace show sharedB | grep "^  ID:" | awk '{print $2}')
 curl -s -X POST http://localhost:7233/api/clio/ingest \
   -H "Content-Type: application/json" \
   -d "{\"project\":\"shared-proj\",\"title\":\"A1\",\"content\":\"# A1\\n\\ndoc from sharedA\",\"metadata\":{\"workspace_id\":\"$WSA_ID\"}}"
@@ -198,20 +198,20 @@ curl -s -X POST http://localhost:7233/api/clio/ingest \
   -H "Content-Type: application/json" \
   -d "{\"project\":\"shared-proj\",\"title\":\"B1\",\"content\":\"# B1\\n\\ndoc from sharedB\",\"metadata\":{\"workspace_id\":\"$WSB_ID\"}}"
 
-./cfcf-binary clio projects                      # shared-proj has 3 docs
+cfcf clio projects                      # shared-proj has 3 docs
 
 # Workspace-scoped migrate: sharedA's 2 docs move, sharedB's 1 doc stays.
-./cfcf-binary workspace set sharedA --project sharedA-only --migrate-history
-./cfcf-binary clio projects                      # shared-proj: 1, sharedA-only: 2
+cfcf workspace set sharedA --project sharedA-only --migrate-history
+cfcf clio projects                      # shared-proj: 1, sharedA-only: 2
 
 # The wide-sweep flag: moves EVERY doc regardless of workspace. Only for
 # collapsing Projects.
-./cfcf-binary workspace set sharedB --project sharedA-only --migrate-history --all-in-project
-./cfcf-binary clio projects                      # shared-proj: 0, sharedA-only: 3
+cfcf workspace set sharedB --project sharedA-only --migrate-history --all-in-project
+cfcf clio projects                      # shared-proj: 0, sharedA-only: 3
 
 # --all-in-project requires --migrate-history; the CLI should reject the
 # combo otherwise:
-./cfcf-binary workspace set sharedA --project foo --all-in-project
+cfcf workspace set sharedA --project foo --all-in-project
 # Expected error: "--all-in-project has no effect without --migrate-history."
 ```
 
@@ -220,7 +220,7 @@ curl -s -X POST http://localhost:7233/api/clio/ingest \
 ```bash
 # Fresh install
 rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
-./cfcf-binary init
+cfcf init
 # Walk through the existing agent + permission prompts, then:
 # At the "Clio memory layer" step, you should see:
 #   - an explanation of FTS vs. hybrid/semantic modes,
@@ -230,9 +230,9 @@ rm -f ~/Library/Application\ Support/cfcf/config.json    # macOS
 
 Three flows to cover:
 - **Pick the default (press Enter)**: init immediately downloads the model (~130 MB, q8-quantized variant) with a stderr progress bar; Next Steps shows "Clio ready: active embedder is nomic-embed-text-v1.5". `ls ~/.cfcf/models/` should show the cached model directory under `nomic-ai/nomic-embed-text-v1.5/`. `sqlite3 ~/.cfcf/clio.db "SELECT name FROM clio_active_embedder"` should return `nomic-embed-text-v1.5`.
-- **Pick a specific embedder (e.g. "3")**: same download-during-init flow but for the chosen model. Verify via `./cfcf-binary clio embedder active`.
+- **Pick a specific embedder (e.g. "3")**: same download-during-init flow but for the chosen model. Verify via `cfcf clio embedder active`.
 - **Skip (type "S")**: no download, no DB write to `clio_active_embedder`; Next Steps includes a "FTS-only mode" note with the install command.
-- **Network-failure during install**: (simulate by disconnecting wifi before picking a non-default model) init should continue, print the captured install error in a final "Install error (captured -- you can retry)" line, and have written `clio.preferredEmbedder: <picked>` to the config. Then `./cfcf-binary clio embedder install` (no arg) should resume from the saved preference.
+- **Network-failure during install**: (simulate by disconnecting wifi before picking a non-default model) init should continue, print the captured install error in a final "Install error (captured -- you can retry)" line, and have written `clio.preferredEmbedder: <picked>` to the config. Then `cfcf clio embedder install` (no arg) should resume from the saved preference.
 
 Re-running `cfcf init --force` should re-prompt (can change the pick). If the current active embedder matches the new pick, the install is a no-op.
 
@@ -241,18 +241,18 @@ Re-running `cfcf init --force` should re-prompt (can change the pick). If the cu
 Requires a real HuggingFace download on first run. Expect ~120 MB + ~30-60s on first install.
 
 ```bash
-./cfcf-binary server start
-./cfcf-binary clio embedder list                 # no active marker
-./cfcf-binary clio embedder active               # "No active embedder."
+cfcf server start
+cfcf clio embedder list                 # no active marker
+cfcf clio embedder active               # "No active embedder."
 
-./cfcf-binary clio embedder install bge-small-en-v1.5
+cfcf clio embedder install bge-small-en-v1.5
 # Expected stderr:
 #   [clio] loading embedder "bge-small-en-v1.5" from HuggingFace (~120 MB; first-run only)…
 #   [clio] embedder ready.
 # Then stdout: "Active embedder: bge-small-en-v1.5 (dim=384, chunk=1800 chars)"
 
-./cfcf-binary clio embedder active               # shows active record
-./cfcf-binary clio embedder list                 # "●" next to bge-small-en-v1.5
+cfcf clio embedder active               # shows active record
+cfcf clio embedder list                 # "●" next to bge-small-en-v1.5
 
 ls -la ~/.cfcf/models/                           # transformers.js cache populated
 ```
@@ -268,28 +268,28 @@ Failure modes to exercise:
 
 ```bash
 # Happy path: idempotent when nothing has changed.
-./cfcf-binary clio reindex
+cfcf clio reindex
 # Expected: "re-embedded: 0, skipped: <chunk-count>"
 
 # Force re-embed everything (useful after model update within the same slug).
-./cfcf-binary clio reindex --force
+cfcf clio reindex --force
 
 # Scope to one Clio Project.
-./cfcf-binary clio reindex --project cf-ecosystem
+cfcf clio reindex --project cf-ecosystem
 
 # Unknown project -> zero stats, no error.
-./cfcf-binary clio reindex --project this-project-does-not-exist
+cfcf clio reindex --project this-project-does-not-exist
 
 # No embedder installed -> clear error message pointing at install command.
-./cfcf-binary clio embedder install bge-small-en-v1.5   # (undo a fresh DB)
+cfcf clio embedder install bge-small-en-v1.5   # (undo a fresh DB)
 # (cannot fully test "no embedder" without nuking the active-embedder row;
 #  can inspect via `sqlite3 ~/.cfcf/clio.db "DELETE FROM clio_active_embedder"`)
 
 # Batch size override (bigger = faster, more RAM).
-./cfcf-binary clio reindex --force --batch-size 64
+cfcf clio reindex --force --batch-size 64
 
 # JSON output for scripting.
-./cfcf-binary clio reindex --json | jq .
+cfcf clio reindex --json | jq .
 ```
 
 ### 8. Hybrid + semantic search (requires installed embedder)
@@ -298,19 +298,19 @@ Failure modes to exercise:
 # Seed a small corpus
 for i in 1 2 3; do
   echo "# Doc $i\n\nAuth flows + token refresh strategies, iter $i notes." > /tmp/d$i.md
-  ./cfcf-binary clio ingest /tmp/d$i.md --project cf-ecosystem --title "Doc $i"
+  cfcf clio ingest /tmp/d$i.md --project cf-ecosystem --title "Doc $i"
 done
-./cfcf-binary clio ingest /tmp/auth.md --project cf-ecosystem --title "Original"
+cfcf clio ingest /tmp/auth.md --project cf-ecosystem --title "Original"
 
 # Search in all three modes. With no --mode and no clio.defaultSearchMode
 # in the global config, the server resolves mode to "auto":
 #   - active embedder present → hybrid (RRF over FTS + vector)
 #   - no active embedder      → fts
-./cfcf-binary clio search "token refresh"                # uses the configured default
-./cfcf-binary clio search "token refresh" --mode fts
-./cfcf-binary clio search "token refresh" --mode semantic
-./cfcf-binary clio search "token refresh" --mode hybrid
-./cfcf-binary clio search "token refresh" --mode hybrid --match-count 3 --json | jq .
+cfcf clio search "token refresh"                # uses the configured default
+cfcf clio search "token refresh" --mode fts
+cfcf clio search "token refresh" --mode semantic
+cfcf clio search "token refresh" --mode hybrid
+cfcf clio search "token refresh" --mode hybrid --match-count 3 --json | jq .
 
 # Hybrid should rank "Auth gotcha" (shares 'flaky' + 'yields' + 'auth') and the
 # repeated Doc-i docs reasonably. Output ordering shouldn't change across runs
@@ -328,12 +328,12 @@ Easiest reproducer: run a single iteration against the calc example.
 ```bash
 # Setup (if you haven't already)
 cd /tmp/cfcf-calc && git init && git commit --allow-empty -m "initial" && cd -
-./cfcf-binary workspace init --repo /tmp/cfcf-calc --name calc-clio --project cf-ecosystem
+cfcf workspace init --repo /tmp/cfcf-calc --name calc-clio --project cf-ecosystem
 
 # Kick the loop (don't let it run forever -- stop after iteration 2)
-./cfcf-binary run --workspace calc-clio
+cfcf run --workspace calc-clio
 # In another terminal, after iteration 1 completes:
-./cfcf-binary stop --workspace calc-clio
+cfcf stop --workspace calc-clio
 ```
 
 After the stop:
@@ -343,8 +343,8 @@ After the stop:
 # - reflection-analysis.md (if reflection ran)
 # - Tagged decision-log entries
 # - An iteration-summary doc
-./cfcf-binary clio stats            # document + chunk counts increased
-./cfcf-binary clio search "calc"    # should find things
+cfcf clio stats            # document + chunk counts increased
+cfcf clio search "calc"    # should find things
 
 # The agent cue card should be present in the workspace:
 ls /tmp/cfcf-calc/cfcf-docs/clio-guide.md
@@ -363,8 +363,8 @@ The web UI wasn't modified as part of this feature — status tab should continu
 ### 11. Config surface round-trips
 
 ```bash
-./cfcf-binary config show          # shows clio.ingestPolicy if set
-./cfcf-binary config edit          # can edit it interactively
+cfcf config show          # shows clio.ingestPolicy if set
+cfcf config edit          # can edit it interactively
 # Or via PUT /api/config body {"clio": {"ingestPolicy": "summaries-only"}}
 ```
 
@@ -372,15 +372,15 @@ The web UI wasn't modified as part of this feature — status tab should continu
 
 ```bash
 bun run build
-./cfcf-binary --version           # 0.8.0 (bumped to 0.9.0 when the PR merges)
-./cfcf-binary clio --help          # every subcommand shows help
-./cfcf-binary clio embedder --help
-./cfcf-binary clio reindex --help
-./cfcf-binary workspace set --help # exercises --migrate-history + --all-in-project help text
-./cfcf-binary init --help
+cfcf --version           # 0.8.0 (bumped to 0.9.0 when the PR merges)
+cfcf clio --help          # every subcommand shows help
+cfcf clio embedder --help
+cfcf clio reindex --help
+cfcf workspace set --help # exercises --migrate-history + --all-in-project help text
+cfcf init --help
 ```
 
-Consider running the binary from a fresh directory (`cd /tmp && /path/to/cfcf-binary server start`) to confirm the no-repo code path still works with the new deps.
+Consider running cfcf from a fresh directory (`cd /tmp && cfcf server start`) to confirm the no-repo code path still works with the new deps.
 
 ---
 

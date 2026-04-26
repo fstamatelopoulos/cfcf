@@ -6,7 +6,25 @@
  * On first run (no config), starts the interactive setup flow.
  */
 
+// Bun-runtime guard. cfcf uses bun:sqlite, Bun.spawn, Bun.file, Bun.serve
+// directly throughout the codebase. The shebang above selects bun, but a
+// user could also invoke us under Node (e.g. `node ./bin/cfcf.js`) and
+// hit a confusing failure deep in module loading. Surface the constraint
+// here with a clear message.
+//
+// See `docs/research/installer-design.md` §1 + the 2026-04-26 entry in
+// `docs/decisions-log.md` for why Bun is a runtime requirement.
+if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") {
+  process.stderr.write(
+    "[cfcf] error: cfcf requires the Bun runtime (≥ 1.3) but is being executed by something else.\n" +
+    "[cfcf] Install Bun: curl -fsSL https://bun.sh/install | bash\n" +
+    "[cfcf] Then re-run: bun install -g cfcf  (or bun install -g <tarball-URL>)\n",
+  );
+  process.exit(1);
+}
+
 import { Command } from "commander";
+import { readFileSync } from "node:fs";
 import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -20,6 +38,8 @@ import { registerReviewCommand } from "./commands/review.js";
 import { registerDocumentCommand } from "./commands/document.js";
 import { registerReflectCommand } from "./commands/reflect.js";
 import { registerClioCommands } from "./commands/clio.js";
+import { registerDoctorCommand } from "./commands/doctor.js";
+import { registerSelfUpdateCommand } from "./commands/self-update.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -35,6 +55,25 @@ if (process.env.CFCF_INTERNAL_SERVE === "1") {
   runCli();
 }
 
+/**
+ * `cfcf --version` output. Resolves the installed package's package.json
+ * via `require.resolve("@cerefox/cfcf-cli/package.json")` so the version
+ * shown matches what the user actually installed (not the in-repo
+ * VERSION constant). Dev mode (workspace package is named `@cfcf/cli`,
+ * not `@cerefox/cfcf-cli`) falls back to the VERSION constant from core.
+ */
+function buildVersionString(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require("node:module") as typeof import("node:module");
+    const req = createRequire(import.meta.url);
+    const pkgJsonPath = req.resolve("@cerefox/cfcf-cli/package.json");
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+    if (typeof pkg.version === "string") return pkg.version;
+  } catch { /* not the installed shape; fall through */ }
+  return VERSION;
+}
+
 function runCli(): void {
 
 const program = new Command();
@@ -42,7 +81,7 @@ const program = new Command();
 program
   .name("cfcf")
   .description("Cerefox Code Factory (cf²) -- AI coding agent orchestration")
-  .version(VERSION);
+  .version(buildVersionString());
 
 registerServerCommands(program);
 registerInitCommand(program);
@@ -56,6 +95,8 @@ registerReviewCommand(program);
 registerDocumentCommand(program);
 registerReflectCommand(program);
 registerClioCommands(program);
+registerDoctorCommand(program);
+registerSelfUpdateCommand(program);
 
 program.parse();
 }

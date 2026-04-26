@@ -1,0 +1,179 @@
+name: release
+
+# Trigger: workflow_dispatch ONLY (decided 2026-04-26).
+# Tagging and releasing are deliberately separated:
+#   - tagging is a developer milestone marker (no workflow runs)
+#   - releasing is an explicit publish act, run via this workflow
+# Run via the GitHub Actions UI ("Run workflow" → enter tag) or
+#   gh workflow run release.yml -f tag=v0.10.0
+#
+# Reference: docs/research/installer-design.md §5.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to build from (e.g. v0.10.0). Must already exist + be reachable from main.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark this as a prerelease (does not become "latest").'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write      # gh release create
+  actions: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  # ── sanity: tag must exist + be reachable from main ────────────────
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag → sha + verify on main
+        id: resolve
+        run: |
+          if ! git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag '${{ inputs.tag }}' does not exist. Tag locally + push first."
+            exit 1
+          fi
+          sha="$(git rev-parse "refs/tags/${{ inputs.tag }}^{}")"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::Tag '${{ inputs.tag }}' (sha $sha) is not an ancestor of main."
+            exit 1
+          fi
+
+  # ── per-platform native package build ──────────────────────────────
+  # Compiles the pinned libsqlite3 + downloads the matching sqlite-vec
+  # asset, packs them into @cerefox/cfcf-native-<platform>-X.Y.Z.tgz.
+  # Each leg runs on a runner of the matching arch so libsqlite3 ends
+  # up native-binary-correct without cross-compilation.
+  build-native:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # arm64 runner
+            platform: darwin-arm64
+          - os: macos-13          # x64 runner (Intel)
+            platform: darwin-x64
+          - os: ubuntu-latest
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build native package
+        run: scripts/build-native-package.sh "${{ matrix.platform }}" "${{ inputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfcf-native-${{ matrix.platform }}
+          retention-days: 14
+          path: |
+            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz
+            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz.sha256
+
+  # ── single CLI build ────────────────────────────────────────────────
+  # The bundled JS is platform-independent (the heavy native deps are
+  # externalised; per-platform native lives in build-native above), so
+  # one build leg covers all OSes.
+  build-cli:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace deps (needed by bun run build:web)
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI tarball
+        run: scripts/build-cli.sh "${{ inputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfcf-cli
+          retention-days: 14
+          path: |
+            dist/cfcf-*.tgz
+            dist/cfcf-*.tgz.sha256
+
+  # ── assemble + publish release ─────────────────────────────────────
+  release:
+    needs: [build-native, build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble SHA256SUMS
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          rm -- *.sha256
+
+      - name: Write MANIFEST.txt
+        # Small key:value file so self-update + install.sh can resolve
+        # "latest" by following GitHub's release redirect to MANIFEST.txt
+        # and parsing the cfcf: line. See packages/cli/src/commands/
+        # self-update.ts.
+        run: |
+          version="${{ inputs.tag }}"
+          v_no_prefix="${version#v}"
+          cat > dist/MANIFEST.txt <<EOF
+          cfcf: $version
+          cli-tarball: cfcf-${v_no_prefix}.tgz
+          built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+
+      - name: Copy install script
+        run: cp scripts/install.sh dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flag="--latest"
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then flag="--prerelease"; fi
+          gh release create "${{ inputs.tag }}" \
+            --title "${{ inputs.tag }}" \
+            --generate-notes \
+            --verify-tag \
+            $flag \
+            dist/cfcf-*.tgz \
+            dist/cerefox-cfcf-native-*.tgz \
+            dist/SHA256SUMS \
+            dist/MANIFEST.txt \
+            dist/install.sh

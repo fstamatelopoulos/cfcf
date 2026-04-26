@@ -18,26 +18,20 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
 
 ## Prerequisites
 
-- **[Node.js](https://nodejs.org/)** v20+ (required for AI agent CLIs)
-- **[Bun](https://bun.sh/)** v1.3+ (runtime and toolchain)
-- **[Git](https://git-scm.com/)** (required for iteration branch management)
-- At least one supported AI coding agent:
+### For end users (running cfcf via the installer)
+
+- **[Git](https://git-scm.com/)** — required for iteration branch management
+- **[Bun](https://bun.sh/)** v1.3+ — cfcf's runtime. The curl-bash installer below installs Bun for you if it's missing, so this is effectively automatic for first-time users.
+- At least one supported AI coding agent (cfcf detects what's installed during `cfcf init`):
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
   - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
 
-### Install Node.js
+cfcf is distributed as a standard npm package (`@cerefox/cfcf-cli`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/cfcf-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
 
-```bash
-# macOS (Homebrew)
-brew install node
+### For developers (building from source)
 
-# macOS / Linux (nvm -- recommended for managing versions)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-nvm install 20
-
-# Windows
-# Download installer from https://nodejs.org/
-```
+- **[Bun](https://bun.sh/)** v1.3+ — runtime and toolchain (`bun install`, `bun test`, `bun build`)
+- Git + the agent CLIs above.
 
 ### Install Bun
 
@@ -59,7 +53,25 @@ npm install -g @anthropic-ai/claude-code
 npm install -g @openai/codex
 ```
 
-## Getting Started
+## Install (end users)
+
+cfcf is distributed as the `@cerefox/cfcf-cli` npm package. The curl-bash installer detects Bun, installs it if missing, then `bun install -g <tarball-URL>`:
+
+```bash
+curl -fsSL https://<host>/install.sh | bash
+```
+
+If Bun is already on your machine, skip the wrapper:
+
+```bash
+bun install -g <tarball-URL>            # GitHub Releases (cfcf-private phase)
+# or, once cfcf is on npmjs.com:
+bun install -g @cerefox/cfcf-cli
+```
+
+Full install guide (file:// installs, upgrade, uninstall, troubleshooting): [`docs/guides/installing.md`](docs/guides/installing.md). After install, run `cfcf doctor` to verify and `cfcf init` for first-run setup.
+
+## Getting Started (developers)
 
 ```bash
 # Clone the repo
@@ -97,7 +109,7 @@ bun run test
 # TypeScript type checking
 bun run typecheck
 
-# Build a self-contained binary
+# Build the npm-format CLI tarball (dist/cfcf-X.Y.Z.tgz)
 bun run build
 
 # Start server in watch mode (auto-restart on changes)

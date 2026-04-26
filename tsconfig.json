@@ -14,6 +14,10 @@
     "outDir": "./dist",
     "rootDir": ".",
     "composite": true,
+    // Redirect the incremental-build cache out of ./dist so it doesn't
+    // collide with the release-tarball output (scripts/build-release-tarball.sh
+    // also writes there). node_modules/ is gitignored already.
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo",
     "paths": {
       "@cfcf/core": ["./packages/core/src"],
       "@cfcf/core/*": ["./packages/core/src/*"],
