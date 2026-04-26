@@ -25,6 +25,39 @@ function getCacheDir(): string {
   return join(homedir(), ".cfcf", "models");
 }
 
+/**
+ * Best-effort check: does this embedder's main weights file already
+ * exist in the local transformers cache? Used by `cfcf init` to skip
+ * the full warmup-with-progress-bar dance on re-runs (avoids the
+ * misleading "Installing embedder: ... ~130 MB download" line + the
+ * network re-validation flicker for tiny config files).
+ *
+ * Conservative: if the file exists, we assume it's intact. transformers
+ * itself does the real integrity check on load. Worst case, a corrupt
+ * cache makes us skip the "downloading" message but the load still
+ * succeeds (or fails loudly). We do NOT try to parse transformers'
+ * manifest.json -- the structure varies across versions.
+ *
+ * Cache layout (pinned for v0.10.0): `~/.cfcf/models/<hf-model-id>/`
+ * with `onnx/<weights>.onnx` inside. Filename depends on `dtype`:
+ *   - q8        → onnx/model_quantized.onnx
+ *   - q4        → onnx/model_q4.onnx
+ *   - fp16      → onnx/model_fp16.onnx
+ *   - undefined → onnx/model.onnx (fp32 fallback)
+ */
+export function isEmbedderCached(entry: EmbedderEntry): boolean {
+  const dir = getCacheDir();
+  const fname =
+    entry.dtype === "q8"   ? "model_quantized.onnx" :
+    entry.dtype === "q4"   ? "model_q4.onnx" :
+    entry.dtype === "fp16" ? "model_fp16.onnx" :
+    entry.dtype === "int8" ? "model_int8.onnx" :
+    entry.dtype === "uint8" ? "model_uint8.onnx" :
+                              "model.onnx";
+  const candidate = join(dir, entry.hfModelId, "onnx", fname);
+  return existsSync(candidate);
+}
+
 function makeBar(pct: number, width = 20): string {
   const clamped = Math.max(0, Math.min(100, pct));
   const filled = Math.round((clamped / 100) * width);

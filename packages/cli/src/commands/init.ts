@@ -19,6 +19,7 @@ import {
   EMBEDDER_CATALOGUE,
   DEFAULT_EMBEDDER_NAME,
   findEmbedderEntry,
+  isEmbedderCached,
   LocalClio,
 } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
@@ -404,28 +405,53 @@ export function registerInitCommand(program: Command): void {
         if (!entry) {
           installError = `Unknown embedder "${embedderPicked}" (catalogue mismatch?)`;
         } else {
-          console.log();
-          console.log(`Installing embedder: ${entry.name} (~${entry.approxSizeMb} MB download)`);
-          console.log("First run only; subsequent uses read from ~/.cfcf/models/.");
-          console.log();
+          // Fast path: model already downloaded AND active in Clio's
+          // DB → skip the warmup-with-progress-bar dance entirely. The
+          // `Installing embedder ... ~130 MB download` + progress bar
+          // were misleading on init re-runs; the only network traffic
+          // was transformers.js re-validating tiny config files. Fix
+          // captured 2026-04-26 during dogfood install.
           let clio: LocalClio | null = null;
           try {
             clio = new LocalClio();
-            await clio.installActiveEmbedder(entry, { force: false, loadNow: true });
-            const record = clio.getActiveEmbedderRecord();
-            if (!record || record.name !== entry.name) {
-              throw new Error(
-                `post-install check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
+            const existingActive = clio.getActiveEmbedderRecord();
+            const fullyCached =
+              existingActive?.name === entry.name && isEmbedderCached(entry);
+
+            if (fullyCached && existingActive) {
+              console.log();
+              console.log(
+                `✓ Clio ready: ${existingActive.name} (already cached and active; dim=${existingActive.dim}, chunk=${existingActive.recommendedChunkMaxChars} chars)`,
               );
+              verifiedActive = {
+                name: existingActive.name,
+                dim: existingActive.dim,
+                recommendedChunkMaxChars: existingActive.recommendedChunkMaxChars,
+              };
+              embedderInstalled = true;
+            } else {
+              // First-time install or different embedder picked --
+              // download is real; show the bandwidth hint + progress.
+              console.log();
+              console.log(`Installing embedder: ${entry.name} (~${entry.approxSizeMb} MB download)`);
+              console.log("First run only; subsequent uses read from ~/.cfcf/models/.");
+              console.log();
+              await clio.installActiveEmbedder(entry, { force: false, loadNow: true });
+              const record = clio.getActiveEmbedderRecord();
+              if (!record || record.name !== entry.name) {
+                throw new Error(
+                  `post-install check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
+                );
+              }
+              verifiedActive = {
+                name: record.name,
+                dim: record.dim,
+                recommendedChunkMaxChars: record.recommendedChunkMaxChars,
+              };
+              embedderInstalled = true;
+              console.log();
+              console.log(`✓ Clio ready: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
             }
-            verifiedActive = {
-              name: record.name,
-              dim: record.dim,
-              recommendedChunkMaxChars: record.recommendedChunkMaxChars,
-            };
-            embedderInstalled = true;
-            console.log();
-            console.log(`✓ Clio ready: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
           } catch (err) {
             installError = err instanceof Error ? err.message : String(err);
           } finally {
