@@ -854,7 +854,12 @@ Fetch a single Clio Project by UUID or name (case-insensitive).
 
 ### POST /api/clio/ingest
 
-Ingest a Markdown document. Chunks the content via the heading-aware chunker, sha256-dedups by content, inserts document + chunks in one transaction.
+Ingest a Markdown document. Chunks the content via the heading-aware chunker, then takes one of four branches based on the request body:
+
+1. `documentId` provided → **deterministic update**. Snapshots the named doc's current chunks into a new version row and replaces them with the new content. 404s if the doc doesn't exist or is soft-deleted. Wins over `updateIfExists` (returns a `note` if both passed). Mirrors Cerefox `cerefox_ingest(document_id=...)`.
+2. `updateIfExists: true` → **title-based update**. Looks up an existing live (non-deleted) doc with the same title in the same Project; if found, updates in place (snapshot + replace); if not, falls through to create. Mirrors Cerefox `cerefox_ingest(update_if_exists=true)`.
+3. Content matches an existing live doc's `content_hash` → **skip** (idempotent no-op; returns the existing record). PR1 behaviour preserved.
+4. Otherwise → **create** a brand-new document.
 
 **Request body:**
 ```json
@@ -864,14 +869,69 @@ Ingest a Markdown document. Chunks the content via the heading-aware chunker, sh
   "content": "# Markdown body\n\n...",
   "source": "optional origin hint",
   "metadata": { "role": "dev", "artifact_type": "iteration-log" },
-  "reviewStatus": "approved"
+  "reviewStatus": "approved",
+  "documentId": "<uuid, optional>",     // 5.11: deterministic update
+  "updateIfExists": false,              // 5.11: title-based update fallback
+  "author": "claude-code"               // 5.11: stored on version rows for attribution
 }
 ```
 
 **Responses:**
-- `201 Created` on a fresh ingest — returns `{ id, created: true, document, chunksInserted }`.
-- `200 OK` when the content_hash matches an existing document (idempotent no-op) — returns `{ id, created: false, document, chunksInserted: 0 }`.
-- `400` for missing required fields / empty title or content.
+- `201 Created` on a fresh ingest — returns `{ id, action: "created", created: true, document, chunksInserted }`.
+- `200 OK` on update — returns `{ id, action: "updated", created: false, document, chunksInserted, versionId, versionNumber, note? }`. The `versionId` points at the snapshot row holding the prior content.
+- `200 OK` on dedup skip — returns `{ id, action: "skipped", created: false, document, chunksInserted: 0 }`.
+- `400` for missing required fields / empty title or content / malformed metadata.
+- `404` when `documentId` doesn't resolve.
+
+**Backwards compatibility:** the legacy `created` boolean is still set (`true` iff `action === "created"`), so PR1 callers continue to work. New code should prefer `action`.
+
+### GET /api/clio/documents/:id/content
+
+**5.11.** Reconstruct the full Markdown content of a document by joining its chunks (newline-separated, in `chunk_index` order). Mirrors Cerefox `cerefox_get_document(p_document_id, p_version_id)`.
+
+**Path:** `:id` — document UUID.
+
+**Query params:**
+- `version_id` (optional) — UUID of an archived version (from `GET /api/clio/documents/:id/versions`). When omitted, returns the live (current) version.
+
+**Response:** `200 OK`
+```json
+{
+  "document": { /* ClioDocument */ },
+  "content": "# Reconstructed markdown body\n\n...",
+  "chunkCount": 12,
+  "totalChars": 7430,
+  "versionId": null
+}
+```
+
+**Errors:** `404` when the doc doesn't exist or `version_id` doesn't belong to it.
+
+### GET /api/clio/documents/:id/versions
+
+**5.11.** List archived versions for a document, newest first. Empty array when the doc has never been updated. Mirrors Cerefox `cerefox_list_document_versions`.
+
+**Response:** `200 OK`
+```json
+{
+  "versions": [
+    {
+      "id": "<version uuid>",
+      "documentId": "<doc uuid>",
+      "versionNumber": 3,
+      "source": "claude-code",
+      "metadata": {},
+      "chunkCount": 12,
+      "totalChars": 7430,
+      "archived": false,
+      "createdAt": "2026-04-26T08:11:42.054Z"
+    }
+    // ...older versions...
+  ]
+}
+```
+
+**Errors:** `404` when the doc doesn't exist.
 
 ### GET /api/clio/search
 

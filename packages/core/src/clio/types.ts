@@ -65,17 +65,111 @@ export interface IngestRequest {
   /** Structured metadata merged into the document's metadata JSON. */
   metadata?: Record<string, unknown>;
   reviewStatus?: "approved" | "pending_review";
+  /**
+   * Deterministic update by document UUID. Mirrors Cerefox `cerefox_ingest`'s
+   * `document_id` parameter. When provided, looks up the document, snapshots
+   * its current chunks into a new version row, replaces the live content with
+   * the new chunks, and bumps `updated_at`. Errors if the document doesn't
+   * exist (or is soft-deleted). Wins over `updateIfExists` if both are set
+   * (a runtime warning is surfaced via `IngestResult.note`). 5.11 / Clio v2.
+   */
+  documentId?: string;
+  /**
+   * Title-based update fallback. Mirrors Cerefox `cerefox_ingest`'s
+   * `update_if_exists` parameter. When true, looks for an existing live
+   * (non-deleted) document with the same title in the same Clio Project; if
+   * found, updates it in place. Otherwise falls through to a normal create.
+   * Ignored when `documentId` is provided. 5.11 / Clio v2.
+   */
+  updateIfExists?: boolean;
+  /**
+   * Optional attribution: who or what triggered this write. Stored on the
+   * version row's `source` column when an update happens, so `cfcf clio
+   * versions <doc-id>` shows who made each version. Full audit-log
+   * integration (5.13) will index this for filtering. Defaults to "agent"
+   * for compatibility with Cerefox `cerefox_ingest`'s default.
+   */
+  author?: string;
 }
 
 export interface IngestResult {
   /** The document's row id. */
   id: string;
-  /** True when this was a fresh ingest; false when content_hash already existed. */
+  /**
+   * What this ingest call did:
+   *   - "created": new document inserted
+   *   - "updated": existing document had its content replaced; a snapshot
+   *                of the prior content lives in `clio_document_versions`
+   *                (returned `versionId` + `versionNumber` below)
+   *   - "skipped": `content_hash` matched an existing live document; nothing
+   *                changed (the old behaviour from PR1)
+   * Source of truth going forward; mirrors Cerefox `IngestResult.action`.
+   */
+  action: "created" | "updated" | "skipped";
+  /**
+   * Legacy field. `true` iff `action === "created"`. Kept for backwards
+   * compatibility with PR1 callers; new code should prefer `action`.
+   * @deprecated Use `action` instead.
+   */
   created: boolean;
-  /** The existing or new document. */
+  /** The current document record (post-update if action === "updated"). */
   document: ClioDocument;
-  /** Number of chunks produced (0 when a duplicate was found). */
+  /** Number of chunks in the live (post-update) version. 0 when skipped. */
   chunksInserted: number;
+  /**
+   * When `action === "updated"`: UUID of the snapshot row in
+   * `clio_document_versions` holding the prior content. Pass to
+   * `getDocumentContent({ versionId })` to retrieve the archived state.
+   */
+  versionId?: string;
+  /**
+   * When `action === "updated"`: the sequential version number assigned to
+   * the new snapshot. Starts at 1 for the first update; mirrors
+   * `cerefox_document_versions.version_number`.
+   */
+  versionNumber?: number;
+  /**
+   * Optional human-readable warning. Set when caller behaviour is non-fatal
+   * but worth surfacing -- e.g. `documentId` was provided so `updateIfExists`
+   * was overridden. Mirrors Cerefox's `IngestResult.note`.
+   */
+  note?: string;
+}
+
+/**
+ * One archived version of a document. Returned by
+ * `MemoryBackend.listDocumentVersions(docId)` newest-first.
+ *
+ * `versionNumber` is sequential per document, starting at 1. The "live"
+ * (current) chunks are NOT a version row -- they live in `clio_chunks`
+ * with `version_id IS NULL`. Each time a document is updated, the
+ * outgoing chunks are archived under a new version row before the new
+ * chunks are written; that's why `versionNumber` only starts existing
+ * after the first update.
+ *
+ * 5.11 / Clio v2.
+ */
+export interface ClioDocumentVersion {
+  id: string;
+  documentId: string;
+  versionNumber: number;
+  /**
+   * Free-text label. Today this carries the `author` value from the
+   * triggering ingest (e.g. "agent", "claude-code", "cfcf-harness").
+   * Cerefox's analogous column is `cerefox_document_versions.source`
+   * with values like "file", "paste", "agent", "manual".
+   */
+  source: string | null;
+  metadata: Record<string, unknown>;
+  chunkCount: number;
+  totalChars: number;
+  /**
+   * If true, this version is protected from retention cleanup (when 5.13
+   * lands). Currently always false; the field is present for forward
+   * compatibility with Cerefox's `archived` flag.
+   */
+  archived: boolean;
+  createdAt: string;
 }
 
 export interface SearchRequest {

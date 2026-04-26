@@ -10,6 +10,7 @@
 import type {
   ClioProject,
   ClioDocument,
+  ClioDocumentVersion,
   IngestRequest,
   IngestResult,
   SearchRequest,
@@ -33,6 +34,30 @@ export interface MemoryBackend {
   // ── Documents ─────────────────────────────────────────────────────────
   ingest(req: IngestRequest): Promise<IngestResult>;
   getDocument(id: string): Promise<ClioDocument | null>;
+  /**
+   * Look up a live (non-deleted) document by exact title within a Clio
+   * Project. Returns null if no match. Used by the `updateIfExists` ingest
+   * path; exposed on the interface so future remote backends (e.g.
+   * `CerefoxRemote`) can implement the same lookup with their own SQL.
+   * 5.11 / Clio v2.
+   */
+  findDocumentByTitle(projectId: string, title: string): Promise<ClioDocument | null>;
+  /**
+   * Reconstruct full Markdown content for a document from its chunks.
+   * Defaults to the live version (`version_id IS NULL`); pass
+   * `opts.versionId` (returned by `listDocumentVersions`) to retrieve an
+   * archived state. Returns null if the document or version doesn't
+   * exist. 5.11 / Clio v2.
+   */
+  getDocumentContent(id: string, opts?: { versionId?: string }): Promise<DocumentContent | null>;
+  /**
+   * List archived versions for a document, newest-first. Each row is one
+   * snapshot taken at the moment the document was updated. The "live"
+   * (current) chunks are NOT a version row -- they live in `clio_chunks`
+   * with `version_id IS NULL`. A document that has never been updated
+   * returns an empty array. 5.11 / Clio v2.
+   */
+  listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]>;
   /**
    * List documents, newest-first, optionally scoped to one Clio Project.
    * Soft-deleted documents are excluded. `limit` defaults to 50 to keep
@@ -103,6 +128,19 @@ export interface ReindexOptions {
   batchSize?: number;
   /** Optional progress callback invoked after each batch. */
   onProgress?: (info: { processed: number; total: number }) => void;
+}
+
+/**
+ * Returned by `MemoryBackend.getDocumentContent`. Carries the document
+ * record alongside its reconstructed Markdown body. `versionId` echoes
+ * which version was reconstructed (null = live/current).
+ */
+export interface DocumentContent {
+  document: ClioDocument;
+  content: string;
+  chunkCount: number;
+  totalChars: number;
+  versionId: string | null;
 }
 
 export interface ReindexResult {

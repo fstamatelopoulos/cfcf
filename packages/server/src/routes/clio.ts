@@ -82,10 +82,22 @@ export function registerClioRoutes(app: Hono): void {
         source: body.source,
         metadata: body.metadata,
         reviewStatus: body.reviewStatus,
+        documentId: body.documentId,
+        updateIfExists: body.updateIfExists,
+        author: body.author,
       });
-      return c.json(result, result.created ? 201 : 200);
+      // 201 for new docs; 200 for updates and skips. Mirrors Cerefox's
+      // status-code split (created → 201, updated/no-op → 200).
+      const status = result.action === "created" ? 201 : 200;
+      return c.json(result, status);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      // ingest("document_id ... not found") → 404 instead of 400 so the
+      // CLI / agents can distinguish "your input was malformed" from
+      // "the doc you named doesn't exist".
+      if (message.includes("not found")) {
+        return c.json({ error: message }, 404);
+      }
       return c.json({ error: message }, 400);
     }
   });
@@ -180,6 +192,36 @@ export function registerClioRoutes(app: Hono): void {
     const doc = await backend.getDocument(id);
     if (!doc) return c.json({ error: "Document not found" }, 404);
     return c.json(doc);
+  });
+
+  // Reconstructed full content for a document. Returns the live version
+  // by default; pass ?version_id=<uuid> to retrieve an archived state
+  // (UUIDs come from `GET /api/clio/documents/:id/versions`).
+  // Mirrors Cerefox's `cerefox_get_document(p_document_id, p_version_id)`.
+  app.get("/api/clio/documents/:id/content", async (c) => {
+    const id = c.req.param("id");
+    const versionId = c.req.query("version_id") || undefined;
+    const backend = getClioBackend();
+    const result = await backend.getDocumentContent(id, versionId ? { versionId } : undefined);
+    if (!result) {
+      return c.json(
+        { error: versionId ? `Document or version ${versionId} not found` : "Document not found" },
+        404,
+      );
+    }
+    return c.json(result);
+  });
+
+  // List archived versions for a document, newest-first. Empty array
+  // when the doc has never been updated. Mirrors Cerefox's
+  // `cerefox_list_document_versions`.
+  app.get("/api/clio/documents/:id/versions", async (c) => {
+    const id = c.req.param("id");
+    const backend = getClioBackend();
+    const doc = await backend.getDocument(id);
+    if (!doc) return c.json({ error: "Document not found" }, 404);
+    const versions = await backend.listDocumentVersions(id);
+    return c.json({ versions });
   });
 
   // List documents (newest-first, optional ?project=, ?limit=, ?offset=).

@@ -247,6 +247,119 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(res.status).toBe(404);
   });
 
+  // ── 5.11: update API + versioned content + versions ────────────────
+  it("POST /api/clio/ingest with updateIfExists snapshots + returns action='updated'", async () => {
+    const app = createApp();
+    const a = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Same title", content: "body v0" }),
+    });
+    const created = await a.json();
+    expect(created.action).toBe("created");
+
+    const b = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Same title", content: "body v1",
+        updateIfExists: true, author: "test-suite",
+      }),
+    });
+    expect(b.status).toBe(200); // updates return 200, not 201
+    const updated = await b.json();
+    expect(updated.action).toBe("updated");
+    expect(updated.id).toBe(created.id);
+    expect(updated.versionId).toBeTruthy();
+    expect(updated.versionNumber).toBe(1);
+  });
+
+  it("POST /api/clio/ingest with documentId returns 404 when the doc doesn't exist", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "x", content: "body",
+        documentId: "00000000-0000-4000-8000-000000000000",
+      }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /api/clio/documents/:id/content reconstructs live content + can pull a specific version", async () => {
+    const app = createApp();
+    const a = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Versioned", content: "## H\n\nv0 body" }),
+    });
+    const v0 = await a.json();
+
+    const b = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Versioned", content: "## H\n\nv1 body",
+        documentId: v0.id,
+      }),
+    });
+    const v1 = await b.json();
+
+    // Live = v1.
+    const live = await app.request(`/api/clio/documents/${v0.id}/content`);
+    expect(live.status).toBe(200);
+    const liveBody = await live.json();
+    expect(liveBody.content).toContain("v1 body");
+    expect(liveBody.versionId).toBeNull();
+
+    // Archived = v0 via version_id.
+    const arch = await app.request(`/api/clio/documents/${v0.id}/content?version_id=${v1.versionId}`);
+    expect(arch.status).toBe(200);
+    const archBody = await arch.json();
+    expect(archBody.content).toContain("v0 body");
+    expect(archBody.versionId).toBe(v1.versionId);
+  });
+
+  it("GET /api/clio/documents/:id/content returns 404 for unknown version_id", async () => {
+    const app = createApp();
+    const a = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "X", content: "body" }),
+    });
+    const { id } = await a.json();
+    const bogus = await app.request(`/api/clio/documents/${id}/content?version_id=00000000-0000-4000-8000-000000000000`);
+    expect(bogus.status).toBe(404);
+  });
+
+  it("GET /api/clio/documents/:id/versions lists archived versions newest-first", async () => {
+    const app = createApp();
+    const a = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Multi", content: "v0" }),
+    });
+    const { id } = await a.json();
+    for (const body of ["v1", "v2", "v3"]) {
+      await app.request("/api/clio/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: "p1", title: "Multi", content: body, documentId: id }),
+      });
+    }
+    const res = await app.request(`/api/clio/documents/${id}/versions`);
+    expect(res.status).toBe(200);
+    const { versions } = await res.json();
+    expect(versions.map((v: { versionNumber: number }) => v.versionNumber)).toEqual([3, 2, 1]);
+  });
+
+  it("GET /api/clio/documents/:id/versions returns 404 for unknown doc", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/documents/bogus/versions");
+    expect(res.status).toBe(404);
+  });
+
   it("GET /api/clio/stats returns counts + migrations", async () => {
     const app = createApp();
     await app.request("/api/clio/ingest", {

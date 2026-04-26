@@ -401,3 +401,273 @@ describe("LocalClio.getDocument", () => {
     await clio.close();
   });
 });
+
+// ── Item 5.11: update-doc API + versioning ─────────────────────────────────
+
+describe("LocalClio.ingest -- update by document_id (5.11)", () => {
+  it("snapshots the prior content, replaces chunks, returns action='updated'", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({ project: "p1", title: "Doc A", content: "original body v0" });
+    expect(v0.action).toBe("created");
+
+    const v1 = await clio.ingest({
+      project: "p1",
+      title: "Doc A (renamed)",
+      content: "rewritten body v1",
+      documentId: v0.id,
+      author: "claude-code",
+    });
+
+    expect(v1.action).toBe("updated");
+    expect(v1.id).toBe(v0.id);                         // same doc, same UUID
+    expect(v1.versionId).toBeTruthy();                 // a snapshot row exists
+    expect(v1.versionNumber).toBe(1);
+    expect(v1.document.title).toBe("Doc A (renamed)"); // title gets re-written too
+    expect(v1.document.contentHash).not.toBe(v0.document.contentHash);
+
+    // Live content reads back as the new version.
+    const live = await clio.getDocumentContent(v0.id);
+    expect(live).toBeTruthy();
+    expect(live!.content).toContain("rewritten body v1");
+    expect(live!.versionId).toBeNull();
+
+    // Archived content reads back via the version_id.
+    const archived = await clio.getDocumentContent(v0.id, { versionId: v1.versionId! });
+    expect(archived).toBeTruthy();
+    expect(archived!.content).toContain("original body v0");
+    expect(archived!.versionId).toBe(v1.versionId!);
+
+    await clio.close();
+  });
+
+  it("errors when document_id does not exist", async () => {
+    const clio = makeClio();
+    await expect(
+      clio.ingest({
+        project: "p1",
+        title: "x",
+        content: "body",
+        documentId: "00000000-0000-4000-8000-000000000000",
+      }),
+    ).rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("errors when document_id points at a soft-deleted doc", async () => {
+    // Schema-level deletion (no public soft-delete API yet; 5.11 only
+    // exposes the read-side filter). We simulate by writing deleted_at
+    // directly, exercising the same code path 5.13's DELETE endpoint
+    // will hit.
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Doomed", content: "rip" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (clio as any).db.run(
+      `UPDATE clio_documents SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+      [r.id],
+    );
+    await expect(
+      clio.ingest({ project: "p1", title: "x", content: "body", documentId: r.id }),
+    ).rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("documentId wins over updateIfExists; surfaces a note", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({ project: "p1", title: "Both flags", content: "v0" });
+    const v1 = await clio.ingest({
+      project: "p1",
+      title: "Both flags",
+      content: "v1",
+      documentId: v0.id,
+      updateIfExists: true,
+    });
+    expect(v1.action).toBe("updated");
+    expect(v1.note).toMatch(/documentId provided/);
+    await clio.close();
+  });
+
+  it("chained updates increment version_number sequentially", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({ project: "p1", title: "Chain", content: "v0" });
+
+    const v1 = await clio.ingest({
+      project: "p1", title: "Chain", content: "v1", documentId: v0.id,
+    });
+    const v2 = await clio.ingest({
+      project: "p1", title: "Chain", content: "v2", documentId: v0.id,
+    });
+    const v3 = await clio.ingest({
+      project: "p1", title: "Chain", content: "v3", documentId: v0.id,
+    });
+
+    expect(v1.versionNumber).toBe(1);
+    expect(v2.versionNumber).toBe(2);
+    expect(v3.versionNumber).toBe(3);
+
+    const versions = await clio.listDocumentVersions(v0.id);
+    expect(versions.map((v) => v.versionNumber)).toEqual([3, 2, 1]); // newest first
+
+    // Each archived version recovers its own content.
+    const c1 = await clio.getDocumentContent(v0.id, { versionId: v1.versionId! });
+    const c2 = await clio.getDocumentContent(v0.id, { versionId: v2.versionId! });
+    const c3 = await clio.getDocumentContent(v0.id, { versionId: v3.versionId! });
+    expect(c1!.content).toContain("v0");
+    expect(c2!.content).toContain("v1");
+    expect(c3!.content).toContain("v2");
+
+    // Live = v3.
+    const live = await clio.getDocumentContent(v0.id);
+    expect(live!.content).toContain("v3");
+    await clio.close();
+  });
+});
+
+describe("LocalClio.ingest -- update by title (updateIfExists, 5.11)", () => {
+  it("matches by title within the same Project + updates in place", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({ project: "p1", title: "By title", content: "v0" });
+
+    const v1 = await clio.ingest({
+      project: "p1",
+      title: "By title",          // same title in same Project
+      content: "v1",
+      updateIfExists: true,
+    });
+
+    expect(v1.action).toBe("updated");
+    expect(v1.id).toBe(v0.id);
+    expect(v1.versionNumber).toBe(1);
+
+    // No second doc was created.
+    const docs = await clio.listDocuments({ project: "p1" });
+    expect(docs.length).toBe(1);
+    await clio.close();
+  });
+
+  it("does NOT match across Projects (each Project's namespace is independent)", async () => {
+    const clio = makeClio();
+    const inP1 = await clio.ingest({ project: "p1", title: "Cross", content: "p1-body" });
+    const inP2 = await clio.ingest({
+      project: "p2",
+      title: "Cross",                // same title, different Project
+      content: "p2-body",
+      updateIfExists: true,
+    });
+    expect(inP2.action).toBe("created");
+    expect(inP2.id).not.toBe(inP1.id);
+    await clio.close();
+  });
+
+  it("falls through to create when no title match exists", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Brand new",
+      content: "body",
+      updateIfExists: true,
+    });
+    expect(r.action).toBe("created");
+    await clio.close();
+  });
+
+  it("excludes soft-deleted matches; falls through to create", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({ project: "p1", title: "Deleted match", content: "v0" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (clio as any).db.run(
+      `UPDATE clio_documents SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+      [v0.id],
+    );
+    const v1 = await clio.ingest({
+      project: "p1",
+      title: "Deleted match",
+      content: "v1",
+      updateIfExists: true,
+    });
+    expect(v1.action).toBe("created");
+    expect(v1.id).not.toBe(v0.id);
+    await clio.close();
+  });
+});
+
+describe("LocalClio.ingest -- create-path dedup unchanged (5.11)", () => {
+  it("returns action='skipped' for byte-identical content (PR1 behaviour preserved)", async () => {
+    const clio = makeClio();
+    const a = await clio.ingest({ project: "p1", title: "Same", content: "identical body" });
+    const b = await clio.ingest({ project: "p1", title: "Same", content: "identical body" });
+    expect(b.action).toBe("skipped");
+    expect(b.created).toBe(false);          // legacy flag still works
+    expect(b.id).toBe(a.id);
+    await clio.close();
+  });
+
+  it("after migration 0003: two docs with the same hash can coexist (no UNIQUE violation)", async () => {
+    // Reachable when an update reassigns doc A's hash to match doc B's
+    // current hash. Schema must not block.
+    const clio = makeClio();
+    const a = await clio.ingest({ project: "p1", title: "A", content: "shared body" });
+    const b = await clio.ingest({ project: "p1", title: "B", content: "different body" });
+    // Update b to have a's content. Without 0003 this would fire UNIQUE.
+    const updated = await clio.ingest({
+      project: "p1", title: "B", content: "shared body", documentId: b.id,
+    });
+    expect(updated.action).toBe("updated");
+    // Both a and b now have identical hashes; both are still readable.
+    const aDoc = await clio.getDocument(a.id);
+    const bDoc = await clio.getDocument(b.id);
+    expect(aDoc!.contentHash).toBe(bDoc!.contentHash);
+    await clio.close();
+  });
+});
+
+describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentContent (5.11)", () => {
+  it("findDocumentByTitle returns null for unknown title", async () => {
+    const clio = makeClio();
+    const proj = await clio.createProject({ name: "p1" });
+    expect(await clio.findDocumentByTitle(proj.id, "nope")).toBeNull();
+    await clio.close();
+  });
+
+  it("listDocumentVersions returns [] for never-updated docs", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Fresh", content: "body" });
+    expect(await clio.listDocumentVersions(r.id)).toEqual([]);
+    await clio.close();
+  });
+
+  it("getDocumentContent returns null for unknown document", async () => {
+    const clio = makeClio();
+    expect(await clio.getDocumentContent("00000000-0000-4000-8000-000000000000")).toBeNull();
+    await clio.close();
+  });
+
+  it("getDocumentContent({ versionId }) returns null when version doesn't belong to that doc", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "T", content: "body" });
+    expect(
+      await clio.getDocumentContent(r.id, { versionId: "00000000-0000-4000-8000-000000000000" }),
+    ).toBeNull();
+    await clio.close();
+  });
+
+  it("ensures FTS index drops archived chunks (search returns only live content)", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({
+      project: "p1",
+      title: "Versioned search",
+      content: "# Original\n\nstrawberry shortcake recipe",
+    });
+    await clio.ingest({
+      project: "p1",
+      title: "Versioned search",
+      content: "# Updated\n\nblueberry pancake recipe",
+      documentId: v0.id,
+    });
+
+    const strawberry = await clio.search({ query: "strawberry" });
+    expect(strawberry.hits.length).toBe(0);   // archived; not in FTS
+    const blueberry = await clio.search({ query: "blueberry" });
+    expect(blueberry.hits.length).toBeGreaterThan(0); // live; in FTS
+    await clio.close();
+  });
+});

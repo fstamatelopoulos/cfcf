@@ -423,9 +423,18 @@ cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
 cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
 cat note.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Note"
 
+# Update an existing doc instead of creating a new one (item 5.11):
+#   --update-if-exists matches by title within the same Project
+#   --document-id <uuid> is the deterministic update path (wins if both passed)
+# When an update happens, the prior content is snapshotted into a version row;
+# recall it with `cfcf clio get <id> --version-id <uuid>`.
+cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --update-if-exists --author claude-code
+cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
+
 # Browse / retrieve
 cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--json]   # newest first
-cfcf clio get <document-id> [--json]
+cfcf clio get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
+cfcf clio versions <document-id> [--json]                                   # archived version history
 
 # Projects (grouping of workspaces by knowledge domain)
 cfcf clio projects [--json]

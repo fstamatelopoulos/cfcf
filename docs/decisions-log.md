@@ -19,6 +19,24 @@
 
 ## Log
 
+### 2026-04-26 -- Clio update-doc API (5.11): three design choices worth recording
+
+PR1 of item 5.11 ships the `update_if_exists` + `document_id` ingest paths, version snapshots, and versioned content reads. Three decisions buried in the implementation that future readers should know about:
+
+**1. Migration 0003 drops the UNIQUE constraint on `content_hash`.** PR1 of Clio (5.7) declared the column UNIQUE because the only ingest path was create + content-hash-dedup. The update API breaks that assumption: a legitimate update of doc A whose new content happens to match doc B's current hash would fire the UNIQUE constraint and reject the update. Hash collisions by content match are a real-world possibility (two agents converging on the same final state). Replacement: a non-unique index. The dedup-on-create lookup still benefits from the index but no longer rejects parallel docs with the same hash; when there's a hash collision, the dedup query returns one of them as the "skipped" target — benign. The migration uses the canonical 12-step SQLite table-rebuild pattern with `PRAGMA defer_foreign_keys = ON` (NOT `foreign_keys = OFF`, which is a no-op inside the migration runner's transaction); FK enforcement is postponed to COMMIT time, when the new table exists with the same name and `clio_chunks`'s FK resolves cleanly.
+
+**2. `version_id IS NULL` = "live"; FTS triggers gate on it.** Mirrors Cerefox's convention. The `clio_chunks_fts_au` trigger fires on UPDATE with predicate `WHEN old.version_id IS NULL OR new.version_id IS NULL` — so the snapshot path's `UPDATE clio_chunks SET version_id = <new>` automatically removes the prior chunks from the FTS index (`old.version_id IS NULL` matches), and the subsequent INSERT of new chunks adds them back (the AI trigger fires for `new.version_id IS NULL`). One-line schema invariant; no application code needed to keep search and versions in sync.
+
+**3. `IngestResult.action` is the new source of truth; `created` is kept for one release.** PR1 returned `{ created: boolean }`. With three outcomes (`"created"`, `"updated"`, `"skipped"`) a boolean stops carrying the signal. We added `action` as an enum alongside `created` (`true` iff `action === "created"`) so PR1 callers keep working without code changes; the legacy field is `@deprecated` in the JSDoc and slated for removal once dependent code (notably `iteration-loop`'s auto-ingest hooks) has migrated. Same pattern as Cerefox's `IngestResult.action` ("create" | "update-content" | "skipped").
+
+**Out of scope for 5.11 PR1, tracked elsewhere:**
+- Soft-delete mutation API (`DELETE` + `restore`) — table column already filtered on the read side; mutation API in a 5.11 follow-up.
+- `author`/`requestor` field beyond storing it in the version row's `source` column — full write-attribution + read filtering moves to 5.12 with the rest of the agent-parity surface.
+- Audit-log writes — 5.13.
+- Retention cleanup of old version rows — also 5.13 (pairs with audit log; both touch the same write-path).
+
+---
+
 ### 2026-04-26 -- v0.10.0 post-pivot dogfood findings (server-spawn, progress-bar, init cached-skip, CI artifact retention)
 
 Same day as the pivot above. These are the four follow-on bugs surfaced by dogfood-installing the new npm-format build on Intel Mac. Captured here so future contributors know these are **install-shape gotchas**, not design flaws — they're the kind of thing that only shows up after a real install.

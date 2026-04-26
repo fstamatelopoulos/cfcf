@@ -190,7 +190,13 @@ describe("applyCustomSqlite + getSqliteVecPath", () => {
 });
 
 describe("schema shape", () => {
-  it("enforces content_hash uniqueness on clio_documents", () => {
+  // Migration 0003 (item 5.11) relaxed the UNIQUE constraint on
+  // clio_documents.content_hash so legitimate updates whose new content
+  // happens to match another doc don't deadlock. Application-level dedup
+  // still happens in LocalClio.ingest's create branch (returns
+  // action="skipped" for the existing match); the schema just doesn't
+  // enforce one-doc-per-hash anymore.
+  it("does NOT enforce content_hash uniqueness at the schema level (relaxed in 0003)", () => {
     const path = makeTempDbPath();
     const db = openClioDb({ path });
 
@@ -200,12 +206,13 @@ describe("schema shape", () => {
       VALUES ('d1', 'p1', 't1', 'src', 'abc123')
     `);
 
+    // Used to throw on the duplicate hash; now succeeds silently.
     expect(() =>
       db.run(`
         INSERT INTO clio_documents (id, project_id, title, source, content_hash)
         VALUES ('d2', 'p1', 't2', 'src2', 'abc123')
       `),
-    ).toThrow(/UNIQUE constraint failed/);
+    ).not.toThrow();
 
     db.close();
   });

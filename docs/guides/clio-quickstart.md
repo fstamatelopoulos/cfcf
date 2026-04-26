@@ -85,7 +85,40 @@ cfcf clio project show cf-ecosystem   # description, doc count, timestamps
 cfcf clio docs list                   # list documents (newest first; --project, --limit, --json)
 cfcf clio docs list --project cf-ecosystem
 cfcf clio stats                       # DB size, counts, active embedder, migrations
-cfcf clio get <document-id>           # fetch a document by id
+cfcf clio get <document-id>           # fetch + reconstruct full content from chunks
+cfcf clio get <document-id> --version-id <uuid>   # fetch an archived version
+cfcf clio get <document-id> --raw     # content only (no header) for scripts
+cfcf clio versions <document-id>      # list archived versions, newest first
+```
+
+## Update an existing document (item 5.11, Cerefox parity)
+
+Re-ingesting the same content as an existing doc returns `action: "skipped"` (the PR1 hash dedup). To explicitly **update** a doc — i.e. replace its content while archiving the prior version — use one of the two update flags:
+
+```bash
+# Title-based update (within the same Project). Mirrors Cerefox `update_if_exists=true`.
+cfcf clio ingest design-notes.md --project backend-services --title "Auth design" --update-if-exists --author claude-code
+
+# UUID-based update (deterministic; errors if the doc isn't found).
+# Mirrors Cerefox `document_id=<uuid>`. Wins over --update-if-exists if both passed.
+cfcf clio ingest design-notes.md --project backend-services --title "Auth design" --document-id 3f57ff7f-66e7-421a-9303-9fb5754983b0
+```
+
+When an update happens:
+
+- The prior chunks are snapshotted into a new row in `clio_document_versions` (sequential `version_number`).
+- The doc's `content_hash`, `title`, `metadata`, `chunk_count`, `total_chars`, `updated_at` are rewritten.
+- Search (FTS + vector) returns the new content; the archived version is excluded from indexes but remains retrievable.
+- The CLI prints the snapshot's `version_id` + `version_number` so you can recall the prior content via `cfcf clio get <id> --version-id <uuid>`.
+
+The recommended agent workflow mirrors Cerefox's:
+
+```
+cfcf clio search "topic"
+  → note the doc id (look in --json output today; copy-pasteable [id: uuid] rendering coming in 5.12)
+cfcf clio get <id>
+  → modify content offline
+cfcf clio ingest modified.md --project <p> --title "<same title>" --document-id <id> --author "<your name>"
 ```
 
 ## Where things live
@@ -108,7 +141,8 @@ cfcf clio get <document-id>           # fetch a document by id
 | `cfcf-docs/clio-relevant.md` preload into agent context | ✅ |
 | `cfcf-docs/clio-guide.md` agent cue card | ✅ |
 | Web UI Clio settings (default search mode, min score, preferred embedder readout) | ✅ on the Server Info page |
-| Audit log + versioning + soft-delete | table shapes present; full impl tracked under 6.16/6.17 |
+| Update API: `--update-if-exists` + `--document-id` + version snapshots + `cfcf clio versions <id>` | ✅ shipped 5.11 |
+| Audit log + write attribution + soft-delete API | tables present; tracked under 5.13 (audit) and 5.11+ (soft-delete API) |
 | sqlite-vec HNSW (replaces brute-force cosine) | tracked under 6.15; needs the 5.5 installer infra |
 | Web UI Clio tab (browse projects + docs in the GUI) | tracked under 6.18 |
 | Remote Cerefox backend (`MemoryBackend` interface ready) | future iteration |

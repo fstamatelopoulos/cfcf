@@ -392,16 +392,17 @@ All under `/api/clio/*`. JSON bodies, same auth / error-shape conventions as the
 
 | Method | Path | Purpose | v1? |
 |---|---|---|---|
-| `POST` | `/api/clio/ingest` | Ingest a document (chunk + embed + store). Cerefox-compatible body shape. | ✅ |
-| `GET`  | `/api/clio/search` | Hybrid search. Query params: `q`, `project`, `match_count`, `metadata`, `mode` (`hybrid` / `fts` / `semantic`). | ✅ |
-| `GET`  | `/api/clio/documents/:id` | Retrieve a document by id. Optional `?version_id=` (v2+). | ✅ (v1 without version param) |
+| `POST` | `/api/clio/ingest` | Ingest or update a document. Body fields: `documentId` (deterministic update), `updateIfExists` (title-based update fallback), `author` — Cerefox-parity since 5.11. | ✅ |
+| `GET`  | `/api/clio/search` | Hybrid search. Query params: `q`, `project`, `match_count`, `metadata`, `mode` (`hybrid` / `fts` / `semantic`), `min_score`. | ✅ |
+| `GET`  | `/api/clio/documents/:id` | Retrieve a document's metadata row by id. | ✅ |
+| `GET`  | `/api/clio/documents/:id/content` | **5.11.** Reconstruct full content from chunks. Optional `?version_id=` for archived versions. | ✅ (5.11) |
+| `GET`  | `/api/clio/documents/:id/versions` | **5.11.** List archived versions, newest first. | ✅ (5.11) |
 | `GET`  | `/api/clio/projects` | List Clio Projects (name, id, document_count). | ✅ |
-| `GET`  | `/api/clio/metadata/keys` | List all metadata keys used by any document in a project. | v2 |
-| `POST` | `/api/clio/metadata/search` | Exact-match metadata filter; returns matching documents without text scoring. | v2 |
-| `GET`  | `/api/clio/documents/:id/versions` | List archived versions. | v2 |
-| `GET`  | `/api/clio/audit-log` | Query the audit log with filters. | v2 |
-| `DELETE` | `/api/clio/documents/:id` | Soft-delete. | v2 |
-| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted. | v2 |
+| `GET`  | `/api/clio/metadata/keys` | List all metadata keys used by any document in a project. | 5.12 |
+| `POST` | `/api/clio/metadata/search` | Exact-match metadata filter; returns matching documents without text scoring. | 5.12 |
+| `GET`  | `/api/clio/audit-log` | Query the audit log with filters. | 5.13 |
+| `DELETE` | `/api/clio/documents/:id` | Soft-delete (read-side filter exists today; mutation API in 5.13). | 5.13 |
+| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted. | 5.13 |
 | `GET`  | `/api/clio/stats` | DB size, chunk count per project, index health. | ✅ |
 
 ### 7.2 CLI commands

@@ -13,11 +13,24 @@ import { DEFAULT_EMBEDDER_NAME } from "@cfcf/core";
 import type {
   ClioProject,
   ClioDocument,
+  ClioDocumentVersion,
   IngestResult,
   SearchResponse,
   SearchHit,
   ClioStats,
 } from "@cfcf/core";
+
+interface DocumentContentResponse {
+  document: ClioDocument;
+  content: string;
+  chunkCount: number;
+  totalChars: number;
+  versionId: string | null;
+}
+
+interface VersionsResponse {
+  versions: ClioDocumentVersion[];
+}
 
 interface ClioProjectListResponse {
   projects: ClioProject[];
@@ -135,6 +148,18 @@ function registerUnder(root: Command): void {
       "--metadata <json>",
       "Additional metadata as JSON, merged over the other --* metadata fields",
     )
+    .option(
+      "--update-if-exists",
+      "If a live document with the same title already exists in this Project, update it in place (snapshot the prior content as a version) instead of creating a new doc. Mirrors Cerefox `cerefox_ingest(update_if_exists=true)`.",
+    )
+    .option(
+      "--document-id <uuid>",
+      "Update this specific document by UUID (deterministic update). Errors if the document doesn't exist. Wins over --update-if-exists if both passed. Mirrors Cerefox `cerefox_ingest(document_id=...)`.",
+    )
+    .option(
+      "--author <name>",
+      "Who/what is making this write (e.g. 'claude-code', 'archiver'). Stored on the version row when an update happens; surfaced by `cfcf clio versions <doc-id>`. Defaults to 'agent'.",
+    )
     .option("--json", "Emit the raw JSON result instead of a human-readable summary")
     .action(async (file: string | undefined, opts) => {
       if (!(await checkServer())) return;
@@ -188,6 +213,9 @@ function registerUnder(root: Command): void {
         content,
         source,
         metadata,
+        updateIfExists: opts.updateIfExists ? true : undefined,
+        documentId: opts.documentId,
+        author: opts.author,
       });
       if (!res.ok) {
         console.error(`Ingest failed: ${res.error}`);
@@ -200,33 +228,68 @@ function registerUnder(root: Command): void {
         return;
       }
 
-      if (data.created) {
-        console.log(`Ingested: ${data.document.title} (${data.chunksInserted} chunk${data.chunksInserted === 1 ? "" : "s"})`);
-        console.log(`  id:      ${data.id}`);
-        console.log(`  project: ${data.document.projectId}`);
-        console.log(`  source:  ${data.document.source}`);
-      } else {
-        console.log(`Already in Clio (content_hash match): ${data.document.title}`);
-        console.log(`  id:      ${data.id}`);
+      const chunksLabel = `${data.chunksInserted} chunk${data.chunksInserted === 1 ? "" : "s"}`;
+      switch (data.action) {
+        case "created":
+          console.log(`Ingested: ${data.document.title} (${chunksLabel})`);
+          console.log(`  id:      ${data.id}`);
+          console.log(`  project: ${data.document.projectId}`);
+          console.log(`  source:  ${data.document.source}`);
+          break;
+        case "updated":
+          console.log(`Updated: ${data.document.title} (${chunksLabel}, prior version v${data.versionNumber})`);
+          console.log(`  id:           ${data.id}`);
+          console.log(`  project:      ${data.document.projectId}`);
+          console.log(`  prior version_id: ${data.versionId}`);
+          console.log(`  Recall the prior content via:`);
+          console.log(`    cfcf clio get ${data.id} --version-id ${data.versionId}`);
+          break;
+        case "skipped":
+          console.log(`Already in Clio (content_hash match): ${data.document.title}`);
+          console.log(`  id:      ${data.id}`);
+          console.log(`  Use --update-if-exists or --document-id <uuid> to overwrite.`);
+          break;
+      }
+      if (data.note) {
+        console.log(`  note: ${data.note}`);
       }
     });
 
   // ── get ───────────────────────────────────────────────────────────────
+  // Reconstructs the full document content from its chunks. Default =
+  // the live (current) version; pass --version-id <uuid> to retrieve an
+  // archived version (UUIDs come from `cfcf clio versions <doc-id>`).
   root
     .command("get <id>")
-    .description("Retrieve a Clio document by id")
-    .option("--raw", "Print only the raw concatenated chunk content")
-    .option("--json", "Print the full document record as JSON")
+    .description("Retrieve a Clio document by id (reconstructs full content from chunks)")
+    .option(
+      "--version-id <uuid>",
+      "Retrieve a specific archived version (default: live/current). UUID comes from `cfcf clio versions <id>`.",
+    )
+    .option("--raw", "Print only the reconstructed content (skip the metadata header)")
+    .option("--json", "Print the full {document, content, ...} response as JSON")
     .action(async (id: string, opts) => {
       if (!(await checkServer())) return;
-      const res = await get<ClioDocument>(`/api/clio/documents/${encodeURIComponent(id)}`);
+      const qs = new URLSearchParams();
+      if (opts.versionId) qs.set("version_id", opts.versionId);
+      const path = qs.toString()
+        ? `/api/clio/documents/${encodeURIComponent(id)}/content?${qs.toString()}`
+        : `/api/clio/documents/${encodeURIComponent(id)}/content`;
+      const res = await get<DocumentContentResponse>(path);
       if (!res.ok) {
-        console.error(`Not found: ${id}`);
+        console.error(`Not found: ${id}${opts.versionId ? ` (version ${opts.versionId})` : ""}`);
         process.exit(1);
       }
-      const doc = res.data!;
+      const data = res.data!;
+      const doc = data.document;
       if (opts.json) {
-        console.log(JSON.stringify(doc, null, 2));
+        console.log(JSON.stringify(data, null, 2));
+        return;
+      }
+      if (opts.raw) {
+        // Pure content; useful for `cfcf clio get <id> | sed ...` agent workflows.
+        process.stdout.write(data.content);
+        if (!data.content.endsWith("\n")) process.stdout.write("\n");
         return;
       }
       console.log(`# ${doc.title}`);
@@ -236,19 +299,53 @@ function registerUnder(root: Command): void {
       console.log(`  source:        ${doc.source}`);
       console.log(`  content_hash:  ${doc.contentHash}`);
       console.log(`  review_status: ${doc.reviewStatus}`);
-      console.log(`  chunks:        ${doc.chunkCount}`);
-      console.log(`  total_chars:   ${doc.totalChars}`);
+      console.log(`  chunks:        ${data.chunkCount}`);
+      console.log(`  total_chars:   ${data.totalChars}`);
       console.log(`  created_at:    ${doc.createdAt}`);
+      console.log(`  updated_at:    ${doc.updatedAt}`);
+      console.log(`  version:       ${data.versionId ? `archived (${data.versionId})` : "live (current)"}`);
       if (doc.metadata && Object.keys(doc.metadata).length > 0) {
         console.log(`  metadata:`);
         for (const [k, v] of Object.entries(doc.metadata)) {
           console.log(`    ${k}: ${JSON.stringify(v)}`);
         }
       }
-      if (opts.raw) {
-        console.log();
-        console.log("--- content ---");
-        console.log("(Pass --json for the full document record. v1 doesn't reconstruct full content from chunks in CLI output yet; use GET /api/clio/documents/:id programmatically for now.)");
+      console.log();
+      console.log("--- content ---");
+      console.log(data.content);
+    });
+
+  // ── versions ──────────────────────────────────────────────────────────
+  // List archived versions for a document. Empty for docs that have
+  // never been updated. Mirrors Cerefox `cerefox_list_versions`.
+  root
+    .command("versions <id>")
+    .description("List archived versions for a Clio document (newest first)")
+    .option("--json", "Emit raw JSON")
+    .action(async (id: string, opts) => {
+      if (!(await checkServer())) return;
+      const res = await get<VersionsResponse>(`/api/clio/documents/${encodeURIComponent(id)}/versions`);
+      if (!res.ok) {
+        console.error(`Not found: ${id}`);
+        process.exit(1);
+      }
+      const versions = res.data!.versions;
+      if (opts.json) {
+        console.log(JSON.stringify(versions, null, 2));
+        return;
+      }
+      if (versions.length === 0) {
+        console.log(`No archived versions for ${id}.`);
+        console.log("(A document only gets versions after it's been updated. Try ingesting with --update-if-exists or --document-id.)");
+        return;
+      }
+      console.log(`${versions.length} version(s) for ${id} (newest first):`);
+      console.log();
+      for (const v of versions) {
+        console.log(`  v${v.versionNumber}  ${v.createdAt}  ${v.chunkCount} chunks, ${v.totalChars} chars`);
+        if (v.source) console.log(`       source: ${v.source}`);
+        console.log(`       version_id: ${v.id}`);
+        console.log(`       Recall via: cfcf clio get ${id} --version-id ${v.id}`);
       }
     });
 

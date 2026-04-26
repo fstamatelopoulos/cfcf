@@ -16,6 +16,7 @@ import { chunkMarkdown } from "../chunking/markdown.js";
 import type {
   ClioProject,
   ClioDocument,
+  ClioDocumentVersion,
   IngestRequest,
   IngestResult,
   SearchRequest,
@@ -23,7 +24,7 @@ import type {
   SearchHit,
   ClioStats,
 } from "../types.js";
-import type { MemoryBackend, ReindexOptions, ReindexResult } from "./types.js";
+import type { MemoryBackend, ReindexOptions, ReindexResult, DocumentContent } from "./types.js";
 import {
   getActiveEmbedder,
   embeddingToBlob,
@@ -39,6 +40,22 @@ const FTS_CANDIDATE_MULTIPLIER = 5;
 
 // UUID v4 pattern (loose). Used to distinguish "project id" from "project name".
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Row shape returned when SELECTing from `clio_documents`. */
+interface DocumentRow {
+  id: string;
+  project_id: string;
+  title: string;
+  source: string;
+  content_hash: string;
+  metadata: string;
+  review_status: string;
+  chunk_count: number;
+  total_chars: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
 
 /** Row shape returned by the candidate-fetching queries in hybrid / semantic search. */
 interface VectorCandidateRow {
@@ -280,67 +297,84 @@ export class LocalClio implements MemoryBackend {
     // Resolve (or auto-create) the Project. The caller is expected to
     // pass a slug; UUID inputs skip auto-create (see resolveProject).
     const project = await this.resolveProject(req.project, { createIfMissing: true });
-
     const contentHash = sha256Hex(req.content);
 
-    // Dedup by content_hash across the whole DB (same as Cerefox).
-    const existingRow = this.db.query<
-      {
-        id: string;
-        project_id: string;
-        title: string;
-        source: string;
-        content_hash: string;
-        metadata: string;
-        review_status: string;
-        chunk_count: number;
-        total_chars: number;
-        created_at: string;
-        updated_at: string;
-        deleted_at: string | null;
-      },
-      [string]
-    >(`SELECT * FROM clio_documents WHERE content_hash = ? LIMIT 1`).get(contentHash);
+    // ── Branch 1: update by document_id (deterministic). ──────────────
+    //
+    // Mirrors Cerefox's `cerefox_ingest(document_id=...)`. The caller
+    // explicitly named which document to update; we error if it's
+    // missing or soft-deleted rather than silently fall through to a
+    // create. `updateIfExists` is overridden when both are passed.
+    if (req.documentId) {
+      const target = await this.getDocument(req.documentId);
+      if (!target || target.deletedAt) {
+        throw new Error(`ingest: document_id "${req.documentId}" not found`);
+      }
+      const result = await this.updateDocument(target, req, contentHash);
+      if (req.updateIfExists) {
+        result.note = "documentId provided; updateIfExists flag was overridden";
+      }
+      return result;
+    }
+
+    // ── Branch 2: update by title (within same Project). ──────────────
+    //
+    // Mirrors Cerefox's `update_if_exists`. Looks up by exact title in
+    // the resolved Project; on hit, snapshot+replace; on miss, fall
+    // through to the create path.
+    if (req.updateIfExists) {
+      const existing = await this.findDocumentByTitle(project.id, req.title);
+      if (existing) {
+        return await this.updateDocument(existing, req, contentHash);
+      }
+      // Fall through to create.
+    }
+
+    // ── Branch 3: dedup by content_hash. ──────────────────────────────
+    //
+    // PR1 behaviour: if the exact same content already lives in Clio
+    // under any document, skip and return the existing record. The
+    // caller can opt out of this dedup by passing `updateIfExists` or
+    // `documentId` (both branches above bypass this lookup).
+    const existingRow = this.db.query<DocumentRow, [string]>(
+      `SELECT * FROM clio_documents WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1`,
+    ).get(contentHash);
     if (existingRow) {
       return {
         id: existingRow.id,
+        action: "skipped",
         created: false,
         document: this.mapDocument(existingRow),
         chunksInserted: 0,
       };
     }
 
-    // Use embedder-aware chunk size when an embedder is active; fall back
-    // to the Cerefox default when not.
+    // ── Branch 4: create. ─────────────────────────────────────────────
+    return await this.createDocument(project.id, req, contentHash);
+  }
+
+  // ── Ingest helpers (5.11) ──────────────────────────────────────────────
+
+  /**
+   * Insert a brand-new document + its chunks. Embeds chunks before
+   * opening the write transaction so we don't hold a write lock during
+   * the (slow) embedder call.
+   */
+  private async createDocument(
+    projectId: string,
+    req: IngestRequest,
+    contentHash: string,
+  ): Promise<IngestResult> {
     const embedder = await this.getEmbedder();
-    const chunkOpts = embedder
-      ? { maxChunkChars: embedder.recommendedChunkMaxChars }
-      : undefined;
+    const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
     const chunks = chunkMarkdown(req.content, chunkOpts);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, req.title);
+
     const docId = randomUUID();
     const now = new Date().toISOString();
     const metadata = JSON.stringify(req.metadata ?? {});
     const totalChars = req.content.length;
 
-    // Compute embeddings up front (outside the transaction). Embedding
-    // is the slow part; we don't want to hold a write lock during it.
-    let embeddings: Uint8Array[] | null = null;
-    if (embedder && chunks.length > 0) {
-      try {
-        const texts = chunks.map((c) => c.content);
-        const vectors = await embedder.embed(texts);
-        embeddings = vectors.map((v) => embeddingToBlob(v));
-      } catch (err) {
-        // Embedding failure downgrades to FTS-only for this document.
-        // Chunks still index in FTS5; vector search just won't match them.
-        console.warn(
-          `[clio] embedder failed for "${req.title}" -- ingesting without embeddings: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        embeddings = null;
-      }
-    }
-
-    // All-or-nothing: document + chunks insert in one transaction.
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare(`
@@ -350,7 +384,7 @@ export class LocalClio implements MemoryBackend {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         docId,
-        project.id,
+        projectId,
         req.title,
         req.source ?? "manual",
         contentHash,
@@ -361,33 +395,7 @@ export class LocalClio implements MemoryBackend {
         now,
         now,
       );
-
-      const insertChunk = this.db.prepare(`
-        INSERT INTO clio_chunks
-          (id, document_id, chunk_index, heading_path, heading_level, title,
-           content, char_count, embedding, embedder, embedding_dim, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const emb = embeddings ? embeddings[i] : null;
-        insertChunk.run(
-          randomUUID(),
-          docId,
-          chunk.chunkIndex,
-          JSON.stringify(chunk.headingPath),
-          chunk.headingLevel,
-          chunk.title || null,
-          chunk.content,
-          chunk.charCount,
-          emb,
-          embedder ? embedder.name : null,
-          embedder ? embedder.dim : null,
-          now,
-          now,
-        );
-      }
-
+      this.insertChunkBatch(docId, chunks, embeddings, embedder, now);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
@@ -396,26 +404,297 @@ export class LocalClio implements MemoryBackend {
 
     const doc = await this.getDocument(docId);
     if (!doc) throw new Error(`Clio ingest wrote doc ${docId} but could not read it back`);
-    return { id: docId, created: true, document: doc, chunksInserted: chunks.length };
+    return {
+      id: docId,
+      action: "created",
+      created: true,
+      document: doc,
+      chunksInserted: chunks.length,
+    };
+  }
+
+  /**
+   * Snapshot the existing live chunks into a new version row, then
+   * replace them with new chunks from `req.content`. Mirrors Cerefox's
+   * `cerefox_ingest_document` UPDATE branch (rpcs.sql) which delegates
+   * to `cerefox_snapshot_version` for the archive-prior-chunks step.
+   *
+   * Embedding is done before the transaction (same reasoning as
+   * createDocument). The transaction holds:
+   *   1. INSERT clio_document_versions row   (the snapshot record)
+   *   2. UPDATE clio_chunks SET version_id = <new> WHERE document_id = ?
+   *      AND version_id IS NULL  (FTS triggers fire here -- prior chunks
+   *      drop out of the FTS index because trigger predicate
+   *      `WHEN new.version_id IS NULL` no longer matches)
+   *   3. UPDATE clio_documents SET title=, content_hash=, metadata=,
+   *      chunk_count=, total_chars=, updated_at=
+   *   4. INSERT new chunks (FTS triggers fire on insert -- new chunks
+   *      enter the FTS index)
+   * All four steps are atomic; rollback restores the prior state.
+   */
+  private async updateDocument(
+    target: ClioDocument,
+    req: IngestRequest,
+    contentHash: string,
+  ): Promise<IngestResult> {
+    const embedder = await this.getEmbedder();
+    const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
+    const chunks = chunkMarkdown(req.content, chunkOpts);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, req.title);
+
+    const now = new Date().toISOString();
+    const versionId = randomUUID();
+    const metadata = JSON.stringify(req.metadata ?? {});
+    const totalChars = req.content.length;
+    // Free-text "who/what triggered this version". Cerefox's analogous
+    // column carries values like "file" / "paste" / "agent" / "manual".
+    // We accept any string from the caller and default to "agent" for
+    // parity with cerefox_ingest's default p_source.
+    const versionSource = req.author?.trim() || "agent";
+
+    let versionNumber = 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Compute the next version number (sequential per document). Mirrors
+      // cerefox_snapshot_version's MAX(version_number) + 1.
+      const maxRow = this.db.query<{ max_n: number | null }, [string]>(
+        `SELECT MAX(version_number) AS max_n FROM clio_document_versions WHERE document_id = ?`,
+      ).get(target.id);
+      versionNumber = (maxRow?.max_n ?? 0) + 1;
+
+      // Count current chunks for the snapshot's chunk_count + total_chars.
+      const liveCounts = this.db.query<{ n: number; chars: number | null }, [string]>(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(char_count), 0) AS chars
+           FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL`,
+      ).get(target.id);
+      const priorChunkCount = liveCounts?.n ?? 0;
+      const priorTotalChars = liveCounts?.chars ?? 0;
+
+      // 1. Create the snapshot row.
+      this.db.prepare(`
+        INSERT INTO clio_document_versions
+          (id, document_id, version_number, source, metadata, chunk_count, total_chars, archived, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(versionId, target.id, versionNumber, versionSource, "{}", priorChunkCount, priorTotalChars, now);
+
+      // 2. Archive prior live chunks under the new version. The
+      //    fts-update trigger fires per row: `WHEN old.version_id IS NULL OR new.version_id IS NULL`
+      //    matches old=NULL, so the trigger removes the row from FTS.
+      this.db.prepare(`
+        UPDATE clio_chunks
+           SET version_id = ?, updated_at = ?
+         WHERE document_id = ? AND version_id IS NULL
+      `).run(versionId, now, target.id);
+
+      // 3. Update the document row in place. Title may have changed; that's
+      //    why we always re-write it.
+      this.db.prepare(`
+        UPDATE clio_documents
+           SET title = ?, source = ?, content_hash = ?, metadata = ?,
+               review_status = ?, chunk_count = ?, total_chars = ?, updated_at = ?
+         WHERE id = ?
+      `).run(
+        req.title,
+        req.source ?? target.source,
+        contentHash,
+        metadata,
+        req.reviewStatus ?? target.reviewStatus,
+        chunks.length,
+        totalChars,
+        now,
+        target.id,
+      );
+
+      // 4. Insert the new live chunks.
+      this.insertChunkBatch(target.id, chunks, embeddings, embedder, now);
+
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+
+    const doc = await this.getDocument(target.id);
+    if (!doc) throw new Error(`Clio update wrote doc ${target.id} but could not read it back`);
+    return {
+      id: target.id,
+      action: "updated",
+      created: false,
+      document: doc,
+      chunksInserted: chunks.length,
+      versionId,
+      versionNumber,
+    };
+  }
+
+  /**
+   * Run the embedder over all chunk texts and convert the resulting
+   * vectors into BLOBs. Returns null when no embedder is active OR when
+   * the embedder call fails -- in either case the caller proceeds to
+   * insert chunks without embeddings (FTS still works; vector search
+   * skips them). Same semantics as the original PR1 inline block.
+   */
+  private async embedChunks(
+    texts: string[],
+    embedder: Embedder | null,
+    docTitleForLog: string,
+  ): Promise<Uint8Array[] | null> {
+    if (!embedder || texts.length === 0) return null;
+    try {
+      const vectors = await embedder.embed(texts);
+      return vectors.map((v) => embeddingToBlob(v));
+    } catch (err) {
+      console.warn(
+        `[clio] embedder failed for "${docTitleForLog}" -- ingesting without embeddings: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * INSERT one chunk per row with the live (`version_id IS NULL`) state.
+   * Caller MUST be inside an open write transaction.
+   */
+  private insertChunkBatch(
+    documentId: string,
+    chunks: ReturnType<typeof chunkMarkdown>,
+    embeddings: Uint8Array[] | null,
+    embedder: Embedder | null,
+    nowIso: string,
+  ): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO clio_chunks
+        (id, document_id, chunk_index, heading_path, heading_level, title,
+         content, char_count, embedding, embedder, embedding_dim, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const emb = embeddings ? embeddings[i] : null;
+      stmt.run(
+        randomUUID(),
+        documentId,
+        chunk.chunkIndex,
+        JSON.stringify(chunk.headingPath),
+        chunk.headingLevel,
+        chunk.title || null,
+        chunk.content,
+        chunk.charCount,
+        emb,
+        embedder ? embedder.name : null,
+        embedder ? embedder.dim : null,
+        nowIso,
+        nowIso,
+      );
+    }
   }
 
   async getDocument(id: string): Promise<ClioDocument | null> {
-    const row = this.db.query<{
-      id: string;
-      project_id: string;
-      title: string;
-      source: string;
-      content_hash: string;
-      metadata: string;
-      review_status: string;
-      chunk_count: number;
-      total_chars: number;
-      created_at: string;
-      updated_at: string;
-      deleted_at: string | null;
-    }, [string]>(`SELECT * FROM clio_documents WHERE id = ? LIMIT 1`).get(id);
+    const row = this.db.query<DocumentRow, [string]>(
+      `SELECT * FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
     if (!row) return null;
     return this.mapDocument(row);
+  }
+
+  /**
+   * Look up a live document by exact title within a Project. Used by
+   * the `updateIfExists` ingest path. Returns the most recently
+   * updated match if multiple documents share the same title (this can
+   * happen if `updateIfExists` was never used and the user ingested
+   * the same title twice; the newer one wins). Soft-deleted documents
+   * are excluded.
+   */
+  async findDocumentByTitle(projectId: string, title: string): Promise<ClioDocument | null> {
+    const row = this.db.query<DocumentRow, [string, string]>(
+      `SELECT * FROM clio_documents
+        WHERE project_id = ? AND title = ? AND deleted_at IS NULL
+        ORDER BY updated_at DESC
+        LIMIT 1`,
+    ).get(projectId, title);
+    if (!row) return null;
+    return this.mapDocument(row);
+  }
+
+  /**
+   * Reconstruct full Markdown content for a document. Default = the
+   * live (current) version (`version_id IS NULL`); pass
+   * `opts.versionId` to retrieve an archived version returned by
+   * `listDocumentVersions`. Mirrors Cerefox's `cerefox_get_document`.
+   *
+   * Content is the chunks joined with "\n\n" in chunk_index order --
+   * round-trip-faithful with the chunker's split convention.
+   */
+  async getDocumentContent(id: string, opts?: { versionId?: string }): Promise<DocumentContent | null> {
+    const doc = await this.getDocument(id);
+    if (!doc) return null;
+    const versionFilter = opts?.versionId ?? null;
+
+    let rows: { content: string; char_count: number }[];
+    if (versionFilter === null) {
+      rows = this.db.query<{ content: string; char_count: number }, [string]>(
+        `SELECT content, char_count FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL
+          ORDER BY chunk_index ASC`,
+      ).all(id);
+    } else {
+      rows = this.db.query<{ content: string; char_count: number }, [string, string]>(
+        `SELECT content, char_count FROM clio_chunks
+          WHERE document_id = ? AND version_id = ?
+          ORDER BY chunk_index ASC`,
+      ).all(id, versionFilter);
+    }
+    if (rows.length === 0 && versionFilter !== null) {
+      // Specific version was requested but no chunks under it.
+      return null;
+    }
+
+    const content = rows.map((r) => r.content).join("\n\n");
+    const totalChars = rows.reduce((acc, r) => acc + r.char_count, 0);
+    return {
+      document: doc,
+      content,
+      chunkCount: rows.length,
+      totalChars,
+      versionId: versionFilter,
+    };
+  }
+
+  /**
+   * List archived versions for a document, newest-first. Empty array
+   * for documents that have never been updated. Mirrors Cerefox's
+   * `cerefox_list_document_versions`.
+   */
+  async listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]> {
+    const rows = this.db.query<{
+      id: string;
+      document_id: string;
+      version_number: number;
+      source: string | null;
+      metadata: string;
+      chunk_count: number;
+      total_chars: number;
+      archived: number;
+      created_at: string;
+    }, [string]>(
+      `SELECT id, document_id, version_number, source, metadata,
+              chunk_count, total_chars, archived, created_at
+         FROM clio_document_versions
+        WHERE document_id = ?
+        ORDER BY version_number DESC`,
+    ).all(documentId);
+    return rows.map((r) => ({
+      id: r.id,
+      documentId: r.document_id,
+      versionNumber: r.version_number,
+      source: r.source,
+      metadata: parseJsonObject(r.metadata),
+      chunkCount: r.chunk_count,
+      totalChars: r.total_chars,
+      archived: r.archived !== 0,
+      createdAt: r.created_at,
+    }));
   }
 
   async listDocuments(opts: { project?: string; limit?: number; offset?: number } = {}): Promise<ClioDocument[]> {
