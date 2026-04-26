@@ -7,12 +7,13 @@ name: release
 # Run via the GitHub Actions UI ("Run workflow" → enter tag) or
 #   gh workflow run release.yml -f tag=v0.10.0
 #
-# Reference: docs/research/installer-design.md §6.1.
+# Reference: docs/research/installer-design.md §5.
+
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing git tag to build from (e.g. v0.10.0). The tag must already exist on the repo and be reachable from main.'
+        description: 'Existing git tag to build from (e.g. v0.10.0). Must already exist + be reachable from main.'
         required: true
         type: string
       prerelease:
@@ -49,15 +50,18 @@ jobs:
           fi
           sha="$(git rev-parse "refs/tags/${{ inputs.tag }}^{}")"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          # Make sure main is up to date locally before the ancestor check.
           git fetch origin main
           if ! git merge-base --is-ancestor "$sha" origin/main; then
             echo "::error::Tag '${{ inputs.tag }}' (sha $sha) is not an ancestor of main."
             exit 1
           fi
 
-  # ── per-platform build ──────────────────────────────────────────────
-  build:
+  # ── per-platform native package build ──────────────────────────────
+  # Compiles the pinned libsqlite3 + downloads the matching sqlite-vec
+  # asset, packs them into @cerefox/cfcf-native-<platform>-X.Y.Z.tgz.
+  # Each leg runs on a runner of the matching arch so libsqlite3 ends
+  # up native-binary-correct without cross-compilation.
+  build-native:
     needs: verify
     strategy:
       fail-fast: false
@@ -65,46 +69,64 @@ jobs:
         include:
           - os: macos-14          # arm64 runner
             platform: darwin-arm64
-            bun-target: bun-darwin-arm64
           - os: macos-13          # x64 runner (Intel)
             platform: darwin-x64
-            bun-target: bun-darwin-x64
           - os: ubuntu-latest
             platform: linux-x64
-            bun-target: bun-linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}     # build from the tagged commit, not HEAD
+          ref: ${{ inputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install workspace deps (for bun build:web)
-        run: bun install
-
-      - name: Build per-platform tarball
-        run: scripts/build-release-tarball.sh "${{ inputs.tag }}"
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          BUN_TARGET: ${{ matrix.bun-target }}
-
-      - name: Smoke-test tarball
-        run: scripts/smoke-tarball.sh "dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz" "${{ matrix.platform }}"
+      - name: Build native package
+        run: scripts/build-native-package.sh "${{ matrix.platform }}" "${{ inputs.tag }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cfcf-${{ matrix.platform }}
-          retention-days: 14         # short window: artifacts only used during the release run
+          name: cfcf-native-${{ matrix.platform }}
+          retention-days: 14
           path: |
-            dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz
-            dist/cfcf-${{ matrix.platform }}-${{ inputs.tag }}.tar.gz.sha256
+            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz
+            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz.sha256
 
-  # ── assemble SHA256SUMS + publish release ──────────────────────────
+  # ── single CLI build ────────────────────────────────────────────────
+  # The bundled JS is platform-independent (the heavy native deps are
+  # externalised; per-platform native lives in build-native above), so
+  # one build leg covers all OSes.
+  build-cli:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace deps (needed by bun run build:web)
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI tarball
+        run: scripts/build-cli.sh "${{ inputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfcf-cli
+          retention-days: 14
+          path: |
+            dist/cfcf-*.tgz
+            dist/cfcf-*.tgz.sha256
+
+  # ── assemble + publish release ─────────────────────────────────────
   release:
-    needs: build
+    needs: [build-native, build-cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,12 +144,22 @@ jobs:
           cat *.sha256 > SHA256SUMS
           rm -- *.sha256
 
-      - name: Write MANIFEST.txt (release-level)
-        run: scripts/write-manifest.sh "${{ inputs.tag }}" dist/MANIFEST.txt
-
-      - name: Copy install scripts
+      - name: Write MANIFEST.txt
+        # Small key:value file so self-update + install.sh can resolve
+        # "latest" by following GitHub's release redirect to MANIFEST.txt
+        # and parsing the cfcf: line. See packages/cli/src/commands/
+        # self-update.ts.
         run: |
-          cp scripts/install.sh dist/
+          version="${{ inputs.tag }}"
+          v_no_prefix="${version#v}"
+          cat > dist/MANIFEST.txt <<EOF
+          cfcf: $version
+          cli-tarball: cfcf-${v_no_prefix}.tgz
+          built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+
+      - name: Copy install script
+        run: cp scripts/install.sh dist/
 
       - name: Create GitHub Release
         env:
@@ -140,4 +172,8 @@ jobs:
             --generate-notes \
             --verify-tag \
             $flag \
-            dist/*.tar.gz dist/SHA256SUMS dist/MANIFEST.txt dist/install.sh
+            dist/cfcf-*.tgz \
+            dist/cerefox-cfcf-native-*.tgz \
+            dist/SHA256SUMS \
+            dist/MANIFEST.txt \
+            dist/install.sh

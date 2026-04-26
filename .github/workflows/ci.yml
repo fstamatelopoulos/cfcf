@@ -37,16 +37,12 @@ jobs:
 
   build:
     needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: bun-linux-x64
-            artifact: cfcf-linux-x64
-          - os: macos-latest
-            target: bun-darwin-arm64
-            artifact: cfcf-darwin-arm64
+    # Single Linux runner: the CLI tarball is platform-independent (the
+    # heavy native deps live in per-platform @cerefox/cfcf-native-<platform>
+    # packages, built only at release time -- see release.yml). This job
+    # smokes the build pipeline on every PR so a broken build-cli.sh
+    # surfaces here instead of mid-release.
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
@@ -58,26 +54,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # 5.4: web bundle must be built first so the compiled binary includes
-      # the embedded web-assets.generated.ts. Without this, the published
-      # artifact would have no web GUI.
-      - name: Build web bundle
-        run: bun run build:web
+      - name: Build CLI tarball (smoke)
+        run: scripts/build-cli.sh v0.0.0-dev
 
-      - name: Build binary
-        run: bun build packages/cli/src/index.ts --compile --outfile ${{ matrix.artifact }} --target ${{ matrix.target }}
-
-      - name: Upload binary
+      - name: Upload CLI tarball
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          # Default retention is 90 days; that's what hit the
-          # account-level artifact storage quota on the v0.9.0 merge
-          # (run 24943769789, "Artifact storage quota has been hit").
-          # 7 days is plenty for a build-debugging window without
-          # accumulating gigabytes per release. The future 5.5 release
-          # workflow will use a different mechanism (gh release create
-          # with the assets attached to a tag) so it isn't subject to
-          # this same per-run-artifact cap.
+          name: cfcf-cli-tarball
+          path: |
+            dist/cfcf-*.tgz
+            dist/cfcf-*.tgz.sha256
           retention-days: 7
