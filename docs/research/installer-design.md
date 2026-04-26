@@ -1218,15 +1218,27 @@ fi
 
 `scripts/uninstall.sh` in §8.7. Bundled into the tarball at `~/.cfcf/uninstall.sh`. Also symlinked as `cfcf-uninstall` → `/usr/local/bin/cfcf-uninstall` for discoverability.
 
-### 10.2 Self-update (follow-up, not in 5.5)
+### 10.2 Self-update — `cfcf self-update`
 
-`cfcf self-update` would:
+**DECIDED 2026-04-26: ships in 5.5.** The dogfood-the-installer-every-iteration loop is the primary use case, and a manual `bash install.sh ... | CFCF_VERSION=...` is too much friction to repeat per release.
 
-1. Read `~/.cfcf/MANIFEST` to know the current version.
-2. Fetch `<base>/MANIFEST.txt` to know the latest version.
-3. If newer, re-run the install flow (or just re-invoke `install.sh` with `CFCF_VERSION=<new>`).
+The CLI command is a thin wrapper:
 
-Trivial once 5.5 is landed. Not in 5.5 scope but should be mentioned in `docs/guides/installing.md` as a "coming soon" line.
+1. Read `<install-dir>/MANIFEST` for the local version. Bail if missing (dev mode).
+2. Fetch `<CFCF_BASE_URL>/MANIFEST.txt` for the latest version (HTTP redirect resolves "latest" → the actual tag).
+3. Compare. Same-version → "already on latest, no upgrade needed" + exit 0.
+4. Different → prompt the user (skipped under `--yes`), then run `curl -fsSL <base>/install.sh | bash` with `CFCF_VERSION=<latest>` + `CFCF_SKIP_INIT=1` in the env.
+5. install.sh's existing logic takes it from there (sha256 verify, untar, Gatekeeper xattr strip, smoke test). Upgrade preserves user data per §3.3.
+
+Implementation in `packages/cli/src/commands/self-update.ts` (~180 LoC). Flags:
+- `--check` — report current vs latest, exit without installing
+- `--yes` — non-interactive (automation / CI)
+- `--version <ver>` — install a specific tag instead of latest
+- `--base-url <url>` — override the install URL
+
+**Web-UI new-version notification + server-side periodic poll** is tracked separately under plan item 6.20. It's the "tell me when there's a new version" UX layer; the CLI command is "do the upgrade" and ships now.
+
+A future `cfcf self-update --rollback <ver>` is feasible (just install an older version) but only useful once we have multiple released versions to roll back between. Not in 5.5.
 
 ---
 
@@ -1600,7 +1612,7 @@ Until then: A wins.
 - **Signing macOS binary.** **DECIDED 2026-04-26: option (a)** — install script runs `xattr -d com.apple.quarantine ~/.cfcf/bin/cfcf` after unpack. Apple Developer signing ($99/yr) deferred indefinitely; Gatekeeper bypass is documented in `docs/guides/installing.md`'s troubleshooting section as the expected first-run experience.
 - **Linux distro coverage.** The generic `linux-x64` tarball assumes glibc ≥ 2.31 (what Ubuntu 20.04 ships). Musl (Alpine) is separate. Out of scope until someone asks.
 - **Phase 2 hosting choice.** **DEFERRED 2026-04-26.** v1 ships only the build pipeline + tarballs + install.sh. Distribution channel is left open — user shares tarballs out-of-band (Dropbox, S3, locally-served via `scripts/serve-dist.ts`, or eventually a public `cfcf-releases` repo with optional GitHub Pages landing page). The install script is **hosting-agnostic via `CFCF_BASE_URL`** so no code change is required when we pick a channel — we just publish the assets there + tell users which URL to point at. Future GitHub Pages on `cfcf-releases` would give us a free public landing page (search-indexed by Google) with the install one-liner; that's a follow-up phase, not part of 5.5.
-- **Auto-update** (`cfcf self-update`). §10.2 sketches it; decide whether to land with 5.5 or later.
+- ~~**Auto-update** (`cfcf self-update`)~~. ✓ in 5.5; see §10.2.
 
 ---
 
@@ -1630,9 +1642,10 @@ When 5.5 gets scheduled (possibly immediately after this doc):
 12. [x] Update `cfcf --version` to read `~/.cfcf/MANIFEST` (§11.2). ✓ shipped + verified the multi-line MANIFEST output during smoke.
 13. [x] Add `.github/workflows/release.yml` (§6.1) — workflow_dispatch only, takes tag input, verifies on main, builds matrix, smoke-tests, gh release create. ✓ shipped.
 14. [x] Write `docs/guides/installing.md` (§12.1) + update `README.md` (§12.2). ✓ shipped.
-15. [ ] **`cfcf doctor`** (§11.3). New CLI command that runs the full self-check matrix. Required for 5.5. ~80 LoC under `packages/cli/src/commands/doctor.ts`. After this lands, the troubleshooting section in `installing.md` can simply tell users "run `cfcf doctor`" instead of step-by-step diagnostics.
-16. [ ] **First real install on the dogfood Mac.** Build a tarball locally; run the installer against it via file://; use the resulting `~/.cfcf/bin/cfcf` for daily work. This is the empirical proof that the install pipeline is healthy on at least one platform; informs whether to push the branch + open the PR.
-17. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 — the installer execs `cfcf init` and init handles the embedder download).
+15. [x] **`cfcf doctor`** (§11.3). ✓ shipped + verified against the dev tree. Detects dev-mode (no MANIFEST) and downgrades the runtime-dep colocation failures to warnings so dev-mode doctor isn't alarming.
+16. [x] **`cfcf self-update`** (§10.2). ✓ shipped. Thin wrapper that re-runs install.sh in upgrade mode. Implements `--check`, `--yes`, `--version`, `--base-url`. Bails cleanly in dev mode. ~180 LoC under `packages/cli/src/commands/self-update.ts`.
+17. [ ] **First real install on the dogfood Mac.** Build a tarball locally; run the installer against it via file://; use the resulting `~/.cfcf/bin/cfcf` for daily work. Verify `cfcf doctor` reports all green; verify `cfcf self-update --check` works against the future host once one is configured. This is the empirical proof that the install pipeline is healthy on at least one platform; informs whether to push the branch + open the PR.
+18. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 — the installer execs `cfcf init` and init handles the embedder download).
 
 ### 16.3 Order rationale
 

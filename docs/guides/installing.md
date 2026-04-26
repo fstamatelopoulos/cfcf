@@ -105,13 +105,24 @@ Future plan: when `cfcf-releases` becomes a public GitHub repo, GitHub Pages on 
 
 ## Upgrading
 
-Re-run the installer with the new `CFCF_VERSION`:
+The simplest path is `cfcf self-update`:
+
+```bash
+cfcf self-update                        # check + interactive upgrade
+cfcf self-update --check                # check only; print latest vs current
+cfcf self-update --yes                  # non-interactive (CI / scripts)
+cfcf self-update --version v0.11.0      # install a specific tag instead of latest
+```
+
+It reads `~/.cfcf/MANIFEST` for the current version, fetches the latest from the configured release URL, and re-runs the installer in upgrade mode if a newer version is available. Same-version → "already on latest" + exit.
+
+If you'd rather invoke the installer directly:
 
 ```bash
 curl -fsSL https://<host>/install.sh | CFCF_VERSION=v0.11.0 bash
 ```
 
-The unpack overwrites `bin/` + `native/` + `MANIFEST` but **leaves your data alone** — `~/.cfcf/clio.db`, `~/.cfcf/models/`, and `~/.cfcf/logs/` survive upgrades intact.
+Either way, the unpack overwrites `bin/` + `native/` + `MANIFEST` but **leaves your data alone** — `~/.cfcf/clio.db`, `~/.cfcf/models/`, and `~/.cfcf/logs/` survive upgrades intact. Schema migrations (Clio DB, workspace configs, global config) apply lazily on next read.
 
 ## Uninstalling
 
