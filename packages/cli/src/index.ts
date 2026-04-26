@@ -6,6 +6,23 @@
  * On first run (no config), starts the interactive setup flow.
  */
 
+// Bun-runtime guard. cfcf uses bun:sqlite, Bun.spawn, Bun.file, Bun.serve
+// directly throughout the codebase. The shebang above selects bun, but a
+// user could also invoke us under Node (e.g. `node ./bin/cfcf.js`) and
+// hit a confusing failure deep in module loading. Surface the constraint
+// here with a clear message.
+//
+// See `docs/research/installer-design.md` §1 + the 2026-04-26 entry in
+// `docs/decisions-log.md` for why Bun is a runtime requirement.
+if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") {
+  process.stderr.write(
+    "[cfcf] error: cfcf requires the Bun runtime (≥ 1.3) but is being executed by something else.\n" +
+    "[cfcf] Install Bun: curl -fsSL https://bun.sh/install | bash\n" +
+    "[cfcf] Then re-run: bun install -g cfcf  (or bun install -g <tarball-URL>)\n",
+  );
+  process.exit(1);
+}
+
 import { Command } from "commander";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

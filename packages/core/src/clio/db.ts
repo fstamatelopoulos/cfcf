@@ -48,18 +48,22 @@ export function getClioDbPath(): string {
 }
 
 /**
- * Resolve the directory where the installer drops `libsqlite3.<ext>`
- * + `sqlite-vec.<ext>`. Defaults to `~/.cfcf/native/`; override via
- * `CFCF_NATIVE_DIR` (mostly used by integration tests).
+ * Map process.platform + process.arch → the cfcf platform tag used in
+ * the per-platform native package name (`@cerefox/cfcf-native-<tag>`).
+ * Returns null on unsupported platforms (handled gracefully — falls
+ * back to system SQLite).
  */
-export function getCfcfNativeDir(): string {
-  if (process.env.CFCF_NATIVE_DIR) return process.env.CFCF_NATIVE_DIR;
-  return join(homedir(), ".cfcf", "native");
+function getPlatformTag(): string | null {
+  if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64";
+  if (process.platform === "darwin" && process.arch === "x64")   return "darwin-x64";
+  if (process.platform === "linux"  && process.arch === "x64")   return "linux-x64";
+  if (process.platform === "win32"  && process.arch === "x64")   return "windows-x64";
+  return null;
 }
 
 /**
- * Map process.platform → the dynamic-library suffix that the installer
- * uses for both libsqlite3 and sqlite-vec.
+ * Map process.platform → the dynamic-library suffix that ships in the
+ * per-platform native package.
  */
 function dlExt(): string {
   switch (process.platform) {
@@ -70,16 +74,44 @@ function dlExt(): string {
 }
 
 /**
- * sqlite-vec's loadable extension — full path under `~/.cfcf/native/`.
- * Used by 6.15's sqlite-vec integration; exposed here so Clio's eventual
- * `db.loadExtension(...)` call has a single source of truth for the
- * path. The `entryPoint` is sqlite-vec's actual init symbol — the
- * filename-based default that bun:sqlite computes (`sqlite3_sqlitevec_init`)
- * doesn't match (the symbol is `sqlite3_vec_init`), so callers must pass
- * the entry point explicitly.
+ * Resolve the directory where the per-platform native package lives.
+ * In production, the package was installed as a transitive dep of the
+ * cfcf CLI package and lives at
+ *   <bun-global-prefix>/node_modules/@cerefox/cfcf-native-<platform>/
+ * `require.resolve` is the canonical npm-ecosystem way to find a
+ * dep's directory. CFCF_NATIVE_DIR env override stays for tests +
+ * advanced users.
+ */
+export function getCfcfNativeDir(): string | null {
+  if (process.env.CFCF_NATIVE_DIR) return process.env.CFCF_NATIVE_DIR;
+  const tag = getPlatformTag();
+  if (!tag) return null;
+  // Try to resolve the platform package's package.json to get its dir.
+  // require.resolve walks the standard Node module path; in installed
+  // mode it finds the colocated peer under the global node_modules
+  // prefix. In dev mode (running via `bun run dev:cli`) the package
+  // isn't installed; we return null and the caller falls back gracefully.
+  try {
+    const { createRequire } = require("node:module") as typeof import("node:module");
+    const requireFromHere = createRequire(import.meta.url);
+    const pkgJson = requireFromHere.resolve(`@cerefox/cfcf-native-${tag}/package.json`);
+    return join(pkgJson, ".."); // dirname of package.json
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * sqlite-vec's loadable extension — path inside the per-platform native
+ * package. Used by 6.15's sqlite-vec integration; exposed here so Clio's
+ * eventual `db.loadExtension(...)` call has a single source of truth.
+ * The `entryPoint` is sqlite-vec's actual init symbol — bun:sqlite's
+ * filename-based default doesn't match the actual `sqlite3_vec_init`
+ * symbol, so callers must pass the entry point explicitly.
  */
 export function getSqliteVecPath(): { path: string; entryPoint: string } | null {
   const dir = getCfcfNativeDir();
+  if (!dir) return null;
   const path = join(dir, `sqlite-vec${dlExt()}`);
   if (!existsSync(path)) return null;
   return { path, entryPoint: "sqlite3_vec_init" };
@@ -88,12 +120,12 @@ export function getSqliteVecPath(): { path: string; entryPoint: string } | null 
 let customSqliteApplied = false;
 
 /**
- * Point bun:sqlite at the pinned `libsqlite3` shipped by the 5.5
- * installer. Required on macOS for `db.loadExtension(...)` to work
- * (Apple's system SQLite has SQLITE_OMIT_LOAD_EXTENSION compiled in).
- * Also gives every platform the same SQLite version so behavioural
- * differences (FTS5 tokeniser internals, UPSERT semantics, etc.) don't
- * sneak in.
+ * Point bun:sqlite at the pinned `libsqlite3` shipped by
+ * `@cerefox/cfcf-native-<platform>`. Required on macOS for
+ * `db.loadExtension(...)` to work (Apple's system SQLite has
+ * SQLITE_OMIT_LOAD_EXTENSION compiled in). Also gives every platform
+ * the same SQLite version so behavioural differences (FTS5 tokeniser
+ * internals, UPSERT semantics, etc.) don't sneak in.
  *
  * Idempotent: only the first call has effect; subsequent calls are
  * no-ops. **Must run before the first `new Database(...)`** — Bun's
@@ -101,18 +133,17 @@ let customSqliteApplied = false;
  * first-opened DB, so a late call after a prior open is silently
  * ignored.
  *
- * Silent no-op when `~/.cfcf/native/libsqlite3.<ext>` is absent:
- *   - dev mode (no installer ever ran)
- *   - user manually deleted `~/.cfcf/native/`
- *   - new install where Database has somehow been opened before this
- *     hook ran (programmer error worth surfacing — but still
- *     non-fatal here; the call site just gets system SQLite back,
- *     which works for everything Clio v1 does)
+ * Silent no-op when the platform native package isn't reachable:
+ *   - dev mode (running via `bun run dev:cli`; package not installed)
+ *   - unsupported platform (e.g. linux-arm64; falls back to system SQLite)
+ *   - corrupt install (caught by `cfcf doctor`)
  */
 export function applyCustomSqlite(): void {
   if (customSqliteApplied) return;
   customSqliteApplied = true;
-  const path = join(getCfcfNativeDir(), `libsqlite3${dlExt()}`);
+  const dir = getCfcfNativeDir();
+  if (!dir) return;
+  const path = join(dir, `libsqlite3${dlExt()}`);
   if (!existsSync(path)) return;
   try {
     Database.setCustomSQLite(path);

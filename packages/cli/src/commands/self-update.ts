@@ -164,25 +164,20 @@ export function registerSelfUpdateCommand(program: Command): void {
         }
       }
 
-      // 6. Re-run the installer. We pipe install.sh through bash with
-      //    the right env vars set. install.sh handles the
-      //    running-server check, sha256 verify, and the actual untar.
+      // 6. Run `bun install -g <new-tarball>`. Bun's package manager
+      //    handles the upgrade in place: replaces the cfcf package +
+      //    runs postinstall hooks for the per-platform native package.
+      //    Atomic from the user's perspective; if it fails the previous
+      //    install stays intact.
       const versionToInstall = remote.cfcf ?? target;
       console.log(`\nLaunching installer for ${versionToInstall}...\n`);
 
-      const env: Record<string, string> = {
-        ...process.env,
-        CFCF_VERSION: versionToInstall,
-        CFCF_SKIP_INIT: "1",         // user already configured cfcf; init isn't needed on upgrade
-      };
-      if (opts.baseUrl) env.CFCF_BASE_URL = opts.baseUrl;
-
-      // Use `bash -c "curl ... | bash"` so install.sh doesn't have to
-      // be on disk. Streams output live.
-      const cmd = `curl -fsSL "${baseUrl}/install.sh" | bash`;
-      const proc = spawn("bash", ["-c", cmd], {
+      // The release uploads `cfcf-<version>.tgz` next to MANIFEST.txt.
+      // baseUrl already encodes either /releases/latest/download or
+      // /releases/download/<tag>; just append the tarball name.
+      const tarballUrl = `${baseUrl}/cfcf-${versionToInstall}.tgz`;
+      const proc = spawn("bun", ["install", "-g", tarballUrl], {
         stdio: "inherit",
-        env,
       });
 
       proc.on("exit", (code) => {
@@ -190,8 +185,6 @@ export function registerSelfUpdateCommand(program: Command): void {
           console.log(`\n✓ upgraded to ${versionToInstall}.`);
           console.log(`  Run \`cfcf doctor\` to verify the new install.`);
           if (process.env.CFCF_INTERNAL_SERVE === undefined) {
-            // Server-running guard already lives in install.sh, but
-            // remind the user about restarting just in case.
             console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
           }
         } else {
