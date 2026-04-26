@@ -100,8 +100,37 @@ export function registerInitCommand(program: Command): void {
         process.exit(1);
       }
 
-      // Step 2: Configure agents
-      const config = createDefaultConfig(available);
+      // Step 2: Configure agents.
+      //
+      // Re-running `cfcf init --force` (and `cfcf config edit`, which
+      // delegates here) on an already-configured machine should offer
+      // the user's current values as defaults rather than the hardcoded
+      // bootstrap defaults — see plan item 6.21. We load the existing
+      // config and use it as the base; validate that each role's adapter
+      // is still detected on this machine (a previously-installed agent
+      // may have been removed) and fall back to the bootstrap default
+      // for any role pointing at an unavailable agent.
+      let config: CfcfGlobalConfig = createDefaultConfig(available);
+      const fresh = createDefaultConfig(available); // kept for fallback
+      if (exists && opts.force) {
+        const existing = await readConfig();
+        if (existing) {
+          config = existing;
+          // Refresh the detected-agents list (may have changed since
+          // last init).
+          config.availableAgents = available;
+          // Sanity-check each role's adapter against current detection.
+          // If the user's previously-picked dev agent is gone, fall
+          // back to the bootstrap default rather than carrying a stale
+          // pick the prompts would then re-offer.
+          const heal = (current: string, fallback: string): string =>
+            available.includes(current) ? current : fallback;
+          config.devAgent.adapter        = heal(config.devAgent.adapter,        fresh.devAgent.adapter);
+          config.judgeAgent.adapter      = heal(config.judgeAgent.adapter,      fresh.judgeAgent.adapter);
+          config.architectAgent.adapter  = heal(config.architectAgent.adapter,  fresh.architectAgent.adapter);
+          config.documenterAgent.adapter = heal(config.documenterAgent.adapter, fresh.documenterAgent.adapter);
+        }
+      }
 
       console.log("Configuration");
       console.log("-------------");
@@ -155,17 +184,20 @@ export function registerInitCommand(program: Command): void {
       console.log("  Examples: opus, sonnet, o3, gpt-4o");
       console.log();
 
-      const devModel = await prompt("Dev agent model", "");
-      if (devModel) config.devAgent.model = devModel;
+      // Model prompts default to the existing per-role model when set
+      // (so re-running init keeps the user's pick on Enter). Empty
+      // input clears the override; an explicit value wins.
+      const devModel = await prompt("Dev agent model", config.devAgent.model ?? "");
+      config.devAgent.model = devModel || undefined;
 
-      const judgeModel = await prompt("Judge agent model", "");
-      if (judgeModel) config.judgeAgent.model = judgeModel;
+      const judgeModel = await prompt("Judge agent model", config.judgeAgent.model ?? "");
+      config.judgeAgent.model = judgeModel || undefined;
 
-      const architectModel = await prompt("Architect agent model", "");
-      if (architectModel) config.architectAgent.model = architectModel;
+      const architectModel = await prompt("Architect agent model", config.architectAgent.model ?? "");
+      config.architectAgent.model = architectModel || undefined;
 
-      const documenterModel = await prompt("Documenter agent model", "");
-      if (documenterModel) config.documenterAgent.model = documenterModel;
+      const documenterModel = await prompt("Documenter agent model", config.documenterAgent.model ?? "");
+      config.documenterAgent.model = documenterModel || undefined;
 
       console.log();
 
@@ -310,9 +342,19 @@ export function registerInitCommand(program: Command): void {
       });
       console.log("     S) Skip -- Clio runs in FTS-only mode until you install one.");
       console.log();
+      // Default the picker to the user's existing preferredEmbedder
+      // when set (re-running init shouldn't push them back to the
+      // catalogue default). Falls back to DEFAULT_EMBEDDER_NAME for
+      // first-run installs.
+      const existingPref = config.clio?.preferredEmbedder;
+      const defaultEmbedderIdx = (() => {
+        const target = existingPref ?? DEFAULT_EMBEDDER_NAME;
+        const i = EMBEDDER_CATALOGUE.findIndex((e) => e.name === target);
+        return (i >= 0 ? i : EMBEDDER_CATALOGUE.findIndex((e) => e.name === DEFAULT_EMBEDDER_NAME)) + 1;
+      })();
       const embedderPick = await prompt(
         `Embedder choice (1-${EMBEDDER_CATALOGUE.length} / S)`,
-        String(EMBEDDER_CATALOGUE.findIndex((e) => e.name === DEFAULT_EMBEDDER_NAME) + 1),
+        String(defaultEmbedderIdx),
       );
       let embedderPicked: string | null = null;
       const pickTrim = embedderPick.trim().toUpperCase();
