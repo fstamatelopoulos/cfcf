@@ -380,7 +380,7 @@ v1 ships with `install`, `list`, `active`, and `set` verbs. `reindex` and `unins
 
 ### 6.4 Runtime: ONNX Runtime Node
 
-`onnxruntime-node` provides platform binaries (darwin-arm64 / darwin-x64 / linux-x64 / win32-x64) around 30 MB each. The ONNX model file itself is separate. Both bundled into the cf² binary via Bun's asset embedding, extracted to `~/.cfcf/models/` and `~/.cfcf/native/` on first use (same pattern as sqlite-vec).
+`onnxruntime-node` provides platform binaries (darwin-arm64 / darwin-x64 / linux-x64 / win32-x64) around 30 MB each. The ONNX model file itself is separate. As of v0.10.0 (item 5.5): `onnxruntime-node` is a transitive dep of `@huggingface/transformers` and is fetched by `bun install -g` from npmjs.com into the user's global `node_modules/`. The embedder model itself is downloaded lazily by transformers from HuggingFace into `~/.cfcf/models/` on first Clio use. The earlier "bundled into cfcf-binary via asset embedding" approach (described in this section before the npm-format pivot) is superseded — see [`installer-design.md`](../research/installer-design.md) §3.
 
 ## 7. API design
 
@@ -484,7 +484,16 @@ The generated `CLAUDE.md` / `AGENTS.md` lists this as a Tier-2 read.
 
 ## 8. Packaging and delivery
 
-### 8.1 What gets bundled into `cfcf-binary`
+### 8.1 What gets bundled — superseded by item 5.5 (v0.10.0)
+
+> ⚠️ **Superseded.** The original plan was to embed ~150 MB of native libs + the ONNX model into a `cfcf-binary` produced by `bun build --compile`. Item 5.5 (shipped v0.10.0) replaced that with the npm-format distribution model — see [`docs/research/installer-design.md`](../research/installer-design.md). Current shape:
+>
+> - **CLI bundle**: `bun build` (no `--compile`) produces a ~1 MB JS file shipped as `@cerefox/cfcf-cli`. Heavy native deps are externalised.
+> - **Native libs (libsqlite3, sqlite-vec)**: ship as a per-platform `@cerefox/cfcf-native-<platform>` npm package, declared as an `optionalDependencies` entry in `@cerefox/cfcf-cli`. Resolved via `require.resolve` at runtime — no `~/.cfcf/native/` extraction step.
+> - **`onnxruntime-node` + `sharp`**: standard transitive deps fetched from npmjs.com by `bun install -g`.
+> - **Embedder model**: downloaded lazily by `@huggingface/transformers` to `~/.cfcf/models/` on first Clio use.
+>
+> The original Clio-iteration plan is preserved below for historical context.
 
 Beyond today's embedded assets (templates + web dist):
 

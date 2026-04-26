@@ -31,7 +31,7 @@
 ### Embedder bundling: lazy download by default
 
 - Design doc originally preferred "embed-by-default" (220 MB binary) with `CFCF_CLIO_LAZY_DOWNLOAD=1` opt-out.
-- **Decision (this session): flip the default.** Binary stays lean (~64 MB). Model + native binaries are fetched on first Clio use to `~/.cfcf/models/` and `~/.cfcf/native/` from pinned GitHub Releases URLs with sha256 verification.
+- **Decision (this session): flip the default.** Embedder model is fetched on first Clio use to `~/.cfcf/models/` (via `@huggingface/transformers`, not pinned GH-Release-URL fetch — the original sha256-verified-download plan was simplified once we pivoted to the npm-format distribution in v0.10.0; model integrity now relies on HuggingFace's hashes). Native binaries (custom libsqlite3 + sqlite-vec) ship inside the per-platform `@cerefox/cfcf-native-<platform>` npm package — not lazy-fetched at runtime. See [`installer-design.md`](installer-design.md) §3.2 for the current shape; this doc captures the original Clio-iteration plan.
 - **The download must be seamless.** On first invocation:
   - Print a one-line status: `Clio: fetching embedder (bge-small-en-v1.5, ~120 MB)…`
   - Show progress every ~5%.

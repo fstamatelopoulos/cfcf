@@ -53,7 +53,25 @@ npm install -g @anthropic-ai/claude-code
 npm install -g @openai/codex
 ```
 
-## Getting Started
+## Install (end users)
+
+cfcf is distributed as the `@cerefox/cfcf-cli` npm package. The curl-bash installer detects Bun, installs it if missing, then `bun install -g <tarball-URL>`:
+
+```bash
+curl -fsSL https://<host>/install.sh | bash
+```
+
+If Bun is already on your machine, skip the wrapper:
+
+```bash
+bun install -g <tarball-URL>            # GitHub Releases (cfcf-private phase)
+# or, once cfcf is on npmjs.com:
+bun install -g @cerefox/cfcf-cli
+```
+
+Full install guide (file:// installs, upgrade, uninstall, troubleshooting): [`docs/guides/installing.md`](docs/guides/installing.md). After install, run `cfcf doctor` to verify and `cfcf init` for first-run setup.
+
+## Getting Started (developers)
 
 ```bash
 # Clone the repo
@@ -91,7 +109,7 @@ bun run test
 # TypeScript type checking
 bun run typecheck
 
-# Build a self-contained binary
+# Build the npm-format CLI tarball (dist/cfcf-X.Y.Z.tgz)
 bun run build
 
 # Start server in watch mode (auto-restart on changes)

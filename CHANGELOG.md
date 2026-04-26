@@ -9,6 +9,17 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Pivot: distribution model (item 5.5, target v0.10.0)
+
+cfcf now distributes as a standard npm-format CLI package (`@cerefox/cfcf-cli`) rather than a `bun --compile` self-contained binary. Bun ≥ 1.3 becomes a runtime requirement; the curl-bash installer (`scripts/install.sh`) bootstraps it automatically when missing. Per-platform native libs (pinned libsqlite3 + sqlite-vec) ship as separate `@cerefox/cfcf-native-<platform>` optional npm packages. Phase-0 dogfood verified end-to-end on Intel Mac (darwin-x64); `cfcf doctor` reports all 11 health checks passing. Full post-mortem of why we abandoned `--compile`: see [`docs/decisions-log.md`](docs/decisions-log.md) 2026-04-26.
+
+Other changes in this branch:
+- `cfcf doctor` rewritten for the npm-format shape (Bun runtime check, package metadata, per-platform native package, runtime deps, agent CLIs).
+- `cfcf self-update` rewritten as a `bun install -g <new-tarball>` wrapper.
+- `release.yml` rewritten: `workflow_dispatch` only, per-platform `build-native` matrix + single `build-cli` job + `release` step that uploads tarballs + SHA256SUMS + MANIFEST.txt + install.sh.
+- `ci.yml` simplified: drops the per-platform `--compile` build, runs a single `build-cli.sh` smoke per PR.
+- Obsolete scripts deleted: `build-release-tarball.sh`, `stage-runtime-deps.sh`, `resolve-runtime-deps.js`, `write-manifest.sh`. New: `build-cli.sh`, `build-native-package.sh`. `install.sh` slimmed from ~200 to ~100 lines; `uninstall.sh` is now a one-liner around `bun remove -g @cerefox/cfcf-cli`.
+
 ## [0.9.0] -- 2026-04-25
 
 This release ships **Clio**, cf²'s persistent cross-workspace memory layer (item 5.7), plus a long tail of post-review refinements driven by dogfooding on Intel Mac. The full Clio surface lands in one branch: SQLite + FTS5 + ONNX-embedder hybrid search, iteration-loop auto-ingest, full CLI + HTTP + web-UI exposure, and a `MemoryBackend` interface designed to swap in a future remote Cerefox adapter. Default mode is `auto` (hybrid when an embedder is active, else FTS), with a Cerefox-style 0.5 cosine threshold on the vector branch.
