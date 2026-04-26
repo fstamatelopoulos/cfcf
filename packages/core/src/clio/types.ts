@@ -23,7 +23,13 @@ export interface ClioDocument {
   projectId: string;
   title: string;
   source: string;
-  /** sha256 of the full Markdown body. Unique across the whole DB. */
+  /**
+   * Who or what created/last-updated this document. Mirrors Cerefox's
+   * `author` parameter on `cerefox_ingest`. Defaults to 'agent' for
+   * pre-5.12 records that didn't set it. 5.12 / Clio v2.
+   */
+  author: string;
+  /** sha256 of the full Markdown body. Migration 0003 dropped UNIQUE. */
   contentHash: string;
   metadata: Record<string, unknown>;
   reviewStatus: "approved" | "pending_review";
@@ -31,7 +37,7 @@ export interface ClioDocument {
   totalChars: number;
   createdAt: string;
   updatedAt: string;
-  /** v2 soft-delete; null in v1. */
+  /** Set by `deleteDocument`; cleared by `restoreDocument`. 5.11. */
   deletedAt?: string | null;
 }
 
@@ -137,6 +143,41 @@ export interface IngestResult {
 }
 
 /**
+ * One row in `clio_audit_log`. Written automatically on every Clio
+ * mutation (ingest create/update, delete, restore, migrate-project)
+ * since 5.13. Reads (search, get, list) are NOT logged -- the volume
+ * would be noisy and the trust story is about writes.
+ *
+ * `eventType` vocabulary mirrors Cerefox's `cerefox_audit_log.operation`:
+ *   - "create"        : new document inserted
+ *   - "update-content": existing document's content replaced (snapshot taken)
+ *   - "delete"        : soft-delete (deleted_at set)
+ *   - "restore"       : soft-delete cleared
+ *   - "migrate-project": doc(s) re-keyed from one Clio Project to another
+ */
+export interface ClioAuditEntry {
+  id: number;
+  timestamp: string;
+  eventType:
+    | "create"
+    | "update-content"
+    | "delete"
+    | "restore"
+    | "migrate-project";
+  /**
+   * Who/what triggered this event. Defaults to "agent" for ingest paths
+   * that don't pass `author`. Free-text otherwise.
+   */
+  actor: string | null;
+  projectId: string | null;
+  documentId: string | null;
+  /** Engine query text. Null for non-search events (always null in v1). */
+  query: string | null;
+  /** JSON details: version_id, prior_title, sizes, etc. */
+  metadata: Record<string, unknown>;
+}
+
+/**
  * One archived version of a document. Returned by
  * `MemoryBackend.listDocumentVersions(docId)` newest-first.
  *
@@ -215,6 +256,8 @@ export interface SearchHit {
   /** Document-level context for display. */
   docTitle: string;
   docSource: string;
+  /** Who/what last wrote this document. 5.12. */
+  docAuthor: string;
   docProjectId: string;
   docProjectName: string;
   docMetadata: Record<string, unknown>;

@@ -392,17 +392,17 @@ All under `/api/clio/*`. JSON bodies, same auth / error-shape conventions as the
 
 | Method | Path | Purpose | v1? |
 |---|---|---|---|
-| `POST` | `/api/clio/ingest` | Ingest or update a document. Body fields: `documentId` (deterministic update), `updateIfExists` (title-based update fallback), `author` — Cerefox-parity since 5.11. | ✅ |
-| `GET`  | `/api/clio/search` | Hybrid search. Query params: `q`, `project`, `match_count`, `metadata`, `mode` (`hybrid` / `fts` / `semantic`), `min_score`. | ✅ |
+| `POST` | `/api/clio/ingest` | Ingest or update a document. Body fields: `documentId`, `updateIfExists`, `author` — Cerefox-parity since 5.11. Returns `action`: `created` / `updated` / `skipped`. | ✅ (5.11) |
+| `GET`  | `/api/clio/search` | Hybrid search. Hits include `docAuthor` + full `documentId`. Query params: `q`, `project`, `match_count`, `metadata`, `mode`, `min_score`. | ✅ |
 | `GET`  | `/api/clio/documents/:id` | Retrieve a document's metadata row by id. | ✅ |
-| `GET`  | `/api/clio/documents/:id/content` | **5.11.** Reconstruct full content from chunks. Optional `?version_id=` for archived versions. | ✅ (5.11) |
-| `GET`  | `/api/clio/documents/:id/versions` | **5.11.** List archived versions, newest first. | ✅ (5.11) |
+| `GET`  | `/api/clio/documents/:id/content` | Reconstruct full content from chunks. Optional `?version_id=` for archived versions. | ✅ (5.11) |
+| `GET`  | `/api/clio/documents/:id/versions` | List archived versions, newest first. | ✅ (5.11) |
+| `DELETE` | `/api/clio/documents/:id` | Soft-delete (idempotent). Body: `{author}`. | ✅ (5.11) |
+| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted (idempotent). Body: `{author}`. | ✅ (5.11) |
+| `POST` | `/api/clio/metadata-search` | Exact-match metadata filter (no FTS). Body: `{metadataFilter, project?, updatedSince?, includeDeleted?, matchCount?}`. | ✅ (5.12) |
+| `GET`  | `/api/clio/metadata-keys` | List metadata keys + sample values, most-used first. Optional `?project=`. | ✅ (5.12) |
+| `GET`  | `/api/clio/audit-log` | Query mutation events (create/update-content/delete/restore/migrate-project). Filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`. | ✅ (5.13) |
 | `GET`  | `/api/clio/projects` | List Clio Projects (name, id, document_count). | ✅ |
-| `GET`  | `/api/clio/metadata/keys` | List all metadata keys used by any document in a project. | 5.12 |
-| `POST` | `/api/clio/metadata/search` | Exact-match metadata filter; returns matching documents without text scoring. | 5.12 |
-| `GET`  | `/api/clio/audit-log` | Query the audit log with filters. | 5.13 |
-| `DELETE` | `/api/clio/documents/:id` | Soft-delete (read-side filter exists today; mutation API in 5.13). | 5.13 |
-| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted. | 5.13 |
 | `GET`  | `/api/clio/stats` | DB size, chunk count per project, index health. | ✅ |
 
 ### 7.2 CLI commands

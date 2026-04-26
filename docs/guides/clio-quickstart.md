@@ -142,7 +142,11 @@ cfcf clio ingest modified.md --project <p> --title "<same title>" --document-id 
 | `cfcf-docs/clio-guide.md` agent cue card | ✅ |
 | Web UI Clio settings (default search mode, min score, preferred embedder readout) | ✅ on the Server Info page |
 | Update API: `--update-if-exists` + `--document-id` + version snapshots + `cfcf clio versions <id>` | ✅ shipped 5.11 |
-| Audit log + write attribution + soft-delete API | tables present; tracked under 5.13 (audit) and 5.11+ (soft-delete API) |
+| Soft-delete + restore: `cfcf clio delete <id>` + `cfcf clio restore <id>` (idempotent) | ✅ shipped 5.11 |
+| `author` field threaded through writes + reads + audit (Cerefox parity) | ✅ shipped 5.12 |
+| `cfcf clio metadata-search` + `cfcf clio metadata-keys` (discovery) | ✅ shipped 5.12 |
+| Search-result `[id: <uuid>]` rendering for the search → ingest agent loop | ✅ shipped 5.12 |
+| `cfcf clio audit` + `GET /api/clio/audit-log` (mutations only; reads not logged) | ✅ shipped 5.13 |
 | sqlite-vec HNSW (replaces brute-force cosine) | tracked under 6.15; needs the 5.5 installer infra |
 | Web UI Clio tab (browse projects + docs in the GUI) | tracked under 6.18 |
 | Remote Cerefox backend (`MemoryBackend` interface ready) | future iteration |

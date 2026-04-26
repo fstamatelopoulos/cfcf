@@ -933,6 +933,89 @@ Ingest a Markdown document. Chunks the content via the heading-aware chunker, th
 
 **Errors:** `404` when the doc doesn't exist.
 
+### DELETE /api/clio/documents/:id
+
+**5.11.** Soft-delete. Sets `deleted_at`; the row + chunks + versions remain. Idempotent. Mirrors Cerefox `cerefox_delete_document`.
+
+**Body (optional):** `{ "author": "claude-code" }` — recorded on the audit log entry.
+
+**Response:** `200 OK` with `{ deleted: true, document }`. `404` for unknown doc.
+
+### POST /api/clio/documents/:id/restore
+
+**5.11.** Undo a soft-delete. Idempotent: restoring an already-live doc returns `{ restored: false, document }`.
+
+**Response:** `200 OK`. `404` for unknown doc.
+
+### POST /api/clio/metadata-search
+
+**5.12.** Find documents by metadata-only filter. Mirrors Cerefox `cerefox_metadata_search`.
+
+**Body:**
+```json
+{
+  "metadataFilter": { "role": "reflection", "tier": "semantic" },
+  "project": "cf-ecosystem",                      // optional
+  "updatedSince": "2026-04-01T00:00:00Z",         // optional ISO timestamp
+  "includeDeleted": false,                        // optional
+  "matchCount": 50                                 // optional, default 50, cap 500
+}
+```
+
+**Response:** `200 OK` with `{ documents: ClioDocument[], metadataFilter }`. `400` for missing/empty `metadataFilter`.
+
+### GET /api/clio/metadata-keys
+
+**5.12.** List metadata keys + sample values currently in the corpus. Mirrors Cerefox `cerefox_list_metadata_keys`.
+
+**Query params:** `project` (optional name or id; restricts the scan to that Clio Project).
+
+**Response:** `200 OK`
+```json
+{
+  "keys": [
+    { "key": "role", "documentCount": 42, "valueSamples": ["reflection", "dev", "architect"] },
+    { "key": "artifact_type", "documentCount": 18, "valueSamples": ["reflection-analysis", "iteration-log"] }
+  ]
+}
+```
+
+Most-used keys first. Array values produce `valueSamples: []` (only top-level scalars are sampled — they're the only valid values for `metadata-search` filters anyway).
+
+### GET /api/clio/audit-log
+
+**5.13.** Query the audit log. Mirrors Cerefox `cerefox_get_audit_log`. Newest first.
+
+The audit log records every Clio **mutation**: `create`, `update-content`, `delete`, `restore`, `migrate-project`. Reads (search, get, list) are NOT recorded — write attribution is the trust story.
+
+**Query params (all optional, AND-combined):**
+- `event_type` — `create` | `update-content` | `delete` | `restore` | `migrate-project`
+- `actor` — exact match (e.g. `claude-code`)
+- `project` — Clio Project name or id
+- `document_id` — UUID
+- `since` — ISO-8601 timestamp; only entries with `timestamp >= this`
+- `limit` — default 100, cap 1000
+
+**Response:** `200 OK`
+```json
+{
+  "entries": [
+    {
+      "id": 42,
+      "timestamp": "2026-04-26T08:11:42.054Z",
+      "eventType": "update-content",
+      "actor": "claude-code",
+      "projectId": "<uuid>",
+      "documentId": "<uuid>",
+      "query": null,
+      "metadata": { "version_id": "<uuid>", "version_number": 3, "chunks": 12, "total_chars": 7430 }
+    }
+  ]
+}
+```
+
+**Errors:** `400` for unknown `event_type`.
+
 ### GET /api/clio/search
 
 Hybrid / semantic / FTS search.

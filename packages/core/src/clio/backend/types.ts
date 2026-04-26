@@ -11,6 +11,7 @@ import type {
   ClioProject,
   ClioDocument,
   ClioDocumentVersion,
+  ClioAuditEntry,
   IngestRequest,
   IngestResult,
   SearchRequest,
@@ -60,11 +61,46 @@ export interface MemoryBackend {
   listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]>;
   /**
    * List documents, newest-first, optionally scoped to one Clio Project.
-   * Soft-deleted documents are excluded. `limit` defaults to 50 to keep
-   * the response compact for the CLI; pagination via `offset`. Used by
-   * `cfcf clio docs list`.
+   * Soft-deleted documents are excluded by default; pass
+   * `includeDeleted: true` to surface them too. `limit` defaults to 50;
+   * pagination via `offset`. Used by `cfcf clio docs list`.
    */
-  listDocuments(opts?: { project?: string; limit?: number; offset?: number }): Promise<ClioDocument[]>;
+  listDocuments(opts?: { project?: string; limit?: number; offset?: number; includeDeleted?: boolean }): Promise<ClioDocument[]>;
+  /**
+   * Find documents by metadata-only filter (no FTS query). Mirrors
+   * Cerefox `cerefox_metadata_search`. Use cases: catch-up workflows
+   * (`metadata_search({type:"decision-log"}, updated_since:"…")`),
+   * cross-cutting filters (find all reflection-analyses across
+   * Projects), audit-style queries.
+   *
+   * Soft-deleted docs are excluded by default (override via
+   * `includeDeleted: true`). 5.12 / Clio v2.
+   */
+  metadataSearch(opts: MetadataSearchRequest): Promise<MetadataSearchResponse>;
+  /**
+   * Discovery: list every top-level metadata key currently used by any
+   * live document, with sample values. Mirrors Cerefox
+   * `cerefox_list_metadata_keys`. Use case: agents inspecting
+   * "what filters can I apply?" before crafting a metadata_search.
+   * 5.12 / Clio v2.
+   */
+  listMetadataKeys(opts?: { project?: string }): Promise<MetadataKeyInfo[]>;
+  /**
+   * Soft-delete a document. Sets `deleted_at = now`; downstream search
+   * and `getDocument` (default-args) treat it as gone, but the row +
+   * its chunks + its versions remain in the DB so a `restoreDocument`
+   * call can undo it. Mirrors Cerefox `cerefox_delete_document`. The
+   * `author` argument is recorded in the audit log when 5.13 lands.
+   * Idempotent: deleting an already-deleted doc is a no-op.
+   * Throws if the document doesn't exist. 5.11.
+   */
+  deleteDocument(id: string, opts?: { author?: string }): Promise<void>;
+  /**
+   * Undo a soft-delete. Clears `deleted_at`. Idempotent: restoring an
+   * already-live doc is a no-op (does not error). Throws if the doc
+   * doesn't exist. Mirrors Cerefox `cerefox_restore_document`. 5.11.
+   */
+  restoreDocument(id: string, opts?: { author?: string }): Promise<void>;
 
   // ── Search ────────────────────────────────────────────────────────────
   search(req: SearchRequest): Promise<SearchResponse>;
@@ -95,6 +131,17 @@ export interface MemoryBackend {
     toProjectId: string,
     opts?: { workspaceId?: string; allInProject?: boolean },
   ): Promise<number>;
+
+  // ── Audit log (5.13) ──────────────────────────────────────────────────
+  /**
+   * Query the audit log. All filters are optional; combining them
+   * AND's the conditions. Results are newest-first.
+   *
+   * The audit log records every mutation: `create`, `update-content`,
+   * `delete`, `restore`, `migrate-project`. Reads (search, get, list)
+   * are NOT recorded.
+   */
+  getAuditLog(opts?: AuditLogQuery): Promise<ClioAuditEntry[]>;
 
   // ── Reindex ───────────────────────────────────────────────────────────
   /**
@@ -128,6 +175,65 @@ export interface ReindexOptions {
   batchSize?: number;
   /** Optional progress callback invoked after each batch. */
   onProgress?: (info: { processed: number; total: number }) => void;
+}
+
+/**
+ * Request shape for `MemoryBackend.metadataSearch`.
+ *
+ * `metadataFilter` is an exact-match JSON-containment filter against
+ * `clio_documents.metadata`: every key/value pair must match. Top-level
+ * keys only (matches Cerefox's behaviour for v1 -- nested object
+ * containment lands when callers ask for it).
+ *
+ * `updatedSince` is an ISO-8601 timestamp; only documents whose
+ * `updated_at >= updatedSince` are returned. Drives the catch-up
+ * workflow ("what's changed since last sync?").
+ */
+export interface MetadataSearchRequest {
+  metadataFilter: Record<string, string | number | boolean>;
+  /** Optional Clio Project scope (name or id). */
+  project?: string;
+  /** ISO-8601 timestamp; results filtered to `updated_at >= updatedSince`. */
+  updatedSince?: string;
+  /** Include soft-deleted docs (default false). */
+  includeDeleted?: boolean;
+  /** Max docs to return (default 50, cap 500). */
+  matchCount?: number;
+}
+
+export interface MetadataSearchResponse {
+  documents: import("../types.js").ClioDocument[];
+  /** Echoed back so callers can confirm the filter was understood. */
+  metadataFilter: Record<string, string | number | boolean>;
+}
+
+/**
+ * One row in the response of `MemoryBackend.listMetadataKeys`.
+ * `valueSamples` holds up to 5 distinct values seen for this key in
+ * the corpus, useful for agents discovering the metadata vocabulary.
+ */
+export interface MetadataKeyInfo {
+  key: string;
+  documentCount: number;
+  valueSamples: (string | number | boolean)[];
+}
+
+/**
+ * Filter shape for `MemoryBackend.getAuditLog`. All fields optional.
+ */
+export interface AuditLogQuery {
+  /** Restrict by event type (Cerefox-style vocabulary). */
+  eventType?: ClioAuditEntry["eventType"];
+  /** Restrict by actor (exact match). Useful for "what did claude-code write?" */
+  actor?: string;
+  /** Restrict by Clio Project (name or id). */
+  project?: string;
+  /** Restrict by document UUID. */
+  documentId?: string;
+  /** ISO-8601 timestamp; only entries with timestamp >= this. */
+  since?: string;
+  /** Max entries to return (default 100, cap 1000). */
+  limit?: number;
 }
 
 /**

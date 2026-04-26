@@ -24,7 +24,17 @@ import type {
   SearchHit,
   ClioStats,
 } from "../types.js";
-import type { MemoryBackend, ReindexOptions, ReindexResult, DocumentContent } from "./types.js";
+import type {
+  MemoryBackend,
+  ReindexOptions,
+  ReindexResult,
+  DocumentContent,
+  MetadataSearchRequest,
+  MetadataSearchResponse,
+  MetadataKeyInfo,
+  AuditLogQuery,
+} from "./types.js";
+import type { ClioAuditEntry } from "../types.js";
 import {
   getActiveEmbedder,
   embeddingToBlob,
@@ -47,6 +57,7 @@ interface DocumentRow {
   project_id: string;
   title: string;
   source: string;
+  author: string;
   content_hash: string;
   metadata: string;
   review_status: string;
@@ -69,6 +80,7 @@ interface VectorCandidateRow {
   embedding: Uint8Array | null;
   doc_title: string;
   doc_source: string;
+  doc_author: string;
   doc_project_id: string;
   doc_project_name: string;
   doc_metadata: string;
@@ -299,6 +311,12 @@ export class LocalClio implements MemoryBackend {
     const project = await this.resolveProject(req.project, { createIfMissing: true });
     const contentHash = sha256Hex(req.content);
 
+    // The audit-write call lives at the bottom of this function so a
+    // single mutation produces a single audit row regardless of which
+    // branch ran. We also surface IngestRequest.author into every
+    // entry's `actor` column for write attribution (5.12 + 5.13).
+    const actor = req.author?.trim() || "agent";
+
     // ── Branch 1: update by document_id (deterministic). ──────────────
     //
     // Mirrors Cerefox's `cerefox_ingest(document_id=...)`. The caller
@@ -314,6 +332,18 @@ export class LocalClio implements MemoryBackend {
       if (req.updateIfExists) {
         result.note = "documentId provided; updateIfExists flag was overridden";
       }
+      this.writeAudit({
+        eventType: "update-content",
+        actor,
+        projectId: result.document.projectId,
+        documentId: result.id,
+        metadata: {
+          version_id: result.versionId,
+          version_number: result.versionNumber,
+          chunks: result.chunksInserted,
+          total_chars: result.document.totalChars,
+        },
+      });
       return result;
     }
 
@@ -325,7 +355,21 @@ export class LocalClio implements MemoryBackend {
     if (req.updateIfExists) {
       const existing = await this.findDocumentByTitle(project.id, req.title);
       if (existing) {
-        return await this.updateDocument(existing, req, contentHash);
+        const result = await this.updateDocument(existing, req, contentHash);
+        this.writeAudit({
+          eventType: "update-content",
+          actor,
+          projectId: result.document.projectId,
+          documentId: result.id,
+          metadata: {
+            version_id: result.versionId,
+            version_number: result.versionNumber,
+            chunks: result.chunksInserted,
+            total_chars: result.document.totalChars,
+            matched_by: "title",
+          },
+        });
+        return result;
       }
       // Fall through to create.
     }
@@ -350,7 +394,18 @@ export class LocalClio implements MemoryBackend {
     }
 
     // ── Branch 4: create. ─────────────────────────────────────────────
-    return await this.createDocument(project.id, req, contentHash);
+    const created = await this.createDocument(project.id, req, contentHash);
+    this.writeAudit({
+      eventType: "create",
+      actor,
+      projectId: created.document.projectId,
+      documentId: created.id,
+      metadata: {
+        chunks: created.chunksInserted,
+        total_chars: created.document.totalChars,
+      },
+    });
+    return created;
   }
 
   // ── Ingest helpers (5.11) ──────────────────────────────────────────────
@@ -375,18 +430,20 @@ export class LocalClio implements MemoryBackend {
     const metadata = JSON.stringify(req.metadata ?? {});
     const totalChars = req.content.length;
 
+    const author = req.author?.trim() || "agent";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare(`
         INSERT INTO clio_documents
-          (id, project_id, title, source, content_hash, metadata, review_status,
+          (id, project_id, title, source, author, content_hash, metadata, review_status,
            chunk_count, total_chars, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         docId,
         projectId,
         req.title,
         req.source ?? "manual",
+        author,
         contentHash,
         metadata,
         req.reviewStatus ?? "approved",
@@ -446,11 +503,17 @@ export class LocalClio implements MemoryBackend {
     const versionId = randomUUID();
     const metadata = JSON.stringify(req.metadata ?? {});
     const totalChars = req.content.length;
-    // Free-text "who/what triggered this version". Cerefox's analogous
-    // column carries values like "file" / "paste" / "agent" / "manual".
-    // We accept any string from the caller and default to "agent" for
-    // parity with cerefox_ingest's default p_source.
-    const versionSource = req.author?.trim() || "agent";
+    // The `source` column on clio_document_versions records WHO WROTE
+    // the content being archived (i.e. the prior live author), not
+    // who is triggering this update. That way `cfcf clio versions` +
+    // future audit queries answer "who wrote v3?" with `versions[0]
+    // .source` rather than requiring a JOIN with the audit log.
+    // Cerefox's same column conflates "trigger label" + "author"; we
+    // pick the more useful interpretation.
+    const archivedAuthor = target.author || "agent";
+    // The new live author (who's making this update) -- written to
+    // clio_documents.author below.
+    const newAuthor = req.author?.trim() || "agent";
 
     let versionNumber = 0;
     this.db.exec("BEGIN IMMEDIATE");
@@ -471,12 +534,14 @@ export class LocalClio implements MemoryBackend {
       const priorChunkCount = liveCounts?.n ?? 0;
       const priorTotalChars = liveCounts?.chars ?? 0;
 
-      // 1. Create the snapshot row.
+      // 1. Create the snapshot row. `source` records the author of
+      //    the OUTGOING content (target.author). Future audit / version
+      //    listing answers "who wrote v3?" without JOINing the audit log.
       this.db.prepare(`
         INSERT INTO clio_document_versions
           (id, document_id, version_number, source, metadata, chunk_count, total_chars, archived, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-      `).run(versionId, target.id, versionNumber, versionSource, "{}", priorChunkCount, priorTotalChars, now);
+      `).run(versionId, target.id, versionNumber, archivedAuthor, "{}", priorChunkCount, priorTotalChars, now);
 
       // 2. Archive prior live chunks under the new version. The
       //    fts-update trigger fires per row: `WHEN old.version_id IS NULL OR new.version_id IS NULL`
@@ -488,15 +553,18 @@ export class LocalClio implements MemoryBackend {
       `).run(versionId, now, target.id);
 
       // 3. Update the document row in place. Title may have changed; that's
-      //    why we always re-write it.
+      //    why we always re-write it. `author` records who triggered THIS
+      //    write -- the live row reflects the latest editor; prior editors
+      //    live on their respective version rows' `source` column.
       this.db.prepare(`
         UPDATE clio_documents
-           SET title = ?, source = ?, content_hash = ?, metadata = ?,
+           SET title = ?, source = ?, author = ?, content_hash = ?, metadata = ?,
                review_status = ?, chunk_count = ?, total_chars = ?, updated_at = ?
          WHERE id = ?
       `).run(
         req.title,
         req.source ?? target.source,
+        newAuthor,
         contentHash,
         metadata,
         req.reviewStatus ?? target.reviewStatus,
@@ -697,7 +765,12 @@ export class LocalClio implements MemoryBackend {
     }));
   }
 
-  async listDocuments(opts: { project?: string; limit?: number; offset?: number } = {}): Promise<ClioDocument[]> {
+  async listDocuments(opts: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    includeDeleted?: boolean;
+  } = {}): Promise<ClioDocument[]> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
     const offset = Math.max(opts.offset ?? 0, 0);
     let projectId: string | null = null;
@@ -707,25 +780,227 @@ export class LocalClio implements MemoryBackend {
       if (!proj) return [];
       projectId = proj.id;
     }
-    const sql = projectId
-      ? `SELECT * FROM clio_documents WHERE deleted_at IS NULL AND project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
-      : `SELECT * FROM clio_documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-    const bindings: (string | number)[] = projectId ? [projectId, limit, offset] : [limit, offset];
-    const rows = this.db.query<{
-      id: string;
-      project_id: string;
-      title: string;
-      source: string;
-      content_hash: string;
-      metadata: string;
-      review_status: string;
-      chunk_count: number;
-      total_chars: number;
-      created_at: string;
-      updated_at: string;
-      deleted_at: string | null;
-    }, (string | number)[]>(sql).all(...bindings);
+    const where: string[] = [];
+    if (!opts.includeDeleted) where.push("deleted_at IS NULL");
+    if (projectId) where.push("project_id = ?");
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const sql = `SELECT * FROM clio_documents ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    const bindings: (string | number)[] = projectId
+      ? [projectId, limit, offset]
+      : [limit, offset];
+    const rows = this.db.query<DocumentRow, (string | number)[]>(sql).all(...bindings);
     return rows.map((r) => this.mapDocument(r));
+  }
+
+  async deleteDocument(id: string, opts: { author?: string } = {}): Promise<void> {
+    // Look up first so we can distinguish "doesn't exist" (throws) from
+    // "already soft-deleted" (no-op). Mirrors cerefox_delete_document's
+    // RAISE EXCEPTION behaviour.
+    const actor = opts.author?.trim() || "agent";
+    const target = this.db.query<{ id: string; project_id: string; deleted_at: string | null }, [string]>(
+      `SELECT id, project_id, deleted_at FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
+    if (!target) throw new Error(`deleteDocument: document "${id}" not found`);
+    if (target.deleted_at) return; // already deleted; idempotent (no audit row)
+    this.db.prepare(
+      `UPDATE clio_documents SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+    ).run(id);
+    this.writeAudit({
+      eventType: "delete", actor,
+      projectId: target.project_id, documentId: id,
+    });
+  }
+
+  async metadataSearch(opts: MetadataSearchRequest): Promise<MetadataSearchResponse> {
+    if (!opts.metadataFilter || Object.keys(opts.metadataFilter).length === 0) {
+      throw new Error("metadataSearch: metadataFilter must contain at least one key");
+    }
+    const matchCount = Math.min(Math.max(opts.matchCount ?? 50, 1), 500);
+
+    let projectId: string | null = null;
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return { documents: [], metadataFilter: opts.metadataFilter };
+      projectId = proj.id;
+    }
+
+    const conds: string[] = [];
+    const bindings: (string | number | boolean)[] = [];
+
+    if (!opts.includeDeleted) conds.push("deleted_at IS NULL");
+    if (projectId) {
+      conds.push("project_id = ?");
+      bindings.push(projectId);
+    }
+    if (opts.updatedSince) {
+      conds.push("updated_at >= ?");
+      bindings.push(opts.updatedSince);
+    }
+    // Per-key json_extract equality. Top-level keys only (matches
+    // Cerefox v1; nested-object containment is a future ask).
+    for (const [k, v] of Object.entries(opts.metadataFilter)) {
+      conds.push(`json_extract(metadata, ?) = ?`);
+      bindings.push(`$.${k}`);
+      bindings.push(v);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sql = `SELECT * FROM clio_documents ${where} ORDER BY updated_at DESC LIMIT ?`;
+    bindings.push(matchCount);
+
+    const rows = this.db.query<DocumentRow, (string | number | boolean)[]>(sql).all(...bindings);
+    return {
+      documents: rows.map((r) => this.mapDocument(r)),
+      metadataFilter: opts.metadataFilter,
+    };
+  }
+
+  async listMetadataKeys(opts: { project?: string } = {}): Promise<MetadataKeyInfo[]> {
+    let projectId: string | null = null;
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return [];
+      projectId = proj.id;
+    }
+    // Pull every live doc's metadata + walk it in JS. SQLite has no
+    // native "list JSON keys across rows" without recursive CTE
+    // contortions; the corpus is small enough that an N-row scan is
+    // fine. Cerefox does this server-side via PG's jsonb_each; we
+    // emulate the contract.
+    const sql = projectId
+      ? `SELECT metadata FROM clio_documents WHERE deleted_at IS NULL AND project_id = ?`
+      : `SELECT metadata FROM clio_documents WHERE deleted_at IS NULL`;
+    const rows = projectId
+      ? this.db.query<{ metadata: string }, [string]>(sql).all(projectId)
+      : this.db.query<{ metadata: string }, []>(sql).all();
+
+    const keyToCount = new Map<string, number>();
+    const keyToValues = new Map<string, Set<string>>(); // values stringified for set comparison
+
+    for (const r of rows) {
+      const m = parseJsonObject(r.metadata);
+      for (const [k, v] of Object.entries(m)) {
+        keyToCount.set(k, (keyToCount.get(k) ?? 0) + 1);
+        // Only collect scalar values for the sample set; arrays/objects
+        // would dilute the signal and aren't valid metadata_search
+        // filter values anyway (top-level scalars only in v1).
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          let set = keyToValues.get(k);
+          if (!set) { set = new Set(); keyToValues.set(k, set); }
+          if (set.size < 5) set.add(JSON.stringify(v));
+        }
+      }
+    }
+
+    const out: MetadataKeyInfo[] = [];
+    for (const [key, documentCount] of keyToCount) {
+      const samples = Array.from(keyToValues.get(key) ?? []).map((s) => JSON.parse(s));
+      out.push({ key, documentCount, valueSamples: samples });
+    }
+    // Most-used keys first (handy for the agent discovering the schema).
+    out.sort((a, b) => b.documentCount - a.documentCount);
+    return out;
+  }
+
+  async restoreDocument(id: string, opts: { author?: string } = {}): Promise<void> {
+    const actor = opts.author?.trim() || "agent";
+    const target = this.db.query<{ id: string; project_id: string; deleted_at: string | null }, [string]>(
+      `SELECT id, project_id, deleted_at FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
+    if (!target) throw new Error(`restoreDocument: document "${id}" not found`);
+    if (!target.deleted_at) return; // already live; idempotent (no audit row)
+    this.db.prepare(
+      `UPDATE clio_documents SET deleted_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+    ).run(id);
+    this.writeAudit({
+      eventType: "restore", actor,
+      projectId: target.project_id, documentId: id,
+    });
+  }
+
+  // ── Audit log (5.13) ───────────────────────────────────────────────────
+
+  /**
+   * Internal: write one row to clio_audit_log. Called from the public
+   * mutation paths (ingest create/update, deleteDocument, restoreDocument,
+   * migrateDocumentsBetweenProjects). Reads (search, get, listDocuments,
+   * etc.) intentionally do NOT call this -- the volume would dwarf the
+   * write events and the trust story is about who-wrote-what.
+   *
+   * Failures are swallowed (best-effort): we don't want a stuck audit
+   * write to fail an otherwise-successful ingest. The mutation has
+   * already committed when this fires.
+   */
+  private writeAudit(entry: {
+    eventType: ClioAuditEntry["eventType"];
+    actor: string | null;
+    projectId?: string | null;
+    documentId?: string | null;
+    query?: string | null;
+    metadata?: Record<string, unknown>;
+  }): void {
+    try {
+      this.db.prepare(
+        `INSERT INTO clio_audit_log (event_type, actor, project_id, document_id, query, metadata)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        entry.eventType,
+        entry.actor,
+        entry.projectId ?? null,
+        entry.documentId ?? null,
+        entry.query ?? null,
+        JSON.stringify(entry.metadata ?? {}),
+      );
+    } catch (err) {
+      // Last-resort warn; never throw from the audit path.
+      // eslint-disable-next-line no-console
+      console.warn(`[clio] audit write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async getAuditLog(opts: AuditLogQuery = {}): Promise<ClioAuditEntry[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+    const conds: string[] = [];
+    const bindings: (string | number)[] = [];
+
+    if (opts.eventType) { conds.push("event_type = ?"); bindings.push(opts.eventType); }
+    if (opts.actor)     { conds.push("actor = ?");      bindings.push(opts.actor); }
+    if (opts.documentId){ conds.push("document_id = ?"); bindings.push(opts.documentId); }
+    if (opts.since)     { conds.push("timestamp >= ?"); bindings.push(opts.since); }
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return [];
+      conds.push("project_id = ?");
+      bindings.push(proj.id);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sql = `SELECT id, timestamp, event_type, actor, project_id, document_id, query, metadata
+                 FROM clio_audit_log ${where}
+                 ORDER BY id DESC LIMIT ?`;
+    bindings.push(limit);
+
+    const rows = this.db.query<{
+      id: number;
+      timestamp: string;
+      event_type: string;
+      actor: string | null;
+      project_id: string | null;
+      document_id: string | null;
+      query: string | null;
+      metadata: string | null;
+    }, (string | number)[]>(sql).all(...bindings);
+
+    return rows.map((r) => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      eventType: r.event_type as ClioAuditEntry["eventType"],
+      actor: r.actor,
+      projectId: r.project_id,
+      documentId: r.document_id,
+      query: r.query,
+      metadata: r.metadata ? parseJsonObject(r.metadata) : {},
+    }));
   }
 
   // ── Search ─────────────────────────────────────────────────────────────
@@ -817,6 +1092,7 @@ export class LocalClio implements MemoryBackend {
              f.bm25_rank,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata
@@ -846,6 +1122,7 @@ export class LocalClio implements MemoryBackend {
         bm25_rank: number;
         doc_title: string;
         doc_source: string;
+        doc_author: string;
         doc_project_id: string;
         doc_project_name: string;
         doc_metadata: string;
@@ -866,6 +1143,7 @@ export class LocalClio implements MemoryBackend {
       score: -r.bm25_rank,
       docTitle: r.doc_title,
       docSource: r.doc_source,
+      docAuthor: r.doc_author ?? "agent",
       docProjectId: r.doc_project_id,
       docProjectName: r.doc_project_name,
       docMetadata: parseJsonObject(r.doc_metadata),
@@ -1061,6 +1339,7 @@ export class LocalClio implements MemoryBackend {
              c.embedding,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
@@ -1109,6 +1388,7 @@ export class LocalClio implements MemoryBackend {
              c.embedding,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
@@ -1158,6 +1438,7 @@ export class LocalClio implements MemoryBackend {
       score,
       docTitle: row.doc_title,
       docSource: row.doc_source,
+      docAuthor: row.doc_author ?? "agent",
       docProjectId: row.doc_project_id,
       docProjectName: row.doc_project_name,
       docMetadata: parseJsonObject(row.doc_metadata),
@@ -1232,7 +1513,25 @@ export class LocalClio implements MemoryBackend {
         ).run(toProjectId, fromProjectId, opts.workspaceId!);
       }
       this.db.exec("COMMIT");
-      return Number(result.changes);
+      const changes = Number(result.changes);
+      if (changes > 0) {
+        // One audit row per migrate call (not per moved doc -- that
+        // would balloon the log on big sweeps). The metadata JSON
+        // captures from/to projects + the scope decision.
+        this.writeAudit({
+          eventType: "migrate-project",
+          actor: "agent",
+          projectId: toProjectId,
+          metadata: {
+            from_project_id: fromProjectId,
+            to_project_id: toProjectId,
+            workspace_id: opts.workspaceId ?? null,
+            scope: opts.allInProject ? "all-in-project" : "workspace",
+            documents_moved: changes,
+          },
+        });
+      }
+      return changes;
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -1417,25 +1716,13 @@ export class LocalClio implements MemoryBackend {
     };
   }
 
-  private mapDocument(row: {
-    id: string;
-    project_id: string;
-    title: string;
-    source: string;
-    content_hash: string;
-    metadata: string;
-    review_status: string;
-    chunk_count: number;
-    total_chars: number;
-    created_at: string;
-    updated_at: string;
-    deleted_at: string | null;
-  }): ClioDocument {
+  private mapDocument(row: DocumentRow): ClioDocument {
     return {
       id: row.id,
       projectId: row.project_id,
       title: row.title,
       source: row.source,
+      author: row.author ?? "agent",
       contentHash: row.content_hash,
       metadata: parseJsonObject(row.metadata),
       reviewStatus: row.review_status === "pending_review" ? "pending_review" : "approved",

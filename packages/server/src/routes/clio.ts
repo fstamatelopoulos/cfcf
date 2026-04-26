@@ -194,6 +194,131 @@ export function registerClioRoutes(app: Hono): void {
     return c.json(doc);
   });
 
+  // Audit log (5.13). Read-only (writes happen automatically on every
+  // mutation). Mirrors Cerefox `cerefox_get_audit_log`. Filters all
+  // optional; combine with AND. Newest-first.
+  app.get("/api/clio/audit-log", async (c) => {
+    const eventType = c.req.query("event_type") || undefined;
+    const actor = c.req.query("actor") || undefined;
+    const project = c.req.query("project") || undefined;
+    const documentId = c.req.query("document_id") || undefined;
+    const since = c.req.query("since") || undefined;
+    const limitStr = c.req.query("limit");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
+      return c.json({ error: "limit must be a positive integer" }, 400);
+    }
+    const allowedTypes = ["create", "update-content", "delete", "restore", "migrate-project"];
+    if (eventType && !allowedTypes.includes(eventType)) {
+      return c.json({ error: `event_type must be one of: ${allowedTypes.join(", ")}` }, 400);
+    }
+    const backend = getClioBackend();
+    try {
+      const entries = await backend.getAuditLog({
+        eventType: eventType as "create" | "update-content" | "delete" | "restore" | "migrate-project" | undefined,
+        actor,
+        project,
+        documentId,
+        since,
+        limit,
+      });
+      return c.json({ entries });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // Metadata-only search (5.12). Required body: { metadataFilter:{...} };
+  // optional: project, updatedSince (ISO timestamp), includeDeleted,
+  // matchCount. Mirrors Cerefox `cerefox_metadata_search`.
+  app.post("/api/clio/metadata-search", async (c) => {
+    let body: Partial<{
+      metadataFilter: Record<string, string | number | boolean>;
+      project: string;
+      updatedSince: string;
+      includeDeleted: boolean;
+      matchCount: number;
+    }> = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (!body.metadataFilter || typeof body.metadataFilter !== "object") {
+      return c.json({ error: "metadataFilter is required (object)" }, 400);
+    }
+    try {
+      const backend = getClioBackend();
+      const result = await backend.metadataSearch({
+        metadataFilter: body.metadataFilter,
+        project: body.project,
+        updatedSince: body.updatedSince,
+        includeDeleted: body.includeDeleted,
+        matchCount: body.matchCount,
+      });
+      return c.json(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // Discovery: list metadata keys + sample values (5.12). Mirrors
+  // Cerefox `cerefox_list_metadata_keys`. Optional ?project=<name|id>.
+  app.get("/api/clio/metadata-keys", async (c) => {
+    const project = c.req.query("project") || undefined;
+    const backend = getClioBackend();
+    try {
+      const keys = await backend.listMetadataKeys({ project });
+      return c.json({ keys });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // Soft-delete (5.11). Sets deleted_at; the row + chunks + versions
+  // remain so a subsequent restore is possible. Returns 200 (with
+  // deleted=true) on first delete; idempotent thereafter. 404 when the
+  // doc doesn't exist. Audit log integration lands in 5.13.
+  app.delete("/api/clio/documents/:id", async (c) => {
+    const id = c.req.param("id");
+    let body: { author?: string } = {};
+    try { body = await c.req.json<{ author?: string }>(); } catch { /* empty body OK */ }
+    const backend = getClioBackend();
+    try {
+      await backend.deleteDocument(id, body);
+      const doc = await backend.getDocument(id);
+      return c.json({ deleted: true, document: doc }, 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes("not found") ? 404 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
+  // Undo a soft-delete (5.11). Idempotent: restoring an already-live
+  // doc returns 200 with restored=false (no change). 404 when the doc
+  // doesn't exist.
+  app.post("/api/clio/documents/:id/restore", async (c) => {
+    const id = c.req.param("id");
+    let body: { author?: string } = {};
+    try { body = await c.req.json<{ author?: string }>(); } catch { /* empty body OK */ }
+    const backend = getClioBackend();
+    try {
+      const before = await backend.getDocument(id);
+      await backend.restoreDocument(id, body);
+      const after = await backend.getDocument(id);
+      const restored = !!(before?.deletedAt && !after?.deletedAt);
+      return c.json({ restored, document: after }, 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes("not found") ? 404 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
   // Reconstructed full content for a document. Returns the live version
   // by default; pass ?version_id=<uuid> to retrieve an archived state
   // (UUIDs come from `GET /api/clio/documents/:id/versions`).
@@ -230,6 +355,7 @@ export function registerClioRoutes(app: Hono): void {
     const project = c.req.query("project") || undefined;
     const limitStr = c.req.query("limit");
     const offsetStr = c.req.query("offset");
+    const includeDeleted = c.req.query("include_deleted") === "true";
     const limit = limitStr ? parseInt(limitStr, 10) : undefined;
     const offset = offsetStr ? parseInt(offsetStr, 10) : undefined;
     if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
@@ -240,7 +366,7 @@ export function registerClioRoutes(app: Hono): void {
     }
     const backend = getClioBackend();
     try {
-      const docs = await backend.listDocuments({ project, limit, offset });
+      const docs = await backend.listDocuments({ project, limit, offset, includeDeleted });
       return c.json({ documents: docs });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

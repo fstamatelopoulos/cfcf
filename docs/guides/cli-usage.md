@@ -432,9 +432,21 @@ cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --update-if-exis
 cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
 
 # Browse / retrieve
-cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--json]   # newest first
+cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted] [--json]
 cfcf clio get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
 cfcf clio versions <document-id> [--json]                                   # archived version history
+
+# Metadata-only search + discovery (5.12, Cerefox parity)
+cfcf clio metadata-search --filter '{"role":"reflection"}' [--updated-since 2026-04-01T00:00:00Z] [--project <name>] [--include-deleted]
+cfcf clio metadata-keys [--project <name>]                                  # what keys + sample values exist
+
+# Soft-delete + restore (5.11, Cerefox parity)
+cfcf clio delete <document-id> [--author <name>]                            # excludes from search; restorable
+cfcf clio restore <document-id> [--author <name>]                           # idempotent
+
+# Audit log (5.13)
+cfcf clio audit [--event-type create|update-content|delete|restore|migrate-project] \
+                [--actor <name>] [--project <p>] [--document-id <id>] [--since <iso>] [--limit 100] [--json]
 
 # Projects (grouping of workspaces by knowledge domain)
 cfcf clio projects [--json]

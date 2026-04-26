@@ -650,6 +650,294 @@ describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentCont
     await clio.close();
   });
 
+  it("deleteDocument soft-deletes; search/listDocuments hide it; restore brings it back", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Trash candidate",
+      content: "# Trash\n\ndeletable body",
+    });
+
+    // Live + searchable.
+    expect((await clio.search({ query: "deletable" })).hits.length).toBe(1);
+    expect((await clio.listDocuments({ project: "p1" })).length).toBe(1);
+
+    await clio.deleteDocument(r.id);
+
+    // Excluded from search + default list.
+    expect((await clio.search({ query: "deletable" })).hits.length).toBe(0);
+    expect((await clio.listDocuments({ project: "p1" })).length).toBe(0);
+    // ...but reachable when explicitly requested.
+    expect((await clio.listDocuments({ project: "p1", includeDeleted: true })).length).toBe(1);
+
+    // Idempotent.
+    await clio.deleteDocument(r.id);
+
+    // Restore.
+    await clio.restoreDocument(r.id);
+    expect((await clio.search({ query: "deletable" })).hits.length).toBe(1);
+    expect((await clio.listDocuments({ project: "p1" })).length).toBe(1);
+
+    // Idempotent restore.
+    await clio.restoreDocument(r.id);
+    await clio.close();
+  });
+
+  it("deleteDocument throws when the doc doesn't exist", async () => {
+    const clio = makeClio();
+    await expect(clio.deleteDocument("00000000-0000-4000-8000-000000000000"))
+      .rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("restoreDocument throws when the doc doesn't exist", async () => {
+    const clio = makeClio();
+    await expect(clio.restoreDocument("00000000-0000-4000-8000-000000000000"))
+      .rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  // ── 5.12: author field + metadata-search + metadata-keys ────────────
+  it("ingest persists `author` on creates and updates", async () => {
+    const clio = makeClio();
+    const created = await clio.ingest({
+      project: "p1", title: "Author test", content: "c0", author: "claude-code",
+    });
+    expect(created.document.author).toBe("claude-code");
+
+    const updated = await clio.ingest({
+      project: "p1", title: "Author test", content: "c1",
+      documentId: created.id, author: "codex",
+    });
+    expect(updated.document.author).toBe("codex");
+
+    const list = await clio.listDocuments({ project: "p1" });
+    expect(list[0].author).toBe("codex");
+
+    // The version row's `source` carries the prior writer's author too,
+    // so the audit trail includes "who wrote each version".
+    const versions = await clio.listDocumentVersions(created.id);
+    expect(versions[0].source).toBe("claude-code"); // the snapshot of the v0 content
+    await clio.close();
+  });
+
+  it("default author is 'agent' when no value passed", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "No author", content: "body" });
+    expect(r.document.author).toBe("agent");
+    await clio.close();
+  });
+
+  it("search results carry docAuthor + documentId for [id: uuid] rendering", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1", title: "Searchable", content: "# H\n\nfindable body", author: "claude-code",
+    });
+    const search = await clio.search({ query: "findable" });
+    expect(search.hits.length).toBe(1);
+    expect(search.hits[0].documentId).toBe(r.id);
+    expect(search.hits[0].docAuthor).toBe("claude-code");
+    await clio.close();
+  });
+
+  it("metadataSearch finds docs by metadata + supports updated_since", async () => {
+    const clio = makeClio();
+    await clio.ingest({
+      project: "p1", title: "A", content: "body 1",
+      metadata: { role: "reflection", tier: "semantic" },
+    });
+    await clio.ingest({
+      project: "p1", title: "B", content: "body 2",
+      metadata: { role: "dev", tier: "episodic" },
+    });
+    await clio.ingest({
+      project: "p1", title: "C", content: "body 3",
+      metadata: { role: "reflection", tier: "episodic" },
+    });
+
+    const r1 = await clio.metadataSearch({ metadataFilter: { role: "reflection" } });
+    expect(r1.documents.length).toBe(2);
+    expect(r1.documents.map((d) => d.title).sort()).toEqual(["A", "C"]);
+
+    const r2 = await clio.metadataSearch({
+      metadataFilter: { role: "reflection", tier: "semantic" },
+    });
+    expect(r2.documents.length).toBe(1);
+    expect(r2.documents[0].title).toBe("A");
+
+    // updated_since filter
+    const cutoff = new Date(Date.now() + 60_000).toISOString(); // 1m in the future
+    const future = await clio.metadataSearch({
+      metadataFilter: { role: "reflection" }, updatedSince: cutoff,
+    });
+    expect(future.documents.length).toBe(0);
+
+    await clio.close();
+  });
+
+  it("metadataSearch rejects empty filter", async () => {
+    const clio = makeClio();
+    await expect(clio.metadataSearch({ metadataFilter: {} })).rejects.toThrow(/at least one key/);
+    await clio.close();
+  });
+
+  it("metadataSearch excludes soft-deleted by default; includeDeleted opts back in", async () => {
+    const clio = makeClio();
+    const a = await clio.ingest({
+      project: "p1", title: "live", content: "x", metadata: { role: "reflection" },
+    });
+    const b = await clio.ingest({
+      project: "p1", title: "deleted", content: "y", metadata: { role: "reflection" },
+    });
+    await clio.deleteDocument(b.id);
+
+    const live = await clio.metadataSearch({ metadataFilter: { role: "reflection" } });
+    expect(live.documents.length).toBe(1);
+    expect(live.documents[0].id).toBe(a.id);
+
+    const all = await clio.metadataSearch({
+      metadataFilter: { role: "reflection" }, includeDeleted: true,
+    });
+    expect(all.documents.length).toBe(2);
+    await clio.close();
+  });
+
+  it("listMetadataKeys aggregates keys + samples across docs", async () => {
+    const clio = makeClio();
+    await clio.ingest({
+      project: "p1", title: "1", content: "x",
+      metadata: { role: "reflection", artifact_type: "reflection-analysis" },
+    });
+    await clio.ingest({
+      project: "p1", title: "2", content: "y",
+      metadata: { role: "reflection", artifact_type: "iteration-log" },
+    });
+    await clio.ingest({
+      project: "p1", title: "3", content: "z",
+      metadata: { role: "dev", tags: ["a", "b"] }, // arrays excluded from sample collection
+    });
+
+    const keys = await clio.listMetadataKeys();
+    const byKey = Object.fromEntries(keys.map((k) => [k.key, k]));
+    expect(byKey.role.documentCount).toBe(3);
+    expect(byKey.role.valueSamples.sort()).toEqual(["dev", "reflection"]);
+    expect(byKey.artifact_type.documentCount).toBe(2);
+    // Arrays land in the count but not in valueSamples.
+    expect(byKey.tags.documentCount).toBe(1);
+    expect(byKey.tags.valueSamples).toEqual([]);
+
+    // most-used first
+    expect(keys[0].key).toBe("role");
+    await clio.close();
+  });
+
+  it("listMetadataKeys is project-scopable + soft-deleted-excluded", async () => {
+    const clio = makeClio();
+    const a = await clio.ingest({
+      project: "p1", title: "1", content: "x", metadata: { only_p1: "yes" },
+    });
+    await clio.ingest({
+      project: "p2", title: "2", content: "y", metadata: { only_p2: "yes" },
+    });
+    await clio.deleteDocument(a.id);
+
+    const p1 = await clio.listMetadataKeys({ project: "p1" });
+    expect(p1.length).toBe(0); // only doc was soft-deleted
+
+    const p2 = await clio.listMetadataKeys({ project: "p2" });
+    expect(p2.map((k) => k.key)).toEqual(["only_p2"]);
+    await clio.close();
+  });
+
+  // ── 5.13: audit log writes ─────────────────────────────────────────
+  it("writeAudit fires on create / update / delete / restore + reads back via getAuditLog", async () => {
+    const clio = makeClio();
+    const a = await clio.ingest({
+      project: "p1", title: "Auditable", content: "v0", author: "claude-code",
+    });
+    await clio.ingest({
+      project: "p1", title: "Auditable", content: "v1",
+      documentId: a.id, author: "codex",
+    });
+    await clio.deleteDocument(a.id, { author: "user" });
+    await clio.restoreDocument(a.id, { author: "user" });
+
+    const log = await clio.getAuditLog();
+    // Newest first.
+    expect(log.map((e) => e.eventType)).toEqual([
+      "restore", "delete", "update-content", "create",
+    ]);
+    expect(log[0].actor).toBe("user");
+    expect(log[2].actor).toBe("codex");
+    expect(log[3].actor).toBe("claude-code");
+    expect(log[2].metadata.version_id).toBeTruthy();
+
+    await clio.close();
+  });
+
+  it("getAuditLog filters by eventType / actor / documentId / since", async () => {
+    const clio = makeClio();
+    const a = await clio.ingest({ project: "p1", title: "A", content: "x", author: "alice" });
+    const b = await clio.ingest({ project: "p1", title: "B", content: "y", author: "bob" });
+    await clio.ingest({
+      project: "p1", title: "A", content: "x2", documentId: a.id, author: "alice",
+    });
+
+    const aliceWrites = await clio.getAuditLog({ actor: "alice" });
+    expect(aliceWrites.length).toBe(2);
+    expect(aliceWrites.every((e) => e.actor === "alice")).toBe(true);
+
+    const onlyCreates = await clio.getAuditLog({ eventType: "create" });
+    expect(onlyCreates.length).toBe(2);
+
+    const justB = await clio.getAuditLog({ documentId: b.id });
+    expect(justB.length).toBe(1);
+    expect(justB[0].eventType).toBe("create");
+    expect(justB[0].actor).toBe("bob");
+
+    // since filter set far in the future returns nothing.
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const none = await clio.getAuditLog({ since: future });
+    expect(none.length).toBe(0);
+    await clio.close();
+  });
+
+  it("idempotent delete/restore do NOT write extra audit rows", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Idem", content: "x" });
+    await clio.deleteDocument(r.id);
+    await clio.deleteDocument(r.id); // idempotent
+    await clio.restoreDocument(r.id);
+    await clio.restoreDocument(r.id); // idempotent
+
+    const log = await clio.getAuditLog({ documentId: r.id });
+    // create + delete + restore = 3 rows, not 5.
+    expect(log.map((e) => e.eventType).sort()).toEqual(["create", "delete", "restore"]);
+    await clio.close();
+  });
+
+  it("migrate-project writes one audit row per call (not per doc)", async () => {
+    const clio = makeClio();
+    const wsA = "ws-a";
+    await clio.ingest({
+      project: "p1", title: "1", content: "x", metadata: { workspace_id: wsA },
+    });
+    await clio.ingest({
+      project: "p1", title: "2", content: "y", metadata: { workspace_id: wsA },
+    });
+    const p1 = (await clio.getProject("p1"))!;
+    const p2 = await clio.createProject({ name: "p2" });
+
+    const moved = await clio.migrateDocumentsBetweenProjects(p1.id, p2.id, { workspaceId: wsA });
+    expect(moved).toBe(2);
+
+    const log = await clio.getAuditLog({ eventType: "migrate-project" });
+    expect(log.length).toBe(1);
+    expect(log[0].metadata.documents_moved).toBe(2);
+    expect(log[0].metadata.workspace_id).toBe(wsA);
+    await clio.close();
+  });
+
   it("ensures FTS index drops archived chunks (search returns only live content)", async () => {
     const clio = makeClio();
     const v0 = await clio.ingest({

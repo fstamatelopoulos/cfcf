@@ -8,12 +8,13 @@
 import type { Command } from "commander";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
-import { isServerReachable, post, get } from "../client.js";
+import { isServerReachable, post, get, del } from "../client.js";
 import { DEFAULT_EMBEDDER_NAME } from "@cfcf/core";
 import type {
   ClioProject,
   ClioDocument,
   ClioDocumentVersion,
+  ClioAuditEntry,
   IngestResult,
   SearchResponse,
   SearchHit,
@@ -30,6 +31,10 @@ interface DocumentContentResponse {
 
 interface VersionsResponse {
   versions: ClioDocumentVersion[];
+}
+
+interface AuditLogResponse {
+  entries: ClioAuditEntry[];
 }
 
 interface ClioProjectListResponse {
@@ -349,6 +354,209 @@ function registerUnder(root: Command): void {
       }
     });
 
+  // ── audit ────────────────────────────────────────────────────────────
+  // Read-only view of clio_audit_log. Mirrors Cerefox `cerefox_get_audit_log`.
+  // Reads (search, get, list) are NOT recorded -- only mutations.
+  root
+    .command("audit")
+    .description("Query the Clio audit log (newest first). All filters AND together.")
+    .option("--event-type <type>", "create | update-content | delete | restore | migrate-project")
+    .option("--actor <name>", "Exact match on actor (e.g. 'claude-code')")
+    .option("-p, --project <name>", "Scope to a single Clio Project")
+    .option("--document-id <uuid>", "Audit history for one document")
+    .option("--since <iso>", "Only entries with timestamp >= this ISO-8601 timestamp")
+    .option("-n, --limit <n>", "Max entries to return (default 100, max 1000)", (v) => parseInt(v, 10))
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const qs = new URLSearchParams();
+      if (opts.eventType) qs.set("event_type", opts.eventType);
+      if (opts.actor) qs.set("actor", opts.actor);
+      if (opts.project) qs.set("project", opts.project);
+      if (opts.documentId) qs.set("document_id", opts.documentId);
+      if (opts.since) qs.set("since", opts.since);
+      if (opts.limit) qs.set("limit", String(opts.limit));
+      const url = qs.toString() ? `/api/clio/audit-log?${qs.toString()}` : "/api/clio/audit-log";
+      const res = await get<AuditLogResponse>(url);
+      if (!res.ok) {
+        console.error(`audit failed: ${res.error}`);
+        process.exit(1);
+      }
+      const entries = res.data!.entries;
+      if (opts.json) {
+        console.log(JSON.stringify(entries, null, 2));
+        return;
+      }
+      if (entries.length === 0) {
+        console.log("No audit entries match the filter.");
+        return;
+      }
+      console.log(`${entries.length} audit entry(ies), newest first:`);
+      console.log();
+      for (const e of entries) {
+        const docPart = e.documentId ? ` doc=${e.documentId.slice(0, 8)}…` : "";
+        const projPart = e.projectId ? ` project=${e.projectId.slice(0, 8)}…` : "";
+        console.log(`  [${e.timestamp}] ${e.eventType}  actor=${e.actor ?? "?"}${docPart}${projPart}`);
+        if (e.metadata && Object.keys(e.metadata).length > 0) {
+          for (const [k, v] of Object.entries(e.metadata)) {
+            console.log(`     ${k}: ${JSON.stringify(v)}`);
+          }
+        }
+      }
+    });
+
+  // ── metadata-search ──────────────────────────────────────────────────
+  // Find documents by metadata only (no FTS query). Supports a JSON
+  // metadata filter and an optional updated_since timestamp for the
+  // catch-up workflow. Mirrors Cerefox `cerefox_metadata_search`.
+  root
+    .command("metadata-search")
+    .description("Find Clio documents by metadata-only filter (no FTS query). Top-level scalar matches.")
+    .requiredOption(
+      "--filter <json>",
+      "Metadata filter as JSON, e.g. '{\"role\":\"reflection\",\"artifact_type\":\"reflection-analysis\"}'",
+    )
+    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option(
+      "--updated-since <iso>",
+      "Only return docs whose updated_at >= this ISO-8601 timestamp (e.g. '2026-04-01T00:00:00Z')",
+    )
+    .option("--include-deleted", "Include soft-deleted docs")
+    .option("-n, --match-count <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      let metadataFilter: Record<string, string | number | boolean>;
+      try {
+        metadataFilter = JSON.parse(opts.filter);
+        if (!metadataFilter || typeof metadataFilter !== "object" || Array.isArray(metadataFilter)) {
+          throw new Error("filter must be a JSON object");
+        }
+      } catch (err) {
+        console.error(`metadata-search: --filter must be valid JSON object (got: ${opts.filter}). ${err instanceof Error ? err.message : ""}`);
+        process.exit(1);
+      }
+      const body = {
+        metadataFilter,
+        project: opts.project,
+        updatedSince: opts.updatedSince,
+        includeDeleted: opts.includeDeleted ? true : undefined,
+        matchCount: opts.matchCount,
+      };
+      const res = await post<{
+        documents: ClioDocument[];
+        metadataFilter: Record<string, unknown>;
+      }>("/api/clio/metadata-search", body);
+      if (!res.ok) {
+        console.error(`metadata-search failed: ${res.error}`);
+        process.exit(1);
+      }
+      const docs = res.data!.documents;
+      if (opts.json) {
+        console.log(JSON.stringify(res.data, null, 2));
+        return;
+      }
+      if (docs.length === 0) {
+        console.log("No documents match the filter.");
+        return;
+      }
+      console.log(`${docs.length} document(s) match ${JSON.stringify(metadataFilter)}:`);
+      console.log();
+      for (const d of docs) {
+        console.log(`  ${d.title}`);
+        console.log(`     [id: ${d.id}]  author: ${d.author}`);
+        console.log(`     project: ${d.projectId}`);
+        console.log(`     updated: ${d.updatedAt}`);
+        if (d.deletedAt) console.log(`     deleted_at: ${d.deletedAt}`);
+        console.log();
+      }
+    });
+
+  // ── metadata-keys ────────────────────────────────────────────────────
+  // Discovery: what metadata keys exist in the corpus, with sample values.
+  // Mirrors Cerefox `cerefox_list_metadata_keys`. Useful for agents
+  // figuring out "what filters can I apply?" before crafting a query.
+  root
+    .command("metadata-keys")
+    .description("List metadata keys + sample values currently in Clio (most-used first)")
+    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const qs = opts.project ? `?project=${encodeURIComponent(opts.project)}` : "";
+      const res = await get<{
+        keys: { key: string; documentCount: number; valueSamples: unknown[] }[];
+      }>(`/api/clio/metadata-keys${qs}`);
+      if (!res.ok) {
+        console.error(`metadata-keys failed: ${res.error}`);
+        process.exit(1);
+      }
+      const keys = res.data!.keys;
+      if (opts.json) {
+        console.log(JSON.stringify(keys, null, 2));
+        return;
+      }
+      if (keys.length === 0) {
+        console.log("No metadata keys found.");
+        return;
+      }
+      console.log(`${keys.length} metadata key(s) (most-used first):`);
+      console.log();
+      for (const k of keys) {
+        const samples = k.valueSamples.length ? `  samples: ${k.valueSamples.map((v) => JSON.stringify(v)).join(", ")}` : "";
+        console.log(`  ${k.key}  (${k.documentCount} doc${k.documentCount === 1 ? "" : "s"})${samples}`);
+      }
+    });
+
+  // ── delete (soft-delete) ──────────────────────────────────────────────
+  // Mirrors Cerefox `cerefox_delete_document`. Sets deleted_at; the
+  // doc, its chunks, and its versions remain in the DB so a subsequent
+  // `cfcf clio restore <id>` can undo it. Search + listDocuments
+  // exclude soft-deleted docs by default.
+  root
+    .command("delete <id>")
+    .description("Soft-delete a Clio document (excludes from search; restorable via `cfcf clio restore <id>`)")
+    .option("--author <name>", "Who is performing this delete (audit attribution; defaults to 'agent')")
+    .action(async (id: string, opts) => {
+      if (!(await checkServer())) return;
+      const res = await del<{ deleted: boolean; document: ClioDocument | null }>(
+        `/api/clio/documents/${encodeURIComponent(id)}`,
+        opts.author ? { author: opts.author } : undefined,
+      );
+      if (!res.ok) {
+        console.error(`Delete failed: ${res.error}`);
+        process.exit(1);
+      }
+      console.log(`Soft-deleted: ${id}`);
+      console.log(`  Restore with: cfcf clio restore ${id}`);
+    });
+
+  // ── restore ───────────────────────────────────────────────────────────
+  // Undo a soft-delete. Idempotent: restoring an already-live doc is
+  // a no-op (returns restored=false). Mirrors Cerefox
+  // `cerefox_restore_document`.
+  root
+    .command("restore <id>")
+    .description("Restore a soft-deleted Clio document")
+    .option("--author <name>", "Who is performing this restore (audit attribution)")
+    .action(async (id: string, opts) => {
+      if (!(await checkServer())) return;
+      const res = await post<{ restored: boolean; document: ClioDocument | null }>(
+        `/api/clio/documents/${encodeURIComponent(id)}/restore`,
+        opts.author ? { author: opts.author } : undefined,
+      );
+      if (!res.ok) {
+        console.error(`Restore failed: ${res.error}`);
+        process.exit(1);
+      }
+      const data = res.data!;
+      if (data.restored) {
+        console.log(`Restored: ${id}`);
+      } else {
+        console.log(`No-op: ${id} was not soft-deleted (idempotent restore).`);
+      }
+    });
+
   // ── docs: list ────────────────────────────────────────────────────────
   // Browse what's actually in Clio. Useful for "what did I ingest the
   // other day?" + dogfooding the iteration-loop's auto-ingest hooks.
@@ -359,10 +567,11 @@ function registerUnder(root: Command): void {
 
   docsCmd
     .command("list")
-    .description("List Clio documents (newest first). Soft-deleted docs are excluded.")
+    .description("List Clio documents (newest first). Soft-deleted docs are excluded by default.")
     .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
     .option("-n, --limit <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
     .option("--offset <n>", "Pagination offset (default 0)", (v) => parseInt(v, 10))
+    .option("--include-deleted", "Include soft-deleted docs in the list")
     .option("--json", "Emit raw JSON")
     .action(async (opts) => {
       if (!(await checkServer())) return;
@@ -370,6 +579,7 @@ function registerUnder(root: Command): void {
       if (opts.project) qs.set("project", opts.project);
       if (opts.limit) qs.set("limit", String(opts.limit));
       if (opts.offset) qs.set("offset", String(opts.offset));
+      if (opts.includeDeleted) qs.set("include_deleted", "true");
       const url = qs.toString() ? `/api/clio/documents?${qs.toString()}` : "/api/clio/documents";
       const res = await get<{ documents: ClioDocument[] }>(url);
       if (!res.ok) {
@@ -705,8 +915,13 @@ async function checkServer(): Promise<boolean> {
 
 function printHit(rank: number, h: SearchHit): void {
   const heading = h.headingPath.length > 0 ? ` > ${h.headingPath.join(" > ")}` : "";
+  // Title + score line. Followed by [id: <full-uuid>] in copy-pasteable
+  // form (5.12) so agents can: search → grep [id: → feed back into
+  // `cfcf clio ingest --document-id <uuid>` for updates. The chunk id
+  // is also shown but truncated since it isn't the agent's primary key.
   console.log(`  ${rank}. [${h.score.toFixed(3)}] ${h.docTitle}${heading}`);
-  console.log(`     ${h.docSource}  (chunk ${h.chunkIndex}, id=${h.chunkId.slice(0, 8)}…)`);
+  console.log(`     [id: ${h.documentId}]  author: ${h.docAuthor}`);
+  console.log(`     ${h.docSource}  (chunk ${h.chunkIndex}, chunk_id=${h.chunkId.slice(0, 8)}…)`);
   const snippet = h.content.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
   console.log(`     ${snippet}${h.content.length > 160 ? "…" : ""}`);
   console.log();

@@ -19,6 +19,25 @@
 
 ## Log
 
+### 2026-04-26 -- Clio Cerefox parity (5.11/5.12/5.13): four design choices worth recording
+
+Same branch (`iteration-5/clio-update-api`) ships 5.12 (agent-parity API surface) + 5.13 (audit log) + 5.11 follow-ups (soft-delete + restore mutation API) on top of 5.11 PR1's update + versioning. Four decisions baked into the implementation:
+
+**1. `author` is a typed column on `clio_documents`, not a metadata key.** Migration `0004_author_column` adds `author TEXT NOT NULL DEFAULT 'agent'` + an index. Cerefox keeps author only on the audit log; we promoted it to a first-class column because (a) `cfcf clio search` callers want author rendered next to each hit without a JOIN, (b) future audit/retention queries filter heavily on author, (c) the migration is cheap and the storage cost is negligible vs the query simplicity. Default `'agent'` backfills cleanly for pre-5.12 records.
+
+**2. Version row's `source` carries the OUTGOING author, not the trigger label.** Cerefox's `cerefox_document_versions.source` stores the snapshot's trigger label (`"file"` / `"paste"` / `"agent"` / `"manual"`). Our equivalent column instead stores **who wrote the content being archived** (`target.author` at update time). Rationale: `cfcf clio versions <doc-id>` answers "who wrote v3?" with `versions[0].source` directly; with Cerefox's interpretation, the same question requires a JOIN with the audit log. Different read-model optimisation; same column name.
+
+**3. Reads aren't audit-logged.** The `clio_audit_log` placeholder schema (from 0001) had `event_type` enum entries for `'search'` and `'get'`. We dropped those from the live writer. Reasons: (a) volume — every preload-context read in the iteration loop would write a row, dwarfing actual mutation entries; (b) the trust story 5.13 is wired for is "who changed what", not "who saw what"; (c) Cerefox's `cerefox_audit_log` is also write-only in practice. The columns stay (no migration churn) so a future "verbose mode" could turn read-logging back on without schema work.
+
+**4. Audit writes are best-effort + outside the mutation transaction.** A failure in `writeAudit` warns to stderr and returns; the underlying mutation still succeeds. Symmetric to Cerefox's `cerefox_create_audit_entry` which is `PERFORM`-ed (no return value checked) at the bottom of the ingest RPC. The alternative — wrap audit + mutation in one transaction — would mean a stuck audit could roll back successful ingests, which is the wrong failure mode for an observability layer. Idempotent no-op delete/restore (already-deleted / already-live) intentionally do NOT write audit rows; the user expectation is "did anything change?" → "no" → "no log entry".
+
+**Out of 5.11/5.12/5.13, tracked elsewhere:**
+- Retention auto-cleanup of old version rows + audit rows — small follow-up; pairs with the same write-paths.
+- Nested-object metadata containment (filter on `metadata.tags[]` etc.) — Cerefox v1 doesn't support this either; future ask.
+- Read-side audit (search/get logging) — see decision #3; doable when needed.
+
+---
+
 ### 2026-04-26 -- Clio update-doc API (5.11): three design choices worth recording
 
 PR1 of item 5.11 ships the `update_if_exists` + `document_id` ingest paths, version snapshots, and versioned content reads. Three decisions buried in the implementation that future readers should know about:

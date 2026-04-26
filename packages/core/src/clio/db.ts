@@ -25,6 +25,7 @@ import { mkdirSync, existsSync } from "fs";
 import migration_0001_initial from "./migrations/0001_initial.sql" with { type: "text" };
 import migration_0002_active_embedder from "./migrations/0002_active_embedder.sql" with { type: "text" };
 import migration_0003_relax_content_hash from "./migrations/0003_relax_content_hash.sql" with { type: "text" };
+import migration_0004_author_column from "./migrations/0004_author_column.sql" with { type: "text" };
 
 export interface ClioMigration {
   /** Filename used as a unique key in the `clio_migrations` tracking table. */
@@ -37,6 +38,7 @@ const MIGRATIONS: ClioMigration[] = [
   { filename: "0001_initial.sql", sql: migration_0001_initial },
   { filename: "0002_active_embedder.sql", sql: migration_0002_active_embedder },
   { filename: "0003_relax_content_hash.sql", sql: migration_0003_relax_content_hash },
+  { filename: "0004_author_column.sql", sql: migration_0004_author_column },
 ];
 
 /**

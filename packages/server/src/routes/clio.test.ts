@@ -360,6 +360,212 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(res.status).toBe(404);
   });
 
+  // ── 5.11 follow-up: soft-delete + restore ──────────────────────────
+  it("DELETE /api/clio/documents/:id soft-deletes + GET /content excludes it", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "ToDelete", content: "body" }),
+    });
+    const { id } = await r.json();
+
+    const del = await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    const delBody = await del.json();
+    expect(delBody.deleted).toBe(true);
+
+    // Search excludes it.
+    const search = await app.request("/api/clio/search?q=body");
+    const searchBody = await search.json();
+    expect(searchBody.hits.length).toBe(0);
+
+    // Default list excludes it.
+    const list = await app.request("/api/clio/documents");
+    const listBody = await list.json();
+    expect(listBody.documents.length).toBe(0);
+
+    // Explicit include surfaces it.
+    const listAll = await app.request("/api/clio/documents?include_deleted=true");
+    const listAllBody = await listAll.json();
+    expect(listAllBody.documents.length).toBe(1);
+  });
+
+  it("DELETE /api/clio/documents/:id is idempotent + 404s for unknown", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "X", content: "body" }),
+    });
+    const { id } = await r.json();
+
+    const first = await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+    expect(first.status).toBe(200);
+    const second = await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+    expect(second.status).toBe(200);
+
+    const bogus = await app.request(`/api/clio/documents/00000000-0000-4000-8000-000000000000`, { method: "DELETE" });
+    expect(bogus.status).toBe(404);
+  });
+
+  // ── 5.12: metadata-search + metadata-keys + author surfaced ────────
+  it("POST /api/clio/metadata-search filters by metadata + updatedSince", async () => {
+    const app = createApp();
+    for (const [title, role] of [["a", "reflection"], ["b", "dev"], ["c", "reflection"]] as const) {
+      await app.request("/api/clio/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: "p1", title, content: `body ${title}`, metadata: { role },
+        }),
+      });
+    }
+    const res = await app.request("/api/clio/metadata-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metadataFilter: { role: "reflection" } }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.documents.length).toBe(2);
+    expect(body.metadataFilter).toEqual({ role: "reflection" });
+  });
+
+  it("POST /api/clio/metadata-search rejects missing metadataFilter", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/metadata-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /api/clio/metadata-keys aggregates keys + samples", async () => {
+    const app = createApp();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "x", content: "body",
+        metadata: { role: "reflection", tier: "semantic" },
+      }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "y", content: "body 2",
+        metadata: { role: "dev" },
+      }),
+    });
+    const res = await app.request("/api/clio/metadata-keys");
+    expect(res.status).toBe(200);
+    const { keys } = await res.json();
+    const keyNames = keys.map((k: { key: string }) => k.key).sort();
+    expect(keyNames).toContain("role");
+    expect(keyNames).toContain("tier");
+  });
+
+  it("GET /api/clio/search hits include docAuthor", async () => {
+    const app = createApp();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Author surfaces", content: "findable",
+        author: "claude-code",
+      }),
+    });
+    const res = await app.request("/api/clio/search?q=findable");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.hits[0].docAuthor).toBe("claude-code");
+  });
+
+  // ── 5.13: audit log ────────────────────────────────────────────────
+  it("GET /api/clio/audit-log returns mutation events newest-first", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "audited", content: "v0", author: "test",
+      }),
+    });
+    const { id } = await r.json();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "audited", content: "v1", documentId: id, author: "test",
+      }),
+    });
+
+    const log = await app.request("/api/clio/audit-log");
+    expect(log.status).toBe(200);
+    const { entries } = await log.json();
+    expect(entries.map((e: { eventType: string }) => e.eventType)).toEqual([
+      "update-content", "create",
+    ]);
+  });
+
+  it("GET /api/clio/audit-log filters by event_type + actor + document_id", async () => {
+    const app = createApp();
+    const ingest = (title: string, author: string) =>
+      app.request("/api/clio/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: "p1", title, content: title + " body", author }),
+      });
+    await ingest("a", "alice");
+    await ingest("b", "bob");
+
+    const aliceOnly = await app.request("/api/clio/audit-log?actor=alice");
+    const aliceBody = await aliceOnly.json();
+    expect(aliceBody.entries.length).toBe(1);
+    expect(aliceBody.entries[0].actor).toBe("alice");
+
+    const createsOnly = await app.request("/api/clio/audit-log?event_type=create");
+    const createsBody = await createsOnly.json();
+    expect(createsBody.entries.length).toBe(2);
+
+    const bogus = await app.request("/api/clio/audit-log?event_type=invalid");
+    expect(bogus.status).toBe(400);
+  });
+
+  it("POST /api/clio/documents/:id/restore restores; idempotent on already-live", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Restorable", content: "body" }),
+    });
+    const { id } = await r.json();
+
+    await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+    const restore = await app.request(`/api/clio/documents/${id}/restore`, { method: "POST" });
+    expect(restore.status).toBe(200);
+    const body = await restore.json();
+    expect(body.restored).toBe(true);
+
+    // Now live again.
+    const list = await app.request("/api/clio/documents");
+    const listBody = await list.json();
+    expect(listBody.documents.length).toBe(1);
+
+    // Idempotent: restoring an already-live doc returns restored=false.
+    const noop = await app.request(`/api/clio/documents/${id}/restore`, { method: "POST" });
+    expect(noop.status).toBe(200);
+    const noopBody = await noop.json();
+    expect(noopBody.restored).toBe(false);
+
+    // 404 for unknown doc.
+    const bogus = await app.request(`/api/clio/documents/00000000-0000-4000-8000-000000000000/restore`, { method: "POST" });
+    expect(bogus.status).toBe(404);
+  });
+
   it("GET /api/clio/stats returns counts + migrations", async () => {
     const app = createApp();
     await app.request("/api/clio/ingest", {
