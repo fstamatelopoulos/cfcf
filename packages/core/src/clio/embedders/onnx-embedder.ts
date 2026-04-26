@@ -138,6 +138,11 @@ export class OnnxEmbedder implements Embedder {
         process.stderr.write(`${line}\n`);
       }
     };
+    // Cap off the current in-place line (newline) so the next append-
+    // only write lands cleanly on its own line. Idempotent. Use this
+    // before ANY append-only write, regardless of which file owns the
+    // active line — that's the bug fix for "[clio] ✓ X" being
+    // concatenated onto the previous file's progress bar.
     const finalizeLine = (): void => {
       if (isTty && activeFile !== null) {
         process.stderr.write("\n");
@@ -161,14 +166,22 @@ export class OnnxEmbedder implements Embedder {
       if (info.status === "progress") {
         const total = info.total ?? 0;
         const loaded = info.loaded ?? 0;
+        // No useful state to render yet (HF often emits a 0/0 priming
+        // event before any real bytes). Skip until we have either a
+        // known total or some loaded bytes.
+        if (total === 0 && loaded === 0) return;
+
         const prior = progressState.get(file) ?? {
           loaded: 0, total: 0, done: false,
           indeterminate: false, lastRenderAt: 0, lastRenderedPct: -1,
         };
-        // Heuristic: if total grew since last event, the upstream is
-        // streaming with unknown final size. Stick that file in
-        // indeterminate mode until status="done".
-        const indeterminate = prior.indeterminate || (prior.total > 0 && total > prior.total) || total === loaded;
+        // Indeterminate signal: total grew between events (the upstream
+        // is streaming with unknown final size). Latches once tripped.
+        // Cheap files that complete in a single progress event are NOT
+        // indeterminate — the previous `total === loaded` heuristic
+        // misclassified them, leading to bogus "[streaming...] 0.0 MB"
+        // lines for tiny config files.
+        const indeterminate = prior.indeterminate || (prior.total > 0 && total > prior.total);
         const next: FileState = {
           loaded, total, done: false,
           indeterminate, lastRenderAt: prior.lastRenderAt, lastRenderedPct: prior.lastRenderedPct,
@@ -210,11 +223,23 @@ export class OnnxEmbedder implements Embedder {
         progressState.set(file, next);
       } else if (info.status === "done") {
         const prior = progressState.get(file);
-        // Finalize the in-place line for this file (newline) and emit a
-        // tick so the user sees the file as completed in the scrollback.
-        if (activeFile === file) finalizeLine();
-        const finalSize = prior ? fmtMb(prior.loaded) : "?";
-        process.stderr.write(`[clio] ✓ ${file}  (${finalSize} MB)\n`);
+        // Finalize ANY in-place line first so the ✓ line lands cleanly
+        // on its own row -- regardless of which file owned the bar.
+        // Previously this only fired when activeFile === file, so a
+        // "done" event for file A while file B was rendering would
+        // concatenate "[clio] ✓ A" onto B's progress bar.
+        finalizeLine();
+        // Pick the best size we can: prior progress events → loaded;
+        // else done event's own total → total; else "cached" because
+        // the file was already on disk and HF emitted no progress
+        // events at all (most common for tokenizer.json + already-
+        // downloaded model files).
+        const finalSize = prior && prior.loaded > 0
+          ? `${fmtMb(prior.loaded)} MB`
+          : info.total && info.total > 0
+          ? `${fmtMb(info.total)} MB`
+          : "cached";
+        process.stderr.write(`[clio] ✓ ${file}  (${finalSize})\n`);
         if (prior) progressState.set(file, { ...prior, done: true });
       }
     };
