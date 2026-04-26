@@ -72,3 +72,12 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
+          # Default retention is 90 days; that's what hit the
+          # account-level artifact storage quota on the v0.9.0 merge
+          # (run 24943769789, "Artifact storage quota has been hit").
+          # 7 days is plenty for a build-debugging window without
+          # accumulating gigabytes per release. The future 5.5 release
+          # workflow will use a different mechanism (gh release create
+          # with the assets attached to a tag) so it isn't subject to
+          # this same per-run-artifact cap.
+          retention-days: 7

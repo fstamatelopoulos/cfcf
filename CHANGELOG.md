@@ -9,9 +9,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-### v0.9.0 release notes (preview, finalised on tag)
+## [0.9.0] -- 2026-04-25
 
-This release ships **Clio**, cf²'s persistent cross-workspace memory layer (item 5.7), plus a long tail of post-review refinements driven by dogfooding on this Intel Mac. The full Clio surface lands in one branch: SQLite + FTS5 + ONNX-embedder hybrid search, iteration-loop auto-ingest, full CLI + HTTP + web-UI exposure, and a `MemoryBackend` interface designed to swap in a future remote Cerefox adapter. Default mode is `auto` (hybrid when an embedder is active, else FTS), with a Cerefox-style 0.5 cosine threshold on the vector branch.
+This release ships **Clio**, cf²'s persistent cross-workspace memory layer (item 5.7), plus a long tail of post-review refinements driven by dogfooding on Intel Mac. The full Clio surface lands in one branch: SQLite + FTS5 + ONNX-embedder hybrid search, iteration-loop auto-ingest, full CLI + HTTP + web-UI exposure, and a `MemoryBackend` interface designed to swap in a future remote Cerefox adapter. Default mode is `auto` (hybrid when an embedder is active, else FTS), with a Cerefox-style 0.5 cosine threshold on the vector branch.
 
 Headline behaviour:
 - `cfcf init` walks you through agent picks (numbered list, validated) + downloads the default embedder (nomic-embed-text-v1.5, q8, 768d, ~130 MB) inline with a stderr progress bar; when init exits, hybrid search is ready.
