@@ -1,0 +1,356 @@
+/**
+ * Clio HTTP routes (item 5.7 PR1).
+ *
+ * Mounted onto the main Hono app via `registerClioRoutes(app)`. All
+ * endpoints under `/api/clio/*` plus the `PUT /api/workspaces/:id/clio-project`
+ * wire for `cfcf workspace set --project`.
+ *
+ * Response shapes match the CLI's `LocalClio`-returned types 1:1.
+ */
+
+import type { Hono } from "hono";
+import { getClioBackend } from "../clio-backend.js";
+import {
+  getWorkspace,
+  findWorkspaceByName,
+  updateWorkspace,
+  readConfig,
+  type IngestRequest,
+  type SearchRequest,
+  EMBEDDER_CATALOGUE,
+  findEmbedderEntry,
+  LocalClio,
+} from "@cfcf/core";
+
+export function registerClioRoutes(app: Hono): void {
+  // ── Projects ─────────────────────────────────────────────────────────
+
+  app.get("/api/clio/projects", async (c) => {
+    const backend = getClioBackend();
+    const projects = await backend.listProjects();
+    return c.json({ projects });
+  });
+
+  app.post("/api/clio/projects", async (c) => {
+    const body = await c.req.json<{ name?: string; description?: string }>()
+      .catch(() => ({} as { name?: string; description?: string }));
+    if (!body.name || !body.name.trim()) {
+      return c.json({ error: "name is required" }, 400);
+    }
+    try {
+      const backend = getClioBackend();
+      const project = await backend.createProject({
+        name: body.name.trim(),
+        description: body.description?.trim() || undefined,
+      });
+      return c.json(project, 201);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.toLowerCase().includes("already exists")) {
+        return c.json({ error: message }, 409);
+      }
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.get("/api/clio/projects/:idOrName", async (c) => {
+    const idOrName = c.req.param("idOrName");
+    const backend = getClioBackend();
+    const project = await backend.getProject(idOrName);
+    if (!project) return c.json({ error: "Clio Project not found" }, 404);
+    return c.json(project);
+  });
+
+  // ── Ingest ───────────────────────────────────────────────────────────
+
+  app.post("/api/clio/ingest", async (c) => {
+    let body: Partial<IngestRequest>;
+    try {
+      body = await c.req.json<Partial<IngestRequest>>();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (!body.project || !body.title || !body.content) {
+      return c.json({ error: "project, title, and content are required" }, 400);
+    }
+    try {
+      const backend = getClioBackend();
+      const result = await backend.ingest({
+        project: body.project,
+        title: body.title,
+        content: body.content,
+        source: body.source,
+        metadata: body.metadata,
+        reviewStatus: body.reviewStatus,
+      });
+      return c.json(result, result.created ? 201 : 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // ── Search ───────────────────────────────────────────────────────────
+
+  app.get("/api/clio/search", async (c) => {
+    const q = c.req.query("q") ?? "";
+    if (!q.trim()) {
+      return c.json({ error: "q is required" }, 400);
+    }
+    const project = c.req.query("project") || undefined;
+    // Resolve the search mode in this order (most specific wins):
+    //   1. Explicit ?mode= query param  (per-call override; CLI's --mode)
+    //   2. clio.defaultSearchMode in the global config
+    //      - "auto" (the default) checks the active-embedder row:
+    //          present → "hybrid", absent → "fts"
+    //      - concrete values (fts/semantic/hybrid) bypass the auto check
+    //   3. Hard fallback "fts" if config can't be read for any reason.
+    let mode: SearchRequest["mode"] = (c.req.query("mode") as SearchRequest["mode"]) || undefined;
+    if (!mode) {
+      try {
+        const config = await readConfig();
+        const configured = config?.clio?.defaultSearchMode ?? "auto";
+        if (configured === "auto") {
+          const backend = getClioBackend();
+          const active = backend instanceof LocalClio ? backend.getActiveEmbedderRecord() : null;
+          mode = active ? "hybrid" : "fts";
+        } else {
+          mode = configured;
+        }
+      } catch {
+        mode = "fts";
+      }
+    }
+    const matchCountStr = c.req.query("match_count");
+    const matchCount = matchCountStr ? parseInt(matchCountStr, 10) : undefined;
+    if (matchCountStr && (isNaN(matchCount as number) || (matchCount as number) < 1)) {
+      return c.json({ error: "match_count must be a positive integer" }, 400);
+    }
+
+    // Metadata filter: JSON-encoded in the `metadata` query param for
+    // simplicity. e.g. ?metadata={"role":"reflection"}
+    let metadata: SearchRequest["metadata"];
+    const metaRaw = c.req.query("metadata");
+    if (metaRaw) {
+      try {
+        metadata = JSON.parse(metaRaw) as SearchRequest["metadata"];
+      } catch {
+        return c.json({ error: "metadata must be valid JSON" }, 400);
+      }
+    }
+
+    // Minimum cosine similarity for the vector-only branch (hybrid) /
+    // every result (semantic). Resolution order, like search mode:
+    //   1. ?min_score= query param (per-call)
+    //   2. clio.minSearchScore in the global config
+    //   3. built-in default 0.5 (Cerefox parity)
+    // Pure FTS is unaffected -- LocalClio's searchFts ignores minScore.
+    let minScore: number | undefined;
+    const minScoreStr = c.req.query("min_score");
+    if (minScoreStr !== undefined) {
+      const n = parseFloat(minScoreStr);
+      if (isNaN(n) || n < 0 || n > 1) {
+        return c.json({ error: "min_score must be a number in [0, 1]" }, 400);
+      }
+      minScore = n;
+    }
+    if (minScore === undefined) {
+      try {
+        const config = await readConfig();
+        minScore = config?.clio?.minSearchScore;
+      } catch { /* fall through */ }
+    }
+    if (minScore === undefined) minScore = 0.5;
+
+    try {
+      const backend = getClioBackend();
+      const res = await backend.search({ query: q, project, matchCount, mode, metadata, minScore });
+      return c.json(res);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // ── Documents ────────────────────────────────────────────────────────
+
+  app.get("/api/clio/documents/:id", async (c) => {
+    const id = c.req.param("id");
+    const backend = getClioBackend();
+    const doc = await backend.getDocument(id);
+    if (!doc) return c.json({ error: "Document not found" }, 404);
+    return c.json(doc);
+  });
+
+  // List documents (newest-first, optional ?project=, ?limit=, ?offset=).
+  // Powers `cfcf clio docs list`. Soft-deleted docs are excluded.
+  app.get("/api/clio/documents", async (c) => {
+    const project = c.req.query("project") || undefined;
+    const limitStr = c.req.query("limit");
+    const offsetStr = c.req.query("offset");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    const offset = offsetStr ? parseInt(offsetStr, 10) : undefined;
+    if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
+      return c.json({ error: "limit must be a positive integer" }, 400);
+    }
+    if (offsetStr && (isNaN(offset as number) || (offset as number) < 0)) {
+      return c.json({ error: "offset must be a non-negative integer" }, 400);
+    }
+    const backend = getClioBackend();
+    try {
+      const docs = await backend.listDocuments({ project, limit, offset });
+      return c.json({ documents: docs });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // ── Embedder catalogue + install + set (PR2) ─────────────────────────
+
+  app.get("/api/clio/embedders", async (c) => {
+    const backend = getClioBackend();
+    const active = backend instanceof LocalClio ? backend.getActiveEmbedderRecord() : null;
+    const catalogue = EMBEDDER_CATALOGUE.map((e) => ({
+      name: e.name,
+      dim: e.dim,
+      approxSizeMb: e.approxSizeMb,
+      description: e.description,
+      recommendedChunkMaxChars: e.recommendedChunkMaxChars,
+      recommendedExpansionRadius: e.recommendedExpansionRadius,
+      active: active?.name === e.name,
+    }));
+    return c.json({ catalogue });
+  });
+
+  app.post("/api/clio/embedders/install", async (c) => {
+    const body = await c.req.json<{ name?: string; force?: boolean }>().catch(() => ({}) as { name?: string; force?: boolean });
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+    const entry = findEmbedderEntry(body.name);
+    if (!entry) return c.json({ error: `Unknown embedder "${body.name}". Run 'cfcf clio embedder list' to see supported embedders.` }, 400);
+
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support local embedders" }, 400);
+    }
+
+    try {
+      const record = await backend.installActiveEmbedder(entry, { force: !!body.force, loadNow: true });
+      return c.json({ active: record, downloaded: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
+  });
+
+  app.post("/api/clio/embedders/set", async (c) => {
+    const body = await c.req.json<{ name?: string; force?: boolean; reindex?: boolean }>()
+      .catch(() => ({}) as { name?: string; force?: boolean; reindex?: boolean });
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+    const entry = findEmbedderEntry(body.name);
+    if (!entry) return c.json({ error: `Unknown embedder "${body.name}"` }, 400);
+
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support embedders" }, 400);
+    }
+    try {
+      // `--reindex` implies force: we're about to re-embed everything
+      // anyway, so allow the switch past the guardrail.
+      const record = await backend.installActiveEmbedder(entry, {
+        force: !!body.force || !!body.reindex,
+        loadNow: !!body.reindex, // pre-warm the model if we're about to use it
+      });
+      let reindexResult = null;
+      if (body.reindex) {
+        reindexResult = await backend.reindex();
+      }
+      return c.json({ active: record, reindex: reindexResult });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  app.post("/api/clio/reindex", async (c) => {
+    const body = await c.req.json<{ project?: string; force?: boolean; batchSize?: number }>()
+      .catch(() => ({}) as { project?: string; force?: boolean; batchSize?: number });
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support reindex" }, 400);
+    }
+    try {
+      const result = await backend.reindex({
+        project: body.project,
+        force: !!body.force,
+        batchSize: body.batchSize,
+      });
+      return c.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // ── Stats ────────────────────────────────────────────────────────────
+
+  app.get("/api/clio/stats", async (c) => {
+    const backend = getClioBackend();
+    const stats = await backend.stats();
+    return c.json(stats);
+  });
+
+  // ── Workspace Clio Project binding (backs `cfcf workspace set --project`) ─
+
+  app.put("/api/workspaces/:id/clio-project", async (c) => {
+    const id = c.req.param("id");
+    const workspace =
+      (await getWorkspace(id)) ?? (await findWorkspaceByName(id));
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+
+    let body: { project?: string; migrateHistory?: boolean; allInProject?: boolean };
+    try {
+      body = await c.req.json<typeof body>();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (!body.project || !body.project.trim()) {
+      return c.json({ error: "project is required" }, 400);
+    }
+
+    const newName = body.project.trim();
+    const oldName = workspace.clioProject;
+
+    // Resolve (auto-create) the new Clio Project. Refuses to auto-create
+    // from a raw UUID, so callers pass a human name.
+    const backend = getClioBackend();
+    let newProject;
+    try {
+      newProject = await backend.resolveProject(newName, { createIfMissing: true });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+
+    // Migrate historical docs if requested. Scope: by default, only this
+    // workspace's own docs move (filtered by metadata.workspace_id); with
+    // `allInProject=true` every doc in the old Clio Project is rekeyed.
+    let migrated = 0;
+    if (body.migrateHistory && oldName) {
+      const oldProject = await backend.getProject(oldName);
+      if (oldProject) {
+        migrated = await backend.migrateDocumentsBetweenProjects(
+          oldProject.id,
+          newProject.id,
+          body.allInProject ? { allInProject: true } : { workspaceId: workspace.id },
+        );
+      }
+    }
+
+    // Persist the new assignment on the workspace config.
+    const updated = await updateWorkspace(workspace.id, { clioProject: newProject.name });
+    if (!updated) return c.json({ error: "Failed to update workspace" }, 500);
+
+    return c.json({ workspace: updated, migrated });
+  });
+}

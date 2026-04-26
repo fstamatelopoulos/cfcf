@@ -106,6 +106,46 @@ export interface CfcfGlobalConfig {
    *   - "needs_refinement_or_blocked":  stop on anything but READY
    */
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
+  /**
+   * Global Clio defaults (item 5.7). Each workspace inherits these unless
+   * it has its own `clio` override on `WorkspaceConfig`. See
+   * `docs/design/clio-memory-layer.md` §5.2.
+   */
+  clio?: ClioGlobalConfig;
+}
+
+export interface ClioGlobalConfig {
+  /** Default ingest policy applied to new workspaces. Defaults to "summaries-only". */
+  ingestPolicy?: "summaries-only" | "all" | "off";
+  /**
+   * Embedder the user chose during `cfcf init` (or most recent
+   * `cfcf clio embedder install <name>`). Used as the default when the
+   * user runs `cfcf clio embedder install` with no arg -- lets the
+   * "re-run after init failed" path work without re-specifying the
+   * name. Cleared if the user opts to stay in FTS-only mode.
+   */
+  preferredEmbedder?: string;
+  /**
+   * Default search mode used by `cfcf clio search` (and by anyone
+   * hitting `/api/clio/search` without an explicit `mode` query param).
+   * Defaults to `"auto"`, which resolves at search time:
+   *   - active embedder present → "hybrid" (RRF over FTS + vector)
+   *   - no active embedder       → "fts"
+   * Set to a concrete value (`fts`, `semantic`, `hybrid`) to force that
+   * mode regardless of embedder state. Per-call `mode` (CLI flag /
+   * query param) still wins when set.
+   */
+  defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
+  /**
+   * Minimum cosine similarity (raw, 0.0–1.0) for the vector-only branch
+   * of hybrid search and for every result of semantic search. Ported
+   * from Cerefox's `CEREFOX_MIN_SEARCH_SCORE`. Defaults to 0.5 when
+   * unset. FTS-matched chunks bypass this filter in hybrid mode (the
+   * threshold only filters vector-only candidates). Per-call values
+   * win over this config. See `docs/decisions-log.md` 2026-04-25
+   * "Hybrid search threshold" for rationale + calibration notes.
+   */
+  minSearchScore?: number;
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;
@@ -191,6 +231,35 @@ export interface WorkspaceConfig {
   status?: WorkspaceStatus;
   /** Per-workspace notification override (defaults to global config) */
   notifications?: NotificationConfig;
+  /**
+   * Clio Project assignment (item 5.7). Name of the Clio Project this
+   * workspace contributes memories to. Undefined → auto-route to the
+   * named `"default"` Project on first ingest (user confirms the first
+   * time). See `docs/design/clio-memory-layer.md` §2 for the
+   * workspace-vs-Project distinction.
+   */
+  clioProject?: string;
+  /**
+   * Per-workspace Clio configuration override (item 5.7). When unset the
+   * workspace inherits the global `CfcfGlobalConfig.clio` defaults.
+   */
+  clio?: ClioWorkspaceConfig;
+}
+
+export interface ClioWorkspaceConfig {
+  /**
+   * Controls which artifacts cf² auto-ingests at iteration boundaries.
+   * See `docs/design/clio-memory-layer.md` §5.2.
+   *   - "summaries-only" (default): curated signal -- reflection-analysis,
+   *     architect-review, tagged decision-log entries, cfcf-generated
+   *     iteration-summary. Good for cross-workspace transfer.
+   *   - "all": above + every iteration-log, every iteration-handoff, every
+   *     judge-assessment, every decision-log append. High-signal
+   *     workspaces / dogfooding.
+   *   - "off": no cfcf-auto ingest. User + agents can still push via
+   *     `cfcf clio ingest` / `POST /api/clio/ingest` on demand.
+   */
+  ingestPolicy?: "summaries-only" | "all" | "off";
 }
 
 // --- Server Communication ---

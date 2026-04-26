@@ -16,6 +16,10 @@ import {
   getAdapterNames,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_PAUSE_EVERY,
+  EMBEDDER_CATALOGUE,
+  DEFAULT_EMBEDDER_NAME,
+  findEmbedderEntry,
+  LocalClio,
 } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { createInterface } from "readline";
@@ -102,7 +106,8 @@ export function registerInitCommand(program: Command): void {
       console.log("Configuration");
       console.log("-------------");
 
-      console.log(`Available agents: ${available.join(", ")}`);
+      console.log("Detected agents:");
+      available.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
       console.log();
       console.log("Four agent roles (each independently configurable):");
       console.log("  - Dev agent: writes code, runs tests");
@@ -111,40 +116,33 @@ export function registerInitCommand(program: Command): void {
       console.log("  - Documenter agent: produces final polished documentation");
       console.log();
 
+      // Pick an agent by number against the detected list. Returns the
+      // chosen adapter name; never returns an unsupported value (loops
+      // until the user types something valid OR accepts the default).
+      // Default index = position of `defaultName` in `available`, or 1.
+      // `defaultName` is the value that came from createDefaultConfig --
+      // e.g. claude-code if both are detected -- so pressing Enter keeps
+      // the conventional pick.
+      async function pickAgent(role: string, defaultName: string): Promise<string> {
+        if (available.length === 1) return available[0];
+        const defaultIdx = Math.max(available.indexOf(defaultName), 0) + 1;
+        while (true) {
+          const raw = await prompt(`${role} agent (1-${available.length})`, String(defaultIdx));
+          const n = parseInt(raw, 10);
+          if (!Number.isNaN(n) && n >= 1 && n <= available.length) {
+            return available[n - 1];
+          }
+          console.log(`  Invalid choice "${raw}". Enter a number 1-${available.length}.`);
+        }
+      }
+
       if (available.length > 1) {
-        const devChoice = await prompt(
-          "Dev agent",
-          config.devAgent.adapter,
-        );
-        if (available.includes(devChoice)) {
-          config.devAgent.adapter = devChoice;
-        }
-
-        const judgeChoice = await prompt(
-          "Judge agent",
-          config.judgeAgent.adapter,
-        );
-        if (available.includes(judgeChoice)) {
-          config.judgeAgent.adapter = judgeChoice;
-        }
-
-        const architectChoice = await prompt(
-          "Architect agent",
-          config.architectAgent.adapter,
-        );
-        if (available.includes(architectChoice)) {
-          config.architectAgent.adapter = architectChoice;
-        }
-
-        const documenterChoice = await prompt(
-          "Documenter agent",
-          config.documenterAgent.adapter,
-        );
-        if (available.includes(documenterChoice)) {
-          config.documenterAgent.adapter = documenterChoice;
-        }
+        config.devAgent.adapter        = await pickAgent("Dev",        config.devAgent.adapter);
+        config.judgeAgent.adapter      = await pickAgent("Judge",      config.judgeAgent.adapter);
+        config.architectAgent.adapter  = await pickAgent("Architect",  config.architectAgent.adapter);
+        config.documenterAgent.adapter = await pickAgent("Documenter", config.documenterAgent.adapter);
       } else {
-        console.log(`Using ${available[0]} for all roles.`);
+        console.log(`Only one agent detected (${available[0]}); using for all roles.`);
         config.devAgent.adapter = available[0];
         config.judgeAgent.adapter = available[0];
         config.architectAgent.adapter = available[0];
@@ -285,17 +283,201 @@ export function registerInitCommand(program: Command): void {
       }
       config.permissionsAcknowledged = true;
 
-      // Step 4: Save config
+      // Step 4: Clio memory-layer onboarding (item 5.7, refined 2026-04-23).
+      // Pick-equals-install: if the user selects an embedder, download
+      // + activate it directly from the CLI (no server needed; the
+      // install is a LocalClio + transformers.js operation). The
+      // user's choice is also saved as `preferredEmbedder` so a failed
+      // install can be retried with `cfcf clio embedder install` (no arg).
+      console.log();
+      console.log("Clio memory layer");
+      console.log("=================");
+      console.log("Clio is cfcf's cross-workspace memory: cf² agents ingest curated");
+      console.log("lessons (reflection analyses, architect reviews, decision-log");
+      console.log("entries) after each iteration so sibling workspaces can query");
+      console.log("them. Two modes:");
+      console.log();
+      console.log("  * FTS keyword search -- works immediately, no setup.");
+      console.log("  * Hybrid + semantic vector search -- requires an embedder model.");
+      console.log("    Picking one below triggers a one-time download (~20-430 MB");
+      console.log("    depending on choice) from HuggingFace into ~/.cfcf/models/.");
+      console.log();
+      console.log("Available embedders:");
+      EMBEDDER_CATALOGUE.forEach((e, i) => {
+        const mark = e.name === DEFAULT_EMBEDDER_NAME ? "★" : " ";
+        console.log(`  ${mark} ${i + 1}) ${e.name.padEnd(26)}  dim=${e.dim.toString().padStart(4)}  ~${e.approxSizeMb.toString().padStart(4)} MB`);
+        console.log(`       ${e.description}`);
+      });
+      console.log("     S) Skip -- Clio runs in FTS-only mode until you install one.");
+      console.log();
+      const embedderPick = await prompt(
+        `Embedder choice (1-${EMBEDDER_CATALOGUE.length} / S)`,
+        String(EMBEDDER_CATALOGUE.findIndex((e) => e.name === DEFAULT_EMBEDDER_NAME) + 1),
+      );
+      let embedderPicked: string | null = null;
+      const pickTrim = embedderPick.trim().toUpperCase();
+      if (pickTrim === "S" || pickTrim === "SKIP") {
+        embedderPicked = null;
+      } else {
+        const idx = parseInt(pickTrim, 10);
+        if (!isNaN(idx) && idx >= 1 && idx <= EMBEDDER_CATALOGUE.length) {
+          embedderPicked = EMBEDDER_CATALOGUE[idx - 1].name;
+        } else {
+          console.log(`Unrecognised choice "${embedderPick}"; defaulting to skip. You can install an embedder later.`);
+        }
+      }
+
+      // Record the user's pick on the global config so `cfcf clio
+      // embedder install` (no arg) can default to it. Also cleared
+      // when user explicitly picks Skip.
+      if (embedderPicked) {
+        config.clio = { ...(config.clio ?? {}), preferredEmbedder: embedderPicked };
+      } else if (config.clio) {
+        const next = { ...config.clio };
+        delete (next as { preferredEmbedder?: string }).preferredEmbedder;
+        config.clio = Object.keys(next).length ? next : undefined;
+      }
+
+      // Step 5: Save config (before install, so even if install fails
+      // the user's pick is persisted).
       await writeConfig(config);
       console.log();
       console.log(`Configuration saved to: ${getConfigPath()}`);
+
+      // Step 6: Install the embedder now (if picked). Happens AFTER
+      // config write so the preferred-embedder record survives a
+      // failed download (retryable via `cfcf clio embedder install`).
+      // 2026-04-25: init DOES trigger the HF download (loadNow: true)
+      // and the underlying loadNow now actually warms the pipeline
+      // (Embedder.warmup() added the same day; the previous loadNow
+      // implementation only constructed the embedder shell). When this
+      // returns successfully the model is on disk in ~/.cfcf/models/,
+      // active in the DB, and the inference pipeline is materialised --
+      // first `cfcf clio search` is instant.
+      let embedderInstalled = false;
+      let installError: string | null = null;
+      let verifiedActive: { name: string; dim: number; recommendedChunkMaxChars: number } | null = null;
+      if (embedderPicked) {
+        const entry = findEmbedderEntry(embedderPicked);
+        if (!entry) {
+          installError = `Unknown embedder "${embedderPicked}" (catalogue mismatch?)`;
+        } else {
+          console.log();
+          console.log(`Installing embedder: ${entry.name} (~${entry.approxSizeMb} MB download)`);
+          console.log("First run only; subsequent uses read from ~/.cfcf/models/.");
+          console.log();
+          let clio: LocalClio | null = null;
+          try {
+            clio = new LocalClio();
+            await clio.installActiveEmbedder(entry, { force: false, loadNow: true });
+            const record = clio.getActiveEmbedderRecord();
+            if (!record || record.name !== entry.name) {
+              throw new Error(
+                `post-install check: expected active embedder "${entry.name}", got "${record?.name ?? "(none)"}"`,
+              );
+            }
+            verifiedActive = {
+              name: record.name,
+              dim: record.dim,
+              recommendedChunkMaxChars: record.recommendedChunkMaxChars,
+            };
+            embedderInstalled = true;
+            console.log();
+            console.log(`✓ Clio ready: ${verifiedActive.name} (dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
+          } catch (err) {
+            installError = err instanceof Error ? err.message : String(err);
+          } finally {
+            if (clio) {
+              try { await clio.close(); } catch { /* best-effort */ }
+            }
+          }
+        }
+      }
+
+      // Classify the install error so the message + retry hint match
+      // the actual failure mode. Three buckets:
+      //   - module-resolution: the @huggingface/transformers JS package
+      //     couldn't be loaded from disk. Almost always a dev-mode issue
+      //     (running the compiled binary from a path where the upward
+      //     node_modules walk doesn't find the externalised deps). The
+      //     real installer (5.5) ships a colocated node_modules/ next to
+      //     the binary so end users never see this.
+      //   - network: the JS package loaded fine, but transformers.js
+      //     couldn't reach HuggingFace (offline / proxy / DNS / 403).
+      //     Retrying from a network-connected shell is the right advice.
+      //   - other: anything else -- print the raw error.
+      const errorClass = installError ? classifyInstallError(installError) : null;
       console.log();
       console.log("Next steps:");
       console.log("  1. Start the server:    cfcf server start");
-      console.log("  2. Create a workspace:  cfcf workspace init --repo <path> --name <name>");
-      console.log("  3. Populate problem-pack/problem.md and success.md with your problem definition");
-      console.log("  4. Review with:         cfcf review --workspace <name>  (optional)");
-      console.log("  5. Launch development:  cfcf run --workspace <name>");
+      if (embedderInstalled && verifiedActive) {
+        console.log(`       (Clio ready: ${verifiedActive.name}, dim=${verifiedActive.dim}, chunk=${verifiedActive.recommendedChunkMaxChars} chars)`);
+      } else if (errorClass === "module-resolution") {
+        console.log(`  2. Fix the module path, then re-run: cfcf init --force`);
+        console.log(`       This is a dev-mode issue: the binary couldn't load the JS`);
+        console.log(`       package '@huggingface/transformers' from disk. The HF`);
+        console.log(`       download did NOT happen. Three workarounds:`);
+        console.log(`         (a) NODE_PATH=$(realpath packages/core/node_modules) ./cfcf-binary init --force`);
+        console.log(`         (b) (cd packages/core && /full/path/to/cfcf-binary init --force)`);
+        console.log(`         (c) bun run dev:cli init --force`);
+        console.log(`       Real-installer users (item 5.5) won't hit this -- the`);
+        console.log(`       installer ships node_modules/ colocated with the binary.`);
+      } else if (errorClass === "network") {
+        console.log(`  2. Retry embedder install (HF download failed): cfcf clio embedder install`);
+        console.log(`       (your pick "${embedderPicked}" is saved; rerun from a network-connected shell)`);
+      } else if (installError) {
+        console.log(`  2. Retry embedder install: cfcf clio embedder install`);
+        console.log(`       (your pick "${embedderPicked}" is saved)`);
+      } else {
+        console.log(`       (Clio: FTS-only mode -- install an embedder later with: cfcf clio embedder install ${DEFAULT_EMBEDDER_NAME})`);
+      }
+      const nextStep = embedderInstalled || !installError ? 2 : 3;
+      console.log(`  ${nextStep}. Create a workspace:   cfcf workspace init --repo <path> --name <name>`);
+      console.log(`  ${nextStep + 1}. Populate problem-pack/problem.md and success.md with your problem definition`);
+      console.log(`  ${nextStep + 2}. Review with:          cfcf review --workspace <name>  (optional)`);
+      console.log(`  ${nextStep + 3}. Launch development:   cfcf run --workspace <name>`);
+      console.log();
+      console.log("Note: if cfcf server is currently running, restart it so the new");
+      console.log("config + active embedder take effect (the server caches both at");
+      console.log("startup):");
+      console.log("    cfcf server stop && cfcf server start");
+      if (installError) {
+        console.log();
+        const label = errorClass === "module-resolution"
+          ? "Install error (dev-mode module-resolution -- see step 2 above)"
+          : errorClass === "network"
+          ? "Install error (network/HuggingFace failure -- see step 2 above)"
+          : "Install error (captured -- you can retry)";
+        console.log(`${label}: ${installError}`);
+      }
       console.log();
     });
+}
+
+/**
+ * Classify an embedder-install error so init can show a useful retry
+ * hint. We can't tell from a single string with 100% confidence, but
+ * the keyword heuristics catch the two common cases (Bun/Node module
+ * resolution failure for the externalised JS package, and
+ * transformers.js's network/HF failures).
+ */
+function classifyInstallError(message: string): "module-resolution" | "network" | "other" {
+  const m = message.toLowerCase();
+  // Bun's ResolveMessage / Node's MODULE_NOT_FOUND wording.
+  if (m.includes("cannot find module") || m.includes("resolvemessage") || m.includes("module_not_found")) {
+    return "module-resolution";
+  }
+  // transformers.js / fetch failures during the HF download.
+  if (
+    m.includes("enotfound") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("certificate") ||
+    m.includes("huggingface") ||
+    m.includes("fetch failed") ||
+    m.includes("network")
+  ) {
+    return "network";
+  }
+  return "other";
 }

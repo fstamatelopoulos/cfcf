@@ -17,6 +17,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Five agent roles**: dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack), reflection (cross-iteration strategic review), documenter (produces final docs). Each role independently configurable (adapter + model).
 - **Three commits per iteration** when reflection runs: `cfcf iteration N dev (...)`, `cfcf iteration N judge (...)`, `cfcf iteration N reflect (<health>): <key_observation>`.
 - **Async execution**: iterate endpoint returns 202, CLI polls for status.
+- **Clio cross-workspace memory** (item 5.7, v0.9.0): persistent SQLite knowledge layer at `~/.cfcf/clio.db`. Shared across all workspaces, scoped by named **Clio Project**. FTS5 keyword search out of the box; install an embedder via `cfcf clio embedder install` to enable hybrid (RRF) + semantic search. Iteration-loop auto-ingests reflection analyses, architect reviews, decision-log entries, iteration summaries (gated by `workspace.clio.ingestPolicy`). All agent roles read Clio via `cfcf-docs/clio-relevant.md` (top-k hits matched against `problem.md`) + the `cfcf-docs/clio-guide.md` cue card. Backend code lives behind a `MemoryBackend` interface so a future remote-Cerefox adapter can swap in cleanly.
 
 ## Key Design Principles
 
@@ -69,17 +70,35 @@ packages/
                          #   (preparing -> dev -> judging -> reflecting? -> deciding)
     workspace-history.ts # history.json: review / iteration / reflection / document events
     adapters/            # Agent adapter implementations (claude-code, codex)
-    templates/           # cfcf-docs/ file templates (16 entries incl. reflection + iteration-log)
+    templates/           # cfcf-docs/ file templates (17 entries incl. reflection + iteration-log + clio-guide)
+    clio/                # Clio memory layer (item 5.7)
+      backend/
+        types.ts           # MemoryBackend interface (swap point for future CerefoxRemote)
+        local-clio.ts      # LocalClio: SQLite + FTS5 + hybrid RRF + reindex
+      embedders/
+        types.ts           # Embedder interface (warmup, embed, close)
+        catalogue.ts       # Built-in embedder catalogue (nomic default + bge / MiniLM)
+        onnx-embedder.ts   # @huggingface/transformers wrapper, lazy HF download, dtype select
+        store.ts           # clio_active_embedder row read/write
+      chunker.ts         # Cerefox markdown chunker (1:1 port)
+      db.ts              # bun:sqlite open + migrations runner
+      migrations/        # 0001_initial.sql + 0002_active_embedder.sql
+      ingest.ts          # iteration-loop auto-ingest hooks (reflection, architect, …)
+      types.ts           # Clio domain types (Document, Chunk, Project, SearchRequest, …)
   server/src/
     app.ts               # Route definitions (testable without binding to port)
     start.ts             # Server lifecycle (start/stop, PID file)
     iteration-runner.ts  # Single iteration execution (manual mode, backwards compat)
+    clio-backend.ts      # MemoryBackend singleton + self-heal on deleted clio.db
+    routes/clio.ts       # /api/clio/* (search with mode + min_score, ingest, list/get
+                         #   documents, projects, embedders, reindex)
   cli/src/
     client.ts            # HTTP client for server communication
     commands/            # CLI command implementations
-      init.ts            # First-run interactive setup (asks for all 5 roles + reflectSafeguardAfter)
+      init.ts            # First-run interactive setup (numbered agent picker, embedder
+                         #   pick + inline HF download with progress bar, error classifier)
       server.ts          # Server start/stop/status
-      workspace.ts       # Workspace init/list/show/delete
+      workspace.ts       # Workspace init/list/show/delete (--project for Clio assignment)
       config.ts          # Global config show/edit
       run.ts             # Start iteration loop (agent) or single iteration (manual)
       review.ts          # Solution Architect review (cfcf review)
@@ -88,6 +107,9 @@ packages/
       document.ts        # Generate final docs (cfcf document)
       reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
+      clio.ts            # cfcf clio {search,ingest,get,docs list,projects,project,
+                         #   embedder {list,active,install,set},reindex,stats}
+                         #   + cfcf memory alias
   web/src/
     App.tsx              # Root router (dashboard / workspace / server)
     pages/               # Dashboard, WorkspaceDetail, ServerInfo

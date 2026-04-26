@@ -20,6 +20,7 @@ import {
   getAllActiveProcesses,
   updateHistoryEvent,
 } from "@cfcf/core";
+import { closeClioBackend } from "./clio-backend.js";
 
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
 let shuttingDown = false;
@@ -75,6 +76,11 @@ async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<v
     // Kill all the processes
     killAllActiveProcesses();
   }
+
+  // Close Clio backend (flushes WAL, releases SQLite handle)
+  try {
+    await closeClioBackend();
+  } catch { /* ignore */ }
 
   // Flush PID file and stop the HTTP listener
   try {

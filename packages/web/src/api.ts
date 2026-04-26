@@ -76,6 +76,16 @@ export interface GlobalConfig {
   autoDocumenter?: boolean;
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
   notifications?: NotificationConfig;
+  /**
+   * Clio (item 5.7) global config. Mirrors `ClioGlobalConfig` in
+   * @cfcf/core. Per-workspace overrides live on `WorkspaceConfig.clio`.
+   */
+  clio?: {
+    ingestPolicy?: "summaries-only" | "all" | "off";
+    preferredEmbedder?: string;
+    defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
+    minSearchScore?: number;
+  };
 }
 
 export function fetchGlobalConfig(): Promise<GlobalConfig> {

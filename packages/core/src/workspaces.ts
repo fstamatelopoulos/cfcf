@@ -51,6 +51,12 @@ export async function createWorkspace(opts: {
   documenterAgent?: { adapter: string; model?: string };
   maxIterations?: number;
   pauseEvery?: number;
+  /**
+   * Clio Project assignment (item 5.7). When set, stored on the workspace
+   * config and used to route cf²-auto ingests + scope search queries.
+   * Undefined → auto-route to the "default" Clio Project on first ingest.
+   */
+  clioProject?: string;
 }): Promise<WorkspaceConfig> {
   // Load global config for defaults
   const globalConfig = await readConfig();
@@ -77,6 +83,12 @@ export async function createWorkspace(opts: {
     processTemplate: "default",
     currentIteration: 0,
     status: "idle",
+    clioProject: opts.clioProject,
+    // item 5.7: Clio ingest policy. Inherit from global; do NOT default here
+    // so the workspace config reads as "inherit from global" when unset.
+    clio: globalConfig?.clio?.ingestPolicy
+      ? { ingestPolicy: globalConfig.clio.ingestPolicy }
+      : undefined,
   };
 
   const dir = getWorkspaceDir(id);

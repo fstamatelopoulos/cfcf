@@ -341,7 +341,7 @@ Results (the small-to-big expanded passages, not raw chunks) land in a new file 
 
 ### 6.1 v1 default
 
-**`bge-small-en-v1.5`** (BAAI). 384 dimensions, ~120 MB, strong retrieval quality for its size, permissive MIT licence, widely benchmarked. Runs via ONNX Runtime Node bindings in-process. Bundled into the cf² binary.
+**`nomic-embed-text-v1.5`** (Nomic). 768 dimensions, ~130 MB (q8-quantized variant), ~8k-token context window that comfortably fits the Cerefox chunker's ~4k-token effective chunk window so design docs and iteration logs embed as one coherent passage. Runs via ONNX Runtime Node bindings in-process. Downloaded on demand to `~/.cfcf/models/` on first install from `nomic-ai/nomic-embed-text-v1.5` on HuggingFace. (Earlier drafts defaulted to `bge-small-en-v1.5`; that stays in the catalogue as the "compact" option for disk-constrained installs.)
 
 ### 6.2 Alternatives (always installable via CLI; not bundled)
 
@@ -350,8 +350,8 @@ Users can install a heavier (or lighter) embedder at any time. Clio ships with t
 | Model | Dim | Size | When useful |
 |---|---|---|---|
 | `all-MiniLM-L6-v2` | 384 | 23 MB | Low-resource installs; when you really want to be lean |
-| `bge-small-en-v1.5` (default) | 384 | 120 MB | Balanced — recommended for v1 |
-| `nomic-embed-text-v1.5` | 768 | 140 MB | Long-context (8k tokens) — useful when ingesting long design docs without chunking noise |
+| `bge-small-en-v1.5` | 384 | 120 MB | Compact alternative to the default — ~512 token context, pick this when disk / RAM is tight |
+| `nomic-embed-text-v1.5` (default) | 768 | 130 MB | 8k token context; fits the Cerefox 4k-token chunk window so long design docs embed as one passage. q8-quantized via dtype option |
 | `bge-base-en-v1.5` | 768 | 430 MB | Quality bump over the small variant |
 | `mxbai-embed-large-v1` | 1024 | 670 MB | Top-quality open-weights option; users who explicitly want "as close to the best as local gets" |
 | Ollama-hosted models (any) | varies | runs in Ollama | If the user already has Ollama, a thin `ollama://<model>` adapter can skip bundling entirely |
