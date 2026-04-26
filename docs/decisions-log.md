@@ -19,6 +19,62 @@
 
 ## Log
 
+### 2026-04-26 -- Installer (5.5): pivot from Bun-compiled binary to npm-format distribution
+
+**Context.** Spent the day building 5.5 according to the original design: `bun --compile` produces a self-contained native binary; the installer ships a tarball with the binary + colocated `node_modules/` + custom SQLite + sqlite-vec; users curl-bash to install. Phase-0 smoke passed locally. We dogfood-installed on this Intel Mac. Then `cfcf init` failed with `Cannot find module '@huggingface/transformers' from '/$bunfs/root/cfcf'`. Spent several hours trying workarounds; none stuck. Pivoted at end of day to a standard npm-format CLI distribution, in line with how every other Node-ecosystem CLI ships (OpenClaw, Vercel, Yarn, Anthropic Claude Code originally).
+
+This entry captures **what we tried**, **why each attempt failed**, **what we learned**, and **what we shipped instead**, so a future contributor (or future me) doesn't redo the investigation.
+
+**Part 1 — The wall: Bun `--compile` doesn't resolve heavy native deps from disk.**
+
+`bun build --compile --external <pkg>` is supposed to produce a binary where `<pkg>` resolves at runtime via standard Node module resolution. In practice, Bun's compile-mode runtime resolver searches only the embedded `/$bunfs/root/` filesystem; it doesn't walk to disk for `--external` modules. Verified via:
+
+- `cfcf-binary` at `~/.cfcf/bin/cfcf` with deps colocated at `~/.cfcf/bin/node_modules/@huggingface/transformers/` (verified by `cfcf doctor`). Direct invocation: `Cannot find module '@huggingface/transformers' from '/$bunfs/root/cfcf'`.
+- Same with `NODE_PATH=...` set explicitly. Bun ignores NODE_PATH in compile mode.
+- Same with the binary invoked directly (not via the symlink) to rule out path-resolution quirks.
+
+The "from `/$bunfs/root/cfcf`" path tells the story: Bun's resolver starts inside the compiled binary's virtual filesystem and never reaches the disk-side colocated `node_modules/`.
+
+**Part 2 — Workarounds we tried, none of which worked.**
+
+1. **Static absolute path in `import()`**: `await import("/Users/.../node_modules/@huggingface/transformers")`. Result: Bun's resolver treats the absolute path as a bare specifier, errors `Cannot find module '/Users/.../...'`.
+
+2. **`file://` URL in `import()`**: `await import(pathToFileURL(absPath).href)`. Result: the entry-point JS file loads, BUT transformers' own internal imports (`import "onnxruntime-common"`, `import "onnxruntime-node"`) go through Bun's regular resolver again, which still doesn't walk to disk. So we can load transformers' top-level file but its first transitive dep import fails.
+
+3. **Static top-level `import * as Transformers from "@huggingface/transformers"`**: forces Bun's compiler to statically analyse the import. Hope was Bun would bundle transformers + its dep tree into the binary. Result: it does NOT bundle. Binary stays the same size (~66 MB). Inspecting the binary with `strings ... | grep huggingface` shows only ~16 references — essentially nothing transformers-related embedded. Bun's compile-mode bundler quietly externalises packages with native `.node` addons or dynamic `require()` patterns regardless of the `--external` flag.
+
+4. **`createRequire(process.execPath)` for CJS-anchored require**: didn't try in detail; transformers is ESM and `createRequire` is CJS-only.
+
+5. **Wrapper shell script that sets up env before exec'ing the binary**: didn't try; the symptoms (Bun's resolver staying inside `bunfs`) suggested env tweaks wouldn't help. Confirmed retrospectively: the issue is internal to how Bun's compiled-binary resolver walks paths, not anything env can influence.
+
+**Part 3 — Why this isn't fixable in our codebase.**
+
+Bun's `--compile` is intentionally a single-executable model. Its resolver was designed for the case "JS that I can fully bundle." Heavy native-addon deps with dynamic `require()` patterns (which is exactly what `onnxruntime-node` does to load its `.node` binary based on `process.platform`/`arch`) sit outside that model. The community pattern for tools using transformers.js + ONNX Runtime is to ship as Node-ecosystem packages — not self-contained binaries — and Hugging Face's own docs explicitly recommend `serverComponentsExternalPackages: ['onnxruntime-node']` (= "don't bundle this, expect the runtime to resolve it") for Next.js. Tools that DO ship self-contained AI inference (Ollama, LM Studio) are written in Go/Rust with C++ inference engines linked directly — they don't use transformers.js. **No widely-used tool ships transformers.js inside a `bun --compile` / `pkg` / `nexe`-style binary.** We were trying something the upstream stack doesn't support.
+
+**Part 4 — Pivot: npm-format distribution.**
+
+Switched to the standard Node-ecosystem CLI shape:
+
+- Build: `bun build` (without `--compile`) bundles cfcf's TS source into a single `dist/cfcf.js`. `bun pm pack` wraps it + `package.json` into an npm-format `cfcf-X.Y.Z.tgz`.
+- Distribution: GitHub Releases tarball asset (private repo for now) → `bun publish @cerefox/cfcf-cli` to npmjs.com when cfcf opens up.
+- User install: `bun install -g <tarball-URL>` (or `npm install -g <tarball-URL>` — same package format works with any npm-aware client). A small `install.sh` wrapper provides the curl-bash UX and bootstraps Bun if missing.
+- Runtime: Bun ≥ 1.3. Hard requirement. Documented in `package.json`'s `engines.bun` and in README.
+- Native deps (custom SQLite + sqlite-vec): per-platform optional npm packages (`@cerefox/cfcf-native-darwin-arm64`, etc.). Pattern Claude Code, sharp, swc, and esbuild all use. npm picks the right one based on `os` + `cpu` fields. `applyCustomSqlite()` resolves the package's path via `require.resolve`.
+
+This adds back complexity in some places (per-platform native packages) but loses much more (no more `--compile` debugging, no more colocated-node_modules-can't-resolve, no more 140 MB tarballs). Net simplification.
+
+**Part 5 — Lessons.**
+
+- **Validate the gnarliest path first.** Our smoke tests proved `cfcf --version` and `cfcf clio embedder list` worked from a compiled binary, but neither imports transformers. We never exercised the actual transformers-loading path until dogfood. **A real smoke must invoke at least one command that hits every external dep.**
+- **Be skeptical of "Bun handles this" docs.** Bun's `--compile` docs state externals resolve at runtime "as normal." That's not what happens for our shape. Where docs are vague, run a focused test before committing to a design.
+- **Match the upstream stack's model.** transformers.js's docs, examples, and supported deployment targets all assume Node-ecosystem distribution. Trying to shoehorn it into a self-contained binary fights the entire ecosystem's design.
+- **Self-contained binaries fit a specific shape.** Bun --compile / pkg / nexe / Deno --compile work great when your code's deps are JS-only, or have native deps that can be statically analysed and bundled. Heavy-native-addon deps with dynamic loading break this model. **Default to npm-format unless you have a strong reason for self-contained.**
+- **The `Cannot find module 'X' from '/$bunfs/root/...'` error pattern is a Bun-compile-mode-specific signature.** If a future investigation surfaces it, jump straight to "is this resolver actually walking to disk?" rather than chasing path config.
+
+**Cost of the day.** Significant. Several hours of build-test-debug cycles, a working tarball that doesn't actually run, and a 1600-line design doc that's now mostly obsolete. **Budget tightening for next time:** when a design hits an unexpected wall, time-box the workaround attempts (one hour, two attempts) before stepping back to question the design itself. We hit this in attempt #2 and didn't step back until attempt #5.
+
+**Doc impact.** `docs/research/installer-design.md` rewritten from ~1600 lines to ~250. Plan item 5.5 description shortened correspondingly. New plan items 6.20 (web-UI version notification) + 6.21 (cfcf init reads existing config as defaults). The substantive 5.5 work — `cfcf doctor`, `cfcf self-update`, `applyCustomSqlite`, custom SQLite + sqlite-vec, the version-pin policy, the embedder install flow from 5.7 — all stays. Only the *distribution mechanism* changed.
+
 ### 2026-04-25 -- Hybrid search threshold (Cerefox port)
 
 **Symptom that surfaced this:** with a single ingested document in Clio, every irrelevant query returned that one doc as a "match" with a tiny RRF score (`[0.016]` was the user's experience). Vector-only candidates with near-zero cosine were being fused into the result set instead of dropped, so an empty-corpus result set (the right answer) became a one-result noisy set.
