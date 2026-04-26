@@ -39,7 +39,7 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBe("ok");
-      expect(body.version).toBe("0.9.0");
+      expect(body.version).toBe("0.10.0");
     });
   });
 

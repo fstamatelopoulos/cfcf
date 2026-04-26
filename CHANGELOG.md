@@ -9,16 +9,45 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-### Pivot: distribution model (item 5.5, target v0.10.0)
+## [0.10.0] -- 2026-04-26
 
-cfcf now distributes as a standard npm-format CLI package (`@cerefox/cfcf-cli`) rather than a `bun --compile` self-contained binary. Bun ≥ 1.3 becomes a runtime requirement; the curl-bash installer (`scripts/install.sh`) bootstraps it automatically when missing. Per-platform native libs (pinned libsqlite3 + sqlite-vec) ship as separate `@cerefox/cfcf-native-<platform>` optional npm packages. Phase-0 dogfood verified end-to-end on Intel Mac (darwin-x64); `cfcf doctor` reports all 11 health checks passing. Full post-mortem of why we abandoned `--compile`: see [`docs/decisions-log.md`](docs/decisions-log.md) 2026-04-26.
+This release ships the **installer + distribution rewrite (item 5.5)**, a UX polish for re-running `cfcf init --force` (item 6.21), and the post-pivot dogfood fixes that surfaced when the new install was exercised on Intel Mac. Plan item 6.17 (Clio update-doc API) was newly flagged and prioritised but not implemented in this release.
 
-Other changes in this branch:
-- `cfcf doctor` rewritten for the npm-format shape (Bun runtime check, package metadata, per-platform native package, runtime deps, agent CLIs).
-- `cfcf self-update` rewritten as a `bun install -g <new-tarball>` wrapper.
-- `release.yml` rewritten: `workflow_dispatch` only, per-platform `build-native` matrix + single `build-cli` job + `release` step that uploads tarballs + SHA256SUMS + MANIFEST.txt + install.sh.
-- `ci.yml` simplified: drops the per-platform `--compile` build, runs a single `build-cli.sh` smoke per PR.
-- Obsolete scripts deleted: `build-release-tarball.sh`, `stage-runtime-deps.sh`, `resolve-runtime-deps.js`, `write-manifest.sh`. New: `build-cli.sh`, `build-native-package.sh`. `install.sh` slimmed from ~200 to ~100 lines; `uninstall.sh` is now a one-liner around `bun remove -g @cerefox/cfcf-cli`.
+### Pivot: distribution model (item 5.5)
+
+cfcf now distributes as a standard npm-format CLI package (`@cerefox/cfcf-cli`) rather than a `bun --compile` self-contained binary. Bun ≥ 1.3 becomes a runtime requirement; the curl-bash installer (`scripts/install.sh`) bootstraps it automatically when missing. Per-platform native libs (pinned libsqlite3 + sqlite-vec) ship as separate `@cerefox/cfcf-native-<platform>` optional npm packages with `os` + `cpu` fields, the same pattern Claude Code, sharp, swc, and esbuild use. Phase-0 dogfood verified end-to-end on Intel Mac (darwin-x64); `cfcf doctor` reports all 11 health checks passing including `sqlite_version = 3.53.0` (proof the pinned custom libsqlite3 loaded). Full post-mortem of why we abandoned `--compile`: see [`docs/decisions-log.md`](docs/decisions-log.md) 2026-04-26 entries.
+
+### Added
+- **`cfcf doctor`** — self-check command rewritten for the npm-format shape. 11 checks: Bun runtime, cfcf package metadata, per-platform native package presence + libsqlite3 + sqlite-vec, custom-libsqlite-loadable proof (opens an in-memory DB and asserts `sqlite_version()` matches the pin), three runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`), two agent CLIs (`claude-code`, `codex`), Clio DB. `--json` flag emits structured results for scripted use.
+- **`cfcf self-update`** — `bun install -g <new-tarball>` wrapper. `--check` polls remote MANIFEST.txt without installing; `--yes` is non-interactive; `--version vX.Y.Z` pins a specific tag; `--base-url` overrides the install URL. Atomic from the user's perspective; if the install fails the previous version stays intact.
+- **`scripts/build-cli.sh`** — bundles `packages/cli/src/index.ts` via `bun build` (no `--compile`), externalises the heavy native deps, stages a publish-shaped `@cerefox/cfcf-cli` package, runs `bun pm pack` → `dist/cfcf-X.Y.Z.tgz`.
+- **`scripts/build-native-package.sh`** — per-platform tarball builder. Compiles libsqlite3 from the pinned amalgamation (3.53.0, `SQLITE_ENABLE_LOAD_EXTENSION=1`), fetches sqlite-vec 0.1.9, packs `@cerefox/cfcf-native-<platform>-X.Y.Z.tgz` with matching `os`/`cpu` fields.
+- **`scripts/stage-dist.sh`** — convenience wrapper that wipes `dist/`, builds CLI + host-platform native tarballs, copies `install.sh`, writes `MANIFEST.txt`, and prints the one-liner to dogfood-install via `file://`.
+- **`docs/guides/installing.md`** — rewritten end-to-end for the npm-format shape. Covers curl-bash + direct `bun install -g` + file:// + upgrade + uninstall + troubleshooting.
+- **Plan item 6.17 (re-scoped + prioritised)**: Clio update-doc API + version snapshots + soft-delete. Surfaced during dogfood when ingesting `decisions-log.md` — `LocalClio.ingest()` dedups by content_hash but has no update verb, so re-ingesting modified content creates a brand-new UUID and orphans the old document. Breaks the `MemoryBackend` parity commitment to Cerefox. Implementation pending; tracked for iteration 5 wrap-up.
+
+### Changed
+- **Build pipeline**: replaced the per-platform `bun --compile` matrix with a single `bun build` (no `--compile`) that bundles into `dist/cfcf.js` shipped inside an npm tarball. The bundled JS is platform-independent; native deps live in per-platform packages. Net result: 250 KB CLI tarball + ~1 MB native tarball per platform vs the old 22 MB darwin / 38 MB linux self-contained binaries.
+- **`release.yml`** — `workflow_dispatch` only (no auto-trigger on tag push). Per-platform `build-native` matrix + single `build-cli` job + `release` step that uploads cli tarball + 3 native tarballs + SHA256SUMS + MANIFEST.txt + install.sh as GitHub Release assets.
+- **`ci.yml`** — drops the per-platform `--compile` build matrix; runs a single `scripts/build-cli.sh` smoke per PR. Linux runner only (CLI tarball is platform-independent). Each push uploads ~250 KB instead of ~140 MB.
+- **`install.sh`** slimmed from ~200 lines to ~100. Bootstraps Bun via `https://bun.sh/install` if missing, detects host platform, fetches the matching `@cerefox/cfcf-native-<platform>` tarball + cli tarball, runs `bun install -g` against both, hands off to `cfcf init`. The earlier MANIFEST verification + Gatekeeper xattr + `~/.cfcf/bin/` symlink steps are gone — Bun's package manager handles all of that.
+- **`uninstall.sh`** is now a one-liner around `bun remove -g @cerefox/cfcf-cli`. Preserves user data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) by default.
+- **`cfcf init --force`** (item 6.21) now reads the existing config and offers the user's current values as prompt defaults — agent picks, models, embedder, max iterations, notification settings — rather than the hardcoded `createDefaultConfig` bootstrap defaults. Each role's adapter is healed against the current `available` list (a previously-installed agent that's since been removed falls back to the bootstrap default). `cfcf config edit` works for free since it delegates to `init --force`.
+- **`packages/core/src/clio/db.ts`** — `applyCustomSqlite()` and `getSqliteVecPath()` now resolve `@cerefox/cfcf-native-<platform>` via `createRequire(import.meta.url).resolve('@cerefox/cfcf-native-<platform>/package.json')` instead of looking under `~/.cfcf/native/`. Dev mode falls back to system SQLite (FTS5 still works; sqlite-vec features unavailable).
+- **`cfcf --version`** now resolves the installed package's version via `require.resolve('@cerefox/cfcf-cli/package.json')` so it reflects the actually-installed version, not the in-repo VERSION constant.
+- **Docs sweep** across 8 files (`README.md`, `CLAUDE.md`, `docs/design/cfcf-stack.md`, `docs/design/clio-memory-layer.md`, `docs/plan.md`, `docs/research/clio-implementation-decisions.md`, `docs/research/clio-test-plan.md`) to remove stale `cfcf-binary` / `bun --compile` / `~/.cfcf/native/` references. Sections that intentionally describe the old shape (decisions-log post-mortems, CHANGELOG entries for past releases) are preserved as historical record.
+
+### Fixed (post-pivot dogfood)
+- **`cfcf server start` failed silently under the npm-format install.** The spawn-self mechanism inherited from the `--compile` shape used `process.execPath`, which under npm-format resolves to the bun runtime itself, not the cfcf entry — re-spawning bare `bun` with no script argument launched a Bun REPL, which never started the server. The readiness poll timed out with a misleading "Try running directly: bun run dev:server" message (which itself is dev-mode advice that doesn't apply to installed users). Fix: derive the bundled JS path from `import.meta.url` and spawn `bun run <bundle>` with `CFCF_INTERNAL_SERVE=1`.
+- **Embedder install progress bar glitched on re-runs.** Three pre-existing bugs in `OnnxEmbedder.progress_callback` surfaced together: (a) lines clobbered each other because `finalizeLine()` only fired when `activeFile === file`; (b) cached files showed `(? MB)` because the renderer fell through when no prior progress events fired; (c) bogus `[streaming...] 0.0 MB` for tiny files because the indeterminate-mode heuristic latched on `total === loaded` from the first event. All three fixed in [`packages/core/src/clio/embedders/onnx-embedder.ts`](packages/core/src/clio/embedders/onnx-embedder.ts).
+- **`cfcf init --force` re-ran the warmup-with-progress-bar dance even when the embedder was fully cached + active.** New `isEmbedderCached(entry)` helper checks for the dtype-aware ONNX weights file under `~/.cfcf/models/<hf-id>/`; init short-circuits with `✓ Clio ready (already cached and active; …)` when both DB row and cache match. First-time installs and embedder switches still hit the full download + progress path.
+- **GitHub Actions artifact storage quota hit.** Old `--compile` binary builds (~22 MB darwin + ~38 MB linux per push) accumulated on a 90-day default retention; the earlier `retention-days: 7` change only applies to NEW artifacts, not retroactively. ~104 stale artifacts ≈ 3 GB, 6× the free-tier 500 MB quota. Bulk-deleted via `gh api -X DELETE`. The new ci.yml produces ~250 KB tarballs per push so this won't recur.
+
+### Removed
+- Build scripts that no longer apply: `scripts/build-release-tarball.sh`, `scripts/stage-runtime-deps.sh`, `scripts/resolve-runtime-deps.js`, `scripts/write-manifest.sh`.
+- `cfcf-binary` artefact and the `--compile` invocation in `package.json`'s build script.
+- The `~/.cfcf/bin/` + `~/.cfcf/native/` + `~/.cfcf/MANIFEST` install layout. Those paths no longer exist after a v0.10.0 install. User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is unchanged.
+- macOS Gatekeeper / `com.apple.quarantine` xattr workaround in `install.sh`. Bun handles its own binary; cfcf is plain JS.
 
 ## [0.9.0] -- 2026-04-25
 
