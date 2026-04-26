@@ -151,7 +151,7 @@ The confusion in the earlier draft was collapsing "where the script is hosted" w
 |---|---|---|
 | **Phase 0** (local dev) | Served from `bun run scripts/serve-dist.ts` on localhost | Built manually on the dev's laptop, served from the same localhost dir |
 | **Phase 1** (private CI) | Uploaded as a release asset to the private `cfcf` repo; users download via `gh release download` (needs a PAT) | Uploaded by CI to private `cfcf` repo releases |
-| **Phase 2** (public releases repo) | Served from `https://raw.githubusercontent.com/<user>/cfcf-releases/main/install.sh` — anonymous `curl` works | Uploaded by CI to `cfcf-releases` public repo; anonymous download via `https://github.com/<user>/cfcf-releases/releases/latest/download/<file>` |
+| **Phase 2** (public releases repo) | Served from `https://raw.githubusercontent.com/fstamatelopoulos/cfcf-releases/main/install.sh` — anonymous `curl` works | Uploaded by CI to `cfcf-releases` public repo; anonymous download via `https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download/<file>` |
 | **Phase 3** (vanity domain) | `https://cerefox.org/install` → HTTP-302 → Phase 2 URL | Same as Phase 2; `cfcf-releases` is still the real origin |
 | **Phase 4** (windows) | Adds `install.ps1` alongside; no change to the bash one | Adds `cfcf-windows-x64-<version>.zip` to each release |
 
@@ -292,7 +292,7 @@ User runs:  curl -fsSL https://<host>/install.sh | bash
 │       case $os-$arch in Darwin-arm64) platform=darwin-arm64 …     │
 │                                                                   │
 │ 2. resolve release URLs                                           │
-│       CFCF_BASE_URL ??= https://github.com/<user>/cfcf-releases   │
+│       CFCF_BASE_URL ??= https://github.com/fstamatelopoulos/cfcf-releases   │
 │                       /releases/latest/download                   │
 │       tarball="cfcf-${platform}-${version}.tar.gz"                │
 │                                                                   │
@@ -320,33 +320,67 @@ User runs:  curl -fsSL https://<host>/install.sh | bash
 
 ### 3.2 Runtime flow (every `cfcf` invocation)
 
+Verified end-to-end on Intel Mac during the 2026-04-26 Phase-0 smoke. Annotations updated to match what actually shipped.
+
 ```
                     ~/.cfcf/bin/cfcf   (bun-compiled standalone)
                            │
                            ▼
-    ┌────────── Bun runtime (embedded) ────────────┐
-    │                                                │
-    │  On first `new Database(...)` in Clio:         │
-    │    1. read CFCF_NATIVE_DIR or ~/.cfcf/native   │
-    │    2. if libsqlite3.<ext> exists:              │
-    │         Database.setCustomSQLite(path)         │
-    │    3. open clio.db with (now-custom) bun:sqlite│
-    │                                                │
-    │  On first Clio ingest/search needing vectors   │
-    │  (6.15 code, not 5.5):                         │
-    │    db.loadExtension(                           │
-    │      join(CFCF_NATIVE_DIR, "sqlite-vec"))      │
-    │                                                │
-    │  On first embedder call:                       │
-    │    resolve @huggingface/transformers via       │
-    │    colocated node_modules/                     │
-    │    (Bun walks up from the binary's dir)        │
-    │    download model to ~/.cfcf/models/ if absent │
-    │                                                │
-    └────────────────────────────────────────────────┘
+    ┌────────── Bun runtime (embedded) ─────────────────┐
+    │                                                    │
+    │  On openClioDb() — first new Database(...):        │
+    │    1. applyCustomSqlite() (db.ts §11.1)            │
+    │       reads CFCF_NATIVE_DIR or ~/.cfcf/native      │
+    │    2. if libsqlite3.<ext> exists:                  │
+    │         Database.setCustomSQLite(path)             │
+    │       Verified: sqlite_version() returns the       │
+    │       pinned 3.53.0, not bun's bundled 3.43.2      │
+    │    3. open clio.db with the (now-custom) driver    │
+    │                                                    │
+    │  Item 6.15 (sqlite-vec HNSW, future):              │
+    │    db.loadExtension(getSqliteVecPath().path,       │
+    │                     "sqlite3_vec_init")            │
+    │    Verified: vec0 KNN query returns the right      │
+    │    nearest-neighbour result                        │
+    │                                                    │
+    │  On first embedder call:                           │
+    │    resolve @huggingface/transformers via           │
+    │    colocated node_modules/                         │
+    │    (Bun's compile-mode resolver walks up from      │
+    │     process.execPath; finds ~/.cfcf/bin/node_      │
+    │     modules/)                                      │
+    │    if not cached, transformers.js downloads the    │
+    │    model to ~/.cfcf/models/                        │
+    │                                                    │
+    └────────────────────────────────────────────────────┘
 ```
 
-### 3.3 Dependency resolution (colocated node_modules)
+### 3.3 Upgrade flow (re-running the installer on top of an existing install)
+
+The installer is idempotent + non-destructive on user data. Re-running it produces an upgrade, never a wipe. Concrete contract:
+
+| Path | Behaviour on upgrade |
+|---|---|
+| `~/.cfcf/bin/` | Replaced wholesale (binary + colocated node_modules/) |
+| `~/.cfcf/native/` | Replaced wholesale (libsqlite3 + sqlite-vec, with whatever pins the new tarball ships) |
+| `~/.cfcf/MANIFEST` | Replaced; new version + timestamps |
+| `~/.cfcf/uninstall.sh` | Replaced |
+| `~/.cfcf/clio.db` | **Preserved.** Migrations apply lazily on next openClioDb() — see below |
+| `~/.cfcf/models/` | **Preserved.** Existing embedder downloads survive |
+| `~/.cfcf/logs/` | **Preserved.** Per-workspace agent logs survive |
+| Platform config dir (`~/Library/Application Support/cfcf/` on macOS, `$XDG_CONFIG_HOME/cfcf/` on Linux) | **Untouched** — installer never writes there |
+
+This is enforced by `tar xzf … --strip-components=1` only matching what's *in* the tarball; entries the tarball doesn't contain are left as-is.
+
+**Schema migration on upgrade:**
+
+- **Clio DB** (`clio.db`) has a built-in migrations runner in `packages/core/src/clio/db.ts`. The `clio_migrations` table tracks what's applied; new schema = new `migrations/000N_name.sql` file embedded into the binary via `import ... with { type: "text" }`. `runMigrations()` skips already-applied entries idempotently. **Same pattern Cerefox uses** — file-based versioned migrations, no separate "migrate" command.
+- **Workspace configs** at `<config-dir>/workspaces/<id>/config.json` go through `validateConfig()` on every read. New required fields are backfilled per `validateConfig`'s defaults; new optional fields are simply absent until the user / web UI sets them. Existing fields are never silently transformed — destructive schema changes require an explicit migration step (none planned for v1).
+- **Global config** (same dir, `config.json`) also goes through `validateConfig()`. The `version` field (`CONFIG_VERSION` constant in `core/src/constants.ts`) lets us trigger explicit upgrade logic if/when a destructive change is unavoidable. Currently `1`; bump only on a real breaking change.
+
+End user contract: **upgrading never loses data.** A user who has been ingesting into Clio for months upgrades the binary and finds every doc still searchable — possibly with new schema features available, never with old features broken.
+
+### 3.4 Dependency resolution (colocated node_modules)
 
 Bun's module resolver, when executing a compiled binary, walks up from `require.main`'s directory looking for `node_modules/`. Since our binary lives at `~/.cfcf/bin/cfcf` and the runtime deps live at `~/.cfcf/bin/node_modules/`, resolution "just works" with zero wiring. This is the same behavior Node.js has had since v0.x.
 
@@ -552,7 +586,7 @@ Phase 1 is "same thing, but CI built the tarball and uploaded it to a GitHub Rel
 1. Land `.github/workflows/release.yml` (per §6).
 2. Push a pre-release tag (`v0.9.0-rc.1`) to `main`.
 3. CI runs, tarballs get uploaded to a GitHub Release.
-4. `CFCF_BASE_URL=https://github.com/<user>/cfcf/releases/download/v0.9.0-rc.1 curl -fsSL <raw install.sh URL> | bash` — works.
+4. `CFCF_BASE_URL=https://github.com/fstamatelopoulos/cfcf/releases/download/v0.9.0-rc.1 curl -fsSL <raw install.sh URL> | bash` — works.
 5. When confident, move to Phase 2 (public `cfcf-releases` repo) by mirroring the assets + updating install.sh's default URL.
 
 ---
@@ -706,7 +740,7 @@ jobs:
 
 ### 6.3 The "latest" pointer
 
-`--latest` (on non-RC tags) tells GitHub to mark this release as the "latest" — accessible via `https://github.com/<user>/<repo>/releases/latest/download/<file>` without knowing the version. `install.sh` with `CFCF_VERSION=latest` relies on this.
+`--latest` (on non-RC tags) tells GitHub to mark this release as the "latest" — accessible via `https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download/<file>` without knowing the version. `install.sh` with `CFCF_VERSION=latest` relies on this.
 
 ---
 
@@ -1041,7 +1075,7 @@ Full, copy-ready version of `scripts/install.sh`:
 #
 # Env vars (all optional):
 #   CFCF_BASE_URL       Override the release base URL (default:
-#                       https://github.com/<user>/cfcf-releases/releases/latest/download
+#                       https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download
 #                       or /releases/download/<version> if CFCF_VERSION != latest)
 #   CFCF_VERSION        "latest" (default) or a specific tag like v0.9.0
 #   CFCF_INSTALL_DIR    Where to install cfcf (default: ~/.cfcf)
@@ -1269,16 +1303,24 @@ platform: darwin-arm64
 built: 2026-04-22T18:00:00Z
 ```
 
-### 11.3 First-run diagnostics
+### 11.3 First-run diagnostics — `cfcf doctor`
 
-`cfcf doctor` command (optional; maybe skip for 5.5): runs a self-check:
+**DECIDED 2026-04-26: include in 5.5** (after the install pipeline + Phase-0 smoke pass, before docs sign-off). Self-check that confirms an install is healthy. Runs:
 
-- Does `~/.cfcf/native/libsqlite3.<ext>` exist?
-- Did `applyCustomSqlite()` succeed?
-- Can `Database.setCustomSQLite` be verified by opening a trivial DB and running `PRAGMA library_version;`?
-- Does `~/.cfcf/bin/node_modules/onnxruntime-node` exist?
+| Check | Surfaces |
+|---|---|
+| `~/.cfcf/MANIFEST` parseable + records the binary's actual version | Mismatched / partial install |
+| `~/.cfcf/native/libsqlite3.<ext>` exists | Custom SQLite missing → loadExtension would fail (6.15 broken) |
+| `applyCustomSqlite()` activated successfully (`PRAGMA library_version` returns the pinned version) | The custom lib loads cleanly |
+| `~/.cfcf/native/sqlite-vec.<ext>` exists | Future sqlite-vec features will work |
+| `~/.cfcf/bin/node_modules/{@huggingface/transformers,onnxruntime-node,sharp}` exist | The three runtime deps are colocated as expected |
+| `cfcf clio embedder check-deps` passes (the existing item from §11.4) | Each runtime dep imports successfully |
+| Active embedder (if any) cached at `~/.cfcf/models/<hfModelId>/` | Embedder install is complete (else: HF download will fire on next search) |
+| Detected agents from `cfcf init` are still resolvable on PATH | `claude-code`, `codex` haven't been removed since init |
 
-Nice-to-have; not blocking. Could land with 6.15 since that's when the sqlite-vec story gets real.
+Output: one line per check, ✓ or ✗, plus a final summary. Exits 0 when everything passes, 1 when any required check fails. Optional `--json` flag for scripting.
+
+Tiny implementation footprint (~80 LoC under `packages/cli/src/commands/doctor.ts`). Each check is a pure function returning `{ name, status, detail? }`; `cfcf doctor` just runs them and prints. Can be reused by future automated diagnostics (e.g. the iteration loop's pre-run sanity check).
 
 ### 11.4 `cfcf clio embedder check-deps` + friendly module-not-found wrapping
 
@@ -1574,19 +1616,23 @@ When 5.5 gets scheduled (possibly immediately after this doc):
 
 ### 16.2 Build order (each step landable independently; run tests + typecheck at each)
 
-1. [ ] Add `scripts/detect-platform.sh` (§8.1). Trivial; no tests strictly needed, but add a tiny bats test.
-2. [ ] Add `scripts/build-sqlite.sh` (§8.2). Test locally: run on dev machine, inspect the resulting `libsqlite3.dylib` with `otool -L` (mac) or `ldd` (linux) + `nm` for symbol presence of `sqlite3_load_extension`.
-3. [ ] Add `scripts/fetch-sqlite-vec.sh` (§8.3). Test locally: run on dev machine, confirm `file native/sqlite-vec.dylib` shows a shared lib.
-4. [ ] Add `applyCustomSqlite()` in `packages/core/src/clio/db.ts` (§11.1) + unit tests. Verify the no-op path (no file) doesn't regress existing Clio tests. Verify via a tiny integration test that with both libs staged under `/tmp`, opening a DB + `SELECT sqlite_version()` returns the pinned version.
-5. [ ] Add `scripts/stage-runtime-deps.sh` + `scripts/resolve-runtime-deps.js` (§8.4). Test locally: after running, check `node_modules/onnxruntime-node/bin/napi-v*/` contains the native addon for the current platform.
-6. [ ] Add `scripts/write-manifest.sh` (§8.5). Smoke-test: output parses as key:value.
-7. [ ] Add `scripts/build-release-tarball.sh` (§5.1, §8.6). Run locally → produces `dist/cfcf-<platform>-0.0.0-dev.tar.gz`.
-8. [ ] Add `scripts/install.sh` (§9). Includes the running-server check from §1.3 + the interactive `cfcf init` handoff from §1.1 (read from `</dev/tty` so `curl | bash` works). Phase 0 smoke: `bun run scripts/serve-dist.ts` in `dist/`, run installer with `CFCF_BASE_URL=http://localhost:8080 CFCF_VERSION=0.0.0-dev`, confirm the press-Enter prompt fires, init runs interactively, post-init `~/.cfcf/bin/cfcf --version` works. Also smoke `CFCF_SKIP_INIT=1 ... | bash` to verify the unattended power-user path skips the handoff cleanly.
-9. [ ] Add `scripts/uninstall.sh` (§8.7). Run it after the Phase 0 install; confirm clean removal (honour the `CFCF_INSTALL_DIR` override to avoid wiping the real `~/.cfcf/`).
-10. [ ] Update `cfcf --version` to read `~/.cfcf/MANIFEST` (§11.2).
-11. [ ] Add `.github/workflows/release.yml` (§6.1). Smoke-test with a pre-release tag (`v0.9.0-rc.1`) on a fork or a test branch.
-12. [ ] Write `docs/guides/installing.md` (§12.1) + update `README.md` (§12.2).
-13. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 — the installer execs `cfcf init` and init handles the embedder download).
+1. [x] `scripts/detect-platform.sh` (§8.1). ✓ shipped 2026-04-26.
+2. [x] `scripts/build-sqlite.sh` (§8.2). ✓ shipped + verified end-to-end on Intel Mac (clang produced libsqlite3.dylib, sqlite3_load_extension symbol present, sqlite_version() returns the pinned 3.53.0).
+3. [x] `scripts/fetch-sqlite-vec.sh` (§8.3). ✓ shipped + verified vec0 KNN query against the pinned 0.1.9.
+4. [x] `applyCustomSqlite()` + `getSqliteVecPath()` in `packages/core/src/clio/db.ts` (§11.1) + 3 new unit tests covering no-op + null + path/entryPoint surfacing. ✓ shipped 2026-04-26.
+5. [x] `scripts/stage-runtime-deps.sh` + `scripts/resolve-runtime-deps.js` (§8.4). ✓ shipped with the threats #1-3 verification block. The transitive-vs-direct dep gotcha (pinning `*` for ORT-node forced 1.24.x with no darwin-x64) was caught by the verification + fixed by pinning only transformers.
+6. [x] `scripts/write-manifest.sh` (§8.5). ✓ shipped with `CFCF_NODE_MODULES` override so release builds read versions from the staged tree.
+7. [x] `scripts/build-release-tarball.sh` (§5.1, §8.6). ✓ shipped — produces `dist/cfcf-darwin-x64-v0.0.0-dev.tar.gz` (140 MB) on Intel Mac.
+8. [x] `scripts/smoke-tarball.sh` (§13.2). ✓ shipped + passes (cfcf --version + clio embedder list + custom SQLite version assertion all OK).
+9. [x] `scripts/install.sh` (§9) with `CFCF_BASE_URL` (file:// + http(s)://), `CFCF_SKIP_INIT`, running-server guard, Gatekeeper xattr strip. ✓ shipped + Phase-0 smoked end-to-end against localhost.
+10. [x] `scripts/uninstall.sh` (§8.7). ✓ shipped + verified removal with `CFCF_FORCE`.
+11. [x] `scripts/serve-dist.ts` (Bun.serve, ~25 LoC). ✓ shipped + used in the smoke test.
+12. [x] Update `cfcf --version` to read `~/.cfcf/MANIFEST` (§11.2). ✓ shipped + verified the multi-line MANIFEST output during smoke.
+13. [x] Add `.github/workflows/release.yml` (§6.1) — workflow_dispatch only, takes tag input, verifies on main, builds matrix, smoke-tests, gh release create. ✓ shipped.
+14. [x] Write `docs/guides/installing.md` (§12.1) + update `README.md` (§12.2). ✓ shipped.
+15. [ ] **`cfcf doctor`** (§11.3). New CLI command that runs the full self-check matrix. Required for 5.5. ~80 LoC under `packages/cli/src/commands/doctor.ts`. After this lands, the troubleshooting section in `installing.md` can simply tell users "run `cfcf doctor`" instead of step-by-step diagnostics.
+16. [ ] **First real install on the dogfood Mac.** Build a tarball locally; run the installer against it via file://; use the resulting `~/.cfcf/bin/cfcf` for daily work. This is the empirical proof that the install pipeline is healthy on at least one platform; informs whether to push the branch + open the PR.
+17. [ ] Mark plan item 5.5 ✅ and link back to this doc in the completion note. Close out 6.19's installer-pre-warm pending note (now superseded by `cfcf init`'s warmup behaviour from 2026-04-25 — the installer execs `cfcf init` and init handles the embedder download).
 
 ### 16.3 Order rationale
 

@@ -22,6 +22,7 @@ import { registerReviewCommand } from "./commands/review.js";
 import { registerDocumentCommand } from "./commands/document.js";
 import { registerReflectCommand } from "./commands/reflect.js";
 import { registerClioCommands } from "./commands/clio.js";
+import { registerDoctorCommand } from "./commands/doctor.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -76,6 +77,7 @@ registerReviewCommand(program);
 registerDocumentCommand(program);
 registerReflectCommand(program);
 registerClioCommands(program);
+registerDoctorCommand(program);
 
 program.parse();
 }
