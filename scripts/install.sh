@@ -32,6 +32,24 @@ if [[ -z "${CFCF_BASE_URL:-}" ]]; then
   fi
 fi
 
+# ── Platform detection ────────────────────────────────────────────────
+# Used to fetch the matching @cerefox/cfcf-native-<platform> tarball.
+# During the cfcf-private phase the native packages are GitHub Release
+# artefacts (not on npmjs.com), so the CLI's optionalDependencies entry
+# can't resolve them automatically -- we install the right one explicitly
+# before the CLI itself.
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+arch="$(uname -m)"
+case "$os-$arch" in
+  darwin-arm64)  platform=darwin-arm64 ;;
+  darwin-x86_64) platform=darwin-x64 ;;
+  linux-x86_64)  platform=linux-x64 ;;
+  *)
+    echo "[cfcf] Unsupported platform: $os-$arch" >&2
+    echo "[cfcf] Supported: darwin-arm64, darwin-x64, linux-x64." >&2
+    exit 1 ;;
+esac
+
 # ── 1. Ensure Bun is on PATH ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then
   echo "[cfcf] Bun not found. Installing via Bun's official installer..."
@@ -72,11 +90,19 @@ fi
 # Strip leading 'v' from the tag for the npm-style version inside the
 # tarball name (build-cli.sh does the same).
 v_no_prefix="${version#v}"
-tarball_url="$CFCF_BASE_URL/cfcf-${v_no_prefix}.tgz"
+cli_url="$CFCF_BASE_URL/cfcf-${v_no_prefix}.tgz"
+native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
 
 # ── 3. Install ────────────────────────────────────────────────────────
-echo "[cfcf] Installing cfcf $version from $tarball_url"
-bun install -g "$tarball_url"
+# Native package first, CLI second. Order matters: when bun installs the
+# CLI, its optionalDependencies entry tries the npm registry; if the
+# package isn't there (Phase 1), bun emits a soft 404 warning. Having
+# the native package already globally installed satisfies the require
+# at runtime regardless of npm visibility.
+echo "[cfcf] Installing @cerefox/cfcf-native-$platform from $native_url"
+bun install -g "$native_url"
+echo "[cfcf] Installing @cerefox/cfcf-cli from $cli_url"
+bun install -g "$cli_url"
 
 # Confirm cfcf is on PATH; if Bun's global bin isn't there, surface
 # the standard hint.
