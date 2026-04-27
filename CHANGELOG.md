@@ -9,7 +9,11 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-This entry covers everything on the `iteration-5/clio-update-api` branch — items **5.11** (update-doc API + version snapshots), **5.12** (agent-parity API surface), **5.13** (audit log + soft-delete), plus a Cerefox-parity audit pass that landed several follow-ups. Targeted version: v0.11.0.
+_Nothing yet. Target: 5.5b (npmjs publish) + 5.8 (user manual + CLI verb normalisation)._
+
+## [0.11.0] -- 2026-04-27
+
+This release covers everything from the `iteration-5/clio-update-api` branch — items **5.11** (update-doc API + version snapshots), **5.12** (agent-parity API surface), **5.13** (audit log + soft-delete + metadata-only edit), plus a Cerefox-parity audit pass that landed several follow-ups.
 
 ### Cerefox-parity, agent-facing search
 
