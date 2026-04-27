@@ -486,6 +486,54 @@ describe("LocalClio.ingest -- update by document_id (5.11)", () => {
     await clio.close();
   });
 
+  it("--document-id update preserves title/author when not explicitly passed (5.11 follow-up)", async () => {
+    const clio = makeClio();
+    const v0 = await clio.ingest({
+      project: "p1", title: "Carefully Named Doc", content: "v0",
+      author: "claude-code", metadata: { role: "design-guideline" },
+    });
+
+    // Update without --title / --author -- should keep both.
+    const v1 = await clio.ingest({
+      project: "p1", content: "v1 body", documentId: v0.id,
+    });
+    expect(v1.action).toBe("updated");
+    expect(v1.document.title).toBe("Carefully Named Doc");
+    expect(v1.document.author).toBe("claude-code");
+    expect(v1.document.metadata).toEqual({ role: "design-guideline" });
+
+    // Explicit --title overrides.
+    const v2 = await clio.ingest({
+      project: "p1", title: "Renamed", content: "v2 body", documentId: v0.id,
+    });
+    expect(v2.document.title).toBe("Renamed");
+
+    // Explicit --author overrides.
+    const v3 = await clio.ingest({
+      project: "p1", content: "v3", documentId: v0.id, author: "user",
+    });
+    expect(v3.document.author).toBe("user");
+    expect(v3.document.title).toBe("Renamed"); // last explicit title persists
+
+    await clio.close();
+  });
+
+  it("create path requires title", async () => {
+    const clio = makeClio();
+    await expect(
+      clio.ingest({ project: "p1", content: "body" }),
+    ).rejects.toThrow(/title is required/);
+    await clio.close();
+  });
+
+  it("--update-if-exists requires title (it's the lookup key)", async () => {
+    const clio = makeClio();
+    await expect(
+      clio.ingest({ project: "p1", content: "body", updateIfExists: true }),
+    ).rejects.toThrow(/title is required/);
+    await clio.close();
+  });
+
   it("chained updates increment version_number sequentially", async () => {
     const clio = makeClio();
     const v0 = await clio.ingest({ project: "p1", title: "Chain", content: "v0" });

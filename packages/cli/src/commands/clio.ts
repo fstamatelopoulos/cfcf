@@ -192,7 +192,18 @@ function registerUnder(root: Command): void {
         defaultSource = `user-ingest: ${path}`;
       }
 
-      const title = opts.title || defaultTitle;
+      // 5.11 follow-up: on `--document-id` update, send the title as
+      // undefined when the user didn't explicitly pass `--title`. The
+      // server preserves the existing doc's title in that case rather
+      // than overwriting with the file-basename default. For create
+      // paths + --update-if-exists, the title is the lookup key (or
+      // the new doc's identity), so we still send a default.
+      const titleExplicit = opts.title !== undefined;
+      const title = titleExplicit
+        ? opts.title
+        : opts.documentId
+          ? undefined        // preserve existing on UUID-keyed update
+          : defaultTitle;    // file basename for create / title-keyed update
       const source = opts.source || defaultSource;
 
       // Build metadata from individual flags + --metadata JSON.
@@ -628,8 +639,11 @@ function registerUnder(root: Command): void {
         // `cfcf clio search`. `[DELETED]` prefix when soft-deleted so
         // mixed lists (--include-deleted) are scannable.
         const titlePrefix = d.deletedAt ? "[DELETED] " : "";
+        const versionsHint = d.versionCount && d.versionCount > 0
+          ? `  versions=${d.versionCount}`
+          : "";
         console.log(`  ${titlePrefix}${d.title}`);
-        console.log(`    [id: ${d.id}]  author: ${d.author}`);
+        console.log(`    [id: ${d.id}]  author: ${d.author}${versionsHint}`);
         console.log(`    project: ${d.projectId}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
         console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
         console.log(`    source=${d.source}`);

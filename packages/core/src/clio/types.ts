@@ -39,6 +39,15 @@ export interface ClioDocument {
   updatedAt: string;
   /** Set by `deleteDocument`; cleared by `restoreDocument`. 5.11. */
   deletedAt?: string | null;
+  /**
+   * Number of archived versions (rows in `clio_document_versions`).
+   * 0 for docs that have never been updated (live content is the only
+   * state). Surfaced in `cfcf clio docs list` and search hits so users
+   * + agents can spot docs with edit history without round-tripping
+   * to `cfcf clio versions <id>`. Mirrors Cerefox's
+   * `cerefox_search_docs.version_count`. 5.12 follow-up.
+   */
+  versionCount?: number;
 }
 
 export interface ClioChunk {
@@ -64,7 +73,15 @@ export interface ClioChunk {
 export interface IngestRequest {
   /** Clio Project to ingest into (by name or id; resolved server-side). */
   project: string;
-  title: string;
+  /**
+   * Document title. Required for create paths. **Optional on
+   * `--document-id` updates** -- when omitted, the existing doc's
+   * title is preserved (5.11 follow-up). Cerefox's analogous parameter
+   * is always required; cfcf diverges because the file-ingest CLI
+   * defaults `title` to the file basename, which would silently
+   * clobber a deliberately-named doc on update.
+   */
+  title?: string;
   content: string;
   /** Free-text origin hint (file path, "stdin", "cfcf-auto:iteration-log", etc.). */
   source?: string;

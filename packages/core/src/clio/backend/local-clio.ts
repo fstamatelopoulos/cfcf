@@ -66,6 +66,8 @@ interface DocumentRow {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** Optional: present when the SELECT joins on clio_document_versions. */
+  version_count?: number;
 }
 
 /** Row shape returned by the candidate-fetching queries in hybrid / semantic search. */
@@ -302,9 +304,10 @@ export class LocalClio implements MemoryBackend {
     if (!req.content || !req.content.trim()) {
       throw new Error("ingest: content is empty");
     }
-    if (!req.title || !req.title.trim()) {
-      throw new Error("ingest: title is empty");
-    }
+    // Title is required for create paths. On `--document-id` updates
+    // (Branch 1 below) we may take the existing doc's title -- so the
+    // emptiness check moves into the create-path resolver instead of
+    // here.
 
     // Resolve (or auto-create) the Project. The caller is expected to
     // pass a slug; UUID inputs skip auto-create (see resolveProject).
@@ -342,6 +345,8 @@ export class LocalClio implements MemoryBackend {
           version_number: result.versionNumber,
           chunks: result.chunksInserted,
           total_chars: result.document.totalChars,
+          title_preserved: req.title === undefined,
+          author_preserved: req.author === undefined,
         },
       });
       return result;
@@ -353,6 +358,10 @@ export class LocalClio implements MemoryBackend {
     // the resolved Project; on hit, snapshot+replace; on miss, fall
     // through to the create path.
     if (req.updateIfExists) {
+      // Title is the lookup key for this branch -- required.
+      if (!req.title || !req.title.trim()) {
+        throw new Error("ingest: title is required when --update-if-exists is set");
+      }
       const existing = await this.findDocumentByTitle(project.id, req.title);
       if (existing) {
         const result = await this.updateDocument(existing, req, contentHash);
@@ -420,10 +429,15 @@ export class LocalClio implements MemoryBackend {
     req: IngestRequest,
     contentHash: string,
   ): Promise<IngestResult> {
+    // Title is required on create paths (no existing doc to inherit from).
+    if (!req.title || !req.title.trim()) {
+      throw new Error("ingest: title is required when creating a new document");
+    }
+    const title = req.title;
     const embedder = await this.getEmbedder();
     const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
     const chunks = chunkMarkdown(req.content, chunkOpts);
-    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, req.title);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, title);
 
     const docId = randomUUID();
     const now = new Date().toISOString();
@@ -441,7 +455,7 @@ export class LocalClio implements MemoryBackend {
       `).run(
         docId,
         projectId,
-        req.title,
+        title,
         req.source ?? "manual",
         author,
         contentHash,
@@ -494,14 +508,26 @@ export class LocalClio implements MemoryBackend {
     req: IngestRequest,
     contentHash: string,
   ): Promise<IngestResult> {
+    // 5.11 follow-up: on `--document-id` update, preserve target's
+    // title + author + metadata when the caller didn't pass them.
+    // Rationale: agents typically want to update CONTENT only; the
+    // file-ingest CLI defaults `title` to the file basename which
+    // would otherwise silently clobber a deliberately-named doc.
+    // Caller can still override either field by passing it explicitly.
+    const resolvedTitle = req.title?.trim() ? req.title : target.title;
+    const titlePreserved = req.title === undefined;
+    const newAuthor = req.author?.trim() ? req.author.trim() : target.author;
+    const authorPreserved = req.author === undefined;
+    const resolvedMetadata = req.metadata ?? target.metadata;
+
     const embedder = await this.getEmbedder();
     const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
     const chunks = chunkMarkdown(req.content, chunkOpts);
-    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, req.title);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, resolvedTitle);
 
     const now = new Date().toISOString();
     const versionId = randomUUID();
-    const metadata = JSON.stringify(req.metadata ?? {});
+    const metadata = JSON.stringify(resolvedMetadata);
     const totalChars = req.content.length;
     // The `source` column on clio_document_versions records WHO WROTE
     // the content being archived (i.e. the prior live author), not
@@ -511,9 +537,8 @@ export class LocalClio implements MemoryBackend {
     // Cerefox's same column conflates "trigger label" + "author"; we
     // pick the more useful interpretation.
     const archivedAuthor = target.author || "agent";
-    // The new live author (who's making this update) -- written to
-    // clio_documents.author below.
-    const newAuthor = req.author?.trim() || "agent";
+    // Suppress unused-warning by referencing the resolved values above.
+    void titlePreserved; void authorPreserved;
 
     let versionNumber = 0;
     this.db.exec("BEGIN IMMEDIATE");
@@ -552,17 +577,15 @@ export class LocalClio implements MemoryBackend {
          WHERE document_id = ? AND version_id IS NULL
       `).run(versionId, now, target.id);
 
-      // 3. Update the document row in place. Title may have changed; that's
-      //    why we always re-write it. `author` records who triggered THIS
-      //    write -- the live row reflects the latest editor; prior editors
-      //    live on their respective version rows' `source` column.
+      // 3. Update the document row in place. `title`/`author`/`metadata`
+      //    use the preserve-or-override values resolved above.
       this.db.prepare(`
         UPDATE clio_documents
            SET title = ?, source = ?, author = ?, content_hash = ?, metadata = ?,
                review_status = ?, chunk_count = ?, total_chars = ?, updated_at = ?
          WHERE id = ?
       `).run(
-        req.title,
+        resolvedTitle,
         req.source ?? target.source,
         newAuthor,
         contentHash,
@@ -659,8 +682,14 @@ export class LocalClio implements MemoryBackend {
   }
 
   async getDocument(id: string): Promise<ClioDocument | null> {
+    // Subquery for version_count is cheap (the index on
+    // clio_document_versions.document_id resolves it in O(versions)).
     const row = this.db.query<DocumentRow, [string]>(
-      `SELECT * FROM clio_documents WHERE id = ? LIMIT 1`,
+      `SELECT d.*,
+              (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+         FROM clio_documents d
+        WHERE d.id = ?
+        LIMIT 1`,
     ).get(id);
     if (!row) return null;
     return this.mapDocument(row);
@@ -783,12 +812,19 @@ export class LocalClio implements MemoryBackend {
       projectId = proj.id;
     }
     const where: string[] = [];
-    if (deletedFilter === "exclude") where.push("deleted_at IS NULL");
-    else if (deletedFilter === "only") where.push("deleted_at IS NOT NULL");
+    if (deletedFilter === "exclude") where.push("d.deleted_at IS NULL");
+    else if (deletedFilter === "only") where.push("d.deleted_at IS NOT NULL");
     // 'include' adds no clause -- both live and tombstoned docs.
-    if (projectId) where.push("project_id = ?");
+    if (projectId) where.push("d.project_id = ?");
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const sql = `SELECT * FROM clio_documents ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    const sql = `
+      SELECT d.*,
+             (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+        FROM clio_documents d
+        ${whereClause}
+       ORDER BY d.created_at DESC
+       LIMIT ? OFFSET ?
+    `;
     const bindings: (string | number)[] = projectId
       ? [projectId, limit, offset]
       : [limit, offset];
@@ -1735,6 +1771,11 @@ export class LocalClio implements MemoryBackend {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at ?? null,
+      // version_count is populated only when the calling SELECT joined
+      // on clio_document_versions (listDocuments + getDocument do).
+      // Other paths (search-hit doc rows, internal lookups) leave it
+      // undefined so callers that don't need it pay no JOIN cost.
+      versionCount: row.version_count,
     };
   }
 
