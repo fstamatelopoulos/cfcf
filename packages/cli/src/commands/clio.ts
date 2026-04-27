@@ -212,6 +212,15 @@ function registerUnder(root: Command): void {
       // ingests can be filtered separately in downstream queries.
       if (!metadata.origin) metadata.origin = "user-cli";
 
+      // Ingest can take several seconds when an embedder is active (the
+      // server runs embedder.embed() over every chunk synchronously
+      // before returning). Show a spinner so the UX doesn't feel stuck.
+      // Suppressed in --json mode + non-TTY stderr.
+      const titleSnippet = title.length > 40 ? title.slice(0, 37) + "…" : title;
+      const stopSpinner = startSpinner({
+        label: `ingesting "${titleSnippet}" (${formatBytes(content.length)})`,
+        enable: !opts.json && !!process.stderr.isTTY,
+      });
       const res = await post<IngestResult>("/api/clio/ingest", {
         project: opts.project,
         title,
@@ -222,6 +231,7 @@ function registerUnder(root: Command): void {
         documentId: opts.documentId,
         author: opts.author,
       });
+      stopSpinner();
       if (!res.ok) {
         console.error(`Ingest failed: ${res.error}`);
         process.exit(1);
@@ -842,10 +852,18 @@ function registerUnder(root: Command): void {
         console.error("Pass either --reindex or --force, not both. --reindex is the safe path.");
         process.exit(1);
       }
+      // The --reindex path runs the server-side embedder loop over
+      // every chunk and can take several seconds. Spinner only when
+      // --reindex is set; the bare set is just a DB row update.
+      const stopSpinner = startSpinner({
+        label: `switching embedder to ${name}${opts.reindex ? " + reindexing" : ""}`,
+        enable: !!opts.reindex && !!process.stderr.isTTY,
+      });
       const res = await post<{ active: { name: string; dim: number }; reindex?: { chunksReembedded: number; chunksSkipped: number; documentsTouched: number; elapsedMs: number } | null }>(
         "/api/clio/embedders/set",
         { name, force: !!opts.force, reindex: !!opts.reindex },
       );
+      stopSpinner();
       if (!res.ok) {
         console.error(`Set failed: ${res.error}`);
         process.exit(1);
@@ -870,6 +888,14 @@ function registerUnder(root: Command): void {
     .option("--json", "Emit the raw JSON result")
     .action(async (opts) => {
       if (!(await checkServer())) return;
+      // Reindex is the slowest cfcf command -- the server runs
+      // embedder.embed() in batches over every chunk in scope. For a
+      // non-trivial corpus this is many seconds; spinner provides
+      // motion. Suppressed in --json + non-TTY for clean machine output.
+      const stopSpinner = startSpinner({
+        label: `reindexing chunks${opts.project ? ` (project: ${opts.project})` : ""}${opts.force ? " [force]" : ""}`,
+        enable: !opts.json && !!process.stderr.isTTY,
+      });
       const res = await post<{ embedder: string; embeddingDim: number; chunksScanned: number; chunksReembedded: number; chunksSkipped: number; documentsTouched: number; elapsedMs: number }>(
         "/api/clio/reindex",
         {
@@ -878,6 +904,7 @@ function registerUnder(root: Command): void {
           batchSize: opts.batchSize,
         },
       );
+      stopSpinner();
       if (!res.ok) {
         console.error(`Reindex failed: ${res.error}`);
         process.exit(1);
@@ -945,6 +972,42 @@ function printHit(rank: number, h: SearchHit): void {
   const snippet = h.content.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
   console.log(`     ${snippet}${h.content.length > 160 ? "…" : ""}`);
   console.log();
+}
+
+/**
+ * Render a stderr spinner with elapsed time while a slow CLI command's
+ * HTTP request is in flight. Returns a stop function that clears the
+ * spinner line in-place so the final result starts on a clean row.
+ *
+ * Why: commands like `cfcf clio ingest` and `cfcf clio reindex` block
+ * on a fetch() that takes several seconds (the server runs
+ * `embedder.embed()` over every chunk synchronously). Without a
+ * spinner the UX feels stuck. Same `\r\x1b[K` in-place rewrite
+ * convention as the embedder-download progress bar in
+ * `OnnxEmbedder.progress_callback`.
+ *
+ * Disabled when `enable=false` (--json output, non-TTY stderr) -- the
+ * spinner produces no lines in the log, callers see only the final
+ * result. Cheap: braille-pattern frame every 100ms.
+ */
+function startSpinner(opts: { label: string; enable: boolean }): () => void {
+  if (!opts.enable) return () => { /* no-op */ };
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const start = Date.now();
+  let frame = 0;
+  const render = () => {
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    process.stderr.write(
+      `\r\x1b[K[clio] ${frames[frame % frames.length]} ${opts.label}  ${elapsed}s`,
+    );
+    frame++;
+  };
+  render();
+  const handle = setInterval(render, 100);
+  return () => {
+    clearInterval(handle);
+    process.stderr.write("\r\x1b[K");
+  };
 }
 
 function formatBytes(bytes: number): string {
