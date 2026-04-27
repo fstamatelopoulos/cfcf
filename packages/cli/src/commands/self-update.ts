@@ -183,9 +183,24 @@ export function registerSelfUpdateCommand(program: Command): void {
       proc.on("exit", (code) => {
         if (code === 0) {
           console.log(`\n✓ upgraded to ${versionToInstall}.`);
-          console.log(`  Run \`cfcf doctor\` to verify the new install.`);
-          if (process.env.CFCF_INTERNAL_SERVE === undefined) {
-            console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
+
+          // Regenerate shell completion to pick up any new verbs in
+          // the upgraded version. We invoke the NEW cfcf binary
+          // (just installed) as a subprocess -- this process is the
+          // OLD version and its completion module's tree-walking
+          // would emit yesterday's verbs. Best-effort; a failure
+          // here doesn't fail the upgrade. Same regeneration the
+          // install.sh and postinstall paths run.
+          try {
+            const completion = spawn("cfcf", ["completion", "install"], { stdio: "inherit" });
+            completion.on("exit", () => {
+              printUpgradeFollowUp(versionToInstall);
+            });
+            completion.on("error", () => {
+              printUpgradeFollowUp(versionToInstall);
+            });
+          } catch {
+            printUpgradeFollowUp(versionToInstall);
           }
         } else {
           console.error(`\n✗ installer exited with code ${code}`);
@@ -193,4 +208,21 @@ export function registerSelfUpdateCommand(program: Command): void {
         }
       });
     });
+}
+
+/**
+ * Common follow-up messaging printed after a successful self-update,
+ * regardless of whether the post-upgrade completion regeneration
+ * succeeded. Kept in one place so the three exit-paths (completion
+ * exit, completion error, completion-spawn-throw) stay consistent.
+ */
+function printUpgradeFollowUp(version: string): void {
+  console.log(`  Run \`cfcf doctor\` to verify the new install.`);
+  if (process.env.CFCF_INTERNAL_SERVE === undefined) {
+    console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
+  }
+  // version is in the success line above the call to this helper;
+  // keep this signature unchanged so future text additions stay
+  // localised. (Currently unused but included for forward-compat.)
+  void version;
 }

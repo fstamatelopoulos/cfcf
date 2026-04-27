@@ -92,6 +92,9 @@ cat > "$stage/package.json" <<EOF
   "bin": {
     "cfcf": "./bin/cfcf.js"
   },
+  "scripts": {
+    "postinstall": "bun ./bin/cfcf.js completion install || true"
+  },
   "files": [
     "bin",
     "dist",

@@ -23,6 +23,9 @@
  */
 
 import type { Command } from "commander";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 interface NodeInfo {
   /** Command name (last token, e.g. "search", "ingest", "docs"). */
@@ -223,11 +226,84 @@ function serialiseForShell(node: NodeInfo): NodeInfo {
  * Detect the user's shell from $SHELL. Returns "bash" | "zsh" | null.
  * Used by `cfcf completion install` to print the right instructions.
  */
-function detectShell(): "bash" | "zsh" | null {
+export function detectShell(): "bash" | "zsh" | null {
   const shell = process.env.SHELL ?? "";
   if (shell.endsWith("/zsh")) return "zsh";
   if (shell.endsWith("/bash")) return "bash";
   return null;
+}
+
+/**
+ * Canonical paths where regenerated completion files live. Same paths
+ * `cfcf completion install` recommends. Stable so install.sh +
+ * `cfcf self-update` can both regenerate-in-place without reading user
+ * preferences.
+ *
+ * `process.env.HOME ?? os.homedir()` so tests can override the path
+ * via `HOME`. (Node's `homedir()` reads userInfo at process start and
+ * doesn't repick when env changes.)
+ */
+function userHome(): string {
+  return process.env.HOME ?? homedir();
+}
+export function bashCompletionPath(): string {
+  return join(userHome(), ".cfcf-completion.bash");
+}
+export function zshCompletionPath(): string {
+  return join(userHome(), ".zsh", "completions", "_cfcf");
+}
+
+export interface RegenerateResult {
+  shell: "bash" | "zsh" | "both" | "none";
+  /** Files we actually wrote this run. */
+  written: string[];
+  /** True iff at least one of the written files didn't exist before. */
+  freshInstall: boolean;
+}
+
+/**
+ * Regenerate the shell completion file(s) for the user's shell.
+ * Idempotent: writing over an existing file leaves the user's
+ * `source` line in their rc untouched. The first run (file didn't
+ * exist) is the only time we should print the source-this-line
+ * instruction; subsequent runs (post-upgrade) are silent.
+ *
+ * Strategy:
+ *   - If $SHELL is bash → write ~/.cfcf-completion.bash
+ *   - If $SHELL is zsh  → write ~/.zsh/completions/_cfcf
+ *   - If neither (CI, sh, fish, …) → no-op (returns shell:"none")
+ *
+ * Used by:
+ *   - scripts/install.sh (immediately after the bun-install step)
+ *   - packages/cli/src/commands/self-update.ts (post-upgrade)
+ *
+ * Best-effort: errors are caught + reported but never fail the
+ * outer install/upgrade flow. Completion is a quality-of-life
+ * feature, not a critical path.
+ */
+export function regenerateShellCompletion(program: Command): RegenerateResult {
+  const shell = detectShell();
+  if (shell === null) return { shell: "none", written: [], freshInstall: false };
+
+  const tree = walkCommands(program);
+  const written: string[] = [];
+  let freshInstall = false;
+
+  if (shell === "bash") {
+    const path = bashCompletionPath();
+    if (!existsSync(path)) freshInstall = true;
+    writeFileSync(path, renderBashCompletion(tree), { mode: 0o644 });
+    written.push(path);
+  } else if (shell === "zsh") {
+    const path = zshCompletionPath();
+    // The directory must exist before the user can `fpath`-add it.
+    mkdirSync(join(userHome(), ".zsh", "completions"), { recursive: true });
+    if (!existsSync(path)) freshInstall = true;
+    writeFileSync(path, renderZshCompletion(tree), { mode: 0o644 });
+    written.push(path);
+  }
+
+  return { shell, written, freshInstall };
 }
 
 export function registerCompletionCommand(program: Command): void {
@@ -259,31 +335,38 @@ export function registerCompletionCommand(program: Command): void {
 
   completionCmd
     .command("install")
-    .description("Print shell-specific install instructions for tab completion")
-    .action(() => {
+    .description("Install tab completion for the detected shell (writes ~/.cfcf-completion.bash or ~/.zsh/completions/_cfcf)")
+    .option("--print-only", "Don't write any files; just print the manual setup instructions")
+    .action((opts: { printOnly?: boolean }) => {
       const detected = detectShell();
-      console.log("cfcf shell completion -- install instructions");
+      if (opts.printOnly || detected === null) {
+        printCompletionInstructions(detected);
+        return;
+      }
+
+      // Auto-write path. Same trust principle as elsewhere: cfcf only
+      // touches files it owns (~/.cfcf-completion.bash + ~/.zsh/...).
+      // It never edits ~/.bashrc / ~/.zshrc -- that one-time `source`
+      // line is the user's call.
+      const result = regenerateShellCompletion(program);
+      const path = result.written[0];
+      console.log(`cfcf shell completion installed for ${detected}.`);
+      console.log(`  wrote: ${path}`);
       console.log();
-      if (detected === "bash" || detected === null) {
-        console.log("Bash:");
-        console.log("  cfcf completion bash > ~/.cfcf-completion.bash");
-        console.log("  echo 'source ~/.cfcf-completion.bash' >> ~/.bashrc");
-        console.log("  # then open a new shell, or: source ~/.bashrc");
-        console.log();
-      }
-      if (detected === "zsh" || detected === null) {
-        console.log("Zsh:");
-        console.log("  mkdir -p ~/.zsh/completions");
-        console.log("  cfcf completion zsh > ~/.zsh/completions/_cfcf");
-        console.log("  # add to ~/.zshrc if not already present:");
-        console.log("  #   fpath=(~/.zsh/completions $fpath)");
-        console.log("  #   autoload -U compinit && compinit");
-        console.log();
-      }
-      if (detected) {
-        console.log(`(Detected shell: ${detected}.)`);
+      if (result.freshInstall) {
+        console.log("One-time setup -- add this line to your shell rc and reopen the shell:");
+        if (detected === "bash") {
+          console.log(`  echo 'source ${path}' >> ~/.bashrc`);
+          console.log(`  # then: source ~/.bashrc`);
+        } else {
+          // zsh: the file is auto-loaded if its parent dir is on $fpath.
+          console.log("  # Add to ~/.zshrc (if not already present):");
+          console.log("  fpath=(~/.zsh/completions $fpath)");
+          console.log("  autoload -U compinit && compinit");
+          console.log("  # then: exec zsh");
+        }
       } else {
-        console.log("(Couldn't detect your shell from $SHELL; both forms shown.)");
+        console.log("Already installed; regenerated to pick up any new verbs.");
       }
       console.log();
       console.log("After re-sourcing, tab-complete works on every cfcf verb:");
@@ -291,6 +374,38 @@ export function registerCompletionCommand(program: Command): void {
       console.log("  cfcf clio <TAB>       → search audit reindex stats docs metadata projects embedder");
       console.log("  cfcf clio docs <TAB>  → list ingest get edit delete restore versions");
       console.log();
-      console.log("Re-run `cfcf completion {bash,zsh}` after upgrading cfcf to pick up new verbs.");
+      console.log("Auto-regenerated by scripts/install.sh and `cfcf self-update`; you should");
+      console.log("rarely need to re-run this command yourself.");
     });
+}
+
+/**
+ * Print the manual install instructions (the old `cfcf completion install`
+ * behaviour). Used when the user passes `--print-only` or when $SHELL
+ * isn't recognised and we can't safely auto-install.
+ */
+function printCompletionInstructions(detected: "bash" | "zsh" | null): void {
+  console.log("cfcf shell completion -- install instructions");
+  console.log();
+  if (detected === "bash" || detected === null) {
+    console.log("Bash:");
+    console.log("  cfcf completion bash > ~/.cfcf-completion.bash");
+    console.log("  echo 'source ~/.cfcf-completion.bash' >> ~/.bashrc");
+    console.log("  # then open a new shell, or: source ~/.bashrc");
+    console.log();
+  }
+  if (detected === "zsh" || detected === null) {
+    console.log("Zsh:");
+    console.log("  mkdir -p ~/.zsh/completions");
+    console.log("  cfcf completion zsh > ~/.zsh/completions/_cfcf");
+    console.log("  # add to ~/.zshrc if not already present:");
+    console.log("  #   fpath=(~/.zsh/completions $fpath)");
+    console.log("  #   autoload -U compinit && compinit");
+    console.log();
+  }
+  if (detected) {
+    console.log(`(Detected shell: ${detected}.)`);
+  } else {
+    console.log("(Couldn't detect your shell from $SHELL; both forms shown.)");
+  }
 }

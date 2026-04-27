@@ -6,9 +6,19 @@
  * subcommands), walk it, and verify the produced tree + scripts.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Command } from "commander";
-import { walkCommands, renderBashCompletion, renderZshCompletion } from "./completion.js";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  walkCommands,
+  renderBashCompletion,
+  renderZshCompletion,
+  regenerateShellCompletion,
+  bashCompletionPath,
+  zshCompletionPath,
+} from "./completion.js";
 
 function buildSampleProgram(): Command {
   // Mirrors the real cfcf shape on a small scale so the test catches
@@ -169,6 +179,137 @@ describe("renderZshCompletion", () => {
     expect(m).not.toBeNull();
     const parsed = JSON.parse(m![1]);
     expect(parsed.children.length).toBeGreaterThan(0);
+  });
+});
+
+describe("regenerateShellCompletion", () => {
+  // Each test gets a temp HOME so we don't write to the real user dir.
+  let tempHome: string;
+  let savedHome: string | undefined;
+  let savedShell: string | undefined;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "cfcf-completion-test-"));
+    savedHome = process.env.HOME;
+    savedShell = process.env.SHELL;
+    process.env.HOME = tempHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedShell === undefined) delete process.env.SHELL; else process.env.SHELL = savedShell;
+    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("writes ~/.cfcf-completion.bash for bash users; freshInstall=true on first run", () => {
+    process.env.SHELL = "/bin/bash";
+    const program = buildSampleProgram();
+
+    const result = regenerateShellCompletion(program);
+
+    expect(result.shell).toBe("bash");
+    expect(result.freshInstall).toBe(true);
+    expect(result.written.length).toBe(1);
+    expect(result.written[0]).toBe(bashCompletionPath());
+    expect(existsSync(bashCompletionPath())).toBe(true);
+    expect(readFileSync(bashCompletionPath(), "utf-8")).toContain("_cfcf_complete()");
+  });
+
+  it("writes ~/.zsh/completions/_cfcf for zsh users + creates the dir", () => {
+    process.env.SHELL = "/usr/local/bin/zsh";
+    const program = buildSampleProgram();
+
+    const result = regenerateShellCompletion(program);
+
+    expect(result.shell).toBe("zsh");
+    expect(result.freshInstall).toBe(true);
+    expect(result.written[0]).toBe(zshCompletionPath());
+    expect(existsSync(zshCompletionPath())).toBe(true);
+    expect(readFileSync(zshCompletionPath(), "utf-8")).toContain("#compdef cfcf");
+  });
+
+  it("subsequent runs report freshInstall=false (file already existed)", () => {
+    process.env.SHELL = "/bin/bash";
+    const program = buildSampleProgram();
+
+    regenerateShellCompletion(program);  // first run
+    const second = regenerateShellCompletion(program);  // second run
+
+    expect(second.freshInstall).toBe(false);
+    expect(second.written[0]).toBe(bashCompletionPath());
+    // File still exists + still contains the function (idempotent rewrite).
+    expect(existsSync(bashCompletionPath())).toBe(true);
+  });
+
+  it("regenerates on every call (picks up new verbs after upgrade)", () => {
+    process.env.SHELL = "/bin/bash";
+    const oldProgram = buildSampleProgram();
+    regenerateShellCompletion(oldProgram);
+    const oldContents = readFileSync(bashCompletionPath(), "utf-8");
+    expect(oldContents).not.toContain('"name":"newverb"');
+
+    // Simulate an upgrade that adds a verb.
+    const newProgram = buildSampleProgram();
+    newProgram.command("newverb").description("freshly added verb");
+    regenerateShellCompletion(newProgram);
+
+    const newContents = readFileSync(bashCompletionPath(), "utf-8");
+    expect(newContents).toContain('"name":"newverb"');
+    expect(newContents).not.toEqual(oldContents);
+  });
+
+  it("returns shell:'none' (no-op) when $SHELL is fish/sh/empty", () => {
+    process.env.SHELL = "/usr/bin/fish";
+    const program = buildSampleProgram();
+
+    const result = regenerateShellCompletion(program);
+
+    expect(result.shell).toBe("none");
+    expect(result.written.length).toBe(0);
+    expect(result.freshInstall).toBe(false);
+    // Neither file should have been created.
+    expect(existsSync(bashCompletionPath())).toBe(false);
+    expect(existsSync(zshCompletionPath())).toBe(false);
+  });
+
+  it("doesn't clobber files outside the canonical paths (sanity test)", () => {
+    process.env.SHELL = "/bin/bash";
+    // Stage a sentinel file in the temp HOME that should NOT be touched.
+    const sentinel = join(tempHome, "do-not-touch.txt");
+    writeFileSync(sentinel, "sentinel");
+
+    const program = buildSampleProgram();
+    regenerateShellCompletion(program);
+
+    expect(readFileSync(sentinel, "utf-8")).toBe("sentinel");
+  });
+
+  it("zsh path: doesn't fail when ~/.zsh/completions doesn't pre-exist", () => {
+    process.env.SHELL = "/bin/zsh";
+    // Confirm the dir doesn't exist; regenerateShellCompletion should mkdir -p it.
+    expect(existsSync(join(tempHome, ".zsh", "completions"))).toBe(false);
+
+    const program = buildSampleProgram();
+    const result = regenerateShellCompletion(program);
+
+    expect(result.shell).toBe("zsh");
+    expect(existsSync(join(tempHome, ".zsh", "completions"))).toBe(true);
+    expect(existsSync(zshCompletionPath())).toBe(true);
+  });
+
+  it("zsh path: tolerates ~/.zsh/completions pre-existing", () => {
+    process.env.SHELL = "/bin/zsh";
+    mkdirSync(join(tempHome, ".zsh", "completions"), { recursive: true });
+    // Drop a pre-existing _cfcf so we can verify it's overwritten cleanly.
+    writeFileSync(zshCompletionPath(), "old contents");
+
+    const program = buildSampleProgram();
+    const result = regenerateShellCompletion(program);
+
+    expect(result.shell).toBe("zsh");
+    expect(result.freshInstall).toBe(false);  // file existed
+    expect(readFileSync(zshCompletionPath(), "utf-8")).not.toBe("old contents");
+    expect(readFileSync(zshCompletionPath(), "utf-8")).toContain("#compdef cfcf");
   });
 });
 

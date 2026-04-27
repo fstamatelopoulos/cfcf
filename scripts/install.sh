@@ -115,6 +115,16 @@ fi
 
 echo "[cfcf] cfcf $version installed."
 
+# ── 3a. Install shell completion (best-effort) ────────────────────────
+# Same regeneration `cfcf self-update` does post-upgrade and that the
+# bun-install postinstall hook does on `bun install -g` (5.5b path).
+# Keeps the user's shell completion in lock-step with the verb tree
+# they actually have. Trust principle: cfcf only touches files it
+# owns (~/.cfcf-completion.bash, ~/.zsh/completions/_cfcf); it does
+# NOT edit user rc files. Failure here doesn't fail the install.
+echo "[cfcf] Installing shell completion..."
+cfcf completion install || echo "[cfcf] (completion install skipped/failed -- run 'cfcf completion install' manually)"
+
 # ── 4. Hand off to cfcf init (interactive) ────────────────────────────
 if [[ -z "${CFCF_SKIP_INIT:-}" ]] && [[ -t 0 || -e /dev/tty ]]; then
   echo "[cfcf] Press Enter to run 'cfcf init' now, or Ctrl-C to exit and run it later."
