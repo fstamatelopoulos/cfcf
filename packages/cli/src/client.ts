@@ -128,7 +128,7 @@ export async function patch<T = unknown>(path: string, body?: unknown): Promise<
 /**
  * Make a DELETE request to the cfcf server. Optional body for callers
  * that need to attach attribution / metadata to the request (e.g.
- * `cfcf clio delete <id> --author <name>` mapped to
+ * `cfcf clio docs delete <id> --author <name>` mapped to
  * `DELETE /api/clio/documents/:id`).
  */
 export async function del<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
