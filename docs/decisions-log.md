@@ -13,6 +13,36 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-04-27 — Clio CLI verbs: namespaced surface with a three-clause rule
+
+**Context.** The Clio CLI accreted across three iterations (5.7 → 5.11 → 5.12 → 5.13) without revisiting the overall shape. Iter-5 dogfood produced repeated "where do I do X?" friction (rename a doc, move it between projects, edit metadata) — same root cause: doc operations were scattered between top-level (`get`, `delete`, `restore`, `versions`, `ingest`) and a `docs` namespace (`docs list`, `docs edit`). Plan item 5.8 promoted this to a normalisation pass before writing the user manual.
+
+**Options considered.**
+
+1. **Literal Cerefox CLI parity.** Audit of `../cerefox/src/cerefox/cli.py` showed Cerefox's CLI is internally inconsistent (`list-docs` plural vs `delete-doc` singular; `metadata-search` flips noun-verb ordering vs `list-docs`). Inheriting that mess would import the wrong shape.
+2. **Both `search` and `ingest` under `docs`.** Maximally rule-bound. Forces `metadata search` / `metadata keys` into either `docs metadata search` (3-deep nesting) or `docs metadata-search` (hyphen rebirth). Rejected.
+3. **Mode flag (`search --content` / `search --metadata`).** Collapses two operations with different ranking semantics (BM25/cosine vs `updated_at desc`) and parameter shapes (string vs JSON filter). Orphans `metadata keys` with no good home. Rejected.
+4. **Both `search` + `ingest` top-level (no namespacing for either).** Returns to the pre-cleanup scattered state. Rejected.
+5. **`search` top-level + `ingest` under `docs`** (with corresponding `metadata.search/keys`, `projects.list/create/show`, `embedder.list/active/install/set` namespaces). Selected.
+
+**Decision.** Option 5 — namespaced surface with three-clause rule:
+
+> 1. Collection-wide / Clio-wide / headline operations stay top-level (`search`, `audit`, `reindex`, `stats`).
+> 2. Verbs that operate on a specific noun-instance go under that noun's namespace (`docs ingest/get/edit/delete/restore/versions`, `projects create/show`, `embedder install/set`).
+> 3. A sub-concept with multiple operations of its own gets its own namespace (`metadata search/keys`).
+
+Search and ingest sit on opposite sides of the rule because they play different roles: search produces a *ranking from the whole collection* (clause 1), ingest creates *a specific doc-instance* (clause 2). The asymmetry has a real reason. Option 5 is also the only shape where `metadata` reads as a clean sibling namespace next to `docs`/`projects`/`embedder` — the killed alternatives all force `metadata` into awkward nesting or hyphen-rebirth.
+
+**No deprecation aliases.** Single user, pre-OSS-launch. Rename cleanly, no legacy verbs.
+
+**Out of scope** (this round): top-level cfcf verbs (`workspace`, `run`, `review`, `reflect`, `document`, `server`, `config`, `init`, `doctor`, `self-update`, `status`, `resume`, `stop`). Iter 6 will audit those with the same lens.
+
+**Why this matters for parity.** Cerefox parity is at the *abstraction layer* — every Cerefox MCP tool maps to a `MemoryBackend` method, and every cfcf CLI verb maps to a `MemoryBackend` method. The CLI surface itself can be cleaner than Cerefox's CLI without breaking that mapping. The user noted that cfcf's clean shape can serve as a reference for a future Cerefox CLI cleanup at the Cerefox-OSS level.
+
+**Reference.** Full audit, killed-alternatives analysis, and locked surface in [`docs/research/cli-verb-normalisation.md`](research/cli-verb-normalisation.md).
+
+---
+
 ## 2026-04-27 — Embedder-recommended chunk size as a safety ceiling, plus pre-flight warnings on switch + reindex
 
 **Context.** Each embedder in the catalogue declares a `recommendedChunkMaxChars` calibrated for its tokenizer's `model_max_length` minus a safety margin (e.g. 1800 chars ≈ 4 chars/token × 0.9 × 512 tokens for a `bge-small-en-v1.5`-class context). Two related risks emerged once `clio.maxChunkChars` became user-configurable:
