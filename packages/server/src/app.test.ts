@@ -39,7 +39,12 @@ describe("server API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBe("ok");
-      expect(body.version).toBe("0.10.0");
+      // /api/health echoes the resolved VERSION constant (installed
+      // package.json's version, or workspace + "-dev" suffix in tests).
+      // Validate the shape rather than a fixed string so the assertion
+      // doesn't drift when package.json bumps.
+      expect(typeof body.version).toBe("string");
+      expect(body.version).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$/);
     });
   });
 

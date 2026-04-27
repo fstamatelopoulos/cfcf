@@ -24,7 +24,6 @@ if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") {
 }
 
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
 import { VERSION } from "@cfcf/core";
 import { registerServerCommands } from "./commands/server.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -56,21 +55,13 @@ if (process.env.CFCF_INTERNAL_SERVE === "1") {
 }
 
 /**
- * `cfcf --version` output. Resolves the installed package's package.json
- * via `require.resolve("@cerefox/cfcf-cli/package.json")` so the version
- * shown matches what the user actually installed (not the in-repo
- * VERSION constant). Dev mode (workspace package is named `@cfcf/cli`,
- * not `@cerefox/cfcf-cli`) falls back to the VERSION constant from core.
+ * `cfcf --version` output. Since 2026-04-27 the resolution lives in
+ * `@cfcf/core`'s VERSION constant (single source of truth — installed
+ * package.json → workspace package.json → "0.0.0-unknown"). Both
+ * `cfcf --version` and `cfcf server start` end up showing the same
+ * string.
  */
 function buildVersionString(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require("node:module") as typeof import("node:module");
-    const req = createRequire(import.meta.url);
-    const pkgJsonPath = req.resolve("@cerefox/cfcf-cli/package.json");
-    const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
-    if (typeof pkg.version === "string") return pkg.version;
-  } catch { /* not the installed shape; fall through */ }
   return VERSION;
 }
 
