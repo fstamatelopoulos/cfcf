@@ -206,6 +206,24 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(chunkBody.hits.length).toBeGreaterThanOrEqual(body.hits.length);
   });
 
+  it("GET /api/clio/search Cerefox-parity knobs (alpha + small_doc_threshold + context_window)", async () => {
+    const app = createApp();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "doc", content: "auth content" }),
+    });
+    // Valid values pass.
+    expect((await app.request("/api/clio/search?q=auth&alpha=0.7")).status).toBe(200);
+    expect((await app.request("/api/clio/search?q=auth&small_doc_threshold=0")).status).toBe(200);
+    expect((await app.request("/api/clio/search?q=auth&context_window=2")).status).toBe(200);
+    // Invalid → 400 with a specific error.
+    expect((await app.request("/api/clio/search?q=auth&alpha=2")).status).toBe(400);
+    expect((await app.request("/api/clio/search?q=auth&alpha=-0.1")).status).toBe(400);
+    expect((await app.request("/api/clio/search?q=auth&small_doc_threshold=-1")).status).toBe(400);
+    expect((await app.request("/api/clio/search?q=auth&context_window=-1")).status).toBe(400);
+  });
+
   it("GET /api/clio/search?by=invalid → 400", async () => {
     const app = createApp();
     const res = await app.request("/api/clio/search?q=auth&by=oops");

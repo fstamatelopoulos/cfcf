@@ -437,7 +437,20 @@ export class LocalClio implements MemoryBackend {
     }
     const title = req.title;
     const embedder = await this.getEmbedder();
-    const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
+    // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
+    //   - max: embedder-recommended wins (context window matters more
+    //     than a hand-tuned global). FTS-only mode + no embedder →
+    //     IngestRequest.chunkMaxChars (server forwards from config) →
+    //     4000 default.
+    //   - min: IngestRequest.chunkMinChars (server forwards from
+    //     config) → 100 default. Caller-side; no embedder override.
+    const chunkOpts: { maxChunkChars?: number; minChunkChars?: number } = {};
+    if (embedder) {
+      chunkOpts.maxChunkChars = embedder.recommendedChunkMaxChars;
+    } else if (req.chunkMaxChars !== undefined) {
+      chunkOpts.maxChunkChars = req.chunkMaxChars;
+    }
+    if (req.chunkMinChars !== undefined) chunkOpts.minChunkChars = req.chunkMinChars;
     const chunks = chunkMarkdown(req.content, chunkOpts);
     const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, title);
 
@@ -523,7 +536,20 @@ export class LocalClio implements MemoryBackend {
     const resolvedMetadata = req.metadata ?? target.metadata;
 
     const embedder = await this.getEmbedder();
-    const chunkOpts = embedder ? { maxChunkChars: embedder.recommendedChunkMaxChars } : undefined;
+    // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
+    //   - max: embedder-recommended wins (context window matters more
+    //     than a hand-tuned global). FTS-only mode + no embedder →
+    //     IngestRequest.chunkMaxChars (server forwards from config) →
+    //     4000 default.
+    //   - min: IngestRequest.chunkMinChars (server forwards from
+    //     config) → 100 default. Caller-side; no embedder override.
+    const chunkOpts: { maxChunkChars?: number; minChunkChars?: number } = {};
+    if (embedder) {
+      chunkOpts.maxChunkChars = embedder.recommendedChunkMaxChars;
+    } else if (req.chunkMaxChars !== undefined) {
+      chunkOpts.maxChunkChars = req.chunkMaxChars;
+    }
+    if (req.chunkMinChars !== undefined) chunkOpts.minChunkChars = req.chunkMinChars;
     const chunks = chunkMarkdown(req.content, chunkOpts);
     const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, resolvedTitle);
 
@@ -1109,6 +1135,14 @@ export class LocalClio implements MemoryBackend {
     // higher-quality entries than a long list. Cerefox's default is 5.
     const matchCount = Math.max(1, Math.min(req.matchCount ?? 5, 50));
 
+    // Cerefox-style small-to-big knobs (with sensible defaults that
+    // match Cerefox's RPC defaults). These can be overridden per-call
+    // (when callers pass them on `SearchRequest`) but the global
+    // config is the usual source of truth -- the route layer reads
+    // it once and forwards.
+    const smallDocThreshold = req.smallDocThreshold ?? 20000;
+    const contextWindow = Math.max(0, req.contextWindow ?? 1);
+
     // Fetch a 5x candidate pool so dedup has enough material.
     const chunkRes = await this.search({ ...req, matchCount: matchCount * 5 });
 
@@ -1164,8 +1198,67 @@ export class LocalClio implements MemoryBackend {
       }
     }
 
+    // Cerefox-style small-to-big content resolution per hit:
+    //   - small doc (total_chars ≤ smallDocThreshold) → return FULL
+    //     document content as bestChunkContent. is_partial=false.
+    //   - large doc → return matched chunk + contextWindow neighbours
+    //     on each side. is_partial=true.
+    // Threshold of 0 disables the small-doc-full-content path entirely.
+    const fullContentByDoc = new Map<string, string>();
+    if (smallDocThreshold > 0) {
+      const smallDocIds = ranked
+        .filter((h) => (docMeta.get(h.documentId)?.total_chars ?? Infinity) <= smallDocThreshold)
+        .map((h) => h.documentId);
+      if (smallDocIds.length > 0) {
+        const placeholders = smallDocIds.map(() => "?").join(",");
+        const chunks = this.db.query<{ document_id: string; content: string; chunk_index: number }, string[]>(
+          `SELECT document_id, content, chunk_index
+             FROM clio_chunks
+            WHERE document_id IN (${placeholders})
+              AND version_id IS NULL
+            ORDER BY document_id, chunk_index ASC`,
+        ).all(...smallDocIds);
+        const byDoc = new Map<string, string[]>();
+        for (const c of chunks) {
+          const arr = byDoc.get(c.document_id) ?? [];
+          arr.push(c.content);
+          byDoc.set(c.document_id, arr);
+        }
+        for (const [docId, arr] of byDoc) {
+          fullContentByDoc.set(docId, arr.join("\n\n"));
+        }
+      }
+    }
+
+    // For large docs (NOT in fullContentByDoc), build the chunk +
+    // contextWindow neighbour window FROM THE DB explicitly. We don't
+    // reuse `h.content` because the chunk-level search already ran its
+    // own `expandSmallToBig` (with a fixed dim-based radius) which
+    // would otherwise leak into the doc-level result, ignoring our
+    // contextWindow knob entirely. Fetching fresh from clio_chunks is
+    // the only way to honour contextWindow=0 (bare chunk) and any
+    // per-call override.
+    const partialContent = new Map<string, string>(); // chunkId → final content for the partial path
+    const largeDocs = ranked.filter((h) => !fullContentByDoc.has(h.documentId));
+    for (const h of largeDocs) {
+      const lo = Math.max(0, h.chunkIndex - contextWindow);
+      const hi = h.chunkIndex + contextWindow;
+      const rows = this.db.query<{ content: string; chunk_index: number }, [string, number, number]>(
+        `SELECT content, chunk_index FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL
+            AND chunk_index BETWEEN ? AND ?
+          ORDER BY chunk_index ASC`,
+      ).all(h.documentId, lo, hi);
+      partialContent.set(h.chunkId, rows.map((r) => r.content).join("\n\n"));
+    }
+
     const hits: DocumentSearchHit[] = ranked.map((h) => {
       const meta = docMeta.get(h.documentId);
+      const fullDocContent = fullContentByDoc.get(h.documentId);
+      const isPartial = fullDocContent === undefined;
+      const content = fullDocContent
+        ?? partialContent.get(h.chunkId)
+        ?? h.content; // last-resort fallback; should never fire
       return {
         documentId: h.documentId,
         docTitle: h.docTitle,
@@ -1182,11 +1275,12 @@ export class LocalClio implements MemoryBackend {
         bestChunkHeadingPath: h.headingPath,
         bestChunkHeadingLevel: h.headingLevel,
         bestChunkTitle: h.title,
-        bestChunkContent: h.content,
+        bestChunkContent: content,
         bestChunkId: h.chunkId,
         bestChunkIndex: h.chunkIndex,
         createdAt: meta?.created_at ?? "",
         updatedAt: meta?.updated_at ?? "",
+        isPartial,
       };
     });
 
@@ -1344,10 +1438,28 @@ export class LocalClio implements MemoryBackend {
   }
 
   /**
-   * Hybrid search: Reciprocal Rank Fusion (RRF) of FTS top-N + vector
-   * top-N. Matches the design doc's §4.3 formula:
-   *   score(d) = sum over engines: 1 / (k + rank_engine(d))
-   * with k = 60.
+   * Hybrid search: alpha-weighted score blending of normalised FTS
+   * BM25 + raw cosine similarity. Cerefox parity (their `p_alpha`
+   * RPC parameter; default 0.7).
+   *
+   * Why renormalisation: SQLite FTS5's `bm25()` returns values in
+   * `[-∞, 0]` where more-negative is more relevant -- corpus-relative,
+   * unbounded, not directly comparable to cosine `[0, 1]`. We min-max
+   * normalise BM25 within the candidate pool, flip sign, scale to
+   * `[0, 1]`. Trade-off: the same query against different filter
+   * combinations can produce different ABSOLUTE blended scores
+   * (because the candidate pool changes), but RELATIVE ranking is
+   * preserved -- which is what hybrid search cares about. Cerefox
+   * doesn't have this problem because Postgres' `ts_rank_cd` is
+   * already in `[0, 1]`.
+   *
+   * Formula (each chunk):
+   *   blended = α × cosine + (1 − α) × normalised_bm25
+   *
+   * FTS-matched chunks ALWAYS pass through regardless of cosine
+   * (mirrors Cerefox's threshold semantics: minScore filters only
+   * vector-only candidates). Decisions-log 2026-04-25 + 2026-04-27
+   * captures the choice + the algorithm switch from RRF.
    */
   private async searchHybrid(
     req: SearchRequest,
@@ -1355,61 +1467,68 @@ export class LocalClio implements MemoryBackend {
     matchCount: number,
     projectFilterId: string | null,
   ): Promise<SearchResponse> {
-    const RRF_K = 60;
+    const alpha = clampAlpha(req.alpha ?? 0.7);
     const candidateCount = Math.max(matchCount * 5, 30);
+    const minScore = req.minScore ?? 0;
 
-    // Run FTS candidates (same filters as searchFts but raw ranks).
+    // FTS candidate pool. Each row's `bm25_rank` is BM25 in [-∞, 0]
+    // where more-negative = more relevant (we negate below).
     const ftsRows = this.fetchFtsCandidates(req, projectFilterId, candidateCount);
-    // Run vector candidates.
+    // Vector candidates + raw cosine per chunk.
     const queryVector = (await embedder.embed([req.query]))[0];
     const vecRows = this.fetchVectorCandidates(req, projectFilterId, embedder);
-    const vecRanked = vecRows
+    const vecScored = vecRows
       .map((row) => ({
         row,
-        score: cosineSimilarity(
+        cosine: cosineSimilarity(
           queryVector,
           blobToEmbedding(new Uint8Array(row.embedding as Uint8Array), embedder.dim),
         ),
       }))
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.cosine - a.cosine)
       .slice(0, candidateCount);
 
-    // Build an id -> rank map for each engine so fusion is cheap.
-    const ftsRank = new Map<string, number>();
-    ftsRows.forEach((r, i) => ftsRank.set(r.chunk_id, i + 1));
-    const vecRank = new Map<string, number>();
-    vecRanked.forEach(({ row }, i) => vecRank.set(row.chunk_id, i + 1));
-    // Raw cosine per chunk; we need this to apply the threshold to the
-    // vector-only branch below.
-    const vecCosine = new Map<string, number>();
-    vecRanked.forEach(({ row, score }) => vecCosine.set(row.chunk_id, score));
-    const minScore = req.minScore ?? 0;
-
-    const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
-    // Seed with whichever engine produced each candidate; take the first
-    // sighting as the canonical row.
-    for (const r of ftsRows) {
-      // FTS-matched chunks ALWAYS pass through, regardless of vector
-      // score (matches Cerefox's threshold semantics: the threshold
-      // only filters vector-only candidates). See decisions-log
-      // 2026-04-25 "Hybrid search threshold".
-      const rrf = 1 / (RRF_K + (ftsRank.get(r.chunk_id) ?? 1));
-      fused.set(r.chunk_id, { row: r, score: rrf });
-    }
-    for (const { row } of vecRanked) {
-      const extra = 1 / (RRF_K + (vecRank.get(row.chunk_id) ?? 1));
-      const cur = fused.get(row.chunk_id);
-      if (cur) {
-        // Already from FTS — boost via co-occurrence regardless of
-        // cosine. The FTS match already attests relevance.
-        cur.score += extra;
-      } else {
-        // Vector-only candidate — apply the threshold here. Below the
-        // floor we drop the candidate entirely rather than fusing it
-        // into the result set with a tiny RRF score.
-        if (minScore > 0 && (vecCosine.get(row.chunk_id) ?? 0) < minScore) continue;
-        fused.set(row.chunk_id, { row, score: extra });
+    // Min-max normalise BM25 across the FTS candidate pool. Convert
+    // to a "higher = better" `[0, 1]` scale comparable to cosine.
+    // Edge case: if every candidate has the same BM25 score (or only
+    // one candidate), all normalise to 1.0 -- the FTS branch's
+    // contribution becomes uniform across hits, which is fine
+    // (degenerate input → degenerate ranking; α biases stay sensible).
+    const ftsNormalised = new Map<string, number>();
+    if (ftsRows.length > 0) {
+      // bm25_rank is more-negative-better. Lower number = better.
+      const ranks = ftsRows.map((r) => r.bm25_rank);
+      const minRank = Math.min(...ranks); // most-negative (best)
+      const maxRank = Math.max(...ranks); // least-negative (worst)
+      const range = maxRank - minRank;
+      for (const r of ftsRows) {
+        // Flip so best=1, worst=0. When range is 0 (all equal), score=1.
+        const normalised = range > 0 ? (maxRank - r.bm25_rank) / range : 1;
+        ftsNormalised.set(r.chunk_id, normalised);
       }
+    }
+    const vecCosine = new Map<string, number>();
+    vecScored.forEach(({ row, cosine }) => vecCosine.set(row.chunk_id, cosine));
+
+    // Build fused candidate set. Seed with FTS rows (always pass
+    // through). Then add vector rows that either: (a) co-occurred in
+    // FTS (boost via the vector contribution), or (b) are vector-only
+    // and clear the minScore floor.
+    const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
+    for (const r of ftsRows) {
+      const ftsScore = ftsNormalised.get(r.chunk_id) ?? 0;
+      const cosineScore = vecCosine.get(r.chunk_id) ?? 0;
+      // FTS-matched chunks ALWAYS pass through (no minScore filter on this branch).
+      const blended = alpha * cosineScore + (1 - alpha) * ftsScore;
+      fused.set(r.chunk_id, { row: r, score: blended });
+    }
+    for (const { row, cosine } of vecScored) {
+      if (fused.has(row.chunk_id)) continue; // already counted via FTS branch
+      // Vector-only: apply minScore floor.
+      if (minScore > 0 && cosine < minScore) continue;
+      // No FTS match → ftsScore = 0 contribution.
+      const blended = alpha * cosine + (1 - alpha) * 0;
+      fused.set(row.chunk_id, { row, score: blended });
     }
 
     const ordered = Array.from(fused.values()).sort((a, b) => b.score - a.score);
@@ -1909,6 +2028,19 @@ export class LocalClio implements MemoryBackend {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
+
+/**
+ * Clamp the hybrid-search alpha (vector vs FTS blend weight) to
+ * [0, 1]. Out-of-range inputs (NaN, negatives, > 1) fall back to 0.7
+ * (Cerefox default). Used by `searchHybrid` so the engine always sees
+ * a sane blend weight regardless of upstream validation.
+ */
+function clampAlpha(alpha: number): number {
+  if (typeof alpha !== "number" || Number.isNaN(alpha) || alpha < 0 || alpha > 1) {
+    return 0.7;
+  }
+  return alpha;
+}
 
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");

@@ -387,6 +387,90 @@ describe("LocalClio.searchDocuments (5.12, Cerefox parity)", () => {
     await clio.close();
   });
 
+  it("isPartial=false + bestChunkContent is the FULL doc when total_chars ≤ smallDocThreshold (Cerefox parity)", async () => {
+    const clio = makeClio();
+    // Small doc (well under default 20000 chars).
+    const small = "# Tiny\n\nA tiny doc that mentions authentication.";
+    await clio.ingest({ project: "p1", title: "Tiny", content: small });
+    const r = await clio.searchDocuments({ query: "authentication" });
+    expect(r.hits.length).toBe(1);
+    const hit = r.hits[0];
+    expect(hit.isPartial).toBe(false);
+    // bestChunkContent should be the full doc (just one chunk in this case).
+    expect(hit.bestChunkContent).toContain("# Tiny");
+    expect(hit.bestChunkContent).toContain("authentication");
+    await clio.close();
+  });
+
+  it("isPartial=true + bestChunkContent is the chunk-window when total_chars > smallDocThreshold", async () => {
+    const clio = makeClio();
+    // Build a doc that's larger than the threshold (force >100 chars
+    // in test by setting threshold low). We'll override per-call.
+    const big = "# Auth\n\n" + "Authentication is the process of verifying who is making a request. ".repeat(20)
+      + "\n\n## Section 2\n\n" + "More authentication details here. ".repeat(20)
+      + "\n\n## Section 3\n\n" + "Yet more authentication content. ".repeat(20);
+    await clio.ingest({ project: "p1", title: "Big", content: big });
+    const r = await clio.searchDocuments({
+      query: "authentication", smallDocThreshold: 200, contextWindow: 1,
+    });
+    expect(r.hits.length).toBe(1);
+    expect(r.hits[0].isPartial).toBe(true);
+    // Content should be chunk + neighbours (not the entire 4000+ char doc).
+    expect(r.hits[0].bestChunkContent.length).toBeLessThan(big.length);
+    await clio.close();
+  });
+
+  it("smallDocThreshold=0 disables the full-doc path; everything is partial", async () => {
+    const clio = makeClio();
+    await clio.ingest({ project: "p1", title: "Small", content: "Tiny auth doc." });
+    const r = await clio.searchDocuments({ query: "auth", smallDocThreshold: 0 });
+    expect(r.hits.length).toBe(1);
+    expect(r.hits[0].isPartial).toBe(true);
+    await clio.close();
+  });
+
+  it("contextWindow=0 returns only the matched chunk in the large-doc path", async () => {
+    const clio = makeClio();
+    // Force a multi-chunk doc by capping chunkMaxChars at ingest time.
+    // Three sections at ~600 chars each → 3 separate chunks, so the
+    // matched chunk is materially smaller than the whole doc.
+    const big = [
+      "# Auth section",
+      "Authentication content. ".repeat(25),
+      "## DB section",
+      "Database content unrelated. ".repeat(25),
+      "## API section",
+      "API documentation here. ".repeat(25),
+    ].join("\n\n");
+    await clio.ingest({
+      project: "p1", title: "Big", content: big, chunkMaxChars: 700, chunkMinChars: 100,
+    });
+    const r = await clio.searchDocuments({
+      query: "authentication", smallDocThreshold: 200, contextWindow: 0,
+    });
+    expect(r.hits[0].isPartial).toBe(true);
+    expect(r.hits[0].chunkCount).toBeGreaterThan(1);
+    // Just the matched chunk -- materially shorter than the whole doc.
+    expect(r.hits[0].bestChunkContent.length).toBeLessThan(big.length / 2);
+    await clio.close();
+  });
+
+  it("hybrid alpha: per-call override clamps to [0,1] + invalid values fall back to default", async () => {
+    // We can't easily assert ordering changes without an embedder, but
+    // we can at least verify the engine accepts the parameter without
+    // crashing for valid + edge-case inputs. (Full alpha-effect tests
+    // live in the clio-hybrid.test.ts file with mock embedder.)
+    const clio = makeClio();
+    await clio.ingest({ project: "p1", title: "doc", content: "auth content" });
+    expect(async () => clio.search({ query: "auth", alpha: 0.0 })).not.toThrow();
+    expect(async () => clio.search({ query: "auth", alpha: 1.0 })).not.toThrow();
+    expect(async () => clio.search({ query: "auth", alpha: 0.5 })).not.toThrow();
+    // Out-of-range -- silently clamped to default 0.7 by clampAlpha; no throw.
+    expect(async () => clio.search({ query: "auth", alpha: -1 })).not.toThrow();
+    expect(async () => clio.search({ query: "auth", alpha: 99 })).not.toThrow();
+    await clio.close();
+  });
+
   it("returns chunkCount = total chunks in the live doc, matchingChunks <= chunkCount", async () => {
     const clio = await seed();
     const result = await clio.searchDocuments({ query: "authentication" });

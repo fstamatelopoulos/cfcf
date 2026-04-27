@@ -71,6 +71,21 @@ function registerUnder(root: Command): void {
       (v) => parseFloat(v),
     )
     .option(
+      "--alpha <n>",
+      "Hybrid-search blend weight (0.0-1.0). α × cosine + (1-α) × normalised_BM25. Higher = more semantic; lower = more keyword. Omit to use clio.hybridAlpha (default 0.7, Cerefox parity).",
+      (v) => parseFloat(v),
+    )
+    .option(
+      "--small-doc-threshold <chars>",
+      "Doc-level: docs ≤ this size return FULL content per hit (Cerefox parity). Larger docs return matched chunk + neighbours. Omit to use clio.smallDocThreshold (default 20000). Set 0 to always use chunk+neighbours.",
+      (v) => parseInt(v, 10),
+    )
+    .option(
+      "--context-window <n>",
+      "Doc-level large-doc path: chunks per side around the matched chunk. Omit to use clio.contextWindow (default 1). Cerefox parity.",
+      (v) => parseInt(v, 10),
+    )
+    .option(
       "-n, --match-count <n>",
       "Max results to return (doc-level default 5; --by-chunk default 10).",
       (v) => parseInt(v, 10),
@@ -109,6 +124,27 @@ function registerUnder(root: Command): void {
           process.exit(1);
         }
         qs.set("min_score", String(opts.minScore));
+      }
+      if (opts.alpha !== undefined) {
+        if (isNaN(opts.alpha) || opts.alpha < 0 || opts.alpha > 1) {
+          console.error(`search: --alpha must be a number in [0, 1] (got: ${opts.alpha})`);
+          process.exit(1);
+        }
+        qs.set("alpha", String(opts.alpha));
+      }
+      if (opts.smallDocThreshold !== undefined) {
+        if (isNaN(opts.smallDocThreshold) || opts.smallDocThreshold < 0) {
+          console.error(`search: --small-doc-threshold must be a non-negative integer`);
+          process.exit(1);
+        }
+        qs.set("small_doc_threshold", String(opts.smallDocThreshold));
+      }
+      if (opts.contextWindow !== undefined) {
+        if (isNaN(opts.contextWindow) || opts.contextWindow < 0) {
+          console.error(`search: --context-window must be a non-negative integer`);
+          process.exit(1);
+        }
+        qs.set("context_window", String(opts.contextWindow));
       }
       if (opts.matchCount) qs.set("match_count", String(opts.matchCount));
       if (opts.metadata) {
@@ -1048,13 +1084,18 @@ function printDocHit(rank: number, h: DocumentSearchHit): void {
   const heading = h.bestChunkHeadingPath.length > 0
     ? ` > ${h.bestChunkHeadingPath.join(" > ")}`
     : "";
-  // Compose the meta line: author + versions + matching chunk count.
-  // Versions only when > 0 (stays out of the way for fresh docs).
   const versionsStr = h.versionCount > 0 ? `  versions=${h.versionCount}` : "";
   const matchesStr = h.matchingChunks > 1 ? `  matched ${h.matchingChunks} chunks` : "";
+  // Cerefox-style: small docs return FULL content (is_partial=false);
+  // large docs return chunk + neighbours (is_partial=true). Surface
+  // this so users / agents know whether to call `cfcf clio get` for
+  // the rest.
+  const partialHint = h.isPartial
+    ? `  (chunk + window of ${h.chunkCount} total)`
+    : `  (full doc, ${h.totalChars} chars)`;
   console.log(`  ${rank}. [${h.bestScore.toFixed(3)}] ${h.docTitle}${heading}`);
   console.log(`     [id: ${h.documentId}]  author: ${h.docAuthor}${versionsStr}${matchesStr}`);
-  console.log(`     ${h.docSource}  (best chunk: ${h.bestChunkIndex}/${h.chunkCount})`);
+  console.log(`     ${h.docSource}${partialHint}`);
   const snippet = h.bestChunkContent.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
   console.log(`     ${snippet}${h.bestChunkContent.length > 160 ? "…" : ""}`);
   console.log();

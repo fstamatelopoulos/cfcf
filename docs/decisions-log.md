@@ -19,6 +19,38 @@
 
 ## Log
 
+### 2026-04-27 -- Cerefox-parity audit (search algorithm, small-to-big, knob coverage)
+
+A side-by-side audit (cfcf vs Cerefox source) surfaced three real divergences in agent-facing retrieval. All three are now closed; the iter-6 follow-up is version retention.
+
+**1. Hybrid algorithm: RRF → alpha-weighted score blending (Cerefox parity)**
+
+Cerefox blends `score = α × cosine + (1−α) × ts_rank_cd` with `α=0.7` default. cfcf was using Reciprocal Rank Fusion (`1/(60+rank)` per engine), which has different characteristics: rank-based, no tunable weight. The user-visible knob (α) is the standard one Cerefox callers tune; missing in cfcf meant we couldn't restore parity at the config level even when underlying behaviour was acceptable.
+
+**The renormalisation issue**: SQLite FTS5's `bm25()` returns values in `[-∞, 0]` (corpus-relative, more-negative = more relevant), not directly comparable to cosine `[0, 1]`. Fixed by min-max normalising BM25 within the candidate pool: `(maxRank − bm25) / (maxRank − minRank)` produces `[0, 1]` higher-better scores. Trade-off: the absolute blended score depends on candidate-pool composition (different filter combos = different absolute scores), but RELATIVE ranking is preserved — which is what hybrid cares about. Cerefox doesn't have this normalisation step because Postgres' `ts_rank_cd` is already roughly `[0, 1]`.
+
+`clio.hybridAlpha` defaults to 0.7 (Cerefox parity), per-call `?alpha=` / `--alpha` overrides. FTS-bypass-on-threshold semantics preserved (FTS-matched chunks always pass the minScore floor).
+
+**2. Small-to-big retrieval was per-chunk; Cerefox is per-document**
+
+Old behaviour: every search hit got `radius` neighbour chunks attached (radius=1 for dim>768, =2 otherwise; not configurable). Cerefox's behaviour: per-doc decision based on `total_chars`. Small docs (≤ `p_small_to_big_threshold`, default 20000) return the FULL doc content as the hit; large docs return matched chunk + `p_context_window` (default 1) neighbours. Returns `is_partial: bool` so the caller knows which path was taken.
+
+cfcf's chunk-level search engine still applies its existing per-chunk expansion (used by `--by-chunk` callers + internal tooling). The doc-level path (`searchDocuments` / the new default `cfcf clio search`) now overrides with Cerefox's logic: when `total_chars ≤ smallDocThreshold` we return the full reconstructed document content; otherwise we fetch matched chunk + `contextWindow` neighbours fresh from the DB (bypassing the chunk-level expansion entirely so `contextWindow=0` actually means "bare chunk").
+
+New config: `clio.smallDocThreshold` (default 20000), `clio.contextWindow` (default 1). New per-call params: `?small_doc_threshold=` / `--small-doc-threshold`, `?context_window=` / `--context-window`. New result field: `DocumentSearchHit.isPartial`.
+
+**3. Chunker knobs were hardcoded; Cerefox exposes them**
+
+Cerefox: `CEREFOX_MAX_CHUNK_CHARS` (4000), `CEREFOX_MIN_CHUNK_CHARS` (100). cfcf: hardcoded with embedder-recommended override for max. Now `clio.maxChunkChars` + `clio.minChunkChars` join the global config. Embedder-recommended max still wins per-doc when an embedder is active (the embedder's context window is the better default for retrieval quality); the config knob takes effect only in FTS-only mode where there's no embedder default to override. The min config takes effect always.
+
+Per-call IngestRequest fields: `chunkMaxChars`, `chunkMinChars` (server forwards from config; explicit per-call values win).
+
+**Out of scope for this PR — tracked as iter-6 work**
+
+Version retention is the remaining Cerefox-parity gap. Cerefox runs lazy retention on every snapshot (default 48h, configurable, always keeps the most-recent version, skips `archived=true`). cfcf's versions accumulate forever — the schema has the `archived` column already but it's never read. Adding lazy retention is a real complexity bump (silent deletion of old versions surprises users); plan item promotes a different shape: an explicit on-demand `cfcf clio cleanup-versions [--older-than 48h] [--keep-last 1] [--project <name>] [--dry-run]` that respects `archived=true`. Default thresholds match Cerefox's. Optional auto-cleanup (Cerefox's behaviour) gated on `clio.versionRetentionHours` config + a future hook.
+
+---
+
 ### 2026-04-27 -- Doc-level search dedup (Cerefox parity, default)
 
 Surfaced when the user ran `cfcf clio search decisions` against a corpus of two docs and got **6 chunk-level hits** (5 of the same decisions log + 1 from the auth doc which legitimately contains the word "decisions"). Reasonable from the engine's perspective; bad UX for an agent or human asking "what docs match X?".

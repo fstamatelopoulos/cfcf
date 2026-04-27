@@ -82,6 +82,17 @@ export function registerClioRoutes(app: Hono): void {
     }
     try {
       const backend = getClioBackend();
+      // Forward chunker knobs from global config (Cerefox parity for
+      // MAX/MIN_CHUNK_CHARS). Per-call overrides on the body still
+      // win; embedder-recommended max wins inside LocalClio when an
+      // embedder is active.
+      let cfgChunkMaxChars: number | undefined;
+      let cfgChunkMinChars: number | undefined;
+      try {
+        const cfg = await readConfig();
+        cfgChunkMaxChars = cfg?.clio?.maxChunkChars;
+        cfgChunkMinChars = cfg?.clio?.minChunkChars;
+      } catch { /* fall through */ }
       const result = await backend.ingest({
         project: body.project,
         title: body.title,
@@ -92,6 +103,8 @@ export function registerClioRoutes(app: Hono): void {
         documentId: body.documentId,
         updateIfExists: body.updateIfExists,
         author: body.author,
+        chunkMaxChars: body.chunkMaxChars ?? cfgChunkMaxChars,
+        chunkMinChars: body.chunkMinChars ?? cfgChunkMinChars,
       });
       // 201 for new docs; 200 for updates and skips. Mirrors Cerefox's
       // status-code split (created → 201, updated/no-op → 200).
@@ -193,9 +206,64 @@ export function registerClioRoutes(app: Hono): void {
       return c.json({ error: "by must be 'doc' or 'chunk'" }, 400);
     }
 
+    // Hybrid blend weight (alpha). Resolution order, like minScore:
+    //   1. ?alpha= query param (per-call)
+    //   2. clio.hybridAlpha in global config
+    //   3. built-in default 0.7 (Cerefox parity)
+    // Ignored for fts/semantic modes.
+    let alpha: number | undefined;
+    const alphaStr = c.req.query("alpha");
+    if (alphaStr !== undefined) {
+      const n = parseFloat(alphaStr);
+      if (isNaN(n) || n < 0 || n > 1) {
+        return c.json({ error: "alpha must be a number in [0, 1]" }, 400);
+      }
+      alpha = n;
+    }
+    if (alpha === undefined) {
+      try {
+        const cfg = await readConfig();
+        alpha = cfg?.clio?.hybridAlpha;
+      } catch { /* fall through */ }
+    }
+    if (alpha === undefined) alpha = 0.7;
+
+    // Doc-level small-to-big knobs (Cerefox parity). Resolution:
+    //   per-call query param → global config → Cerefox-equivalent default.
+    let smallDocThreshold: number | undefined;
+    const sdtStr = c.req.query("small_doc_threshold");
+    if (sdtStr !== undefined) {
+      const n = parseInt(sdtStr, 10);
+      if (isNaN(n) || n < 0) {
+        return c.json({ error: "small_doc_threshold must be a non-negative integer" }, 400);
+      }
+      smallDocThreshold = n;
+    }
+    let contextWindow: number | undefined;
+    const cwStr = c.req.query("context_window");
+    if (cwStr !== undefined) {
+      const n = parseInt(cwStr, 10);
+      if (isNaN(n) || n < 0) {
+        return c.json({ error: "context_window must be a non-negative integer" }, 400);
+      }
+      contextWindow = n;
+    }
+    if (smallDocThreshold === undefined || contextWindow === undefined) {
+      try {
+        const cfg = await readConfig();
+        smallDocThreshold = smallDocThreshold ?? cfg?.clio?.smallDocThreshold;
+        contextWindow = contextWindow ?? cfg?.clio?.contextWindow;
+      } catch { /* fall through */ }
+    }
+    if (smallDocThreshold === undefined) smallDocThreshold = 20000;
+    if (contextWindow === undefined) contextWindow = 1;
+
     try {
       const backend = getClioBackend();
-      const reqShape = { query: q, project, matchCount, mode, metadata, minScore };
+      const reqShape: SearchRequest = {
+        query: q, project, matchCount, mode, metadata, minScore,
+        alpha, smallDocThreshold, contextWindow,
+      };
       const res = by === "doc"
         ? await backend.searchDocuments(reqShape)
         : await backend.search(reqShape);

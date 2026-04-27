@@ -113,6 +113,21 @@ export interface IngestRequest {
    * for compatibility with Cerefox `cerefox_ingest`'s default.
    */
   author?: string;
+  /**
+   * Per-call override for the chunker's max chunk size (chars).
+   * Mirrors Cerefox `CEREFOX_MAX_CHUNK_CHARS`. Embedder-recommended
+   * max wins when an embedder is active (each embedder's context
+   * window is the better default for retrieval). Falls back to the
+   * config's `clio.maxChunkChars` (server-side) or 4000 (built-in
+   * default).
+   */
+  chunkMaxChars?: number;
+  /**
+   * Per-call override for the chunker's min chunk size (chars).
+   * Mirrors Cerefox `CEREFOX_MIN_CHUNK_CHARS`. Falls back to the
+   * config's `clio.minChunkChars` or 100.
+   */
+  chunkMinChars?: number;
 }
 
 export interface IngestResult {
@@ -258,6 +273,30 @@ export interface SearchRequest {
    * default 0.5 is used at the server route.
    */
   minScore?: number;
+  /**
+   * Hybrid-search blend weight (0.0–1.0). Mirrors Cerefox `p_alpha`.
+   * `α × normalised_vec + (1 − α) × normalised_fts`. Per-call value
+   * wins over `clio.hybridAlpha` from global config; absent both,
+   * default 0.7. Ignored for `mode=fts` and `mode=semantic`.
+   * 5.12 / Clio v2.
+   */
+  alpha?: number;
+  /**
+   * Doc-level search small-to-big threshold (chars). Documents
+   * whose live `total_chars` ≤ this value get the full-document
+   * content as `bestChunkContent`; larger docs get matched chunk +
+   * `contextWindow` neighbours. Mirrors Cerefox `p_small_to_big_threshold`.
+   * Per-call value wins over `clio.smallDocThreshold` from global
+   * config; absent both, default 20000. Set to 0 to always return
+   * the chunk-window form.
+   */
+  smallDocThreshold?: number;
+  /**
+   * Doc-level search context window (chunks per side, large-doc
+   * path). Mirrors Cerefox `p_context_window`. Per-call value wins
+   * over `clio.contextWindow`; absent both, default 1.
+   */
+  contextWindow?: number;
 }
 
 export interface SearchHit {
@@ -338,6 +377,14 @@ export interface DocumentSearchHit {
   /** Document timestamps (so agents can spot recently-updated docs). */
   createdAt: string;
   updatedAt: string;
+  /**
+   * `true` when `bestChunkContent` is the matched chunk plus
+   * `contextWindow` neighbours (large-doc path); `false` when it's
+   * the FULL document content (small-doc path: `total_chars` ≤
+   * `clio.smallDocThreshold`). Mirrors Cerefox's
+   * `cerefox_search_docs.is_partial`. 5.12 follow-up.
+   */
+  isPartial: boolean;
 }
 
 export interface DocumentSearchResponse {
