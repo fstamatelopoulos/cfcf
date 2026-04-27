@@ -18,14 +18,34 @@ cfcf clio search "auth" --metadata '{"role":"reflection","tier":"semantic"}'
 cfcf clio search "query" --match-count 5 --json
 
 # Retrieve a specific document by id (returned in search hits)
-cfcf clio get <document-id>
+cfcf clio docs get <document-id>
 
 # List Clio Projects
 cfcf clio projects
 
 # Stats (counts, active embedder, migrations)
 cfcf clio stats
+
+# Metadata-only: filter docs by metadata keys (no FTS query) + key discovery
+cfcf clio metadata search --filter '{"role":"reflection"}'
+cfcf clio metadata keys
 ```
+
+## Verb structure
+
+The CLI follows a three-clause rule (see `cli-verb-normalisation.md`):
+
+- **Top-level**: collection-wide / Clio-wide / headline operations →
+  `cfcf clio search | audit | reindex | stats`.
+- **Under a noun namespace**: verbs that operate on a specific noun-instance →
+  `cfcf clio docs {list,get,ingest,edit,delete,restore,versions} <id>`,
+  `cfcf clio projects {list,create,show}`,
+  `cfcf clio embedder {list,active,install,set}`.
+- **Under a sub-concept namespace**: scoped operations →
+  `cfcf clio metadata {search,keys}`.
+
+If you can't remember the exact form, `cfcf clio --help` and `cfcf clio
+docs --help` (etc.) print the canonical surface.
 
 ## What's in Clio
 
@@ -36,7 +56,7 @@ Clio is automatically populated at iteration boundaries by cf²:
 - **decision-log entries** tagged `[category: lesson | strategy | resolved-question | risk]`.
 - Under `clio.ingestPolicy = "all"`: also iteration-log + iteration-handoff + full judge-assessment per iteration.
 
-It is also populated by the user (via `cfcf clio ingest`) with design guidelines, domain-knowledge notes, research notes, ADRs, onboarding material, etc.
+It is also populated by the user (via `cfcf clio docs ingest`) with design guidelines, domain-knowledge notes, research notes, ADRs, onboarding material, etc.
 
 ## When to search
 

@@ -44,7 +44,7 @@ export interface ClioDocument {
    * 0 for docs that have never been updated (live content is the only
    * state). Surfaced in `cfcf clio docs list` and search hits so users
    * + agents can spot docs with edit history without round-tripping
-   * to `cfcf clio versions <id>`. Mirrors Cerefox's
+   * to `cfcf clio docs versions <id>`. Mirrors Cerefox's
    * `cerefox_search_docs.version_count`. 5.12 follow-up.
    */
   versionCount?: number;

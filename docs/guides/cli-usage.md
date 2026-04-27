@@ -424,29 +424,29 @@ cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
                                     --metadata '{"role":"reflection"}' --json
 
 # Ingest a markdown doc (or pipe via --stdin)
-cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
-cat note.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Note"
+cfcf clio docs ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
+cat note.md | cfcf clio docs ingest --stdin --project cf-ecosystem --title "Note"
 
 # Update an existing doc instead of creating a new one (item 5.11):
 #   --update-if-exists matches by title within the same Project
 #   --document-id <uuid> is the deterministic update path (wins if both passed)
 # When an update happens, the prior content is snapshotted into a version row;
-# recall it with `cfcf clio get <id> --version-id <uuid>`.
-cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --update-if-exists --author claude-code
-cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
+# recall it with `cfcf clio docs get <id> --version-id <uuid>`.
+cfcf clio docs ingest notes.md --project cf-ecosystem --title "Note" --update-if-exists --author claude-code
+cfcf clio docs ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
 
 # Browse / retrieve
 cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted | --deleted-only] [--json]
-cfcf clio get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
-cfcf clio versions <document-id> [--json]                                   # archived version history
+cfcf clio docs get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
+cfcf clio docs versions <document-id> [--json]                                   # archived version history
 
 # Metadata-only search + discovery (5.12, Cerefox parity)
-cfcf clio metadata-search --filter '{"role":"reflection"}' [--updated-since 2026-04-01T00:00:00Z] [--project <name>] [--include-deleted]
-cfcf clio metadata-keys [--project <name>]                                  # what keys + sample values exist
+cfcf clio metadata search --filter '{"role":"reflection"}' [--updated-since 2026-04-01T00:00:00Z] [--project <name>] [--include-deleted]
+cfcf clio metadata keys [--project <name>]                                  # what keys + sample values exist
 
 # Soft-delete + restore (5.11, Cerefox parity)
-cfcf clio delete <document-id> [--author <name>]                            # excludes from search; restorable
-cfcf clio restore <document-id> [--author <name>]                           # idempotent
+cfcf clio docs delete <document-id> [--author <name>]                            # excludes from search; restorable
+cfcf clio docs restore <document-id> [--author <name>]                           # idempotent
 
 # Metadata-only edit (5.13 follow-up, Cerefox parity)
 # Mutate title / author / Clio Project / metadata WITHOUT re-ingesting content.
@@ -471,8 +471,8 @@ cfcf clio audit [--event-type create|update-content|edit-metadata|delete|restore
 
 # Projects (grouping of workspaces by knowledge domain)
 cfcf clio projects [--json]
-cfcf clio project create <name> [--description "..."]
-cfcf clio project show <name-or-id>
+cfcf clio projects create <name> [--description "..."]
+cfcf clio projects show <name-or-id>
 
 # Embedder (controls hybrid/semantic search). Default model installed
 # during cfcf init is nomic-embed-text-v1.5 (q8, 768d, 8k token context).

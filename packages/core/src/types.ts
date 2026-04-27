@@ -302,7 +302,7 @@ export interface ClioWorkspaceConfig {
    *     judge-assessment, every decision-log append. High-signal
    *     workspaces / dogfooding.
    *   - "off": no cfcf-auto ingest. User + agents can still push via
-   *     `cfcf clio ingest` / `POST /api/clio/ingest` on demand.
+   *     `cfcf clio docs ingest` / `POST /api/clio/ingest` on demand.
    */
   ingestPolicy?: "summaries-only" | "all" | "off";
 }

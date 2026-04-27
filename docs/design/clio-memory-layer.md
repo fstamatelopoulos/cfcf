@@ -58,8 +58,8 @@ For the rest of this document, "workspace" refers to a single cf² repo and "Cli
 │   │ (agent calls during run) │ (harness preload at assembly)    │
 │   ▼                          ▼                                  │
 │  bash: `cfcf clio search <q> --project <slug>`                  │
-│        `cfcf clio ingest ...`                                   │
-│        `cfcf clio get <id>` etc.                                │
+│        `cfcf clio docs ingest ...`                                   │
+│        `cfcf clio docs get <id>` etc.                                │
 └───────────────────────┬─────────────────────────────────────────┘
                         │ HTTP (localhost)
 ┌───────────────────────▼─────────────────────────────────────────┐
@@ -282,7 +282,7 @@ Metadata is JSON, queryable via SQLite's JSON1 `json_extract`. Clio is **agent-f
 | `note` | generic catch-all | any | caller's choice |
 | `<anything else>` | caller | caller | caller's choice |
 
-Clio treats the taxonomy as open — `cfcf clio ingest ... --artifact-type my-custom-type` works, and retrieval filters accept any string. The table above is convention, not enforcement. Specific `artifact_type` values get ranking boosts (see §11.5) and can be filtered on at query time.
+Clio treats the taxonomy as open — `cfcf clio docs ingest ... --artifact-type my-custom-type` works, and retrieval filters accept any string. The table above is convention, not enforcement. Specific `artifact_type` values get ranking boosts (see §11.5) and can be filtered on at query time.
 
 **Indexed for query performance** (via JSON-extracted columns): `workspace_id`, `role`, `artifact_type`, `tier`, `origin`. Everything else stays JSON-queried. Free-text `tags` live in the JSON and are searchable via `json_each` joins when needed.
 
@@ -314,8 +314,8 @@ A knob: `clio.ingestPolicy` on `CfcfGlobalConfig` / `ProjectConfig` with values 
 
 | Source | How | Typical `artifact_type` |
 |---|---|---|
-| User-curated Markdown doc | `cfcf clio ingest path/to/note.md --project <clio-project> [--workspace <ws>] [--artifact-type <type>]` | design-guideline, domain-knowledge, research-note, adr, onboarding, reference, note, or any user-supplied string |
-| Agent during its run (via bash) | `cfcf clio ingest --stdin --title "..." --project "..." --artifact-type <type>` | agent-chosen |
+| User-curated Markdown doc | `cfcf clio docs ingest path/to/note.md --project <clio-project> [--workspace <ws>] [--artifact-type <type>]` | design-guideline, domain-knowledge, research-note, adr, onboarding, reference, note, or any user-supplied string |
+| Agent during its run (via bash) | `cfcf clio docs ingest --stdin --title "..." --project "..." --artifact-type <type>` | agent-chosen |
 | External programmatic import | Direct HTTP `POST /api/clio/ingest` | any |
 
 Content-hash dedup means re-running an iteration or re-ingesting an unchanged file won't double-store. Dedup scope: per-document, by sha256 of the full Markdown body (same as Cerefox).
@@ -428,23 +428,23 @@ cfcf clio search "auth" --metadata '{"role":"judge","tier":"semantic"}'
 
 # Project management
 cfcf clio projects                       # list all
-cfcf clio project create "cf-ecosystem" --description "cf², Clio, Cerefox code"
-cfcf clio project show cf-ecosystem
+cfcf clio projects create "cf-ecosystem" --description "cf², Clio, Cerefox code"
+cfcf clio projects show cf-ecosystem
 
 # Ingest (mostly automated from cf² loops, plus manual/agent paths)
 # Arbitrary Markdown docs -- design guidelines, domain knowledge, research
 # notes, meeting memos, onboarding material, anything the user or an
 # agent thinks is useful cross-project context.
-cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Deprecation note"
-cfcf clio ingest path/to/guideline.md --project cf-ecosystem --title "API style" \
+cfcf clio docs ingest path/to/note.md --project cf-ecosystem --title "Deprecation note"
+cfcf clio docs ingest path/to/guideline.md --project cf-ecosystem --title "API style" \
   --artifact-type design-guideline --tier semantic --tags api,style
-cfcf clio ingest --stdin --project cf-ecosystem --title "Auth gotcha" \
+cfcf clio docs ingest --stdin --project cf-ecosystem --title "Auth gotcha" \
   --artifact-type domain-knowledge --author "user" < notes.md
 
 # Retrieve
-cfcf clio get <document-id>
-cfcf clio get <document-id> --raw    # just the content
-cfcf clio get <document-id> --json   # with metadata
+cfcf clio docs get <document-id>
+cfcf clio docs get <document-id> --raw    # just the content
+cfcf clio docs get <document-id> --json   # with metadata
 
 # Embedders (shipped with bge-small; user can install heavier models on demand)
 cfcf clio embedder list              # bundled + installed + available
@@ -489,7 +489,7 @@ dev, judge, architect, reflection, documenter, user. Valid artifact types:
 iteration-log, iteration-handoff, judge-assessment, reflection-analysis,
 decision-log-entry, architect-review.
 
-Retrieve a full document by id: `cfcf clio get <id>`.
+Retrieve a full document by id: `cfcf clio docs get <id>`.
 
 You do NOT need to ingest anything. cf² automatically ingests this iteration's
 outputs after each phase commits — your iteration-log, handoff,

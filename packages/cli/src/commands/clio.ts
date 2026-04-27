@@ -1,8 +1,23 @@
 /**
- * `cfcf clio <verb>` -- Clio memory layer CLI (item 5.7 PR1).
+ * `cfcf clio <verb>` -- Clio memory layer CLI.
  *
- * Verbs: search | ingest | get | projects | project | stats. `cfcf memory`
- * is registered as a top-level alias that points at the same command tree.
+ * Surface (locked 2026-04-27 in `docs/research/cli-verb-normalisation.md`):
+ *   - Top-level (collection-wide / Clio-wide / headline):
+ *       search | audit | reindex | stats
+ *   - `docs` namespace (operates on a doc-instance):
+ *       list | ingest | get | edit | delete | restore | versions
+ *   - `metadata` namespace (sub-concept with multiple operations):
+ *       search | keys
+ *   - `projects` namespace (one-per-project):
+ *       list | create | show
+ *   - `embedder` namespace (one-per-embedder; singular: only one active):
+ *       list | active | install | set
+ *
+ * `cfcf memory` is a top-level alias that points at the same command tree.
+ *
+ * The verb-or-namespace decision follows the three-clause rule in
+ * `cli-verb-normalisation.md` §4.1; the rule is mechanical, so future
+ * verbs can be placed without judgement calls.
  */
 
 import type { Command } from "commander";
@@ -53,6 +68,28 @@ export function registerClioCommands(program: Command): void {
 }
 
 function registerUnder(root: Command): void {
+  // ── Namespace command groups ──────────────────────────────────────────
+  // The four Clio nouns each get their own namespace. Verbs that operate
+  // on a specific instance of a noun (or create one) live under the
+  // namespace; collection-wide / Clio-wide verbs (search, audit, reindex,
+  // stats) stay top-level. See `docs/research/cli-verb-normalisation.md`
+  // §4.1 for the three-clause rule that decides namespace-or-not.
+  //
+  // Declared up-front so every subcommand registration below can attach
+  // to the right parent without forward-reference gymnastics.
+  const docsCmd = root
+    .command("docs")
+    .description("Document operations: list / get / ingest / edit / delete / restore / versions. Default action: list.");
+  const metadataCmd = root
+    .command("metadata")
+    .description("Metadata-only operations: filter docs by metadata; discover metadata keys. (No default subcommand: `cfcf clio metadata` prints help.)");
+  const projectsCmd = root
+    .command("projects")
+    .description("Clio Projects: list / create / show. Default action: list.");
+  const embedderCmd = root
+    .command("embedder")
+    .description("Embedder: list / active / install / set");
+
   // ── search ────────────────────────────────────────────────────────────
   root
     .command("search <query...>")
@@ -206,8 +243,10 @@ function registerUnder(root: Command): void {
       data.hits.forEach((h, i) => printDocHit(i + 1, h));
     });
 
-  // ── ingest ────────────────────────────────────────────────────────────
-  root
+  // ── docs: ingest ──────────────────────────────────────────────────────
+  // Creates a doc-instance (or updates with --document-id / --update-if-exists);
+  // operates on a doc-as-a-noun, so lives under the `docs` namespace.
+  docsCmd
     .command("ingest [file]")
     .description(
       "Ingest a Markdown document into Clio. Pass a file path, or use --stdin to pipe via stdin.",
@@ -236,7 +275,7 @@ function registerUnder(root: Command): void {
     )
     .option(
       "--author <name>",
-      "Who/what is making this write (e.g. 'claude-code', 'archiver'). Stored on the version row when an update happens; surfaced by `cfcf clio versions <doc-id>`. Defaults to 'agent'.",
+      "Who/what is making this write (e.g. 'claude-code', 'archiver'). Stored on the version row when an update happens; surfaced by `cfcf clio docs versions <doc-id>`. Defaults to 'agent'.",
     )
     .option("--json", "Emit the raw JSON result instead of a human-readable summary")
     .action(async (file: string | undefined, opts) => {
@@ -351,7 +390,7 @@ function registerUnder(root: Command): void {
           console.log(`  project:      ${ingestProjectLabel}`);
           console.log(`  prior version_id: ${data.versionId}`);
           console.log(`  Recall the prior content via:`);
-          console.log(`    cfcf clio get ${data.id} --version-id ${data.versionId}`);
+          console.log(`    cfcf clio docs get ${data.id} --version-id ${data.versionId}`);
           break;
         case "skipped":
           console.log(`Already in Clio (content_hash match): ${data.document.title}`);
@@ -364,16 +403,16 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── get ───────────────────────────────────────────────────────────────
+  // ── docs: get ─────────────────────────────────────────────────────────
   // Reconstructs the full document content from its chunks. Default =
   // the live (current) version; pass --version-id <uuid> to retrieve an
-  // archived version (UUIDs come from `cfcf clio versions <doc-id>`).
-  root
+  // archived version (UUIDs come from `cfcf clio docs versions <doc-id>`).
+  docsCmd
     .command("get <id>")
     .description("Retrieve a Clio document by id (reconstructs full content from chunks)")
     .option(
       "--version-id <uuid>",
-      "Retrieve a specific archived version (default: live/current). UUID comes from `cfcf clio versions <id>`.",
+      "Retrieve a specific archived version (default: live/current). UUID comes from `cfcf clio docs versions <id>`.",
     )
     .option("--raw", "Print only the reconstructed content (skip the metadata header)")
     .option("--json", "Print the full {document, content, ...} response as JSON")
@@ -396,7 +435,7 @@ function registerUnder(root: Command): void {
         return;
       }
       if (opts.raw) {
-        // Pure content; useful for `cfcf clio get <id> | sed ...` agent workflows.
+        // Pure content; useful for `cfcf clio docs get <id> | sed ...` agent workflows.
         process.stdout.write(data.content);
         if (!data.content.endsWith("\n")) process.stdout.write("\n");
         return;
@@ -427,10 +466,10 @@ function registerUnder(root: Command): void {
       console.log(data.content);
     });
 
-  // ── versions ──────────────────────────────────────────────────────────
+  // ── docs: versions ────────────────────────────────────────────────────
   // List archived versions for a document. Empty for docs that have
   // never been updated. Mirrors Cerefox `cerefox_list_versions`.
-  root
+  docsCmd
     .command("versions <id>")
     .description("List archived versions for a Clio document (newest first)")
     .option("--json", "Emit raw JSON")
@@ -457,7 +496,7 @@ function registerUnder(root: Command): void {
         console.log(`  v${v.versionNumber}  ${v.createdAt}  ${v.chunkCount} chunks, ${v.totalChars} chars`);
         if (v.source) console.log(`       source: ${v.source}`);
         console.log(`       version_id: ${v.id}`);
-        console.log(`       Recall via: cfcf clio get ${id} --version-id ${v.id}`);
+        console.log(`       Recall via: cfcf clio docs get ${id} --version-id ${v.id}`);
       }
     });
 
@@ -512,12 +551,12 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── metadata-search ──────────────────────────────────────────────────
+  // ── metadata: search ─────────────────────────────────────────────────
   // Find documents by metadata only (no FTS query). Supports a JSON
   // metadata filter and an optional updated_since timestamp for the
   // catch-up workflow. Mirrors Cerefox `cerefox_metadata_search`.
-  root
-    .command("metadata-search")
+  metadataCmd
+    .command("search")
     .description("Find Clio documents by metadata-only filter (no FTS query). Top-level scalar matches.")
     .requiredOption(
       "--filter <json>",
@@ -582,12 +621,12 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── metadata-keys ────────────────────────────────────────────────────
+  // ── metadata: keys ───────────────────────────────────────────────────
   // Discovery: what metadata keys exist in the corpus, with sample values.
   // Mirrors Cerefox `cerefox_list_metadata_keys`. Useful for agents
   // figuring out "what filters can I apply?" before crafting a query.
-  root
-    .command("metadata-keys")
+  metadataCmd
+    .command("keys")
     .description("List metadata keys + sample values currently in Clio (most-used first)")
     .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
     .option("--json", "Emit raw JSON")
@@ -618,14 +657,14 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── delete (soft-delete) ──────────────────────────────────────────────
+  // ── docs: delete (soft-delete) ────────────────────────────────────────
   // Mirrors Cerefox `cerefox_delete_document`. Sets deleted_at; the
   // doc, its chunks, and its versions remain in the DB so a subsequent
-  // `cfcf clio restore <id>` can undo it. Search + listDocuments
+  // `cfcf clio docs restore <id>` can undo it. Search + listDocuments
   // exclude soft-deleted docs by default.
-  root
+  docsCmd
     .command("delete <id>")
-    .description("Soft-delete a Clio document (excludes from search; restorable via `cfcf clio restore <id>`)")
+    .description("Soft-delete a Clio document (excludes from search; restorable via `cfcf clio docs restore <id>`)")
     .option("--author <name>", "Who is performing this delete (audit attribution; defaults to 'agent')")
     .action(async (id: string, opts) => {
       if (!(await checkServer())) return;
@@ -638,14 +677,14 @@ function registerUnder(root: Command): void {
         process.exit(1);
       }
       console.log(`Soft-deleted: ${id}`);
-      console.log(`  Restore with: cfcf clio restore ${id}`);
+      console.log(`  Restore with: cfcf clio docs restore ${id}`);
     });
 
-  // ── restore ───────────────────────────────────────────────────────────
+  // ── docs: restore ─────────────────────────────────────────────────────
   // Undo a soft-delete. Idempotent: restoring an already-live doc is
   // a no-op (returns restored=false). Mirrors Cerefox
   // `cerefox_restore_document`.
-  root
+  docsCmd
     .command("restore <id>")
     .description("Restore a soft-deleted Clio document")
     .option("--author <name>", "Who is performing this restore (audit attribution)")
@@ -667,14 +706,92 @@ function registerUnder(root: Command): void {
       }
     });
 
-  // ── docs: list ────────────────────────────────────────────────────────
+  // ── docs: list (also the default action when `cfcf clio docs` is run) ─
   // Browse what's actually in Clio. Useful for "what did I ingest the
   // other day?" + dogfooding the iteration-loop's auto-ingest hooks.
-  // No `docs show` because `cfcf clio get <id>` already covers that.
-  const docsCmd = root
-    .command("docs")
-    .description("Browse Clio documents (list, etc.)");
+  // (`docsCmd` is hoisted at the top of registerUnder.)
+  async function listDocs(opts: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    includeDeleted?: boolean;
+    deletedOnly?: boolean;
+    json?: boolean;
+  }) {
+    if (!(await checkServer())) return;
+    if (opts.includeDeleted && opts.deletedOnly) {
+      console.error("Note: --deleted-only and --include-deleted both passed; --deleted-only wins.");
+    }
+    const qs = new URLSearchParams();
+    if (opts.project) qs.set("project", opts.project);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    if (opts.offset) qs.set("offset", String(opts.offset));
+    if (opts.deletedOnly) qs.set("deleted_only", "true");
+    else if (opts.includeDeleted) qs.set("include_deleted", "true");
+    const url = qs.toString() ? `/api/clio/documents?${qs.toString()}` : "/api/clio/documents";
+    const res = await get<{ documents: ClioDocument[] }>(url);
+    if (!res.ok) {
+      console.error(`docs list failed: ${res.error}`);
+      process.exit(1);
+    }
+    const docs = res.data!.documents;
+    if (opts.json) {
+      console.log(JSON.stringify(docs, null, 2));
+      return;
+    }
+    if (docs.length === 0) {
+      console.log("No documents." + (opts.project ? ` (project: ${opts.project})` : ""));
+      return;
+    }
+    const headerSuffix = opts.deletedOnly ? " (deleted only)"
+      : opts.includeDeleted ? " (live + deleted)"
+      : "";
+    console.log(`${docs.length} document(s)${opts.project ? ` in project '${opts.project}'` : ""}${headerSuffix}:`);
+    console.log();
+    for (const d of docs) {
+      const role = (d.metadata?.role as string | undefined) ?? "-";
+      const type = (d.metadata?.artifact_type as string | undefined) ?? "-";
+      const wsId = (d.metadata?.workspace_id as string | undefined) ?? "-";
+      // Title + the agent-friendly [id: <uuid>] line so callers can
+      // copy-paste the doc id into `cfcf clio docs ingest --document-id
+      // <uuid>` without a follow-up lookup. Same convention as
+      // `cfcf clio search`. `[DELETED]` prefix when soft-deleted so
+      // mixed lists (--include-deleted) are scannable.
+      const titlePrefix = d.deletedAt ? "[DELETED] " : "";
+      const versionsHint = d.versionCount && d.versionCount > 0
+        ? `  versions=${d.versionCount}`
+        : "";
+      const projectLabel = d.projectName
+        ? `${d.projectName} [${d.projectId}]`
+        : d.projectId;
+      console.log(`  ${titlePrefix}${d.title}`);
+      console.log(`    [id: ${d.id}]  author: ${d.author}${versionsHint}`);
+      console.log(`    project: ${projectLabel}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
+      console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
+      console.log(`    source=${d.source}`);
+      console.log(`    created=${d.createdAt}`);
+      if (d.deletedAt) {
+        console.log(`    deleted_at=${d.deletedAt}  (restore with: cfcf clio docs restore ${d.id})`);
+      }
+      console.log();
+    }
+    console.log(`Tip: --include-deleted to surface tombstones; --deleted-only for the trash-bin view; --json for raw records.`);
+  }
 
+  // Default action (no subcommand) = list. Mirrors `projects` defaulting to list.
+  docsCmd
+    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option("-n, --limit <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
+    .option("--offset <n>", "Pagination offset (default 0)", (v) => parseInt(v, 10))
+    .option("--include-deleted", "Include soft-deleted docs alongside live ones")
+    .option(
+      "--deleted-only",
+      "Show ONLY soft-deleted docs (trash-bin view). Mutually exclusive with --include-deleted; this flag wins.",
+    )
+    .option("--json", "Emit raw JSON")
+    .action(listDocs);
+
+  // Explicit `list` subcommand too, in case users type it out.
   docsCmd
     .command("list")
     .description("List Clio documents (newest first). Soft-deleted docs are excluded by default.")
@@ -687,66 +804,7 @@ function registerUnder(root: Command): void {
       "Show ONLY soft-deleted docs (trash-bin view). Mutually exclusive with --include-deleted; this flag wins.",
     )
     .option("--json", "Emit raw JSON")
-    .action(async (opts) => {
-      if (!(await checkServer())) return;
-      if (opts.includeDeleted && opts.deletedOnly) {
-        console.error("Note: --deleted-only and --include-deleted both passed; --deleted-only wins.");
-      }
-      const qs = new URLSearchParams();
-      if (opts.project) qs.set("project", opts.project);
-      if (opts.limit) qs.set("limit", String(opts.limit));
-      if (opts.offset) qs.set("offset", String(opts.offset));
-      if (opts.deletedOnly) qs.set("deleted_only", "true");
-      else if (opts.includeDeleted) qs.set("include_deleted", "true");
-      const url = qs.toString() ? `/api/clio/documents?${qs.toString()}` : "/api/clio/documents";
-      const res = await get<{ documents: ClioDocument[] }>(url);
-      if (!res.ok) {
-        console.error(`docs list failed: ${res.error}`);
-        process.exit(1);
-      }
-      const docs = res.data!.documents;
-      if (opts.json) {
-        console.log(JSON.stringify(docs, null, 2));
-        return;
-      }
-      if (docs.length === 0) {
-        console.log("No documents." + (opts.project ? ` (project: ${opts.project})` : ""));
-        return;
-      }
-      const headerSuffix = opts.deletedOnly ? " (deleted only)"
-        : opts.includeDeleted ? " (live + deleted)"
-        : "";
-      console.log(`${docs.length} document(s)${opts.project ? ` in project '${opts.project}'` : ""}${headerSuffix}:`);
-      console.log();
-      for (const d of docs) {
-        const role = (d.metadata?.role as string | undefined) ?? "-";
-        const type = (d.metadata?.artifact_type as string | undefined) ?? "-";
-        const wsId = (d.metadata?.workspace_id as string | undefined) ?? "-";
-        // Title + the agent-friendly [id: <uuid>] line so callers can
-        // copy-paste the doc id into `cfcf clio ingest --document-id
-        // <uuid>` without a follow-up lookup. Same convention as
-        // `cfcf clio search`. `[DELETED]` prefix when soft-deleted so
-        // mixed lists (--include-deleted) are scannable.
-        const titlePrefix = d.deletedAt ? "[DELETED] " : "";
-        const versionsHint = d.versionCount && d.versionCount > 0
-          ? `  versions=${d.versionCount}`
-          : "";
-        const projectLabel = d.projectName
-          ? `${d.projectName} [${d.projectId}]`
-          : d.projectId;
-        console.log(`  ${titlePrefix}${d.title}`);
-        console.log(`    [id: ${d.id}]  author: ${d.author}${versionsHint}`);
-        console.log(`    project: ${projectLabel}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
-        console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
-        console.log(`    source=${d.source}`);
-        console.log(`    created=${d.createdAt}`);
-        if (d.deletedAt) {
-          console.log(`    deleted_at=${d.deletedAt}  (restore with: cfcf clio restore ${d.id})`);
-        }
-        console.log();
-      }
-      console.log(`Tip: --include-deleted to surface tombstones; --deleted-only for the trash-bin view; --json for raw records.`);
-    });
+    .action(listDocs);
 
   // ── docs: edit ────────────────────────────────────────────────────────
   // Metadata-only edit. Updates any combination of title / author /
@@ -847,14 +905,11 @@ function registerUnder(root: Command): void {
       console.log(`Audit log: cfcf clio audit --document-id ${document.id}`);
     });
 
-  // ── project(s): list (default) / create / show ───────────────────────
-  // Both `cfcf clio project` and `cfcf clio projects` resolve to the same
-  // command group so either pluralisation works for every subcommand.
+  // ── projects: list (default) / create / show ─────────────────────────
+  // Plural-only namespace (Cerefox-parity rename: `project` was dropped
+  // 2026-04-27 in the CLI verb normalisation pass — see decisions-log).
   // Listing is the default action when no subcommand is given.
-  const projectCmd = root
-    .command("project")
-    .alias("projects")
-    .description("List / create / inspect Clio Projects. Default action: list.");
+  // (`projectsCmd` is hoisted at the top of registerUnder.)
 
   async function listProjects(opts: { json?: boolean }) {
     if (!(await checkServer())) return;
@@ -869,7 +924,7 @@ function registerUnder(root: Command): void {
       return;
     }
     if (projects.length === 0) {
-      console.log("No Clio Projects. Create one with: cfcf clio project create <name>");
+      console.log("No Clio Projects. Create one with: cfcf clio projects create <name>");
       return;
     }
     console.log(`${projects.length} Clio Project(s):`);
@@ -882,14 +937,14 @@ function registerUnder(root: Command): void {
   }
 
   // Default action (no subcommand) = list.
-  projectCmd
+  projectsCmd
     .option("--json", "Print the raw list as JSON (only used when no subcommand is given)")
     .action(async (opts) => {
       await listProjects(opts);
     });
 
   // Explicit `list` subcommand too, in case users type it out.
-  projectCmd
+  projectsCmd
     .command("list")
     .description("List all Clio Projects (same as `cfcf clio project` with no subcommand)")
     .option("--json", "Print the raw list as JSON")
@@ -897,7 +952,7 @@ function registerUnder(root: Command): void {
       await listProjects(opts);
     });
 
-  projectCmd
+  projectsCmd
     .command("create <name>")
     .description("Create a new Clio Project")
     .option("-d, --description <text>", "Optional description shown in `cfcf clio project`")
@@ -912,7 +967,7 @@ function registerUnder(root: Command): void {
       console.log(`Created Clio Project: ${p.name} (${p.id})`);
     });
 
-  projectCmd
+  projectsCmd
     .command("show <nameOrId>")
     .description("Show a Clio Project's metadata")
     .action(async (nameOrId: string) => {
@@ -932,10 +987,7 @@ function registerUnder(root: Command): void {
     });
 
   // ── embedder ──────────────────────────────────────────────────────────
-  const embedderCmd = root
-    .command("embedder")
-    .description("Manage the Clio embedder (PR2: install / set / active / list). See `cfcf clio embedder list`.");
-
+  // (`embedderCmd` is hoisted at the top of registerUnder.)
   embedderCmd
     .command("list")
     .description("List supported embedders from the catalogue, marking the active one.")
@@ -1268,7 +1320,7 @@ function printHit(rank: number, h: SearchHit): void {
   const heading = h.headingPath.length > 0 ? ` > ${h.headingPath.join(" > ")}` : "";
   // Title + score line. Followed by [id: <full-uuid>] in copy-pasteable
   // form (5.12) so agents can: search → grep [id: → feed back into
-  // `cfcf clio ingest --document-id <uuid>` for updates. The chunk id
+  // `cfcf clio docs ingest --document-id <uuid>` for updates. The chunk id
   // is also shown but truncated since it isn't the agent's primary key.
   console.log(`  ${rank}. [${h.score.toFixed(3)}] ${h.docTitle}${heading}`);
   console.log(`     [id: ${h.documentId}]  author: ${h.docAuthor}`);
@@ -1317,7 +1369,7 @@ function printDocHit(rank: number, h: DocumentSearchHit): void {
  * HTTP request is in flight. Returns a stop function that clears the
  * spinner line in-place so the final result starts on a clean row.
  *
- * Why: commands like `cfcf clio ingest` and `cfcf clio reindex` block
+ * Why: commands like `cfcf clio docs ingest` and `cfcf clio reindex` block
  * on a fetch() that takes several seconds (the server runs
  * `embedder.embed()` over every chunk synchronously). Without a
  * spinner the UX feels stuck. Same `\r\x1b[K` in-place rewrite
