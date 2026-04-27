@@ -1,3 +1,4 @@
+-- @migration-flags: disable-foreign-keys
 -- 0003_relax_content_hash.sql -- plan item 5.11.
 --
 -- Drop the UNIQUE constraint on clio_documents.content_hash.
@@ -12,22 +13,22 @@
 --
 -- Replacement: a non-unique index. The dedup-on-create lookup
 -- (`SELECT ... WHERE content_hash = ?`) still benefits from the index
--- but no longer rejects parallel docs with the same hash. When two
--- documents with the same hash exist, the dedup query returns one of
--- them as the "skipped" target -- benign; either is a valid answer.
+-- but no longer rejects parallel docs with the same hash.
 --
 -- SQLite has no DROP CONSTRAINT, so we use the canonical 12-step
 -- table rebuild (https://www.sqlite.org/lang_altertable.html, "Making
--- Other Kinds Of Table Schema Changes"). The migration runner wraps
--- each migration in a BEGIN IMMEDIATE / COMMIT pair, so PRAGMA
--- foreign_keys = OFF is a no-op here (SQLite ignores it inside an
--- active transaction). PRAGMA defer_foreign_keys = ON is the in-
--- transaction equivalent: it postpones all FK enforcement to COMMIT
--- time. By COMMIT time the new clio_documents table exists with the
--- same name, so clio_chunks' FK resolves cleanly even though the old
--- table was dropped mid-transaction.
-
-PRAGMA defer_foreign_keys = ON;
+-- Other Kinds Of Table Schema Changes").
+--
+-- ⚠️ The `-- @migration-flags: disable-foreign-keys` marker on line 1
+-- tells the migration runner to set `PRAGMA foreign_keys = OFF`
+-- BEFORE the wrapping transaction. This is REQUIRED for safety:
+-- `DROP TABLE clio_documents` would otherwise fire `ON DELETE CASCADE`
+-- on every row in clio_chunks (the FK action runs immediately, even
+-- when `defer_foreign_keys = ON` is set inside the transaction --
+-- defer only postpones CHECKS, not CASCADE actions). Found by
+-- experiment 2026-04-27: a clio.db with chunks ingested under 0001-
+-- 0002 had every chunk silently destroyed when this migration ran.
+-- See decisions-log.md 2026-04-27.
 
 CREATE TABLE clio_documents_new (
   id            TEXT PRIMARY KEY,
@@ -80,5 +81,6 @@ CREATE INDEX IF NOT EXISTS clio_documents_tier_idx
   ON clio_documents(json_extract(metadata, '$.tier'))
   WHERE json_extract(metadata, '$.tier') IS NOT NULL;
 
--- defer_foreign_keys is automatically reset at COMMIT (per SQLite docs);
--- no explicit "ON" reset needed here.
+-- The migration runner re-enables foreign_keys after COMMIT (it's
+-- responsible for the bracketing pragmas; this file just declares the
+-- need via the @migration-flags marker on line 1).

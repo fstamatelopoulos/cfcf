@@ -202,6 +202,19 @@ export function openClioDb(opts?: { path?: string }): Database {
  * Apply any pending migrations. Creates the `clio_migrations` tracking
  * table on first call. Each migration is applied in a transaction so a
  * partial failure rolls back cleanly.
+ *
+ * **Migration flags** -- a migration whose first 4 lines contain the
+ * marker `-- @migration-flags: disable-foreign-keys` is run with
+ * `PRAGMA foreign_keys = OFF` set BEFORE the wrapping transaction. This
+ * is required for any migration that drops + rebuilds a parent table
+ * referenced by `ON DELETE CASCADE` foreign keys: SQLite fires CASCADE
+ * actions on `DROP TABLE` regardless of `defer_foreign_keys=ON`, which
+ * silently destroys child rows. `PRAGMA foreign_keys=OFF` only takes
+ * effect outside an active transaction (per SQLite docs), so the flag
+ * tells the runner to set it pre-BEGIN and restore post-COMMIT.
+ *
+ * Discovered 2026-04-27 when migration 0003 nuked a user's clio_chunks
+ * via DROP TABLE clio_documents; see decisions-log.md.
  */
 export function runMigrations(db: Database, migrations: ClioMigration[] = MIGRATIONS): void {
   db.exec(`
@@ -220,6 +233,17 @@ export function runMigrations(db: Database, migrations: ClioMigration[] = MIGRAT
   for (const migration of migrations) {
     if (alreadyApplied.has(migration.filename)) continue;
 
+    const disableFks = /-- @migration-flags:.*\bdisable-foreign-keys\b/.test(
+      migration.sql.split("\n").slice(0, 4).join("\n"),
+    );
+
+    if (disableFks) {
+      // SQLite: PRAGMA foreign_keys is a no-op inside a transaction.
+      // Disable + re-enable bracket the transaction so DROP TABLE on a
+      // parent doesn't trigger ON DELETE CASCADE on children.
+      db.exec("PRAGMA foreign_keys = OFF");
+    }
+
     db.exec("BEGIN IMMEDIATE");
     try {
       db.exec(migration.sql);
@@ -227,9 +251,16 @@ export function runMigrations(db: Database, migrations: ClioMigration[] = MIGRAT
       db.exec("COMMIT");
     } catch (err) {
       db.exec("ROLLBACK");
+      if (disableFks) {
+        try { db.exec("PRAGMA foreign_keys = ON"); } catch { /* best-effort */ }
+      }
       throw new Error(
         `Clio migration ${migration.filename} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+
+    if (disableFks) {
+      db.exec("PRAGMA foreign_keys = ON");
     }
   }
 }

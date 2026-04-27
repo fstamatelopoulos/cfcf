@@ -12,6 +12,13 @@ import { join } from "path";
 import { Database } from "bun:sqlite";
 import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, getSqliteVecPath, type ClioMigration } from "./db.js";
 
+// Load migration SQL via the same `with { type: "text" }` import the
+// db.ts production code uses, so tests exercise the real bytes.
+import m0001Sql from "./migrations/0001_initial.sql" with { type: "text" };
+import m0002Sql from "./migrations/0002_active_embedder.sql" with { type: "text" };
+function m0001(): string { return m0001Sql; }
+function m0002(): string { return m0002Sql; }
+
 const tempDirs: string[] = [];
 function makeTempDbPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "cfcf-clio-db-test-"));
@@ -190,6 +197,64 @@ describe("applyCustomSqlite + getSqliteVecPath", () => {
 });
 
 describe("schema shape", () => {
+  // Regression test: migration 0003 must NOT cascade-delete clio_chunks
+  // when it rebuilds clio_documents. Discovered 2026-04-27 -- the original
+  // 0003 used `PRAGMA defer_foreign_keys=ON` inside the migration's
+  // transaction, which postpones FK CHECKS but NOT cascade actions. DROP
+  // TABLE clio_documents fired ON DELETE CASCADE on every chunk and
+  // corrupted the FTS5 index. Fix: the `-- @migration-flags:
+  // disable-foreign-keys` marker on line 1 of 0003 + a new branch in
+  // runMigrations that brackets the migration with `PRAGMA
+  // foreign_keys = OFF / ON` outside the transaction.
+  //
+  // Test path: simulate a user's pre-0003 DB (only 0001 + 0002 applied,
+  // with real chunk data), run runMigrations to apply 0003 (and 0004),
+  // verify chunks + FTS index survive the rebuild.
+  it("migration 0003 preserves clio_chunks + FTS index across the table rebuild", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:", { create: true });
+    db.exec("PRAGMA foreign_keys = ON");
+
+    // Apply only 0001 + 0002 -- represents a user's DB before they
+    // upgraded to a build that includes 0003.
+    runMigrations(db, [
+      { filename: "0001_initial.sql", sql: m0001() },
+      { filename: "0002_active_embedder.sql", sql: m0002() },
+    ]);
+
+    // Insert real data: project, doc, chunk. The chunk is the canary;
+    // the original 0003 deleted it via ON DELETE CASCADE.
+    db.run("INSERT INTO clio_projects (id, name) VALUES ('p1', 'p1')");
+    db.run(
+      "INSERT INTO clio_documents (id, project_id, title, source, content_hash, chunk_count) VALUES ('d1', 'p1', 't', 's', 'h1', 1)",
+    );
+    db.run(
+      "INSERT INTO clio_chunks (id, document_id, chunk_index, content, char_count) VALUES ('c1', 'd1', 0, 'survive the rebuild canary', 26)",
+    );
+
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM clio_chunks").get()?.n).toBe(1);
+    expect(
+      db.query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM clio_chunks_fts WHERE clio_chunks_fts MATCH 'canary'",
+      ).get()?.n,
+    ).toBe(1);
+
+    // Apply the rest (0003, 0004). With the fix, chunks + FTS survive.
+    runMigrations(db);
+
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM clio_chunks").get()?.n).toBe(1);
+    expect(
+      db.query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM clio_chunks_fts WHERE clio_chunks_fts MATCH 'canary'",
+      ).get()?.n,
+    ).toBe(1);
+    // The doc row also survived (its data was copied across in the rebuild).
+    expect(
+      db.query<{ id: string; author: string }, []>("SELECT id, author FROM clio_documents WHERE id='d1'").get(),
+    ).toEqual({ id: "d1", author: "agent" });
+    db.close();
+  });
+
   // Migration 0003 (item 5.11) relaxed the UNIQUE constraint on
   // clio_documents.content_hash so legitimate updates whose new content
   // happens to match another doc don't deadlock. Application-level dedup

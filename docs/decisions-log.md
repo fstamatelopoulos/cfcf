@@ -19,6 +19,20 @@
 
 ## Log
 
+### 2026-04-27 -- Migration 0003 nuked clio_chunks via DROP TABLE cascade (caught + fixed pre-merge)
+
+**Symptom**: a user's `cfcf clio search "decisions"` returned 0 hits even though `cfcf clio docs list` showed two documents with non-zero `chunk_count`. Reproducer: load 0001 + 0002, ingest a chunk, run 0003 → `clio_chunks` empty + `clio_chunks_fts` corrupted with `SQLITE_CORRUPT_VTAB: database disk image is malformed`. Caught only because the user dogfood-tested the freshly-built branch; would have shipped to v0.11.0 otherwise.
+
+**Cause**: 0003 rebuilds `clio_documents` via the canonical SQLite 12-step pattern (CREATE new → INSERT FROM old → DROP old → RENAME new). `DROP TABLE clio_documents` fires the `ON DELETE CASCADE` action on `clio_chunks.document_id` for every row in the parent table. The original 0003 used `PRAGMA defer_foreign_keys = ON` inside the migration's transaction expecting that to defer the cascade. **It does not.** Per SQLite docs, `defer_foreign_keys` only postpones FK constraint *checks* — referential *actions* (CASCADE / SET NULL / etc.) fire immediately as part of the parent row's deletion.
+
+**Why the original test missed it**: my smoke test was `openClioDb('/tmp/<fresh>')` → all migrations apply against an empty schema with no chunks → no cascade target → "looks fine." The bug only surfaces when 0003 runs against a DB that already has chunks (which is exactly every existing user). Lesson: migration tests must run the migration against a populated DB, not a fresh one.
+
+**Fix**: `PRAGMA foreign_keys = OFF` BEFORE the wrapping `BEGIN IMMEDIATE` (it's a no-op inside an active transaction; the migration runner had it inside, which silently ignored). Re-enable after `COMMIT`. The migration runner now scans the migration's first 4 lines for a `-- @migration-flags: disable-foreign-keys` marker and brackets the transaction with the pragma when present. 0003 carries the marker; future migrations that drop+rebuild a parent table need the same flag. Regression test in `db.test.ts` reproduces the exact failure path (0001+0002 with a chunk → run 0003 → assert chunk + FTS survive).
+
+**User-side recovery**: chunks are unrecoverable from the corrupted DB; the doc rows survived (with stale `chunk_count` columns), but the actual chunk text + FTS index are gone. The fix is to wipe `~/.cfcf/clio.db` and re-ingest. Embedder model + active-embedder pick survive in the file system / config, but the documents need to come back from their original sources.
+
+---
+
 ### 2026-04-26 -- Clio Cerefox parity (5.11/5.12/5.13): four design choices worth recording
 
 Same branch (`iteration-5/clio-update-api`) ships 5.12 (agent-parity API surface) + 5.13 (audit log) + 5.11 follow-ups (soft-delete + restore mutation API) on top of 5.11 PR1's update + versioning. Four decisions baked into the implementation:
