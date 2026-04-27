@@ -2,7 +2,7 @@
 
 Clio is cf²'s **cross-workspace memory layer**. Every role agent (dev, judge, architect, reflection, documenter) can write knowledge into Clio at iteration boundaries; every role agent can search it during a run. Workspaces that share a **Clio Project** see each other's memory; workspaces in different Projects stay isolated.
 
-This quickstart covers Clio as of v0.9.0 (item 5.7, fully shipped). Three logical sub-PRs landed on the same branch: PR1 (FTS + chunker + CRUD + CLI), PR2 (embedders + hybrid RRF search), PR3 (iteration-loop auto-ingest + context preload).
+This quickstart covers Clio as it stands on the iteration-5 work (items 5.7 + 5.11 + 5.12 + 5.13). Originally shipped in v0.9.0 (item 5.7) as three logical sub-PRs: PR1 (FTS + chunker + CRUD + CLI), PR2 (embedders + hybrid search), PR3 (iteration-loop auto-ingest + context preload). Iter-5 follow-ups added: update-doc API + version snapshots (5.11), agent-parity API surface (5.12, including doc-level search default + Cerefox-style alpha-weighted hybrid), audit log + soft-delete (5.13).
 
 ## Mental model
 
@@ -58,7 +58,9 @@ Content is **sha256-dedup'd** across the whole DB — re-ingesting the same file
 cfcf clio search "flaky async auth tests"
 
 # Force a specific mode.
-cfcf clio search "flaky async auth tests" --mode hybrid     # RRF fusion of FTS + vector
+cfcf clio search "flaky async auth tests" --mode hybrid     # α-weighted blend of FTS + vector (default α=0.7)
+cfcf clio search "flaky async auth tests" --alpha 0.3        # bias toward keyword (FTS) match
+cfcf clio search "flaky async auth tests" --by-chunk         # raw chunk-level results (default is doc-level)
 cfcf clio search "flaky async auth tests" --mode semantic   # vector cosine only
 cfcf clio search "flaky async auth tests" --mode fts        # keyword only
 
@@ -132,7 +134,7 @@ cfcf clio ingest modified.md --project <p> --title "<same title>" --document-id 
 |---|---|
 | Doc-level search dedup (default; Cerefox parity) | ✅ shipped 5.12 -- one row per matching doc with `versionCount` + `matchingChunks`. `--by-chunk` for raw view |
 | FTS5 keyword search | ✅ works out of the box |
-| Vector + hybrid (RRF) search | ✅ once an embedder is installed (default: nomic-embed-text-v1.5 q8) |
+| Vector + hybrid (α-weighted blend) search | ✅ once an embedder is installed (default: nomic-embed-text-v1.5 q8). `clio.hybridAlpha` defaults to 0.7 (Cerefox parity); per-call `--alpha` overrides. |
 | Cerefox-style cosine threshold (`--min-score`, `clio.minSearchScore`) | ✅ default 0.5; FTS-matched chunks bypass in hybrid |
 | Small-to-big chunk expansion | ✅ |
 | Embedder install / list / set / **set --reindex** | ✅ (default `cfcf clio embedder install` resolves from `clio.preferredEmbedder`) |

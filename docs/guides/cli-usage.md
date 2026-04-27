@@ -409,7 +409,7 @@ Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md
 
 ```bash
 # Search. Modes: fts | hybrid | semantic. Default mode is auto:
-#   - active embedder present → hybrid (RRF over FTS + vector)
+#   - active embedder present → hybrid (α-weighted blend of cosine + normalised BM25)
 #   - no active embedder      → fts
 # Override per-call with --mode, or set clio.defaultSearchMode in the
 # global config (visible + editable in the Web UI's Server Info page).
@@ -417,6 +417,9 @@ cfcf clio search "flaky auth tests"                              # default: one 
 cfcf clio search "flaky auth tests" --by-chunk                   # legacy raw view: one row per matching CHUNK
 cfcf clio search "flaky auth tests" --mode hybrid                # force a mode
 cfcf clio search "flaky auth tests" --min-score 0.4              # widen vector recall (default 0.5)
+cfcf clio search "flaky auth tests" --alpha 0.3                  # bias toward keyword (default 0.7 = bias toward semantic)
+cfcf clio search "flaky auth tests" --small-doc-threshold 0      # disable full-doc-for-small-docs path
+cfcf clio search "flaky auth tests" --context-window 2           # widen the chunk window in the large-doc path (default 1)
 cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
                                     --metadata '{"role":"reflection"}' --json
 
@@ -460,13 +463,16 @@ cfcf clio embedder list                            # catalogue with active marke
 cfcf clio embedder active                          # current active embedder (or "none")
 cfcf clio embedder install                         # uses clio.preferredEmbedder from config
 cfcf clio embedder install nomic-embed-text-v1.5   # explicit
-cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks
+cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks under the new model
 cfcf clio embedder set <name> --force              # recovery only; degrades vector search until reindex
+cfcf clio embedder set <name>                      # prompts y/N with impact summary (existing-embedding mismatch,
+                                                   #   chunks-over-new-ceiling, config-max-over-ceiling).
+                                                   #   In non-TTY: refuses unless -y/--yes is passed.
 
-# Re-embed existing chunks under the active embedder. Idempotent
-# (skips chunks already matching). Pair with `embedder set --reindex`
-# for the canonical switch flow.
-cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [--json]
+# Re-embed existing chunks under the active embedder. Prompts y/N with
+# the active embedder + scope before running; pass -y/--yes for non-
+# interactive use. Idempotent (skips chunks already matching).
+cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [-y|--yes] [--json]
 
 # Introspection
 cfcf clio stats [--json]

@@ -1,5 +1,7 @@
 # Clio (item 5.7) — test plan + implementation summary
 
+> **Historical record (v0.9.0).** This doc captures the testing-and-acceptance shape for Clio's v0.9.0 ship (item 5.7). The implementation has evolved since: hybrid search switched from RRF to **alpha-weighted score blending** (item 5.12, 2026-04-27); search now returns one row per document by default; small-to-big retrieval is per-document (not per-chunk); the update-doc API + version snapshots + soft-delete + audit log shipped under items 5.11 + 5.13. References to "RRF k=60" below describe the original implementation; the current algorithm is documented in `docs/design/clio-memory-layer.md` §4.3 and the 2026-04-27 entries of `docs/decisions-log.md`.
+
 Doc purpose: help the user do thorough manual + corner-case testing of the Clio implementation shipped on branch `iteration-5/clio`. Also serves as the brief outline of what landed.
 
 **Branch**: `iteration-5/clio` (pushed; no PR open). Latest commit: whatever is on `origin/iteration-5/clio` HEAD when you read this.

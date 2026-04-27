@@ -820,7 +820,7 @@ Stop a running or paused loop.
 
 ## Clio (cross-workspace memory, item 5.7)
 
-All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). As of v0.9.0: FTS5 keyword search + ONNX-embedder hybrid (RRF) + semantic (cosine) search, all behind the same shape — clients pick via `mode`. Default mode is `auto` (hybrid if an embedder is active, else fts).
+All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). FTS5 keyword search + ONNX-embedder hybrid (α-weighted blend of cosine + normalised BM25, default α=0.7) + semantic (cosine) search, all behind the same shape — clients pick via `mode`. Default mode is `auto` (hybrid if an embedder is active, else fts).
 
 ### GET /api/clio/projects
 
@@ -1029,7 +1029,10 @@ Hybrid / semantic / FTS search. Default returns one row per matching **document*
   - `auto` (hybrid if `clio_active_embedder` row exists, else fts).
   Hybrid + semantic require an active embedder; calling them without one returns a 400.
 - `min_score` (optional) — cosine threshold (0.0–1.0) for the **vector branch** of hybrid (FTS-matched chunks bypass) and for **every** result of semantic. Per-call value wins over `clio.minSearchScore` in the global config; absent both, default 0.5 (Cerefox parity). Ignored for `mode=fts`.
-- `match_count` (optional) — max hits to return (default 10, cap 100).
+- `alpha` (optional) — hybrid blend weight (0.0–1.0). `α × cosine + (1−α) × normalised_BM25`. Higher = more semantic; lower = more keyword. Per-call value wins over `clio.hybridAlpha`; absent both, default 0.7 (Cerefox parity). Ignored for `mode=fts` and `mode=semantic`.
+- `small_doc_threshold` (optional) — doc-level small-to-big threshold (chars). Documents whose live `total_chars` is at most this value return the full document content as `bestChunkContent`; larger docs return matched chunk + `context_window` neighbours. Per-call value wins over `clio.smallDocThreshold`; absent both, default 20000 (Cerefox parity). Set 0 to always use the chunk-window form. Only meaningful for `?by=doc`.
+- `context_window` (optional) — sibling chunks per side around the matched chunk in the large-doc path. Per-call value wins over `clio.contextWindow`; absent both, default 1 (Cerefox parity). `0` returns only the matched chunk. Only meaningful for `?by=doc`.
+- `match_count` (optional) — max hits to return. Default 10 for `?by=chunk`, 5 for `?by=doc` (Cerefox parity). Cap 100 for chunks, 50 for docs.
 - `metadata` (optional) — JSON-encoded object for exact-match filtering against `clio_documents.metadata`, e.g. `metadata={"role":"reflection","tier":"semantic"}`.
 
 **Response (default, `?by=doc` — `DocumentSearchResponse`):** `200 OK`
@@ -1056,14 +1059,17 @@ Hybrid / semantic / FTS search. Default returns one row per matching **document*
       "bestChunkId": "<uuid>",
       "bestChunkIndex": 2,
       "createdAt": "2026-04-26T...",
-      "updatedAt": "2026-04-27T..."
+      "updatedAt": "2026-04-27T...",
+      "isPartial": true
     }
   ],
-  "mode": "fts",
+  "mode": "hybrid",
   "totalMatches": 12,
   "totalDocuments": 4
 }
 ```
+
+`isPartial` (Cerefox `is_partial` parity): `true` when `bestChunkContent` is the matched chunk + `context_window` neighbours (large-doc path); `false` when it's the full document content (small-doc path: `total_chars ≤ small_doc_threshold`).
 
 **Response (`?by=chunk` — legacy `SearchResponse`):** `200 OK`
 ```json
@@ -1141,6 +1147,35 @@ Install + activate an embedder. Triggers the HuggingFace download via `@huggingf
 ```
 
 **Responses:** `200 OK` with `{ active: { name, dim, recommendedChunkMaxChars }, downloaded: true|false }` · `400` for unknown name · `409` when existing embeddings would be invalidated and `force` is not set.
+
+### GET /api/clio/embedders/:name/switch-impact
+
+**5.12+ follow-up.** Pre-flight summary for an embedder switch — surfaced by the CLI + Web UI before the user confirms the change. Read-only; no DB writes.
+
+**Path:** `:name` — the candidate embedder name (must be in the catalogue).
+
+**Response:** `200 OK`
+```json
+{
+  "newName": "bge-small-en-v1.5",
+  "newDim": 384,
+  "newRecommendedChunkMaxChars": 1800,
+  "currentName": "nomic-embed-text-v1.5",
+  "currentRecommendedChunkMaxChars": 7000,
+  "totalChunkCount": 89,
+  "embeddedChunkCount": 89,
+  "chunksOverNewCeiling": 67,
+  "configMaxChunkChars": null,
+  "configMaxOverCeiling": false
+}
+```
+
+Three signals the CLI / UI use to warn:
+- `embeddedChunkCount > 0` and switching to a different model → existing embeddings become inconsistent unless `--reindex` is also passed.
+- `chunksOverNewCeiling > 0` → existing chunks exceed the new model's `recommendedChunkMaxChars`; the model would silently truncate inputs at embed time. Recommended remediation: `cfcf clio reindex --rechunk` (planned, item 6.23).
+- `configMaxOverCeiling: true` → the user's `clio.maxChunkChars` exceeds the new embedder's ceiling; future ingests will be capped at the ceiling, not honoured verbatim.
+
+**Errors:** `400` for unknown embedder name; `400` when the active backend doesn't support embedders (only `LocalClio` does today).
 
 ### POST /api/clio/embedders/set
 
