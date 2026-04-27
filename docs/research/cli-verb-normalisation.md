@@ -87,21 +87,28 @@ Source: `../cerefox/src/cerefox/cli.py`.
 
 ### 4.1 The rule
 
-> **Plural-noun namespace + verb subcommand for any noun with multiple operations. Single-noun verbs stay top-level.**
+> **A verb goes under a namespace if it operates on a specific noun-instance (one doc, one project, one embedder). It stays top-level only if it operates on the collection or on Clio-as-a-whole.**
 
-That's it. Two rules collapse into one when you treat "single verb under `clio`" and "namespace.verb under `clio`" as the same shape — the namespace defaults to the most common operation when invoked alone.
+This is the test we apply to every verb. Two examples:
+
+- `ingest` creates a *specific doc* — even though no UUID exists yet, the operation is "make a doc". → `docs ingest`.
+- `search` queries *the whole collection* — there's no specific doc the verb operates on. → top-level.
+- `audit` reports across *all Clio mutations* — not doc-specific. → top-level.
+- `reindex` re-embeds *every chunk in scope* — Clio-wide maintenance. → top-level.
+
+Updated 2026-04-27 after the user-observed `ingest` inconsistency.
 
 ### 4.2 Final cfcf Clio surface
 
 ```
-cfcf clio search <query…>                  # top-level, no noun ambiguity
-cfcf clio ingest [file]                    # top-level
-cfcf clio reindex                          # top-level
-cfcf clio stats                            # top-level
-cfcf clio audit                            # top-level (kept here per user; see §5)
+cfcf clio search <query…>                  # collection-wide query
+cfcf clio audit                            # Clio-wide mutation log
+cfcf clio reindex                          # Clio-wide maintenance
+cfcf clio stats                            # Clio-wide introspection
 
-cfcf clio docs                             # default action: list (alias)
+cfcf clio docs                             # default action: list
 cfcf clio docs list                        # was: clio docs list ✓
+cfcf clio docs ingest [file]               # was: clio ingest [file]
 cfcf clio docs get <id>                    # was: clio get <id>
 cfcf clio docs edit <id>                   # was: clio docs edit ✓
 cfcf clio docs delete <id>                 # was: clio delete <id>
@@ -111,7 +118,7 @@ cfcf clio docs versions <id>               # was: clio versions <id>
 cfcf clio metadata search                  # was: clio metadata-search
 cfcf clio metadata keys                    # was: clio metadata-keys
 
-cfcf clio projects                         # default: list (existing alias kept)
+cfcf clio projects                         # default: list
 cfcf clio projects list                    # existing
 cfcf clio projects create <name>           # was: clio project create
 cfcf clio projects show <nameOrId>         # was: clio project show
@@ -126,6 +133,7 @@ cfcf clio embedder set <name>
 
 | From | To | Reason |
 |---|---|---|
+| `clio ingest [file]` | `clio docs ingest [file]` | creates a doc; operates on a doc-instance |
 | `clio get <id>` | `clio docs get <id>` | doc operation; lives with siblings |
 | `clio versions <id>` | `clio docs versions <id>` | same |
 | `clio delete <id>` | `clio docs delete <id>` | same |
@@ -152,7 +160,7 @@ Every Cerefox MCP tool has a 1:1 cfcf verb under the new surface:
 | Cerefox MCP | cfcf verb |
 |---|---|
 | `cerefox_search` | `cfcf clio search` |
-| `cerefox_ingest` | `cfcf clio ingest` |
+| `cerefox_ingest` | `cfcf clio docs ingest` |
 | `cerefox_get_document` | `cfcf clio docs get` |
 | `cerefox_list_versions` | `cfcf clio docs versions` |
 | `cerefox_list_projects` | `cfcf clio projects list` (or just `cfcf clio projects`) |
@@ -168,7 +176,8 @@ cfcf adds `docs delete`, `docs restore`, `docs edit` — operations Cerefox HTTP
 2. **No deprecation aliases.** Old verbs removed in the same commit. Single-user OSS-pre-launch state means no third-party scripts to break.
 3. **`embedder` stays singular.** One active at a time; no plural concept.
 4. **`clio audit` stays top-level.** Audit covers all Clio mutations, not just docs. User explicitly noted "we will address verb parity broadly in iteration 6" — audit's placement isn't the hill to die on this round.
-5. **Out of scope**: top-level cfcf verbs (`workspace`, `run`, `review`, `reflect`, `document`, `server`, `config`, `init`, `doctor`, `self-update`, `status`, `resume`, `stop`). Untouched. Iter 6 will audit them with the same lens.
+5. **`clio docs ingest`, not `clio ingest`** (added 2026-04-27). Ingest creates a doc, so it operates on a doc-instance and lives under `docs` with the rest of the doc operations. Without this fix the proposal carried the same kind of inconsistency we set out to remove. The clarified rule (§4.1) makes the call deterministic: namespace-or-not is decided by "does this operate on a noun-instance, yes/no?".
+6. **Out of scope**: top-level cfcf verbs (`workspace`, `run`, `review`, `reflect`, `document`, `server`, `config`, `init`, `doctor`, `self-update`, `status`, `resume`, `stop`). Untouched. Iter 6 will audit them with the same lens.
 
 ## 6. Implementation impact
 
@@ -210,9 +219,14 @@ Once this proposal is signed off:
 
 Each PR ships independently; reviewable diff under 800 LOC.
 
-## 8. Open questions for review
+## 8. Review status
 
-1. Confirm option γ is the right shape (vs literal Cerefox CLI parity, which I'd argue against — see §3.2 for why).
-2. Confirm `embedder` stays singular and `audit` stays top-level (your explicit calls; just paper-trailing them).
-3. Confirm the four-PR sequencing; specifically that PR4 (Ask-the-agent) is design-only and lands in iter 6 rather than 5.
-4. Naming detail: `cfcf clio metadata` with no subcommand — should that default to `metadata keys` (lighter, discovery-first), or print help? I'd default to help — both subcommands are equally useful and there's no obvious "primary" action.
+Confirmed by the user 2026-04-27:
+
+1. **Option γ confirmed** over literal Cerefox CLI parity. cfcf-Clio aims for *abstraction parity* with Cerefox (one CLI verb per MemoryBackend method, one MemoryBackend method per Cerefox MCP tool) rather than *surface parity* with Cerefox's CLI. The user noted Cerefox CLI itself can be cleaned up separately at the Cerefox-OSS level using cfcf-Clio's shape as a reference.
+2. **`embedder` singular + `audit` top-level confirmed.**
+3. **Four-PR sequencing confirmed.** PR4 (Ask-the-agent) stays design-only inside 5.8.
+4. **`cfcf clio metadata` with no subcommand → print help.** No obvious "primary" verb; better to show options than guess.
+5. **`clio docs ingest`** (not `clio ingest`) — flagged + adopted in this revision.
+
+No outstanding blockers. Ready to land PR1.
