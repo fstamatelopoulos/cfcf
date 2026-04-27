@@ -263,7 +263,14 @@ function registerUnder(root: Command): void {
       // server runs embedder.embed() over every chunk synchronously
       // before returning). Show a spinner so the UX doesn't feel stuck.
       // Suppressed in --json mode + non-TTY stderr.
-      const titleSnippet = title.length > 40 ? title.slice(0, 37) + "…" : title;
+      //
+      // `title` may be undefined here (the title-preservation case for
+      // --document-id updates without an explicit --title; see above).
+      // Use the file basename / "stdin" placeholder for the spinner
+      // label only -- the actual request still sends `undefined` so
+      // the server preserves the existing doc's title.
+      const labelTitle = title ?? defaultTitle;
+      const titleSnippet = labelTitle.length > 40 ? labelTitle.slice(0, 37) + "…" : labelTitle;
       const stopSpinner = startSpinner({
         label: `ingesting "${titleSnippet}" (${formatBytes(content.length)})`,
         enable: !opts.json && !!process.stderr.isTTY,

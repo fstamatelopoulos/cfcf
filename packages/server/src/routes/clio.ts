@@ -70,8 +70,15 @@ export function registerClioRoutes(app: Hono): void {
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
-    if (!body.project || !body.title || !body.content) {
-      return c.json({ error: "project, title, and content are required" }, 400);
+    if (!body.project || !body.content) {
+      return c.json({ error: "project and content are required" }, 400);
+    }
+    // `title` is optional on `--document-id` updates (server preserves
+    // the existing doc's title) but required for create + update-by-
+    // title paths. The backend enforces the rule with clear errors;
+    // here we only short-circuit the obviously-malformed case.
+    if (!body.documentId && (!body.title || !body.title.trim())) {
+      return c.json({ error: "title is required (omit only when --document-id is set)" }, 400);
     }
     try {
       const backend = getClioBackend();

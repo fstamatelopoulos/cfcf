@@ -323,6 +323,48 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(updated.versionNumber).toBe(1);
   });
 
+  it("POST /api/clio/ingest with documentId omits title → server preserves existing (5.11 follow-up)", async () => {
+    const app = createApp();
+    const created = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Original Title", content: "v0",
+        author: "claude-code",
+      }),
+    });
+    const { id } = await created.json();
+
+    // No title in the body -- this used to be rejected at the route level
+    // with "project, title, and content are required". Now the route
+    // allows it for documentId updates and the backend preserves the
+    // existing title.
+    const updated = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", content: "v1 body", documentId: id,
+      }),
+    });
+    expect(updated.status).toBe(200);
+    const body = await updated.json();
+    expect(body.action).toBe("updated");
+    expect(body.document.title).toBe("Original Title"); // preserved
+    expect(body.document.author).toBe("claude-code");   // preserved
+  });
+
+  it("POST /api/clio/ingest WITHOUT documentId AND without title → 400", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", content: "body" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/title is required/);
+  });
+
   it("POST /api/clio/ingest with documentId returns 404 when the doc doesn't exist", async () => {
     const app = createApp();
     const res = await app.request("/api/clio/ingest", {
