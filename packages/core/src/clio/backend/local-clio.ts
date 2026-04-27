@@ -17,6 +17,7 @@ import type {
   ClioProject,
   ClioDocument,
   ClioDocumentVersion,
+  EditDocumentRequest,
   IngestRequest,
   IngestResult,
   SearchRequest,
@@ -1022,6 +1023,135 @@ export class LocalClio implements MemoryBackend {
       eventType: "restore", actor,
       projectId: target.project_id, documentId: id,
     });
+  }
+
+  async editDocument(
+    id: string,
+    edits: EditDocumentRequest,
+    opts: { author?: string } = {},
+  ): Promise<ClioDocument> {
+    const actor = opts.author?.trim() || "agent";
+
+    // Lookup target. Throws on missing or soft-deleted -- editing a
+    // tombstone is almost certainly a bug; restore first if you mean it.
+    const target = await this.getDocument(id);
+    if (!target) throw new Error(`editDocument: document "${id}" not found`);
+    if (target.deletedAt) {
+      throw new Error(`editDocument: document "${id}" is soft-deleted; restore it first`);
+    }
+
+    // Resolve projectId/projectName. projectId wins if both provided.
+    let nextProjectId: string | undefined;
+    if (edits.projectId !== undefined && edits.projectId !== null) {
+      const proj = await this.getProject(edits.projectId);
+      if (!proj) {
+        throw new Error(`editDocument: project "${edits.projectId}" not found`);
+      }
+      nextProjectId = proj.id;
+    } else if (edits.projectName !== undefined && edits.projectName !== null) {
+      const proj = await this.getProject(edits.projectName);
+      if (!proj) {
+        throw new Error(`editDocument: project "${edits.projectName}" not found`);
+      }
+      nextProjectId = proj.id;
+    }
+
+    // Build the new metadata blob from the set/unset deltas.
+    const beforeMeta = target.metadata ?? {};
+    let nextMeta: Record<string, unknown> | undefined;
+    const setKeys = edits.metadataSet ? Object.keys(edits.metadataSet) : [];
+    const unsetKeys = edits.metadataUnset ?? [];
+    if (setKeys.length > 0 || unsetKeys.length > 0) {
+      nextMeta = { ...beforeMeta };
+      for (const k of setKeys) nextMeta[k] = (edits.metadataSet as Record<string, unknown>)[k];
+      for (const k of unsetKeys) delete nextMeta[k];
+    }
+
+    // Validate / normalise scalar fields.
+    let nextTitle: string | undefined;
+    if (edits.title !== undefined) {
+      const t = edits.title.trim();
+      if (!t) throw new Error("editDocument: title cannot be empty");
+      nextTitle = t;
+    }
+    let nextAuthor: string | undefined;
+    if (edits.author !== undefined) {
+      // Empty string clears (sets to default 'agent') -- mirrors
+      // Cerefox where author has a default.
+      nextAuthor = edits.author.trim() || "agent";
+    }
+
+    // Compute the actual diff. If nothing changed, no audit row, no UPDATE.
+    const diff: Record<string, { before: unknown; after: unknown }> = {};
+    if (nextTitle !== undefined && nextTitle !== target.title) {
+      diff.title = { before: target.title, after: nextTitle };
+    }
+    if (nextAuthor !== undefined && nextAuthor !== target.author) {
+      diff.author = { before: target.author, after: nextAuthor };
+    }
+    if (nextProjectId !== undefined && nextProjectId !== target.projectId) {
+      diff.projectId = { before: target.projectId, after: nextProjectId };
+    }
+    if (nextMeta !== undefined) {
+      // Only record metadata in the diff if a key actually changed
+      // (set or unset). Pure no-ops (e.g. setting key=value when it
+      // already equals value) shouldn't bump updated_at.
+      const beforeKeys = new Set(Object.keys(beforeMeta));
+      const afterKeys = new Set(Object.keys(nextMeta));
+      const allKeys = new Set([...beforeKeys, ...afterKeys]);
+      const changedKeys: string[] = [];
+      for (const k of allKeys) {
+        if (JSON.stringify(beforeMeta[k]) !== JSON.stringify(nextMeta[k])) {
+          changedKeys.push(k);
+        }
+      }
+      if (changedKeys.length > 0) {
+        const afterMeta = nextMeta; // capture for closure (TS narrowing)
+        diff.metadata = {
+          before: Object.fromEntries(changedKeys.map((k) => [k, beforeMeta[k]])),
+          after:  Object.fromEntries(changedKeys.map((k) => [k, afterMeta[k]])),
+        };
+      } else {
+        nextMeta = undefined; // no actual change -- skip the UPDATE column
+      }
+    }
+
+    if (Object.keys(diff).length === 0) {
+      // Idempotent no-op. Return the unchanged record without writing.
+      return target;
+    }
+
+    // Apply the UPDATE in a single statement. We only set columns the
+    // caller actually changed -- updated_at always bumps.
+    const sets: string[] = [];
+    const bindings: (string | null)[] = [];
+    if (nextTitle !== undefined && diff.title) {
+      sets.push("title = ?"); bindings.push(nextTitle);
+    }
+    if (nextAuthor !== undefined && diff.author) {
+      sets.push("author = ?"); bindings.push(nextAuthor);
+    }
+    if (nextProjectId !== undefined && diff.projectId) {
+      sets.push("project_id = ?"); bindings.push(nextProjectId);
+    }
+    if (nextMeta !== undefined && diff.metadata) {
+      const metaJson = JSON.stringify(nextMeta);
+      sets.push("metadata = ?"); bindings.push(metaJson);
+    }
+    sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+    bindings.push(id);
+    this.db.prepare(`UPDATE clio_documents SET ${sets.join(", ")} WHERE id = ?`).run(...bindings);
+
+    this.writeAudit({
+      eventType: "edit-metadata", actor,
+      projectId: nextProjectId ?? target.projectId,
+      documentId: id,
+      metadata: { diff },
+    });
+
+    const updated = await this.getDocument(id);
+    if (!updated) throw new Error(`editDocument: doc ${id} disappeared after UPDATE`);
+    return updated;
   }
 
   // ── Audit log (5.13) ───────────────────────────────────────────────────

@@ -17,7 +17,7 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Five agent roles**: dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack), reflection (cross-iteration strategic review), documenter (produces final docs). Each role independently configurable (adapter + model).
 - **Three commits per iteration** when reflection runs: `cfcf iteration N dev (...)`, `cfcf iteration N judge (...)`, `cfcf iteration N reflect (<health>): <key_observation>`.
 - **Async execution**: iterate endpoint returns 202, CLI polls for status.
-- **Clio cross-workspace memory** (items 5.7 + 5.11 + 5.12 + 5.13): persistent SQLite knowledge layer at `~/.cfcf/clio.db`. Shared across all workspaces, scoped by named **Clio Project**. FTS5 keyword search out of the box; install an embedder via `cfcf clio embedder install` to enable hybrid (α-weighted blend of cosine + normalised BM25, default α=0.7) + semantic search. **Cerefox-parity surface**: doc-level search by default (`--by-chunk` for raw chunk view), per-document small-to-big retrieval (small docs return full content, large docs return chunk + context window), update-by-document-id + update-by-title (with version snapshots in `clio_document_versions`), soft-delete + restore, audit log (write-only), metadata-search + metadata-keys discovery, `--alpha` / `--small-doc-threshold` / `--context-window` per-call knobs and matching `clio.*` global config. Iteration-loop auto-ingests reflection analyses, architect reviews, decision-log entries, iteration summaries (gated by `workspace.clio.ingestPolicy`). All agent roles read Clio via `cfcf-docs/clio-relevant.md` (top-k hits matched against `problem.md`) + the `cfcf-docs/clio-guide.md` cue card. Backend code lives behind a `MemoryBackend` interface so a future remote-Cerefox adapter can swap in cleanly.
+- **Clio cross-workspace memory** (items 5.7 + 5.11 + 5.12 + 5.13): persistent SQLite knowledge layer at `~/.cfcf/clio.db`. Shared across all workspaces, scoped by named **Clio Project**. FTS5 keyword search out of the box; install an embedder via `cfcf clio embedder install` to enable hybrid (α-weighted blend of cosine + normalised BM25, default α=0.7) + semantic search. **Cerefox-parity surface**: doc-level search by default (`--by-chunk` for raw chunk view), per-document small-to-big retrieval (small docs return full content, large docs return chunk + context window), update-by-document-id + update-by-title (with version snapshots in `clio_document_versions`), metadata-only edit (`cfcf clio docs edit` / `PATCH /api/clio/documents/:id`: title/author/project/metadata change with NO version snapshot — versions protect chunks, not metadata; one `edit-metadata` audit entry per non-empty edit), soft-delete + restore, audit log (write-only, with `edit-metadata` before/after diffs), metadata-search + metadata-keys discovery, `--alpha` / `--small-doc-threshold` / `--context-window` per-call knobs and matching `clio.*` global config. Iteration-loop auto-ingests reflection analyses, architect reviews, decision-log entries, iteration summaries (gated by `workspace.clio.ingestPolicy`). All agent roles read Clio via `cfcf-docs/clio-relevant.md` (top-k hits matched against `problem.md`) + the `cfcf-docs/clio-guide.md` cue card. Backend code lives behind a `MemoryBackend` interface so a future remote-Cerefox adapter can swap in cleanly.
 
 ## Key Design Principles
 
@@ -75,7 +75,8 @@ packages/
       backend/
         types.ts           # MemoryBackend interface (swap point for future CerefoxRemote)
         local-clio.ts      # LocalClio: SQLite + FTS5 + alpha-weighted hybrid + per-doc small-to-big +
-                           #   update-by-id + version snapshots + soft-delete + audit + metadata-search
+                           #   update-by-id + version snapshots + soft-delete + edit-metadata +
+                           #   audit + metadata-search
       embedders/
         types.ts           # Embedder interface (warmup, embed, close)
         catalogue.ts       # Built-in embedder catalogue (nomic default + bge / MiniLM); each entry
@@ -96,6 +97,7 @@ packages/
     routes/clio.ts       # /api/clio/* — search (?by=doc default, alpha + small_doc_threshold +
                          #   context_window per-call), ingest (documentId / updateIfExists / author),
                          #   /documents/:id/{content,versions,restore}, DELETE for soft-delete,
+                         #   PATCH for metadata-only edit (5.13 follow-up),
                          #   metadata/search + metadata/keys, audit-log, embedders/{install,set,
                          #   :name/switch-impact}, reindex
   cli/src/
@@ -113,7 +115,8 @@ packages/
       document.ts        # Generate final docs (cfcf document)
       reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
-      clio.ts            # cfcf clio {search,ingest,get,docs list,projects,project,
+      clio.ts            # cfcf clio {search,ingest,get,docs {list,edit},projects,project,
+                         #   versions,audit,delete,restore,metadata-search,metadata-keys,
                          #   embedder {list,active,install,set},reindex,stats}
                          #   + cfcf memory alias
   web/src/

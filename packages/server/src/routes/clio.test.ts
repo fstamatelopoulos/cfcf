@@ -704,6 +704,114 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(bogus.status).toBe(404);
   });
 
+  // ── 5.13 follow-up: PATCH /api/clio/documents/:id (metadata-only edit) ──
+  it("PATCH /api/clio/documents/:id edits title + metadata; updated=true", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Old", content: "body",
+        metadata: { role: "spec", draft: true },
+      }),
+    });
+    const { id } = await r.json();
+
+    const edit = await app.request(`/api/clio/documents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title:        "New",
+        metadataSet:  { reviewed_by: "fotis" },
+        metadataUnset: ["draft"],
+        actor:        "claude-code",
+      }),
+    });
+    expect(edit.status).toBe(200);
+    const body = await edit.json();
+    expect(body.updated).toBe(true);
+    expect(body.document.title).toBe("New");
+    expect(body.document.metadata).toEqual({ role: "spec", reviewed_by: "fotis" });
+  });
+
+  it("PATCH /api/clio/documents/:id moves doc between projects via projectName", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "dst" }),
+    });
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Travelling", content: "body" }),
+    });
+    const { id } = await r.json();
+
+    const edit = await app.request(`/api/clio/documents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectName: "dst" }),
+    });
+    expect(edit.status).toBe(200);
+    const body = await edit.json();
+    expect(body.updated).toBe(true);
+
+    // Now in 'dst', not 'p1'.
+    const dstList = await app.request("/api/clio/documents?project=dst");
+    expect((await dstList.json()).documents.map((d: { id: string }) => d.id)).toContain(id);
+  });
+
+  it("PATCH /api/clio/documents/:id 404s for unknown doc", async () => {
+    const app = createApp();
+    const res = await app.request(
+      `/api/clio/documents/00000000-0000-4000-8000-000000000000`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Whatever" }),
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /api/clio/documents/:id 400s on unknown projectName", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "X", content: "body" }),
+    });
+    const { id } = await r.json();
+    const res = await app.request(`/api/clio/documents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectName: "no-such-project" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/clio/documents/:id no-op returns updated=false (no audit row)", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Steady", content: "body", author: "fotis" }),
+    });
+    const { id } = await r.json();
+    const edit = await app.request(`/api/clio/documents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Steady", author: "fotis" }),
+    });
+    expect(edit.status).toBe(200);
+    const body = await edit.json();
+    expect(body.updated).toBe(false);
+
+    const audit = await app.request(`/api/clio/audit-log?event_type=edit-metadata&document_id=${id}`);
+    expect((await audit.json()).entries.length).toBe(0);
+  });
+
   it("GET /api/clio/stats returns counts + migrations", async () => {
     const app = createApp();
     await app.request("/api/clio/ingest", {

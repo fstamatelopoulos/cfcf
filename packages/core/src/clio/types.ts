@@ -175,6 +175,41 @@ export interface IngestResult {
 }
 
 /**
+ * Metadata-only edit request for `MemoryBackend.editDocument`. All fields
+ * optional; only the supplied ones change. Mirrors the Cerefox metadata
+ * edit surface (HTTP PATCH on the document). Distinct from `IngestRequest`
+ * because **no content snapshot is created** -- versions exist to protect
+ * chunks/content; metadata edits don't touch chunks. The audit log carries
+ * the before/after diff for traceability.
+ *
+ * Field semantics:
+ *   - `title`       : pass to rename. Empty string is rejected.
+ *   - `author`      : pass to attribute. Pass `""` to clear.
+ *   - `projectId`   : pass to move (UUID). Pass `""` to unassign... but
+ *                      `projectId` is NOT NULL in the schema, so a clear
+ *                      is invalid. Use `projectName` for ergonomics.
+ *   - `projectName` : pass instead of `projectId`; resolved server-side
+ *                      to a UUID. Errors if the project doesn't exist.
+ *   - `metadataSet` : keys to set/overwrite on the document's metadata
+ *                      JSON. Existing keys not mentioned here survive.
+ *   - `metadataUnset`: keys to remove. Idempotent (no-op if absent).
+ *
+ * The `metadataSet` / `metadataUnset` split (vs Cerefox's full-blob
+ * replace) avoids the read-modify-write footgun where an agent
+ * accidentally drops keys it didn't know about. A future
+ * `CerefoxRemote` adapter can reconstruct the full blob from these
+ * deltas if the upstream API demands it. 5.13 follow-up.
+ */
+export interface EditDocumentRequest {
+  title?: string;
+  author?: string;
+  projectId?: string;
+  projectName?: string;
+  metadataSet?: Record<string, unknown>;
+  metadataUnset?: string[];
+}
+
+/**
  * One row in `clio_audit_log`. Written automatically on every Clio
  * mutation (ingest create/update, delete, restore, migrate-project)
  * since 5.13. Reads (search, get, list) are NOT logged -- the volume
@@ -183,6 +218,11 @@ export interface IngestResult {
  * `eventType` vocabulary mirrors Cerefox's `cerefox_audit_log.operation`:
  *   - "create"        : new document inserted
  *   - "update-content": existing document's content replaced (snapshot taken)
+ *   - "edit-metadata" : metadata-only edit (title/author/projectId/metadata).
+ *                       NO version snapshot is taken -- versions exist to
+ *                       protect content (chunks); metadata edits don't touch
+ *                       chunks. The before/after diff lives in this row's
+ *                       `metadata` JSON. 5.13 follow-up.
  *   - "delete"        : soft-delete (deleted_at set)
  *   - "restore"       : soft-delete cleared
  *   - "migrate-project": doc(s) re-keyed from one Clio Project to another
@@ -193,6 +233,7 @@ export interface ClioAuditEntry {
   eventType:
     | "create"
     | "update-content"
+    | "edit-metadata"
     | "delete"
     | "restore"
     | "migrate-project";

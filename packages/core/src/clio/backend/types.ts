@@ -12,6 +12,7 @@ import type {
   ClioDocument,
   ClioDocumentVersion,
   ClioAuditEntry,
+  EditDocumentRequest,
   IngestRequest,
   IngestResult,
   SearchRequest,
@@ -97,6 +98,25 @@ export interface MemoryBackend {
    * 5.12 / Clio v2.
    */
   listMetadataKeys(opts?: { project?: string }): Promise<MetadataKeyInfo[]>;
+  /**
+   * Metadata-only edit. Updates any combination of title / author /
+   * projectId / metadata without re-ingesting content. **No version
+   * snapshot is taken** -- versions protect chunks/content from
+   * accidental overwrite, and metadata edits don't touch chunks.
+   * Writes one `edit-metadata` audit-log entry with a before/after
+   * diff of the fields that actually changed.
+   *
+   * Throws if the document doesn't exist or is soft-deleted, or if
+   * `projectName` resolves to no project. Idempotent: an edit that
+   * makes no actual changes is a no-op (no audit row).
+   *
+   * Returns the updated document. 5.13 follow-up.
+   */
+  editDocument(
+    id: string,
+    edits: EditDocumentRequest,
+    opts?: { author?: string },
+  ): Promise<ClioDocument>;
   /**
    * Soft-delete a document. Sets `deleted_at = now`; downstream search
    * and `getDocument` (default-args) treat it as gone, but the row +

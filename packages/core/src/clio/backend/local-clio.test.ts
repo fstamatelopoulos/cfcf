@@ -1215,3 +1215,151 @@ describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentCont
     await clio.close();
   });
 });
+
+describe("LocalClio.editDocument (5.13 follow-up: metadata-only edit)", () => {
+  it("edits title without re-ingesting content (no version snapshot)", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Old name",
+      content: "# Doc\n\nhello world",
+      metadata: { role: "spec" },
+    });
+    const beforeChunks = (await clio.search({ query: "hello world" })).hits.length;
+
+    const updated = await clio.editDocument(r.id, { title: "New name" });
+    expect(updated.title).toBe("New name");
+    // Author/metadata/projectId should be preserved.
+    expect(updated.author).toBe("agent");
+    expect(updated.metadata).toEqual({ role: "spec" });
+    // No version snapshot taken.
+    expect(await clio.listDocumentVersions(r.id)).toEqual([]);
+    // Live chunks unaffected.
+    const afterChunks = (await clio.search({ query: "hello world" })).hits.length;
+    expect(afterChunks).toBe(beforeChunks);
+    await clio.close();
+  });
+
+  it("set/unset metadata is incremental (other keys survive)", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Doc",
+      content: "body",
+      metadata: { role: "spec", workspace_id: "ws-1", draft: true },
+    });
+
+    const updated = await clio.editDocument(r.id, {
+      metadataSet:   { reviewed_by: "fotis", role: "approved-spec" },
+      metadataUnset: ["draft"],
+    });
+    expect(updated.metadata).toEqual({
+      workspace_id: "ws-1",
+      role:         "approved-spec",     // overwritten
+      reviewed_by:  "fotis",             // added
+                                         // draft: unset
+    });
+    await clio.close();
+  });
+
+  it("moves doc between projects via projectName", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "src" });
+    await clio.createProject({ name: "dst" });
+    const r = await clio.ingest({ project: "src", title: "Travelling doc", content: "x" });
+
+    const srcProj = await clio.getProject("src");
+    expect(r.document.projectId).toBe(srcProj!.id);
+
+    const updated = await clio.editDocument(r.id, { projectName: "dst" });
+    const dstProj = await clio.getProject("dst");
+    expect(updated.projectId).toBe(dstProj!.id);
+
+    // Source project's docs list excludes it.
+    expect((await clio.listDocuments({ project: "src" })).map((d) => d.id)).not.toContain(r.id);
+    // Destination project's docs list includes it.
+    expect((await clio.listDocuments({ project: "dst" })).map((d) => d.id)).toContain(r.id);
+    await clio.close();
+  });
+
+  it("audit log records before/after diff for the changed fields only", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Original",
+      content: "body",
+      metadata: { role: "spec" },
+    });
+    await clio.editDocument(r.id, {
+      title: "Renamed",
+      metadataSet: { role: "spec" },           // no-op: same value
+    }, { author: "claude-code" });
+
+    const log = await clio.getAuditLog({ documentId: r.id, eventType: "edit-metadata" });
+    expect(log.length).toBe(1);
+    expect(log[0].actor).toBe("claude-code");
+    const diff = log[0].metadata.diff as Record<string, { before: unknown; after: unknown }>;
+    expect(diff.title).toEqual({ before: "Original", after: "Renamed" });
+    // metadata.role didn't actually change → not in the diff
+    expect(diff.metadata).toBeUndefined();
+    await clio.close();
+  });
+
+  it("idempotent no-op: edit with no changes writes no audit row", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Steady",
+      content: "body",
+      author: "fotis",
+    });
+    const updated = await clio.editDocument(r.id, {
+      title:  "Steady",      // same
+      author: "fotis",       // same
+    });
+    expect(updated.title).toBe("Steady");
+
+    const log = await clio.getAuditLog({ documentId: r.id, eventType: "edit-metadata" });
+    expect(log.length).toBe(0);
+    await clio.close();
+  });
+
+  it("rejects empty title", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Doc", content: "x" });
+    await expect(clio.editDocument(r.id, { title: "   " })).rejects.toThrow(/title cannot be empty/);
+    await clio.close();
+  });
+
+  it("rejects unknown projectName", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Doc", content: "x" });
+    await expect(clio.editDocument(r.id, { projectName: "no-such-project" }))
+      .rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("throws on missing doc", async () => {
+    const clio = makeClio();
+    await expect(clio.editDocument("00000000-0000-4000-8000-000000000000", { title: "x" }))
+      .rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("throws on soft-deleted doc (must restore first)", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Tomb", content: "x" });
+    await clio.deleteDocument(r.id);
+    await expect(clio.editDocument(r.id, { title: "y" })).rejects.toThrow(/soft-deleted/);
+    await clio.close();
+  });
+
+  it("clearing author with empty string falls back to 'agent'", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Doc", content: "x", author: "fotis" });
+    expect(r.document.author).toBe("fotis");
+    const updated = await clio.editDocument(r.id, { author: "" });
+    expect(updated.author).toBe("agent");
+    await clio.close();
+  });
+});

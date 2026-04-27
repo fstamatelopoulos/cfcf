@@ -113,6 +113,28 @@ When an update happens:
 - Search (FTS + vector) returns the new content; the archived version is excluded from indexes but remains retrievable.
 - The CLI prints the snapshot's `version_id` + `version_number` so you can recall the prior content via `cfcf clio get <id> --version-id <uuid>`.
 
+### Metadata-only edit (5.13 follow-up)
+
+For changes that don't touch content -- renaming, moving between Projects,
+adding metadata keys -- use `cfcf clio docs edit`. **No version snapshot
+is taken**: versions exist to protect chunks/content, and metadata edits
+don't touch chunks. The audit log carries a before/after diff.
+
+```bash
+# Rename
+cfcf clio docs edit <id> --title "New name"
+
+# Move to a different Clio Project
+cfcf clio docs edit <id> --project cfcf
+
+# Add / remove metadata keys (incremental; other keys survive)
+cfcf clio docs edit <id> --set-meta reviewed_by=fotis --set-meta status=approved
+cfcf clio docs edit <id> --unset-meta draft
+
+# Combine; --actor attributes the edit in the audit log
+cfcf clio docs edit <id> --title "Renamed" --project cfcf --actor claude-code
+```
+
 The recommended agent workflow mirrors Cerefox's:
 
 ```
@@ -150,6 +172,7 @@ cfcf clio ingest modified.md --project <p> --title "<same title>" --document-id 
 | `cfcf clio metadata-search` + `cfcf clio metadata-keys` (discovery) | ✅ shipped 5.12 |
 | Search-result `[id: <uuid>]` rendering for the search → ingest agent loop | ✅ shipped 5.12 |
 | `cfcf clio audit` + `GET /api/clio/audit-log` (mutations only; reads not logged) | ✅ shipped 5.13 |
+| `cfcf clio docs edit` + `PATCH /api/clio/documents/:id` (metadata-only edit, no version snapshot) | ✅ shipped 5.13 follow-up |
 | sqlite-vec HNSW (replaces brute-force cosine) | tracked under 6.15; needs the 5.5 installer infra |
 | Web UI Clio tab (browse projects + docs in the GUI) | tracked under 6.18 |
 | Remote Cerefox backend (`MemoryBackend` interface ready) | future iteration |

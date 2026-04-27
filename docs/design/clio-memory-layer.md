@@ -409,9 +409,10 @@ All under `/api/clio/*`. JSON bodies, same auth / error-shape conventions as the
 | `GET`  | `/api/clio/documents/:id/versions` | List archived versions, newest first. | ✅ (5.11) |
 | `DELETE` | `/api/clio/documents/:id` | Soft-delete (idempotent). Body: `{author}`. | ✅ (5.11) |
 | `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted (idempotent). Body: `{author}`. | ✅ (5.11) |
+| `PATCH` | `/api/clio/documents/:id` | Metadata-only edit (title/author/projectId/projectName/metadataSet/metadataUnset). NO version snapshot; one `edit-metadata` audit row with before/after diff. Idempotent no-ops write nothing. | ✅ (5.13 follow-up) |
 | `POST` | `/api/clio/metadata-search` | Exact-match metadata filter (no FTS). Body: `{metadataFilter, project?, updatedSince?, includeDeleted?, matchCount?}`. | ✅ (5.12) |
 | `GET`  | `/api/clio/metadata-keys` | List metadata keys + sample values, most-used first. Optional `?project=`. | ✅ (5.12) |
-| `GET`  | `/api/clio/audit-log` | Query mutation events (create/update-content/delete/restore/migrate-project). Filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`. | ✅ (5.13) |
+| `GET`  | `/api/clio/audit-log` | Query mutation events (create/update-content/edit-metadata/delete/restore/migrate-project). Filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`. | ✅ (5.13) |
 | `GET`  | `/api/clio/projects` | List Clio Projects (name, id, document_count). | ✅ |
 | `GET`  | `/api/clio/stats` | DB size, chunk count per project, index health. | ✅ |
 
@@ -453,6 +454,11 @@ cfcf clio embedder active
 
 # Reindex (v2+): re-embed all chunks with the active embedder
 cfcf clio reindex --project cf-ecosystem
+
+# Metadata-only edit (5.13 follow-up; mutate metadata without re-ingesting content)
+# No version snapshot; one edit-metadata audit entry with before/after diff.
+cfcf clio docs edit <document-id> --title "..." --project cfcf \
+                                  --set-meta reviewed_by=fotis --unset-meta draft
 
 # Introspection
 cfcf clio stats

@@ -39,9 +39,17 @@ This entry covers everything on the `iteration-5/clio-update-api` branch — ite
 
 ### Audit log (5.13)
 
-- **`cfcf clio audit`** + `GET /api/clio/audit-log` — query mutation events (`create` / `update-content` / `delete` / `restore` / `migrate-project`) with filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`.
+- **`cfcf clio audit`** + `GET /api/clio/audit-log` — query mutation events (`create` / `update-content` / `edit-metadata` / `delete` / `restore` / `migrate-project`) with filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`.
 - Write-only by design. Reads (search, get, list) intentionally not logged — would dwarf real mutation entries; the trust story is "who changed what". Cerefox precedent.
 - Audit writes are best-effort, outside the mutation transaction. A failure warns to stderr without rolling back the underlying operation.
+
+### Metadata-only edit (5.13 follow-up, Cerefox parity)
+
+- **`cfcf clio docs edit <id>`** + `PATCH /api/clio/documents/:id` — mutate `title`, `author`, Clio Project, and metadata WITHOUT re-ingesting content. Closes the last Cerefox-parity gap: previously the only way to change these fields was a full content update, which forced a version snapshot for what isn't a content change.
+- **No version snapshot is taken** on metadata edits. Versions exist to protect chunks/content from accidental overwrite; metadata edits don't touch chunks. The audit log carries a before/after diff under one `edit-metadata` row.
+- **Set/unset metadata semantics** (`--set-meta key=value`, `--unset-meta key`) — incremental rather than full-blob replace. Avoids the read-modify-write footgun where an agent accidentally drops keys it didn't know about. A future `CerefoxRemote` adapter can reconstruct the full blob from these deltas at the abstraction boundary if upstream demands it.
+- **Idempotent**: an edit that makes no actual changes is a no-op (no audit row, no `updated_at` bump). Useful for agents that re-apply the same set/unset on every iteration.
+- Move docs between Projects via `--project <name>` (or `projectName` / `projectId` in the JSON body). Closes the gap that previously required either a SQL one-liner or a delete-and-reingest dance.
 
 ### Configuration knobs (`ClioGlobalConfig`)
 

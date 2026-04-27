@@ -448,8 +448,25 @@ cfcf clio metadata-keys [--project <name>]                                  # wh
 cfcf clio delete <document-id> [--author <name>]                            # excludes from search; restorable
 cfcf clio restore <document-id> [--author <name>]                           # idempotent
 
+# Metadata-only edit (5.13 follow-up, Cerefox parity)
+# Mutate title / author / Clio Project / metadata WITHOUT re-ingesting content.
+# No version snapshot is taken (versions exist to protect chunks). One audit row
+# per non-empty edit, with a before/after diff.
+cfcf clio docs edit <document-id> \
+    [--title "..."]               # rename
+    [--author "..."]              # set/clear author (empty string clears to 'agent')
+    [--project <name>]            # move to a different Clio Project (by name or UUID)
+    [--set-meta key=value ...]    # incremental metadata add/overwrite (repeatable)
+    [--unset-meta key ...]        # incremental metadata removal (repeatable)
+    [--actor <name>]              # audit-log attribution; defaults to 'agent'
+    [--json]
+# Examples
+cfcf clio docs edit 8a3f… --title "Decisions log (renamed)"
+cfcf clio docs edit 8a3f… --project cfcf
+cfcf clio docs edit 8a3f… --set-meta reviewed_by=fotis --set-meta status=approved --unset-meta draft
+
 # Audit log (5.13)
-cfcf clio audit [--event-type create|update-content|delete|restore|migrate-project] \
+cfcf clio audit [--event-type create|update-content|edit-metadata|delete|restore|migrate-project] \
                 [--actor <name>] [--project <p>] [--document-id <id>] [--since <iso>] [--limit 100] [--json]
 
 # Projects (grouping of workspaces by knowledge domain)

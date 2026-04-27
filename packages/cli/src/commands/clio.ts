@@ -8,7 +8,7 @@
 import type { Command } from "commander";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
-import { isServerReachable, post, get, del } from "../client.js";
+import { isServerReachable, post, get, del, patch } from "../client.js";
 import { createInterface } from "node:readline";
 import { DEFAULT_EMBEDDER_NAME } from "@cfcf/core";
 import type {
@@ -734,6 +734,105 @@ function registerUnder(root: Command): void {
         console.log();
       }
       console.log(`Tip: --include-deleted to surface tombstones; --deleted-only for the trash-bin view; --json for raw records.`);
+    });
+
+  // ── docs: edit ────────────────────────────────────────────────────────
+  // Metadata-only edit. Updates any combination of title / author /
+  // project / metadata WITHOUT re-ingesting content. No version snapshot
+  // is taken (versions exist to protect content; metadata edits don't
+  // touch chunks). Audit-log carries the before/after diff. 5.13 follow-up.
+  docsCmd
+    .command("edit <id>")
+    .description("Edit a Clio document's metadata (title / author / project / metadata). Content is NOT touched.")
+    .option("--title <title>", "Rename the document.")
+    .option("--author <author>", "Set the document's author. Pass an empty string to clear (resets to 'agent').")
+    .option("--project <name>", "Move the document to this Clio Project (by name or UUID).")
+    .option(
+      "--set-meta <kv>",
+      "Add/overwrite a metadata key. Format: key=value (string|number|true|false|null). Repeatable.",
+      (val: string, prev: string[] = []) => [...prev, val],
+      [] as string[],
+    )
+    .option(
+      "--unset-meta <key>",
+      "Remove a metadata key. Repeatable.",
+      (val: string, prev: string[] = []) => [...prev, val],
+      [] as string[],
+    )
+    .option("--actor <actor>", "Audit-log attribution (who's making this edit). Defaults to 'agent'.")
+    .option("--json", "Emit raw JSON")
+    .action(async (id: string, opts: {
+      title?: string;
+      author?: string;
+      project?: string;
+      setMeta?: string[];
+      unsetMeta?: string[];
+      actor?: string;
+      json?: boolean;
+    }) => {
+      if (!(await checkServer())) return;
+
+      // Parse --set-meta key=value pairs. Tolerate quoted values; coerce
+      // bare true/false/null/numbers to typed JSON. Strings stay strings.
+      const metadataSet: Record<string, unknown> = {};
+      for (const raw of opts.setMeta ?? []) {
+        const eq = raw.indexOf("=");
+        if (eq < 0) {
+          console.error(`Invalid --set-meta '${raw}': expected key=value.`);
+          process.exit(1);
+        }
+        const key = raw.slice(0, eq).trim();
+        const valStr = raw.slice(eq + 1);
+        if (!key) {
+          console.error(`Invalid --set-meta '${raw}': empty key.`);
+          process.exit(1);
+        }
+        let parsed: unknown = valStr;
+        if (valStr === "true") parsed = true;
+        else if (valStr === "false") parsed = false;
+        else if (valStr === "null") parsed = null;
+        else if (/^-?\d+(\.\d+)?$/.test(valStr)) parsed = Number(valStr);
+        metadataSet[key] = parsed;
+      }
+
+      const payload: Record<string, unknown> = {};
+      if (opts.title !== undefined) payload.title = opts.title;
+      if (opts.author !== undefined) payload.author = opts.author;
+      if (opts.project !== undefined) payload.projectName = opts.project;
+      if (Object.keys(metadataSet).length > 0) payload.metadataSet = metadataSet;
+      if (opts.unsetMeta && opts.unsetMeta.length > 0) payload.metadataUnset = opts.unsetMeta;
+      if (opts.actor) payload.actor = opts.actor;
+
+      if (Object.keys(payload).length === 0
+          || (Object.keys(payload).length === 1 && payload.actor !== undefined)) {
+        console.error("Nothing to edit. Pass at least one of --title, --author, --project, --set-meta, --unset-meta.");
+        process.exit(1);
+      }
+
+      const res = await patch<{ updated: boolean; document: ClioDocument }>(
+        `/api/clio/documents/${id}`,
+        payload,
+      );
+      if (!res.ok) {
+        console.error(`docs edit failed: ${res.error}`);
+        process.exit(1);
+      }
+      const { updated, document } = res.data!;
+      if (opts.json) {
+        console.log(JSON.stringify(res.data, null, 2));
+        return;
+      }
+      if (!updated) {
+        console.log(`No changes: every requested edit already matched the current state.`);
+        return;
+      }
+      console.log(`Updated document ${document.id}`);
+      console.log(`  title:   ${document.title}`);
+      console.log(`  author:  ${document.author}`);
+      console.log(`  project: ${document.projectId}`);
+      console.log(`  metadata: ${JSON.stringify(document.metadata)}`);
+      console.log();
+      console.log(`Audit log: cfcf clio audit --document-id ${document.id}`);
     });
 
   // ── project(s): list (default) / create / show ───────────────────────

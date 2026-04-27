@@ -298,14 +298,14 @@ export function registerClioRoutes(app: Hono): void {
     if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
       return c.json({ error: "limit must be a positive integer" }, 400);
     }
-    const allowedTypes = ["create", "update-content", "delete", "restore", "migrate-project"];
+    const allowedTypes = ["create", "update-content", "edit-metadata", "delete", "restore", "migrate-project"];
     if (eventType && !allowedTypes.includes(eventType)) {
       return c.json({ error: `event_type must be one of: ${allowedTypes.join(", ")}` }, 400);
     }
     const backend = getClioBackend();
     try {
       const entries = await backend.getAuditLog({
-        eventType: eventType as "create" | "update-content" | "delete" | "restore" | "migrate-project" | undefined,
+        eventType: eventType as "create" | "update-content" | "edit-metadata" | "delete" | "restore" | "migrate-project" | undefined,
         actor,
         project,
         documentId,
@@ -372,6 +372,73 @@ export function registerClioRoutes(app: Hono): void {
   // remain so a subsequent restore is possible. Returns 200 (with
   // deleted=true) on first delete; idempotent thereafter. 404 when the
   // doc doesn't exist. Audit log integration lands in 5.13.
+  // Metadata-only edit (5.13 follow-up). Updates any combination of
+  // title / author / projectId / metadata without re-ingesting content.
+  // **No version snapshot is taken** -- versions exist to protect
+  // chunks/content; metadata edits don't touch chunks. Writes one
+  // `edit-metadata` audit entry with a before/after diff.
+  //
+  // Body shape:
+  //   {
+  //     "title":         "...",          // optional
+  //     "author":        "...",          // optional ("" clears to default 'agent')
+  //     "projectId":     "uuid",         // optional, OR
+  //     "projectName":   "cfcf",         // optional (one of the two)
+  //     "metadataSet":   { k: v, ... },  // optional (incremental)
+  //     "metadataUnset": ["k", ...],     // optional (incremental)
+  //     "author":        "claude-code"   // RESERVED for actor attribution;
+  //                                      //   override via x-cfcf-actor header
+  //                                      //   if you want a separate channel
+  //   }
+  // 200 → { updated: boolean, document }
+  // 400 → bad input (e.g. project not found, empty title)
+  // 404 → doc not found
+  app.patch("/api/clio/documents/:id", async (c) => {
+    const id = c.req.param("id");
+    let body: {
+      title?: string;
+      author?: string;
+      projectId?: string;
+      projectName?: string;
+      metadataSet?: Record<string, unknown>;
+      metadataUnset?: string[];
+      actor?: string;
+    } = {};
+    try { body = await c.req.json(); } catch { /* empty body OK -- treated as no-op */ }
+    const backend = getClioBackend();
+    try {
+      const before = await backend.getDocument(id);
+      // 'actor' field on body is the audit-log attribution (who's making
+      // the edit). 'author' is the document's author column. They CAN
+      // diverge -- a CLI user editing on behalf of an agent.
+      const updated = await backend.editDocument(
+        id,
+        {
+          title:         body.title,
+          author:        body.author,
+          projectId:     body.projectId,
+          projectName:   body.projectName,
+          metadataSet:   body.metadataSet,
+          metadataUnset: body.metadataUnset,
+        },
+        { author: body.actor },
+      );
+      const changed =
+        !before ||
+        before.title !== updated.title ||
+        before.author !== updated.author ||
+        before.projectId !== updated.projectId ||
+        JSON.stringify(before.metadata) !== JSON.stringify(updated.metadata);
+      return c.json({ updated: changed, document: updated }, 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Distinguish "doc not found" (404) from secondary lookups like
+      // "project not found" (400 -- it's a bad input on an existing doc).
+      const status = /document "[^"]+" not found/.test(message) ? 404 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
   app.delete("/api/clio/documents/:id", async (c) => {
     const id = c.req.param("id");
     let body: { author?: string } = {};

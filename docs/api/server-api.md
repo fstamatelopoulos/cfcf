@@ -947,6 +947,33 @@ Ingest a Markdown document. Chunks the content via the heading-aware chunker, th
 
 **Response:** `200 OK`. `404` for unknown doc.
 
+### PATCH /api/clio/documents/:id
+
+**5.13 follow-up.** Metadata-only edit. Mutate `title`, `author`, Clio Project, and metadata WITHOUT re-ingesting content. **No version snapshot is taken** — versions exist to protect chunks from accidental overwrite, and metadata edits don't touch chunks. Writes one `edit-metadata` audit-log entry with a before/after diff.
+
+**Body (all fields optional):**
+```json
+{
+  "title":         "New name",
+  "author":        "claude-code",       // empty string clears to default 'agent'
+  "projectId":     "<uuid>",            // OR
+  "projectName":   "cfcf",              // (one of the two -- projectId wins if both)
+  "metadataSet":   { "reviewed_by": "fotis", "status": "approved" },
+  "metadataUnset": ["draft"],
+  "actor":         "claude-code"        // audit-log attribution; defaults to 'agent'
+}
+```
+
+`metadataSet` adds/overwrites keys; existing keys not mentioned survive. `metadataUnset` removes keys (idempotent — no-op if absent). The set/unset split (vs Cerefox's full-blob replace) avoids the read-modify-write footgun where an agent accidentally drops keys it didn't know about; a future `CerefoxRemote` adapter can reconstruct the full blob from these deltas at the abstraction boundary if upstream demands it.
+
+**Response:** `200 OK` with `{ updated: boolean, document: ClioDocument }`.
+- `updated: true` — at least one field actually changed; one `edit-metadata` audit row was written.
+- `updated: false` — every requested edit already matched the current state; no audit row, no `updated_at` bump.
+
+**Errors:**
+- `400` — empty `title`, unknown `projectId` / `projectName`, or doc is soft-deleted (restore first).
+- `404` — doc not found.
+
 ### POST /api/clio/metadata-search
 
 **5.12.** Find documents by metadata-only filter. Mirrors Cerefox `cerefox_metadata_search`.
@@ -986,10 +1013,10 @@ Most-used keys first. Array values produce `valueSamples: []` (only top-level sc
 
 **5.13.** Query the audit log. Mirrors Cerefox `cerefox_get_audit_log`. Newest first.
 
-The audit log records every Clio **mutation**: `create`, `update-content`, `delete`, `restore`, `migrate-project`. Reads (search, get, list) are NOT recorded — write attribution is the trust story.
+The audit log records every Clio **mutation**: `create`, `update-content`, `edit-metadata`, `delete`, `restore`, `migrate-project`. Reads (search, get, list) are NOT recorded — write attribution is the trust story.
 
 **Query params (all optional, AND-combined):**
-- `event_type` — `create` | `update-content` | `delete` | `restore` | `migrate-project`
+- `event_type` — `create` | `update-content` | `edit-metadata` | `delete` | `restore` | `migrate-project`
 - `actor` — exact match (e.g. `claude-code`)
 - `project` — Clio Project name or id
 - `document_id` — UUID
