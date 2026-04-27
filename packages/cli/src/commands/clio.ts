@@ -394,9 +394,9 @@ function registerUnder(root: Command): void {
       console.log(`${entries.length} audit entry(ies), newest first:`);
       console.log();
       for (const e of entries) {
-        const docPart = e.documentId ? ` doc=${e.documentId.slice(0, 8)}…` : "";
-        const projPart = e.projectId ? ` project=${e.projectId.slice(0, 8)}…` : "";
-        console.log(`  [${e.timestamp}] ${e.eventType}  actor=${e.actor ?? "?"}${docPart}${projPart}`);
+        console.log(`  [${e.timestamp}] ${e.eventType}  actor=${e.actor ?? "?"}`);
+        if (e.documentId) console.log(`     [id: ${e.documentId}]`);
+        if (e.projectId) console.log(`     project: ${e.projectId}`);
         if (e.metadata && Object.keys(e.metadata).length > 0) {
           for (const [k, v] of Object.entries(e.metadata)) {
             console.log(`     ${k}: ${JSON.stringify(v)}`);
@@ -601,15 +601,21 @@ function registerUnder(root: Command): void {
         const role = (d.metadata?.role as string | undefined) ?? "-";
         const type = (d.metadata?.artifact_type as string | undefined) ?? "-";
         const wsId = (d.metadata?.workspace_id as string | undefined) ?? "-";
-        // First line: title + id-prefix + project. Compact, scannable.
+        // Title + the agent-friendly [id: <uuid>] line so callers can
+        // copy-paste the doc id into `cfcf clio ingest --document-id
+        // <uuid>` without a follow-up lookup. Project gets the same
+        // treatment for cross-project workflows (`cfcf clio search
+        // --project <uuid>`). Same convention as `cfcf clio search`.
         console.log(`  ${d.title}`);
-        console.log(`    id=${d.id.slice(0, 8)}…  project=${d.projectId.slice(0, 8)}…  chunks=${d.chunkCount}  chars=${d.totalChars}`);
-        console.log(`    role=${role}  type=${type}  workspace=${wsId === "-" ? "-" : wsId.slice(0, 8) + "…"}`);
+        console.log(`    [id: ${d.id}]  author: ${d.author}`);
+        console.log(`    project: ${d.projectId}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
+        console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
         console.log(`    source=${d.source}`);
         console.log(`    created=${d.createdAt}`);
+        if (d.deletedAt) console.log(`    deleted_at=${d.deletedAt}`);
         console.log();
       }
-      console.log(`Tip: cfcf clio get <id> for full metadata; pass --json for the raw records.`);
+      console.log(`Tip: pass --json for the raw records; --include-deleted to surface tombstones.`);
     });
 
   // ── project(s): list (default) / create / show ───────────────────────
