@@ -924,7 +924,7 @@ function registerUnder(root: Command): void {
       return;
     }
     if (projects.length === 0) {
-      console.log("No Clio Projects. Create one with: cfcf clio project create <name>");
+      console.log("No Clio Projects. Create one with: cfcf clio projects create <name>");
       return;
     }
     console.log(`${projects.length} Clio Project(s):`);
@@ -1369,7 +1369,7 @@ function printDocHit(rank: number, h: DocumentSearchHit): void {
  * HTTP request is in flight. Returns a stop function that clears the
  * spinner line in-place so the final result starts on a clean row.
  *
- * Why: commands like `cfcf clio ingest` and `cfcf clio reindex` block
+ * Why: commands like `cfcf clio docs ingest` and `cfcf clio reindex` block
  * on a fetch() that takes several seconds (the server runs
  * `embedder.embed()` over every chunk synchronously). Without a
  * spinner the UX feels stuck. Same `\r\x1b[K` in-place rewrite

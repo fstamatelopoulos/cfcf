@@ -9,7 +9,34 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_Nothing yet. Target: 5.5b (npmjs publish) + 5.8 (user manual + CLI verb normalisation)._
+Working on plan item **5.8** (user manual + CLI verb normalisation). Target: v0.12.0.
+
+### CLI verb normalisation (BREAKING)
+
+The Clio CLI now follows a single mechanical rule for noun-namespacing:
+
+> 1. Collection-wide / Clio-wide / headline operations stay top-level (`search`, `audit`, `reindex`, `stats`).
+> 2. Verbs that operate on a specific noun-instance go under that noun's namespace (`docs`, `projects`, `embedder`).
+> 3. A sub-concept with multiple operations of its own gets its own namespace (`metadata`).
+
+Verb moves (no deprecation aliases — clean break):
+
+| Old | New |
+|---|---|
+| `cfcf clio ingest` | `cfcf clio docs ingest` |
+| `cfcf clio get` | `cfcf clio docs get` |
+| `cfcf clio versions` | `cfcf clio docs versions` |
+| `cfcf clio delete` | `cfcf clio docs delete` |
+| `cfcf clio restore` | `cfcf clio docs restore` |
+| `cfcf clio metadata-search` | `cfcf clio metadata search` |
+| `cfcf clio metadata-keys` | `cfcf clio metadata keys` |
+| `cfcf clio project create` | `cfcf clio projects create` |
+| `cfcf clio project show` | `cfcf clio projects show` |
+| `cfcf clio project` (alias) | dropped |
+
+Default actions: `cfcf clio docs` and `cfcf clio projects` default to `list`; `cfcf clio metadata` (no subcommand) prints help. The `cfcf memory` root alias still maps to the same tree.
+
+Full proposal + killed-alternatives analysis in [`docs/research/cli-verb-normalisation.md`](docs/research/cli-verb-normalisation.md). Decision recorded in `docs/decisions-log.md` under "2026-04-27 — Clio CLI verbs: namespaced surface with a three-clause rule".
 
 ## [0.11.0] -- 2026-04-27
 
@@ -23,20 +50,20 @@ This release covers everything from the `iteration-5/clio-update-api` branch —
 
 ### Update-doc API + versioning + soft-delete (5.11)
 
-- **`cfcf clio ingest --document-id <uuid>`** — deterministic update by UUID; preserves existing title/author/metadata when the caller omits them.
-- **`cfcf clio ingest --update-if-exists`** — title-based update; matches by exact title within the same Project, falls through to create on miss.
+- **`cfcf clio docs ingest --document-id <uuid>`** — deterministic update by UUID; preserves existing title/author/metadata when the caller omits them.
+- **`cfcf clio docs ingest --update-if-exists`** — title-based update; matches by exact title within the same Project, falls through to create on miss.
 - **`IngestResult.action`** — `"created" | "updated" | "skipped"`. Legacy `created: boolean` kept for backward compat.
 - **Version snapshots** — every update path archives prior chunks into `clio_document_versions`; `version_id IS NULL` on a chunk means "live".
-- **`cfcf clio versions <doc-id>`** + `GET /api/clio/documents/:id/versions` — list archived versions.
-- **`cfcf clio get <doc-id> [--version-id <uuid>]`** + `GET /api/clio/documents/:id/content?version_id=<uuid>` — reconstruct full content for live or archived versions.
-- **`cfcf clio delete <id>` / `cfcf clio restore <id>`** + `DELETE` / `POST /api/clio/documents/:id/restore` — soft-delete + restore (idempotent). `cfcf clio docs list [--include-deleted | --deleted-only]` with `[DELETED]` prefix on tombstones.
+- **`cfcf clio docs versions <doc-id>`** + `GET /api/clio/documents/:id/versions` — list archived versions.
+- **`cfcf clio docs get <doc-id> [--version-id <uuid>]`** + `GET /api/clio/documents/:id/content?version_id=<uuid>` — reconstruct full content for live or archived versions.
+- **`cfcf clio docs delete <id>` / `cfcf clio docs restore <id>`** + `DELETE` / `POST /api/clio/documents/:id/restore` — soft-delete + restore (idempotent). `cfcf clio docs list [--include-deleted | --deleted-only]` with `[DELETED]` prefix on tombstones.
 
 ### Agent-parity API surface (5.12)
 
 - **`author` is a typed first-class column** on `clio_documents`. Surfaced in search hits, listings, and version rows. Default `'agent'`.
 - **Search-result `[id: <full-uuid>]` rendering** (CLI + audit + docs list) so agents can copy-paste doc IDs into follow-up `--document-id` updates without manual lookup.
-- **`cfcf clio metadata-search`** + `POST /api/clio/metadata-search` — exact-match metadata filter (no FTS query required); supports `updated_since` for catch-up workflows.
-- **`cfcf clio metadata-keys`** + `GET /api/clio/metadata-keys` — discover which metadata keys + sample values exist in the corpus.
+- **`cfcf clio metadata search`** + `POST /api/clio/metadata-search` — exact-match metadata filter (no FTS query required); supports `updated_since` for catch-up workflows.
+- **`cfcf clio metadata keys`** + `GET /api/clio/metadata-keys` — discover which metadata keys + sample values exist in the corpus.
 - **Pre-flight warnings on embedder switch** — new `GET /api/clio/embedders/:name/switch-impact` returns `embeddedChunkCount` + `chunksOverNewCeiling` + `configMaxOverCeiling`. CLI prompts y/N (refuses in non-TTY without `--yes`) when any signal fires.
 - **Confirmation prompt on `cfcf clio reindex`** — shows active embedder + scope + cost hint before running. `--yes` skips for non-interactive use.
 - **Embedder-recommended chunk size acts as a SAFETY CEILING.** Smaller user `clio.maxChunkChars` values are honoured; larger values are capped at the active embedder's recommendation with a stderr warning at ingest. Without an embedder, no ceiling.
@@ -67,7 +94,7 @@ New fields, all editable via the Web UI Server Info page:
 
 ### CLI ergonomics
 
-- **Stderr spinners** on the slow embedder-bound paths: `cfcf clio ingest`, `cfcf clio reindex`, `cfcf clio embedder set --reindex`. TTY-only; suppressed under `--json`.
+- **Stderr spinners** on the slow embedder-bound paths: `cfcf clio docs ingest`, `cfcf clio reindex`, `cfcf clio embedder set --reindex`. TTY-only; suppressed under `--json`.
 - **`docs list` shows `versions=N`** when N > 0, plus `[DELETED]` prefix + restore hint for tombstones. `--deleted-only` for the trash-bin view.
 - **Project names surfaced consistently** in `cfcf clio search` (was missing entirely), `docs list`, `metadata-search`, `get`, and `ingest` result rendering. Display format: `<name> [<id>]` so the human-friendly name is primary and the UUID stays available for scripts that want to copy it. Powered by a new optional `ClioDocument.projectName` field populated via SQL JOIN on read paths.
 - **Version banner unified.** `cfcf --version`, `cfcf server start`, `cfcf server status`, and `GET /api/health` all report the same string, resolved at runtime from the installed package's `package.json` (or workspace's `package.json` with `-dev` suffix in source mode).

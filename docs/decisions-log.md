@@ -91,7 +91,7 @@ Search and ingest sit on opposite sides of the rule because they play different 
 
 **Implementation.** New `LocalClio.searchDocuments` fetches `matchCount × 5` chunk candidates via the existing engine, dedups by `document_id` keeping best score, decorates each hit with `versionCount` + `matchingChunks` + the best chunk's content. HTTP `GET /api/clio/search?by=doc` (default) / `?by=chunk` (raw).
 
-**Why surface `versionCount` + `matchingChunks` on hits.** `versionCount` mirrors Cerefox's `cerefox_search_docs.version_count` — agents reasoning about doc maturity ("evolved" vs "fresh") avoid a follow-up `cfcf clio versions` call. `matchingChunks` is cfcf-specific — "matched 5 chunks" vs "matched 1 chunk" is a useful breadth signal, near-free given dedup already pools the candidates.
+**Why surface `versionCount` + `matchingChunks` on hits.** `versionCount` mirrors Cerefox's `cerefox_search_docs.version_count` — agents reasoning about doc maturity ("evolved" vs "fresh") avoid a follow-up `cfcf clio docs versions` call. `matchingChunks` is cfcf-specific — "matched 5 chunks" vs "matched 1 chunk" is a useful breadth signal, near-free given dedup already pools the candidates.
 
 ---
 
@@ -101,7 +101,7 @@ Search and ingest sit on opposite sides of the rule because they play different 
 
 **Decision.** Adopt Cerefox's per-doc logic in the doc-level search path (`searchDocuments`). Configurable via `clio.smallDocThreshold` (default 20000) + `clio.contextWindow` (default 1) globally; per-call overrides via `?small_doc_threshold=` / `--small-doc-threshold` and `?context_window=` / `--context-window`. New result field `DocumentSearchHit.isPartial`.
 
-**Outcome.** Small documents (typed-up notes, design briefs, cheat-sheets) come back in one piece — agents read them inline from the search hit instead of round-tripping to `cfcf clio get`. Large documents still return a focused window. Bypasses the chunk-level engine's expansion entirely (`contextWindow=0` actually means "bare chunk", not "chunk + hardcoded radius").
+**Outcome.** Small documents (typed-up notes, design briefs, cheat-sheets) come back in one piece — agents read them inline from the search hit instead of round-tripping to `cfcf clio docs get`. Large documents still return a focused window. Bypasses the chunk-level engine's expansion entirely (`contextWindow=0` actually means "bare chunk", not "chunk + hardcoded radius").
 
 **Lesson.** Retrieval features land at the layer the caller experiences. Per-chunk tricks are right for the chunk-level engine but wrong for the doc-level surface; mirror the right layer's behaviour.
 
@@ -142,7 +142,7 @@ Search and ingest sit on opposite sides of the rule because they play different 
 
 2. **`author` is a typed first-class column on `clio_documents`.** Cerefox keeps author only on the audit log. cfcf promotes it to a column because (a) search hits and listings render it inline without a JOIN, (b) future audit/retention queries filter heavily on author, (c) the storage cost is negligible vs. the query simplicity. Default `'agent'` so legacy records backfill cleanly.
 
-3. **Version row's `source` carries the OUTGOING author, not the trigger label.** Cerefox's `cerefox_document_versions.source` stores the snapshot trigger (`"file"` / `"agent"` / etc.). cfcf's same column instead stores `target.author` at update time — i.e. who wrote the content being archived. Different read-model: `cfcf clio versions <id>` answers "who wrote v3?" with `versions[0].source` directly, no audit-log JOIN needed.
+3. **Version row's `source` carries the OUTGOING author, not the trigger label.** Cerefox's `cerefox_document_versions.source` stores the snapshot trigger (`"file"` / `"agent"` / etc.). cfcf's same column instead stores `target.author` at update time — i.e. who wrote the content being archived. Different read-model: `cfcf clio docs versions <id>` answers "who wrote v3?" with `versions[0].source` directly, no audit-log JOIN needed.
 
 4. **Audit log is write-only.** The `clio_audit_log` schema (from initial schema) reserves `event_type` values for `'search'` and `'get'` but the live writer skips them. Reasons: (a) volume — every preload-context read in the iteration loop would write a row, dwarfing actual mutation entries; (b) the trust story is "who changed what", not "who saw what"; (c) Cerefox's `cerefox_audit_log` is also write-only in practice. The columns stay (no migration churn) so a future "verbose mode" could turn read-logging back on without schema work.
 

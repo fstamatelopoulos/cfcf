@@ -136,7 +136,7 @@ CREATE INDEX IF NOT EXISTS clio_chunks_version_idx
 -- FTS5 reads the `content` column from `clio_chunks` via rowid. Only
 -- current chunks (version_id IS NULL) are indexed; archived chunks are
 -- excluded from the index but remain retrievable through
--- `cfcf clio get <id> --version-id <uuid>`.
+-- `cfcf clio docs get <id> --version-id <uuid>`.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS clio_chunks_fts USING fts5(
   content,
