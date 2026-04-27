@@ -87,16 +87,35 @@ Source: `../cerefox/src/cerefox/cli.py`.
 
 ### 4.1 The rule
 
-> **A verb goes under a namespace if it operates on a specific noun-instance (one doc, one project, one embedder). It stays top-level only if it operates on the collection or on Clio-as-a-whole.**
+Three clauses; each narrow, each mechanically applicable. The fact that one super-rule didn't suffice is honest — different verbs play different roles, and forcing one rule produces either three-deep nesting or hyphenated verb rebirth (we tested both — see §4.1.1 for the killed alternatives).
 
-This is the test we apply to every verb. Two examples:
+> 1. **Collection-wide / Clio-wide / headline operations stay top-level.**
+>    Verbs whose input is the whole collection and whose output is a ranking, summary, or maintenance side-effect: `search`, `audit`, `reindex`, `stats`.
+>
+> 2. **Verbs that operate on a specific noun-instance go under that noun's namespace.**
+>    Even when the instance doesn't exist yet (`docs ingest`): the operation is *about a doc*. Examples: `docs get/edit/delete/restore/versions/ingest`, `projects create/show`, `embedder install/set`.
+>
+> 3. **A sub-concept with multiple operations of its own gets its own namespace alongside the nouns.**
+>    `metadata search` (filter docs by metadata) and `metadata keys` (discover what keys exist) are siblings of `docs`, `projects`, `embedder`. They're not under `docs` because the operations are scoped to *the metadata concept across the whole collection*, not to a specific doc.
 
-- `ingest` creates a *specific doc* — even though no UUID exists yet, the operation is "make a doc". → `docs ingest`.
-- `search` queries *the whole collection* — there's no specific doc the verb operates on. → top-level.
-- `audit` reports across *all Clio mutations* — not doc-specific. → top-level.
-- `reindex` re-embeds *every chunk in scope* — Clio-wide maintenance. → top-level.
+Apply mechanically to every future verb:
 
-Updated 2026-04-27 after the user-observed `ingest` inconsistency.
+- `ingest` creates a doc-instance → clause 2 → `docs ingest`
+- `search` produces a ranking from the whole collection → clause 1 → top-level
+- `audit` reports Clio-wide mutations → clause 1 → top-level
+- `metadata-search` filters docs by metadata → clause 3 → `metadata search`
+- (hypothetical) `chunk-stats` reports per-chunk distributions → clause 1 → top-level
+- (hypothetical) `chunk-rebuild` rebuilds a doc's chunks from current text → clause 2 → `docs rebuild` (or `docs rechunk`)
+
+Updated 2026-04-27 after two user-flagged tightenings: first the `ingest` inconsistency (now §5.5), then the search-vs-docs question (now §5.7).
+
+#### 4.1.1 Killed alternatives
+
+We considered three other shapes; all three force `metadata` into an awkward position:
+
+- **`docs search` + `docs ingest`**: looks symmetric but breaks `metadata search` / `metadata keys`. Either becomes `docs metadata search` (3-deep) or `docs metadata-search` (hyphen rebirth) or collapsed `docs search --metadata` (loses the BM25-vs-updated_at distinction). Rejected.
+- **`search --content` (default) / `search --metadata` mode flag**: same collapse. Plus `metadata keys` becomes orphan with no good home. Rejected.
+- **Both `search` + `ingest` top-level (no namespacing for either)**: returns to the pre-cleanup state where doc operations scatter across top-level and `docs.<verb>`. Rejected — this is what we're fixing.
 
 ### 4.2 Final cfcf Clio surface
 
@@ -176,8 +195,9 @@ cfcf adds `docs delete`, `docs restore`, `docs edit` — operations Cerefox HTTP
 2. **No deprecation aliases.** Old verbs removed in the same commit. Single-user OSS-pre-launch state means no third-party scripts to break.
 3. **`embedder` stays singular.** One active at a time; no plural concept.
 4. **`clio audit` stays top-level.** Audit covers all Clio mutations, not just docs. User explicitly noted "we will address verb parity broadly in iteration 6" — audit's placement isn't the hill to die on this round.
-5. **`clio docs ingest`, not `clio ingest`** (added 2026-04-27). Ingest creates a doc, so it operates on a doc-instance and lives under `docs` with the rest of the doc operations. Without this fix the proposal carried the same kind of inconsistency we set out to remove. The clarified rule (§4.1) makes the call deterministic: namespace-or-not is decided by "does this operate on a noun-instance, yes/no?".
-6. **Out of scope**: top-level cfcf verbs (`workspace`, `run`, `review`, `reflect`, `document`, `server`, `config`, `init`, `doctor`, `self-update`, `status`, `resume`, `stop`). Untouched. Iter 6 will audit them with the same lens.
+5. **`clio docs ingest`, not `clio ingest`** (added 2026-04-27). Ingest creates a doc, so it operates on a doc-instance and lives under `docs` with the rest of the doc operations. Without this fix the proposal carried the same kind of inconsistency we set out to remove.
+6. **`clio search` stays top-level** (added 2026-04-27 after user challenged the search/ingest asymmetry). Search produces a *ranking* from the whole collection rather than operating on a specific doc; that puts it in clause 1, not clause 2. Pushing search under `docs` would force `metadata search` into either three-deep nesting (`docs metadata search`) or hyphenated verb rebirth (`docs metadata-search`) — both rejected. Keeping search top-level is the only shape where `metadata` reads as a clean sibling namespace next to `docs`/`projects`/`embedder`. The asymmetry has a real reason (different roles, different parameter shapes, different ranking semantics) — not a deduction failure.
+7. **Out of scope**: top-level cfcf verbs (`workspace`, `run`, `review`, `reflect`, `document`, `server`, `config`, `init`, `doctor`, `self-update`, `status`, `resume`, `stop`). Untouched. Iter 6 will audit them with the same lens.
 
 ## 6. Implementation impact
 
@@ -228,5 +248,6 @@ Confirmed by the user 2026-04-27:
 3. **Four-PR sequencing confirmed.** PR4 (Ask-the-agent) stays design-only inside 5.8.
 4. **`cfcf clio metadata` with no subcommand → print help.** No obvious "primary" verb; better to show options than guess.
 5. **`clio docs ingest`** (not `clio ingest`) — flagged + adopted in this revision.
+6. **`clio search` stays top-level** (not `clio docs search`) — the killed-alternatives analysis (§4.1.1) shows pushing search under `docs` poisons the `metadata` namespace.
 
 No outstanding blockers. Ready to land PR1.
