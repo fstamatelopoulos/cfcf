@@ -61,11 +61,22 @@ export interface MemoryBackend {
   listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]>;
   /**
    * List documents, newest-first, optionally scoped to one Clio Project.
-   * Soft-deleted documents are excluded by default; pass
-   * `includeDeleted: true` to surface them too. `limit` defaults to 50;
-   * pagination via `offset`. Used by `cfcf clio docs list`.
+   *
+   * Soft-deleted handling (three-state, mutually-exclusive — default
+   * `'exclude'`):
+   *   - `'exclude'`: live documents only (default; original PR1 behaviour).
+   *   - `'include'`: live AND soft-deleted documents.
+   *   - `'only'`:    only soft-deleted documents (trash-bin view).
+   *
+   * `limit` defaults to 50, capped at 500. Pagination via `offset`.
+   * Used by `cfcf clio docs list`.
    */
-  listDocuments(opts?: { project?: string; limit?: number; offset?: number; includeDeleted?: boolean }): Promise<ClioDocument[]>;
+  listDocuments(opts?: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    deletedFilter?: "exclude" | "include" | "only";
+  }): Promise<ClioDocument[]>;
   /**
    * Find documents by metadata-only filter (no FTS query). Mirrors
    * Cerefox `cerefox_metadata_search`. Use cases: catch-up workflows

@@ -361,6 +361,35 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
   });
 
   // ── 5.11 follow-up: soft-delete + restore ──────────────────────────
+  it("GET /api/clio/documents?deleted_only=true returns only tombstones", async () => {
+    const app = createApp();
+    const live = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "live", content: "live body" }),
+    });
+    const dead = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "dead", content: "dead body" }),
+    });
+    const { id: deadId } = await dead.json();
+    await live.json();
+    await app.request(`/api/clio/documents/${deadId}`, { method: "DELETE" });
+
+    // Default: live only.
+    const def = await app.request("/api/clio/documents");
+    expect((await def.json()).documents.map((d: { title: string }) => d.title)).toEqual(["live"]);
+
+    // Include: both.
+    const inc = await app.request("/api/clio/documents?include_deleted=true");
+    expect((await inc.json()).documents.map((d: { title: string }) => d.title).sort()).toEqual(["dead", "live"]);
+
+    // Only: just tombstones.
+    const only = await app.request("/api/clio/documents?deleted_only=true");
+    expect((await only.json()).documents.map((d: { title: string }) => d.title)).toEqual(["dead"]);
+  });
+
   it("DELETE /api/clio/documents/:id soft-deletes + GET /content excludes it", async () => {
     const app = createApp();
     const r = await app.request("/api/clio/ingest", {

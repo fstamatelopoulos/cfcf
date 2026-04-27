@@ -355,7 +355,16 @@ export function registerClioRoutes(app: Hono): void {
     const project = c.req.query("project") || undefined;
     const limitStr = c.req.query("limit");
     const offsetStr = c.req.query("offset");
+    // Two boolean query params resolve to the three-state deletedFilter:
+    //   include_deleted=true → "include" (live + tombstones)
+    //   deleted_only=true    → "only"    (trash-bin view)
+    //   neither              → "exclude" (default; live only)
+    // `deleted_only=true` wins if both are passed.
     const includeDeleted = c.req.query("include_deleted") === "true";
+    const deletedOnly = c.req.query("deleted_only") === "true";
+    const deletedFilter: "exclude" | "include" | "only" = deletedOnly
+      ? "only"
+      : includeDeleted ? "include" : "exclude";
     const limit = limitStr ? parseInt(limitStr, 10) : undefined;
     const offset = offsetStr ? parseInt(offsetStr, 10) : undefined;
     if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
@@ -366,7 +375,7 @@ export function registerClioRoutes(app: Hono): void {
     }
     const backend = getClioBackend();
     try {
-      const docs = await backend.listDocuments({ project, limit, offset, includeDeleted });
+      const docs = await backend.listDocuments({ project, limit, offset, deletedFilter });
       return c.json({ documents: docs });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

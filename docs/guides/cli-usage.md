@@ -432,7 +432,7 @@ cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --update-if-exis
 cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
 
 # Browse / retrieve
-cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted] [--json]
+cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted | --deleted-only] [--json]
 cfcf clio get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
 cfcf clio versions <document-id> [--json]                                   # archived version history
 

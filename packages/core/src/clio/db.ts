@@ -21,11 +21,16 @@ import { mkdirSync, existsSync } from "fs";
 
 // Embedded migrations. Each `with { type: "text" }` import inlines the
 // file contents as a string at build time (same pattern as templates.ts).
-// Order of execution is the order of this array.
+// Order of execution is the order of the MIGRATIONS array below.
+//
+// 2026-04-27: collapsed the prior 0001-0004 chain into a single
+// 0001_initial.sql so a fresh install applies one self-contained schema
+// instead of replaying historical migrations. The cascade-bug post-
+// mortem (decisions-log.md 2026-04-27) records WHY the prior 0003
+// rebuild migration existed; that lesson lives there now, not in a
+// migration file. Future schema changes get their own NEW migration
+// file (0002_*.sql, 0003_*.sql, ...) -- don't edit 0001 in place.
 import migration_0001_initial from "./migrations/0001_initial.sql" with { type: "text" };
-import migration_0002_active_embedder from "./migrations/0002_active_embedder.sql" with { type: "text" };
-import migration_0003_relax_content_hash from "./migrations/0003_relax_content_hash.sql" with { type: "text" };
-import migration_0004_author_column from "./migrations/0004_author_column.sql" with { type: "text" };
 
 export interface ClioMigration {
   /** Filename used as a unique key in the `clio_migrations` tracking table. */
@@ -36,9 +41,6 @@ export interface ClioMigration {
 
 const MIGRATIONS: ClioMigration[] = [
   { filename: "0001_initial.sql", sql: migration_0001_initial },
-  { filename: "0002_active_embedder.sql", sql: migration_0002_active_embedder },
-  { filename: "0003_relax_content_hash.sql", sql: migration_0003_relax_content_hash },
-  { filename: "0004_author_column.sql", sql: migration_0004_author_column },
 ];
 
 /**

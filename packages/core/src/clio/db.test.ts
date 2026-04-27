@@ -15,9 +15,7 @@ import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, ge
 // Load migration SQL via the same `with { type: "text" }` import the
 // db.ts production code uses, so tests exercise the real bytes.
 import m0001Sql from "./migrations/0001_initial.sql" with { type: "text" };
-import m0002Sql from "./migrations/0002_active_embedder.sql" with { type: "text" };
 function m0001(): string { return m0001Sql; }
-function m0002(): string { return m0002Sql; }
 
 const tempDirs: string[] = [];
 function makeTempDbPath(): string {
@@ -39,10 +37,11 @@ describe("openClioDb", () => {
     const db = openClioDb({ path });
 
     // Applied migrations list: every embedded migration has been run.
+    // 2026-04-27: collapsed to a single 0001_initial.sql; future schema
+    // changes will add 0002_*.sql, 0003_*.sql, ...
     const applied = listAppliedMigrations(db);
-    expect(applied.length).toBeGreaterThanOrEqual(2);
+    expect(applied.length).toBeGreaterThanOrEqual(1);
     expect(applied[0]).toContain("0001_initial.sql");
-    expect(applied[1]).toContain("0002_active_embedder.sql");
 
     // Core tables exist
     const tables = db.query<{ name: string }, []>(
@@ -197,61 +196,45 @@ describe("applyCustomSqlite + getSqliteVecPath", () => {
 });
 
 describe("schema shape", () => {
-  // Regression test: migration 0003 must NOT cascade-delete clio_chunks
-  // when it rebuilds clio_documents. Discovered 2026-04-27 -- the original
-  // 0003 used `PRAGMA defer_foreign_keys=ON` inside the migration's
-  // transaction, which postpones FK CHECKS but NOT cascade actions. DROP
-  // TABLE clio_documents fired ON DELETE CASCADE on every chunk and
-  // corrupted the FTS5 index. Fix: the `-- @migration-flags:
-  // disable-foreign-keys` marker on line 1 of 0003 + a new branch in
-  // runMigrations that brackets the migration with `PRAGMA
-  // foreign_keys = OFF / ON` outside the transaction.
+  // The original 0003 -- which rebuilt clio_documents and silently
+  // cascade-deleted every clio_chunks row via the FK ON DELETE CASCADE --
+  // shipped pre-merge on `iteration-5/clio-update-api`, was fixed by
+  // adding the `-- @migration-flags: disable-foreign-keys` marker that
+  // tells the migration runner to bracket the BEGIN/COMMIT with
+  // `PRAGMA foreign_keys = OFF / ON` (the only place that pragma takes
+  // effect). The migration was then collapsed into 0001 (2026-04-27)
+  // since cfcf has no public users yet, but the runner mechanism stays
+  // for any future migration that needs to drop+rebuild a parent table.
   //
-  // Test path: simulate a user's pre-0003 DB (only 0001 + 0002 applied,
-  // with real chunk data), run runMigrations to apply 0003 (and 0004),
-  // verify chunks + FTS index survive the rebuild.
-  it("migration 0003 preserves clio_chunks + FTS index across the table rebuild", async () => {
-    const { Database } = await import("bun:sqlite");
+  // This test exercises the marker mechanism directly so a future
+  // migration with the same shape can rely on it.
+  it("runMigrations honours the @migration-flags: disable-foreign-keys marker", () => {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
     const db = new Database(":memory:", { create: true });
     db.exec("PRAGMA foreign_keys = ON");
 
-    // Apply only 0001 + 0002 -- represents a user's DB before they
-    // upgraded to a build that includes 0003.
-    runMigrations(db, [
-      { filename: "0001_initial.sql", sql: m0001() },
-      { filename: "0002_active_embedder.sql", sql: m0002() },
-    ]);
+    // Stand up a tiny parent/child schema with ON DELETE CASCADE.
+    db.exec(`
+      CREATE TABLE parent (id TEXT PRIMARY KEY);
+      CREATE TABLE child  (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id) ON DELETE CASCADE);
+    `);
+    db.run("INSERT INTO parent (id) VALUES ('p')");
+    db.run("INSERT INTO child  (id, parent_id) VALUES ('c', 'p')");
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM child").get()?.n).toBe(1);
 
-    // Insert real data: project, doc, chunk. The chunk is the canary;
-    // the original 0003 deleted it via ON DELETE CASCADE.
-    db.run("INSERT INTO clio_projects (id, name) VALUES ('p1', 'p1')");
-    db.run(
-      "INSERT INTO clio_documents (id, project_id, title, source, content_hash, chunk_count) VALUES ('d1', 'p1', 't', 's', 'h1', 1)",
-    );
-    db.run(
-      "INSERT INTO clio_chunks (id, document_id, chunk_index, content, char_count) VALUES ('c1', 'd1', 0, 'survive the rebuild canary', 26)",
-    );
+    // A migration that DROPs the parent (canonical SQLite "rebuild
+    // table" pattern), with the disable-foreign-keys flag on line 1.
+    const flagged = `-- @migration-flags: disable-foreign-keys
+CREATE TABLE parent_new (id TEXT PRIMARY KEY);
+INSERT INTO parent_new SELECT * FROM parent;
+DROP TABLE parent;
+ALTER TABLE parent_new RENAME TO parent;`;
 
-    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM clio_chunks").get()?.n).toBe(1);
-    expect(
-      db.query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM clio_chunks_fts WHERE clio_chunks_fts MATCH 'canary'",
-      ).get()?.n,
-    ).toBe(1);
+    runMigrations(db, [{ filename: "9999_rebuild_parent.sql", sql: flagged }]);
 
-    // Apply the rest (0003, 0004). With the fix, chunks + FTS survive.
-    runMigrations(db);
-
-    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM clio_chunks").get()?.n).toBe(1);
-    expect(
-      db.query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM clio_chunks_fts WHERE clio_chunks_fts MATCH 'canary'",
-      ).get()?.n,
-    ).toBe(1);
-    // The doc row also survived (its data was copied across in the rebuild).
-    expect(
-      db.query<{ id: string; author: string }, []>("SELECT id, author FROM clio_documents WHERE id='d1'").get(),
-    ).toEqual({ id: "d1", author: "agent" });
+    // Without the marker, the DROP TABLE would have cascade-deleted
+    // the child row. With the marker, it survives.
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM child").get()?.n).toBe(1);
     db.close();
   });
 

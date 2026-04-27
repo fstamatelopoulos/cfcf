@@ -668,7 +668,8 @@ describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentCont
     expect((await clio.search({ query: "deletable" })).hits.length).toBe(0);
     expect((await clio.listDocuments({ project: "p1" })).length).toBe(0);
     // ...but reachable when explicitly requested.
-    expect((await clio.listDocuments({ project: "p1", includeDeleted: true })).length).toBe(1);
+    expect((await clio.listDocuments({ project: "p1", deletedFilter: "include" })).length).toBe(1);
+    expect((await clio.listDocuments({ project: "p1", deletedFilter: "only" })).length).toBe(1);
 
     // Idempotent.
     await clio.deleteDocument(r.id);

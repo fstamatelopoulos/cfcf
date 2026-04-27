@@ -571,15 +571,23 @@ function registerUnder(root: Command): void {
     .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
     .option("-n, --limit <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
     .option("--offset <n>", "Pagination offset (default 0)", (v) => parseInt(v, 10))
-    .option("--include-deleted", "Include soft-deleted docs in the list")
+    .option("--include-deleted", "Include soft-deleted docs alongside live ones")
+    .option(
+      "--deleted-only",
+      "Show ONLY soft-deleted docs (trash-bin view). Mutually exclusive with --include-deleted; this flag wins.",
+    )
     .option("--json", "Emit raw JSON")
     .action(async (opts) => {
       if (!(await checkServer())) return;
+      if (opts.includeDeleted && opts.deletedOnly) {
+        console.error("Note: --deleted-only and --include-deleted both passed; --deleted-only wins.");
+      }
       const qs = new URLSearchParams();
       if (opts.project) qs.set("project", opts.project);
       if (opts.limit) qs.set("limit", String(opts.limit));
       if (opts.offset) qs.set("offset", String(opts.offset));
-      if (opts.includeDeleted) qs.set("include_deleted", "true");
+      if (opts.deletedOnly) qs.set("deleted_only", "true");
+      else if (opts.includeDeleted) qs.set("include_deleted", "true");
       const url = qs.toString() ? `/api/clio/documents?${qs.toString()}` : "/api/clio/documents";
       const res = await get<{ documents: ClioDocument[] }>(url);
       if (!res.ok) {
@@ -595,7 +603,10 @@ function registerUnder(root: Command): void {
         console.log("No documents." + (opts.project ? ` (project: ${opts.project})` : ""));
         return;
       }
-      console.log(`${docs.length} document(s)${opts.project ? ` in project '${opts.project}'` : ""}:`);
+      const headerSuffix = opts.deletedOnly ? " (deleted only)"
+        : opts.includeDeleted ? " (live + deleted)"
+        : "";
+      console.log(`${docs.length} document(s)${opts.project ? ` in project '${opts.project}'` : ""}${headerSuffix}:`);
       console.log();
       for (const d of docs) {
         const role = (d.metadata?.role as string | undefined) ?? "-";
@@ -603,19 +614,22 @@ function registerUnder(root: Command): void {
         const wsId = (d.metadata?.workspace_id as string | undefined) ?? "-";
         // Title + the agent-friendly [id: <uuid>] line so callers can
         // copy-paste the doc id into `cfcf clio ingest --document-id
-        // <uuid>` without a follow-up lookup. Project gets the same
-        // treatment for cross-project workflows (`cfcf clio search
-        // --project <uuid>`). Same convention as `cfcf clio search`.
-        console.log(`  ${d.title}`);
+        // <uuid>` without a follow-up lookup. Same convention as
+        // `cfcf clio search`. `[DELETED]` prefix when soft-deleted so
+        // mixed lists (--include-deleted) are scannable.
+        const titlePrefix = d.deletedAt ? "[DELETED] " : "";
+        console.log(`  ${titlePrefix}${d.title}`);
         console.log(`    [id: ${d.id}]  author: ${d.author}`);
         console.log(`    project: ${d.projectId}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
         console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
         console.log(`    source=${d.source}`);
         console.log(`    created=${d.createdAt}`);
-        if (d.deletedAt) console.log(`    deleted_at=${d.deletedAt}`);
+        if (d.deletedAt) {
+          console.log(`    deleted_at=${d.deletedAt}  (restore with: cfcf clio restore ${d.id})`);
+        }
         console.log();
       }
-      console.log(`Tip: pass --json for the raw records; --include-deleted to surface tombstones.`);
+      console.log(`Tip: --include-deleted to surface tombstones; --deleted-only for the trash-bin view; --json for raw records.`);
     });
 
   // ── project(s): list (default) / create / show ───────────────────────

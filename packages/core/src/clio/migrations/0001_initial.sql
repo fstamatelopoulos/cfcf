@@ -1,27 +1,30 @@
--- Clio initial schema (plan item 5.7, design doc §5).
+-- Clio initial schema (plan items 5.7 + 5.11 + 5.12 + 5.13).
 --
--- Ported from cerefox/src/cerefox/db/schema.sql @(2026-04) -- Postgres +
--- pgvector + tsvector -> SQLite + sqlite-vec + FTS5. Maintained
--- independently in cf².
+-- Consolidated 2026-04-27 from the prior 0001 + 0002 + 0003 + 0004 chain
+-- so a fresh install applies a single self-contained schema instead of
+-- replaying historical migrations. The cascade-bug post-mortem
+-- (decisions-log.md 2026-04-27) records WHY the rebuild migration
+-- existed; the lesson lives there now, no longer in a migration file.
+-- Note for future maintainers: future schema changes get their own
+-- new migration file (0002_*.sql, 0003_*.sql, ...). Don't edit this
+-- one in place once it's shipped to users.
 --
--- Scope note: PR1 of Clio ships FTS5-only search. Vector columns and
--- sqlite-vec integration land in PR2. We still declare the `embedding`,
--- `embedder`, and `embedding_dim` columns now so PR2 doesn't need a
--- schema migration -- PR2 just starts populating them and adds a
--- sqlite-vec virtual table + hybrid search query.
+-- Ported (structure + SQL shape) from cerefox/src/cerefox/db/schema.sql
+-- @2026-04 -- Postgres + pgvector + tsvector → SQLite + sqlite-vec +
+-- FTS5. Maintained independently in cf².
 --
 -- Divergences from Cerefox:
---   - One-to-many docs->projects (project_id FK on documents) instead
---     of the M2M junction table. Clio workspaces map 1:1 to a Project;
---     user ingests pick one. Simpler queries, no junction.
+--   - One-to-many docs→projects (project_id FK on documents) instead of
+--     the M2M junction. Clio workspaces map 1:1 to a Project; user
+--     ingests pick one.
 --   - `source_path` merged into `source` (free-text).
 --   - TEXT timestamps (SQLite) instead of TIMESTAMPTZ.
---   - metadata/heading_path are TEXT (JSON) instead of JSONB / TEXT[].
---   - No generated FTS column: the FTS5 virtual table + triggers keep
---     the index in sync with clio_chunks.content.
---   - Versioning / audit-log tables land in schema now but their full
---     write paths + RPCs are v2. Having the tables present means v1
---     ingests don't need a later schema migration.
+--   - metadata / heading_path are TEXT (JSON) instead of JSONB / TEXT[].
+--   - No generated FTS column; FTS5 contentless virtual table + triggers
+--     keep the index in sync with clio_chunks.content.
+--   - `author` is a typed first-class column on clio_documents (5.12)
+--     so search hits + audit queries can filter without joining the
+--     audit log. Cerefox keeps author only on the audit log.
 
 -- ── Projects ────────────────────────────────────────────────────────────
 -- Domain grouping. Matches Cerefox's `Project` concept. A workspace is
@@ -41,6 +44,15 @@ CREATE TABLE IF NOT EXISTS clio_projects (
 -- One row per ingested artifact: iteration-log, iteration-handoff,
 -- judge-assessment, reflection-analysis, decision-log entry,
 -- architect-review, iteration-summary, or any user-ingested Markdown.
+--
+-- `content_hash` is indexed (non-unique) for the dedup-on-create
+-- lookup. The original UNIQUE constraint was relaxed to support the
+-- update-doc API (5.11): a legitimate update of doc A whose new
+-- content matches doc B's current hash must not deadlock.
+--
+-- `author` is the typed first-class write-attribution column (5.12).
+-- Defaults to 'agent' for ingest paths that don't set it. Mirrors
+-- Cerefox's `cerefox_ingest(p_author=...)` parameter.
 
 CREATE TABLE IF NOT EXISTS clio_documents (
   id            TEXT PRIMARY KEY,          -- UUID v4
@@ -50,7 +62,8 @@ CREATE TABLE IF NOT EXISTS clio_documents (
                                            --   e.g. "cfcf-docs/iteration-logs/iteration-3.md"
                                            --   or "user-ingest: /path/to/note.md"
                                            --   or "stdin" for piped ingests
-  content_hash  TEXT NOT NULL UNIQUE,      -- sha256 of the full Markdown body; dedup guard
+  author        TEXT NOT NULL DEFAULT 'agent', -- write-attribution (5.12)
+  content_hash  TEXT NOT NULL,             -- sha256 of the full Markdown body
   metadata      TEXT NOT NULL DEFAULT '{}', -- JSON blob; filterable via json_extract
   review_status TEXT NOT NULL DEFAULT 'approved'
                 CHECK (review_status IN ('approved', 'pending_review')),
@@ -58,21 +71,26 @@ CREATE TABLE IF NOT EXISTS clio_documents (
   total_chars   INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  deleted_at    TEXT DEFAULT NULL          -- soft delete (v2); NULL = active
+  deleted_at    TEXT DEFAULT NULL          -- soft-delete (5.11); NULL = active
 );
 
 CREATE INDEX IF NOT EXISTS clio_documents_project_idx ON clio_documents(project_id);
 CREATE INDEX IF NOT EXISTS clio_documents_deleted_idx
   ON clio_documents(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS clio_documents_content_hash_idx
+  ON clio_documents(content_hash);
+CREATE INDEX IF NOT EXISTS clio_documents_author_idx ON clio_documents(author);
 
--- ── Document versions (v2 feature; table shape here so v1 ingests don't
--- ── need a later schema migration) ──────────────────────────────────────
+-- ── Document versions (5.11) ────────────────────────────────────────────
+-- Every update path snapshots the outgoing chunks into one of these
+-- rows + bumps the per-document `version_number`. Live (current)
+-- chunks live in `clio_chunks` with `version_id IS NULL`.
 
 CREATE TABLE IF NOT EXISTS clio_document_versions (
   id              TEXT PRIMARY KEY,
   document_id     TEXT NOT NULL REFERENCES clio_documents(id) ON DELETE CASCADE,
   version_number  INTEGER NOT NULL,
-  source          TEXT,
+  source          TEXT,                       -- author of the OUTGOING content (5.12)
   metadata        TEXT NOT NULL DEFAULT '{}',
   chunk_count     INTEGER NOT NULL DEFAULT 0,
   total_chars     INTEGER NOT NULL DEFAULT 0,
@@ -97,16 +115,15 @@ CREATE TABLE IF NOT EXISTS clio_chunks (
   title          TEXT,                        -- deepest heading for this chunk
   content        TEXT NOT NULL,
   char_count     INTEGER NOT NULL,
-  -- PR2 fields: declared now, populated when embedder lands.
   embedding      BLOB,                        -- sqlite-vec FLOAT[dim]
-  embedder       TEXT,                        -- e.g. "bge-small-en-v1.5"
-  embedding_dim  INTEGER,                     -- e.g. 384
+  embedder       TEXT,                        -- e.g. "nomic-embed-text-v1.5"
+  embedding_dim  INTEGER,                     -- e.g. 768
   created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
--- Only one current chunk per (document_id, chunk_index); archived
--- chunks may share chunk_index across versions.
+-- Only one current chunk per (document_id, chunk_index); archived chunks
+-- may share chunk_index across versions.
 CREATE UNIQUE INDEX IF NOT EXISTS clio_chunks_current_idx
   ON clio_chunks(document_id, chunk_index) WHERE version_id IS NULL;
 
@@ -115,8 +132,11 @@ CREATE INDEX IF NOT EXISTS clio_chunks_version_idx
   ON clio_chunks(version_id, chunk_index) WHERE version_id IS NOT NULL;
 
 -- ── FTS5 virtual table (keyword search side of hybrid) ──────────────────
--- Contentless FTS5 that we sync via triggers. content='clio_chunks'
--- means FTS5 reads the `content` column from `clio_chunks` via rowid.
+-- Contentless FTS5 synced via triggers. content='clio_chunks' means
+-- FTS5 reads the `content` column from `clio_chunks` via rowid. Only
+-- current chunks (version_id IS NULL) are indexed; archived chunks are
+-- excluded from the index but remain retrievable through
+-- `cfcf clio get <id> --version-id <uuid>`.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS clio_chunks_fts USING fts5(
   content,
@@ -125,9 +145,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS clio_chunks_fts USING fts5(
   content_rowid='rowid',
   tokenize='porter unicode61'
 );
-
--- Sync triggers: only index current chunks (version_id IS NULL).
--- Archived chunks are excluded.
 
 CREATE TRIGGER IF NOT EXISTS clio_chunks_fts_ai AFTER INSERT ON clio_chunks
 WHEN new.version_id IS NULL
@@ -156,10 +173,9 @@ BEGIN
     WHERE new.version_id IS NULL;
 END;
 
--- Document metadata JSON-extracted columns for common filters.
+-- ── Document metadata indexes for common JSON filters ───────────────────
 -- These are queried as `json_extract(metadata, '$.workspace_id') = ?`
--- at search time. Indexing is done on the extracted expressions
--- (SQLite 3.38+ supports this).
+-- at search time. SQLite 3.38+ supports indexes on extracted expressions.
 
 CREATE INDEX IF NOT EXISTS clio_documents_workspace_idx
   ON clio_documents(json_extract(metadata, '$.workspace_id'))
@@ -177,21 +193,43 @@ CREATE INDEX IF NOT EXISTS clio_documents_tier_idx
   ON clio_documents(json_extract(metadata, '$.tier'))
   WHERE json_extract(metadata, '$.tier') IS NOT NULL;
 
--- ── Audit log (v2; table shape in place so v1 operations can still
--- ── write skeleton entries if useful) ───────────────────────────────────
+-- ── Audit log (5.13) ────────────────────────────────────────────────────
+-- One row per Clio mutation: 'create', 'update-content', 'delete',
+-- 'restore', 'migrate-project'. Reads (search, get, list) are NOT
+-- recorded -- the volume would be noisy and the trust story is about
+-- writes.
 
 CREATE TABLE IF NOT EXISTS clio_audit_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  event_type  TEXT NOT NULL,              -- 'ingest' | 'search' | 'get' | 'delete' | 'restore' | 'purge' | 'set-project' | 'migrate-project'
-  actor       TEXT,                       -- e.g. "user", "cfcf-harness", "dev:claude-code:sonnet"
+  event_type  TEXT NOT NULL,              -- 'create' | 'update-content' | 'delete' | 'restore' | 'migrate-project'
+  actor       TEXT,                       -- e.g. "user", "claude-code", "cfcf-harness"
   project_id  TEXT,
   document_id TEXT,
-  query       TEXT,                       -- for search events
-  metadata    TEXT                         -- JSON details
+  query       TEXT,                       -- reserved (currently always null; see decisions-log.md 2026-04-26)
+  metadata    TEXT                         -- JSON details (version_id, sizes, ...)
 );
 
 CREATE INDEX IF NOT EXISTS clio_audit_log_ts_idx ON clio_audit_log(timestamp DESC);
 CREATE INDEX IF NOT EXISTS clio_audit_log_event_idx ON clio_audit_log(event_type, timestamp DESC);
 CREATE INDEX IF NOT EXISTS clio_audit_log_document_idx
   ON clio_audit_log(document_id, timestamp DESC) WHERE document_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS clio_audit_log_actor_idx
+  ON clio_audit_log(actor, timestamp DESC) WHERE actor IS NOT NULL;
+
+-- ── Active embedder (single-row state) ──────────────────────────────────
+-- Clio pins one embedder per DB. The row records the name + dim + install
+-- timestamp so `cfcf clio embedder active` can report it and the ingest
+-- path knows which model to load. Switching embedders is gated by
+-- `cfcf clio embedder set [--reindex]`.
+
+CREATE TABLE IF NOT EXISTS clio_active_embedder (
+  -- Single-row table: enforced via a CHECK on id=1.
+  id                            INTEGER PRIMARY KEY CHECK (id = 1),
+  name                          TEXT NOT NULL,
+  dim                           INTEGER NOT NULL,
+  hf_model_id                   TEXT NOT NULL,
+  recommended_chunk_max_chars   INTEGER NOT NULL,
+  recommended_expansion_radius  INTEGER NOT NULL,
+  installed_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

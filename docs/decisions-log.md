@@ -19,6 +19,22 @@
 
 ## Log
 
+### 2026-04-27 -- Collapsed 0001-0004 into a single 0001_initial.sql
+
+Decision (with the user) on the same `iteration-5/clio-update-api` branch: collapse the four migration files into a single `0001_initial.sql` representing the v0.11.0 schema. Reason: cfcf has no public users yet; the migration chain history is internal-only context. Once the project goes public (5.5b — npm publish), all NEW migrations are forward-only and permanent — but everything pre-public can be cleaned up first to ship a tidy baseline.
+
+What got collapsed:
+- 0001 (initial schema) + 0002 (active embedder) + 0003 (drop UNIQUE on content_hash) + 0004 (add author column) → single `0001_initial.sql`.
+- The cascade-bug post-mortem (next entry) stays in this decisions log; the regression test in `db.test.ts` was rewritten to exercise the `disable-foreign-keys` runner mechanism directly via a synthetic 9999_*.sql migration, so the lesson + the safety net survive even though the original 0003 file is gone.
+- `db.ts`'s `MIGRATIONS` array shrank from 4 entries to 1.
+
+What stayed:
+- The `-- @migration-flags: disable-foreign-keys` marker mechanism in `runMigrations` -- any future migration that needs to drop+rebuild a parent with `ON DELETE CASCADE` children must declare the flag, and the runner handles the bracketing pragmas. This lives forever.
+
+For Fotis's local DB: wiped + re-applied the consolidated 0001 + re-ingested both docs. Stats now show a single migration row (`0001_initial.sql`) instead of four, no behaviour difference.
+
+---
+
 ### 2026-04-27 -- Migration 0003 nuked clio_chunks via DROP TABLE cascade (caught + fixed pre-merge)
 
 **Symptom**: a user's `cfcf clio search "decisions"` returned 0 hits even though `cfcf clio docs list` showed two documents with non-zero `chunk_count`. Reproducer: load 0001 + 0002, ingest a chunk, run 0003 → `clio_chunks` empty + `clio_chunks_fts` corrupted with `SQLITE_CORRUPT_VTAB: database disk image is malformed`. Caught only because the user dogfood-tested the freshly-built branch; would have shipped to v0.11.0 otherwise.

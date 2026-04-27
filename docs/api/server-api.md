@@ -1066,6 +1066,8 @@ List documents, newest first. Soft-deleted docs are excluded.
 - `project` (optional) — Clio Project name or id. When unknown, returns an empty list.
 - `limit` (optional, default 50, cap 500).
 - `offset` (optional, default 0).
+- `include_deleted` (optional, default `false`) — when `true`, soft-deleted docs appear alongside live ones.
+- `deleted_only` (optional, default `false`) — trash-bin view: only soft-deleted docs are returned. Wins over `include_deleted` when both are passed.
 
 **Response:** `200 OK`
 ```json

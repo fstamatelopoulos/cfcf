@@ -769,10 +769,12 @@ export class LocalClio implements MemoryBackend {
     project?: string;
     limit?: number;
     offset?: number;
-    includeDeleted?: boolean;
+    deletedFilter?: "exclude" | "include" | "only";
   } = {}): Promise<ClioDocument[]> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
     const offset = Math.max(opts.offset ?? 0, 0);
+    const deletedFilter = opts.deletedFilter ?? "exclude";
+
     let projectId: string | null = null;
     if (opts.project) {
       // Resolve name → id; if neither name nor id matches, return empty.
@@ -781,7 +783,9 @@ export class LocalClio implements MemoryBackend {
       projectId = proj.id;
     }
     const where: string[] = [];
-    if (!opts.includeDeleted) where.push("deleted_at IS NULL");
+    if (deletedFilter === "exclude") where.push("deleted_at IS NULL");
+    else if (deletedFilter === "only") where.push("deleted_at IS NOT NULL");
+    // 'include' adds no clause -- both live and tombstoned docs.
     if (projectId) where.push("project_id = ?");
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const sql = `SELECT * FROM clio_documents ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
