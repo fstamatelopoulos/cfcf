@@ -163,6 +163,55 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(r.chunksInserted).toBe(0);
   });
 
+  it("GET /api/clio/search defaults to doc-level (Cerefox parity, 5.12)", async () => {
+    const app = createApp();
+    // Two docs both containing 'auth'; chunk-level would surface
+    // multiple hits per doc. Default doc-level dedup returns one row
+    // per doc.
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Auth long-form",
+        content: "# auth\n\nauth here\n\n## section\n\nauth there too\n\n## section\n\nauth everywhere",
+      }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "p1", title: "Auth notes",
+        content: "# notes\n\nshort auth note",
+      }),
+    });
+
+    const res = await app.request("/api/clio/search?q=auth");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Doc-level shape: hits has documentId + bestScore + matchingChunks + versionCount.
+    expect(body.hits.length).toBe(2);
+    expect(body.totalDocuments).toBe(2);
+    expect(body.hits[0]).toHaveProperty("matchingChunks");
+    expect(body.hits[0]).toHaveProperty("versionCount");
+    expect(body.hits[0]).toHaveProperty("bestScore");
+
+    // ?by=chunk falls back to chunk-level (legacy).
+    const byChunk = await app.request("/api/clio/search?q=auth&by=chunk");
+    expect(byChunk.status).toBe(200);
+    const chunkBody = await byChunk.json();
+    expect(chunkBody.hits[0]).toHaveProperty("chunkId");
+    expect(chunkBody.hits[0]).toHaveProperty("score");
+    expect(chunkBody.hits[0]).not.toHaveProperty("bestScore");
+    // chunk-level should have ≥ doc-level hits since the long-form doc has multiple matches.
+    expect(chunkBody.hits.length).toBeGreaterThanOrEqual(body.hits.length);
+  });
+
+  it("GET /api/clio/search?by=invalid → 400", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/search?q=auth&by=oops");
+    expect(res.status).toBe(400);
+  });
+
   it("GET /api/clio/search returns FTS hits", async () => {
     const app = createApp();
     await app.request("/api/clio/ingest", {

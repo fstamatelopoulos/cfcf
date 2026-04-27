@@ -16,6 +16,7 @@ import type {
   IngestResult,
   SearchRequest,
   SearchResponse,
+  DocumentSearchResponse,
   ClioStats,
 } from "../types.js";
 
@@ -114,7 +115,26 @@ export interface MemoryBackend {
   restoreDocument(id: string, opts?: { author?: string }): Promise<void>;
 
   // ── Search ────────────────────────────────────────────────────────────
+  /**
+   * Chunk-level search. One result per matching chunk, ordered by
+   * engine score. Useful for the raw view (`cfcf clio search
+   * --by-chunk`) + internal tooling that wants to inspect individual
+   * chunk hits. Most agent / user code should call `searchDocuments`
+   * instead -- doc-level dedup matches Cerefox's primary
+   * `cerefox_search` and is what humans read intuitively.
+   */
   search(req: SearchRequest): Promise<SearchResponse>;
+  /**
+   * Document-level search. Internally fetches `matchCount × 5` chunk
+   * candidates via `search`, groups by `document_id`, keeps the
+   * best-scoring chunk as the representative, and returns up to
+   * `matchCount` unique documents (default 5; chunk-level default
+   * is 10 because chunks are smaller hits). Mirrors Cerefox's
+   * `cerefox_search_docs` behaviour. 5.12 follow-up. Each hit carries
+   * `versionCount` + `matchingChunks` so agents can spot edit-history
+   * + multi-chunk-match signals without a follow-up call.
+   */
+  searchDocuments(req: SearchRequest): Promise<DocumentSearchResponse>;
 
   // ── Introspection ─────────────────────────────────────────────────────
   stats(): Promise<ClioStats>;

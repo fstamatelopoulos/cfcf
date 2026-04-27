@@ -287,6 +287,68 @@ export interface SearchResponse {
   totalMatches: number;
 }
 
+/**
+ * Search-results variant: one row per matching DOCUMENT (Cerefox-style),
+ * not per chunk. The default agent-facing search returns this shape;
+ * `cfcf clio search --by-chunk` falls back to the raw chunk-level
+ * `SearchResponse` above. 5.12 follow-up.
+ *
+ * Each hit summarises a doc + its best-scoring chunk:
+ *   - `bestScore` is the highest engine score from any of the doc's
+ *     matching chunks (BM25 in fts mode; cosine in semantic; RRF in
+ *     hybrid).
+ *   - `bestChunkContent` is that representative chunk's content,
+ *     small-to-big expanded with neighbours (when an embedder is
+ *     active).
+ *   - `bestChunkHeadingPath` lets agents jump to the right section of
+ *     the source doc.
+ *   - `matchingChunks` reports how many of the doc's chunks were in
+ *     the candidate pool -- not all of them, only those that scored.
+ *     Useful for "this doc had multiple hits" signals.
+ *
+ * Ordering: descending `bestScore` (same scoring as chunk-level hits;
+ * doc-level dedup happens AFTER ranking).
+ */
+export interface DocumentSearchHit {
+  documentId: string;
+  docTitle: string;
+  docSource: string;
+  docAuthor: string;
+  docProjectId: string;
+  docProjectName: string;
+  docMetadata: Record<string, unknown>;
+  /** Total chunks in the live doc (NOT the matching count). */
+  chunkCount: number;
+  totalChars: number;
+  /** Number of archived versions; 0 if the doc has never been updated. */
+  versionCount: number;
+  /** How many of this doc's chunks were in the search candidate pool. */
+  matchingChunks: number;
+  /** Highest score across all matching chunks (BM25/cosine/RRF). */
+  bestScore: number;
+  /** Heading path of the best-scoring chunk. */
+  bestChunkHeadingPath: string[];
+  bestChunkHeadingLevel: number | null;
+  bestChunkTitle: string | null;
+  /** Content of the best-scoring chunk (small-to-big expanded when applicable). */
+  bestChunkContent: string;
+  /** chunk_id of the representative best-scoring chunk (audit / debug). */
+  bestChunkId: string;
+  bestChunkIndex: number;
+  /** Document timestamps (so agents can spot recently-updated docs). */
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentSearchResponse {
+  hits: DocumentSearchHit[];
+  mode: "fts" | "hybrid" | "semantic";
+  /** Total chunk-level matches before doc-level dedup. */
+  totalMatches: number;
+  /** Number of unique documents represented in the candidate pool. */
+  totalDocuments: number;
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────
 
 export interface ClioStats {

@@ -18,6 +18,8 @@ import type {
   IngestResult,
   SearchResponse,
   SearchHit,
+  DocumentSearchResponse,
+  DocumentSearchHit,
   ClioStats,
 } from "@cfcf/core";
 
@@ -68,10 +70,18 @@ function registerUnder(root: Command): void {
       "Minimum cosine (0.0-1.0) for vector-only hybrid candidates / all semantic results. FTS-matched hybrid chunks always pass. Omit to use clio.minSearchScore from config (default 0.5).",
       (v) => parseFloat(v),
     )
-    .option("-n, --match-count <n>", "Max number of hits to return (default 10)", (v) => parseInt(v, 10))
+    .option(
+      "-n, --match-count <n>",
+      "Max results to return (doc-level default 5; --by-chunk default 10).",
+      (v) => parseInt(v, 10),
+    )
     .option(
       "-m, --metadata <json>",
       "Exact-match metadata filter, e.g. '{\"role\":\"reflection\",\"artifact_type\":\"reflection-analysis\"}'",
+    )
+    .option(
+      "--by-chunk",
+      "Show one row per matching CHUNK (raw view) instead of the default doc-level dedup. Useful for debugging the search engine; agents typically want the doc-level default.",
     )
     .option("--json", "Emit the raw JSON response instead of the human-readable formatting")
     .action(async (queryParts: string[], opts) => {
@@ -111,26 +121,52 @@ function registerUnder(root: Command): void {
         qs.set("metadata", opts.metadata);
       }
 
-      const res = await get<SearchResponse>(`/api/clio/search?${qs.toString()}`);
+      // Doc-level (default, Cerefox parity) vs chunk-level (--by-chunk).
+      const by: "doc" | "chunk" = opts.byChunk ? "chunk" : "doc";
+      qs.set("by", by);
+
+      if (by === "chunk") {
+        const res = await get<SearchResponse>(`/api/clio/search?${qs.toString()}`);
+        if (!res.ok) {
+          console.error(`Search failed: ${res.error}`);
+          process.exit(1);
+        }
+        const data = res.data!;
+        if (opts.json) {
+          console.log(JSON.stringify(data, null, 2));
+          return;
+        }
+        if (data.hits.length === 0) {
+          console.log(`No hits for "${q}".`);
+          return;
+        }
+        console.log(`${data.hits.length} chunk-hit(s) for "${q}" (${data.mode}):`);
+        console.log();
+        data.hits.forEach((h, i) => printHit(i + 1, h));
+        return;
+      }
+
+      // Doc-level (the new default).
+      const res = await get<DocumentSearchResponse>(`/api/clio/search?${qs.toString()}`);
       if (!res.ok) {
         console.error(`Search failed: ${res.error}`);
         process.exit(1);
       }
       const data = res.data!;
-
       if (opts.json) {
         console.log(JSON.stringify(data, null, 2));
         return;
       }
-
       if (data.hits.length === 0) {
         console.log(`No hits for "${q}".`);
         return;
       }
-
-      console.log(`${data.hits.length} hit(s) for "${q}" (${data.mode}):`);
+      const totalsHint = data.totalDocuments > data.hits.length
+        ? `  (showing top ${data.hits.length} of ${data.totalDocuments} matching docs; pass --match-count to widen)`
+        : "";
+      console.log(`${data.hits.length} doc-hit(s) for "${q}" (${data.mode})${totalsHint}:`);
       console.log();
-      data.hits.forEach((h, i) => printHit(i + 1, h));
+      data.hits.forEach((h, i) => printDocHit(i + 1, h));
     });
 
   // ── ingest ────────────────────────────────────────────────────────────
@@ -985,6 +1021,35 @@ function printHit(rank: number, h: SearchHit): void {
   console.log(`     ${h.docSource}  (chunk ${h.chunkIndex}, chunk_id=${h.chunkId.slice(0, 8)}…)`);
   const snippet = h.content.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
   console.log(`     ${snippet}${h.content.length > 160 ? "…" : ""}`);
+  console.log();
+}
+
+/**
+ * Render one document-level search hit. Doc-level is the default
+ * `cfcf clio search` view; `--by-chunk` falls back to `printHit` above.
+ *
+ * Layout decisions:
+ *   - Top line: rank, best score, doc title, best-chunk heading path.
+ *   - id line: copy-pasteable [id: <uuid>] for the agent workflow,
+ *     plus author + versions count + matching-chunks count.
+ *   - source line: where the doc came from + best-chunk index for
+ *     debugging.
+ *   - snippet: first ~160 chars of the best chunk's small-to-big-
+ *     expanded content.
+ */
+function printDocHit(rank: number, h: DocumentSearchHit): void {
+  const heading = h.bestChunkHeadingPath.length > 0
+    ? ` > ${h.bestChunkHeadingPath.join(" > ")}`
+    : "";
+  // Compose the meta line: author + versions + matching chunk count.
+  // Versions only when > 0 (stays out of the way for fresh docs).
+  const versionsStr = h.versionCount > 0 ? `  versions=${h.versionCount}` : "";
+  const matchesStr = h.matchingChunks > 1 ? `  matched ${h.matchingChunks} chunks` : "";
+  console.log(`  ${rank}. [${h.bestScore.toFixed(3)}] ${h.docTitle}${heading}`);
+  console.log(`     [id: ${h.documentId}]  author: ${h.docAuthor}${versionsStr}${matchesStr}`);
+  console.log(`     ${h.docSource}  (best chunk: ${h.bestChunkIndex}/${h.chunkCount})`);
+  const snippet = h.bestChunkContent.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
+  console.log(`     ${snippet}${h.bestChunkContent.length > 160 ? "…" : ""}`);
   console.log();
 }
 

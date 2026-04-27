@@ -22,6 +22,8 @@ import type {
   SearchRequest,
   SearchResponse,
   SearchHit,
+  DocumentSearchResponse,
+  DocumentSearchHit,
   ClioStats,
 } from "../types.js";
 import type {
@@ -1081,6 +1083,119 @@ export class LocalClio implements MemoryBackend {
 
     // FTS path (default, or fallback when no embedder is active).
     return await this.searchFts(req, matchCount, projectFilterId);
+  }
+
+  /**
+   * Document-level search. The agent-facing default: one row per
+   * matching document (Cerefox-style), not per chunk. Mirrors
+   * `cerefox_search_docs` behaviour:
+   *   1. Run chunk-level search with `matchCount × 5` candidates so
+   *      dedup has enough material to fill `matchCount` unique docs.
+   *   2. Group hits by `document_id`, keep the best-scoring chunk as
+   *      the representative.
+   *   3. Truncate to `matchCount` distinct documents.
+   *   4. Decorate each hit with `versionCount` + `matchingChunks`
+   *      (counts inside the candidate pool, not all chunks).
+   *
+   * For human/agent search ("which docs match X?") this is far cleaner
+   * than chunk-level (which surfaces multiple chunks of the same doc
+   * + makes near-irrelevant docs that share ONE keyword sit between
+   * chunks of the right doc). Chunk-level remains available via
+   * `search()` for callers that need the raw view.
+   */
+  async searchDocuments(req: SearchRequest): Promise<DocumentSearchResponse> {
+    // Doc-level matchCount default is smaller (5) than chunk-level (10):
+    // a doc-level "show me top N matches" is more useful with fewer,
+    // higher-quality entries than a long list. Cerefox's default is 5.
+    const matchCount = Math.max(1, Math.min(req.matchCount ?? 5, 50));
+
+    // Fetch a 5x candidate pool so dedup has enough material.
+    const chunkRes = await this.search({ ...req, matchCount: matchCount * 5 });
+
+    // Group by documentId, keep the highest-scoring chunk as the
+    // representative. Hits are already ordered by score descending,
+    // so the first chunk per doc encountered IS the best.
+    const seen = new Map<string, SearchHit & { _matching: number }>();
+    for (const hit of chunkRes.hits) {
+      const existing = seen.get(hit.documentId);
+      if (existing) {
+        existing._matching++;
+      } else {
+        seen.set(hit.documentId, { ...hit, _matching: 1 });
+      }
+    }
+
+    // Take the top `matchCount` unique docs.
+    const ranked = Array.from(seen.values()).slice(0, matchCount);
+
+    // Pull versionCount + chunkCount + timestamps in one query for
+    // efficiency rather than calling getDocument N times.
+    const docIds = ranked.map((h) => h.documentId);
+    const docMeta = new Map<string, {
+      chunk_count: number;
+      total_chars: number;
+      version_count: number;
+      created_at: string;
+      updated_at: string;
+    }>();
+    if (docIds.length > 0) {
+      const placeholders = docIds.map(() => "?").join(",");
+      const rows = this.db.query<{
+        id: string;
+        chunk_count: number;
+        total_chars: number;
+        version_count: number;
+        created_at: string;
+        updated_at: string;
+      }, string[]>(
+        `SELECT d.id, d.chunk_count, d.total_chars, d.created_at, d.updated_at,
+                (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+           FROM clio_documents d
+          WHERE d.id IN (${placeholders})`,
+      ).all(...docIds);
+      for (const r of rows) {
+        docMeta.set(r.id, {
+          chunk_count: r.chunk_count,
+          total_chars: r.total_chars,
+          version_count: r.version_count,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        });
+      }
+    }
+
+    const hits: DocumentSearchHit[] = ranked.map((h) => {
+      const meta = docMeta.get(h.documentId);
+      return {
+        documentId: h.documentId,
+        docTitle: h.docTitle,
+        docSource: h.docSource,
+        docAuthor: h.docAuthor ?? "agent",
+        docProjectId: h.docProjectId,
+        docProjectName: h.docProjectName,
+        docMetadata: h.docMetadata,
+        chunkCount: meta?.chunk_count ?? 0,
+        totalChars: meta?.total_chars ?? 0,
+        versionCount: meta?.version_count ?? 0,
+        matchingChunks: h._matching,
+        bestScore: h.score,
+        bestChunkHeadingPath: h.headingPath,
+        bestChunkHeadingLevel: h.headingLevel,
+        bestChunkTitle: h.title,
+        bestChunkContent: h.content,
+        bestChunkId: h.chunkId,
+        bestChunkIndex: h.chunkIndex,
+        createdAt: meta?.created_at ?? "",
+        updatedAt: meta?.updated_at ?? "",
+      };
+    });
+
+    return {
+      hits,
+      mode: chunkRes.mode,
+      totalMatches: chunkRes.totalMatches,
+      totalDocuments: seen.size,
+    };
   }
 
   /**

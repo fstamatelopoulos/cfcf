@@ -19,6 +19,24 @@
 
 ## Log
 
+### 2026-04-27 -- Doc-level search dedup (Cerefox parity, default)
+
+Surfaced when the user ran `cfcf clio search decisions` against a corpus of two docs and got **6 chunk-level hits** (5 of the same decisions log + 1 from the auth doc which legitimately contains the word "decisions"). Reasonable from the engine's perspective; bad UX for an agent or human asking "what docs match X?".
+
+**Cerefox precedent**: the agent-facing `cerefox_search` MCP tool (and its underlying `cerefox_search_docs` RPC) is doc-level by default. The chunk-level engine `cerefox_hybrid_search` is internal-only. cfcf had only the chunk-level engine exposed to callers.
+
+**Decision**: make `cfcf clio search` doc-level by default, add `--by-chunk` for the raw view. New `LocalClio.searchDocuments(req)` fetches `matchCount × 5` chunk candidates via the existing engine, dedups by `document_id` keeping best score, decorates each hit with `versionCount` + `matchingChunks` + the best chunk's content (already small-to-big expanded). HTTP: `GET /api/clio/search?by=doc` (default) / `?by=chunk`.
+
+**`versionCount` on search hits**: yes -- mirrors Cerefox's `cerefox_search_docs.version_count` column. Surfacing edit-history at the search-result level lets agents reason about doc maturity ("this decisions log has versions=2; it's evolved" vs "this is fresh and untested") without a follow-up `cfcf clio versions` call. The cost is one subquery per search; cheap relative to FTS / vector retrieval.
+
+**`matchingChunks` on search hits**: a small but useful signal that the user / agent didn't have before. "matched 5 chunks" vs "matched 1 chunk" indicates how broadly the doc covers the query topic. Cerefox doesn't surface this directly (it's implicit in the candidate-pool size); we expose it explicitly because it's near-free given the dedup pass.
+
+**Why default to doc-level (not chunk-level)**: agent + human searches almost always want "the doc that talks about X", not "the chunks that mention X". Showing 5 chunks of the same doc feels like a UI bug. Chunk-level remains available for callers (e.g. internal tooling, the future Web UI Clio tab) that need it -- but the default matches what the verb's name implies: one entry per matching document.
+
+**Trade-off**: the doc-level path runs the engine with 5x the candidates (so the dedup buffer stays full when many chunks match the same doc). For a 10-doc match-count that's 50 chunk candidates pulled internally -- still cheap given FTS / cosine scan times.
+
+---
+
 ### 2026-04-27 -- Collapsed 0001-0004 into a single 0001_initial.sql
 
 Decision (with the user) on the same `iteration-5/clio-update-api` branch: collapse the four migration files into a single `0001_initial.sql` representing the v0.11.0 schema. Reason: cfcf has no public users yet; the migration chain history is internal-only context. Once the project goes public (5.5b — npm publish), all NEW migrations are forward-only and permanent — but everything pre-public can be cleaned up first to ship a tidy baseline.

@@ -130,6 +130,7 @@ cfcf clio ingest modified.md --project <p> --title "<same title>" --document-id 
 
 | Capability | Status |
 |---|---|
+| Doc-level search dedup (default; Cerefox parity) | ✅ shipped 5.12 -- one row per matching doc with `versionCount` + `matchingChunks`. `--by-chunk` for raw view |
 | FTS5 keyword search | ✅ works out of the box |
 | Vector + hybrid (RRF) search | ✅ once an embedder is installed (default: nomic-embed-text-v1.5 q8) |
 | Cerefox-style cosine threshold (`--min-score`, `clio.minSearchScore`) | ✅ default 0.5; FTS-matched chunks bypass in hybrid |

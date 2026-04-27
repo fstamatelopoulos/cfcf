@@ -413,7 +413,8 @@ Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md
 #   - no active embedder      → fts
 # Override per-call with --mode, or set clio.defaultSearchMode in the
 # global config (visible + editable in the Web UI's Server Info page).
-cfcf clio search "flaky auth tests"
+cfcf clio search "flaky auth tests"                              # default: one row per matching DOC (Cerefox parity)
+cfcf clio search "flaky auth tests" --by-chunk                   # legacy raw view: one row per matching CHUNK
 cfcf clio search "flaky auth tests" --mode hybrid                # force a mode
 cfcf clio search "flaky auth tests" --min-score 0.4              # widen vector recall (default 0.5)
 cfcf clio search "flaky auth tests" --project <name> --match-count 5 \

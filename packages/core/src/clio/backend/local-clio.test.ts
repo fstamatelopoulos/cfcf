@@ -274,6 +274,129 @@ describe("LocalClio.search (FTS)", () => {
   });
 });
 
+// ── 5.12: doc-level search dedup ───────────────────────────────────────────
+
+describe("LocalClio.searchDocuments (5.12, Cerefox parity)", () => {
+  async function seed(): Promise<LocalClio> {
+    // A document with multiple chunks all matching "authentication" (so
+    // chunk-level search would surface several rows from the same doc).
+    const clio = makeClio();
+    const longAuthDoc = [
+      "# Auth notes",
+      "## Section 1",
+      "Authentication is the process of verifying who is making a request.",
+      "## Section 2",
+      "Real-time yields beat fake-timers for authentication-flow tests.",
+      "## Section 3",
+      "Token refresh races plague every authentication system.",
+      "## Section 4",
+      "Storing authentication tokens in container images is a leak risk.",
+    ].join("\n\n");
+    await clio.ingest({
+      project: "p1",
+      title: "Auth long-form",
+      content: longAuthDoc,
+      author: "claude-code",
+    });
+    await clio.ingest({
+      project: "p1",
+      title: "DB notes",
+      content: "# Database migrations\n\nAlways use transactions; authentication-related rollbacks are tricky.",
+      author: "user",
+    });
+    await clio.ingest({
+      project: "p1",
+      title: "Unrelated",
+      content: "# Unrelated topic\n\nNothing about the keyword here.",
+      author: "user",
+    });
+    return clio;
+  }
+
+  it("returns one row per matching document, not per chunk", async () => {
+    const clio = await seed();
+    const result = await clio.searchDocuments({ query: "authentication" });
+    expect(result.mode).toBe("fts");
+    // 2 matching docs (Auth long-form + DB notes); the third doc has
+    // no occurrences of "authentication".
+    expect(result.hits.length).toBe(2);
+    const titles = result.hits.map((h) => h.docTitle);
+    expect(titles).toContain("Auth long-form");
+    expect(titles).toContain("DB notes");
+    // Each hit is unique by documentId.
+    const ids = new Set(result.hits.map((h) => h.documentId));
+    expect(ids.size).toBe(2);
+    await clio.close();
+  });
+
+  it("matchingChunks reports how many chunks of the doc were in the candidate pool", async () => {
+    const clio = await seed();
+    const result = await clio.searchDocuments({ query: "authentication" });
+    const authDoc = result.hits.find((h) => h.docTitle === "Auth long-form");
+    expect(authDoc).toBeTruthy();
+    expect(authDoc!.matchingChunks).toBeGreaterThanOrEqual(1);
+    const dbDoc = result.hits.find((h) => h.docTitle === "DB notes");
+    expect(dbDoc!.matchingChunks).toBe(1);
+    await clio.close();
+  });
+
+  it("orders by best-chunk score descending", async () => {
+    const clio = await seed();
+    const result = await clio.searchDocuments({ query: "authentication" });
+    for (let i = 1; i < result.hits.length; i++) {
+      expect(result.hits[i].bestScore).toBeLessThanOrEqual(result.hits[i - 1].bestScore);
+    }
+    await clio.close();
+  });
+
+  it("surfaces versionCount on each hit (0 for never-updated docs, > 0 after update)", async () => {
+    const clio = await seed();
+    const before = await clio.searchDocuments({ query: "authentication" });
+    for (const h of before.hits) expect(h.versionCount).toBe(0);
+
+    const authDocBefore = before.hits.find((h) => h.docTitle === "Auth long-form")!;
+    await clio.ingest({
+      project: "p1",
+      content: "# Auth long-form\n\nrewritten authentication content",
+      documentId: authDocBefore.documentId,
+    });
+    const after = await clio.searchDocuments({ query: "authentication" });
+    const authDocAfter = after.hits.find((h) => h.documentId === authDocBefore.documentId)!;
+    expect(authDocAfter.versionCount).toBe(1);
+    await clio.close();
+  });
+
+  it("respects matchCount cap", async () => {
+    const clio = await seed();
+    const result = await clio.searchDocuments({ query: "authentication", matchCount: 1 });
+    expect(result.hits.length).toBe(1);
+    expect(result.totalDocuments).toBe(2);
+    await clio.close();
+  });
+
+  it("respects project filter", async () => {
+    const clio = await seed();
+    await clio.ingest({
+      project: "other-project",
+      title: "auth in other proj",
+      content: "authentication content over here",
+      author: "user",
+    });
+    const scoped = await clio.searchDocuments({ query: "authentication", project: "p1" });
+    expect(scoped.hits.every((h) => h.docProjectName === "p1")).toBe(true);
+    await clio.close();
+  });
+
+  it("returns chunkCount = total chunks in the live doc, matchingChunks <= chunkCount", async () => {
+    const clio = await seed();
+    const result = await clio.searchDocuments({ query: "authentication" });
+    const authDoc = result.hits.find((h) => h.docTitle === "Auth long-form")!;
+    expect(authDoc.chunkCount).toBeGreaterThanOrEqual(1);
+    expect(authDoc.matchingChunks).toBeLessThanOrEqual(authDoc.chunkCount);
+    await clio.close();
+  });
+});
+
 describe("LocalClio.stats", () => {
   it("returns counts + applied migrations", async () => {
     const clio = makeClio();

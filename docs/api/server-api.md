@@ -1018,10 +1018,11 @@ The audit log records every Clio **mutation**: `create`, `update-content`, `dele
 
 ### GET /api/clio/search
 
-Hybrid / semantic / FTS search.
+Hybrid / semantic / FTS search. Default returns one row per matching **document** (Cerefox parity); `?by=chunk` returns one row per matching chunk.
 
 **Query params:**
 - `q` (required) — free-text query. FTS operator characters are stripped server-side, so clients don't need to escape.
+- `by` (optional, default `doc`) — `doc` returns deduplicated document-level hits (one per unique `documentId`, ordered by best-chunk score, with `matchingChunks` + `versionCount` + the best chunk's content). `chunk` returns the raw chunk-level hits ordered by score. Doc-level is the default since 5.12 (Cerefox `cerefox_search` parity); chunk-level is preserved for callers that want to see the engine's per-chunk ranking explicitly.
 - `project` (optional) — Clio Project name or id. Scopes to that Project only.
 - `mode` (optional) — `"fts"` · `"hybrid"` · `"semantic"`. When omitted, the server resolves in this order:
   - `clio.defaultSearchMode` from the global config (`auto` | concrete value),
@@ -1031,7 +1032,40 @@ Hybrid / semantic / FTS search.
 - `match_count` (optional) — max hits to return (default 10, cap 100).
 - `metadata` (optional) — JSON-encoded object for exact-match filtering against `clio_documents.metadata`, e.g. `metadata={"role":"reflection","tier":"semantic"}`.
 
-**Response:** `200 OK`
+**Response (default, `?by=doc` — `DocumentSearchResponse`):** `200 OK`
+```json
+{
+  "hits": [
+    {
+      "documentId": "<uuid>",
+      "docTitle": "Auth service design",
+      "docSource": "user-ingest: /Users/.../design.md",
+      "docAuthor": "claude-code",
+      "docProjectId": "<uuid>",
+      "docProjectName": "cf-ecosystem",
+      "docMetadata": { "role": "dev" },
+      "chunkCount": 9,
+      "totalChars": 5320,
+      "versionCount": 2,
+      "matchingChunks": 3,
+      "bestScore": 4.12,
+      "bestChunkHeadingPath": ["Overview", "Architecture"],
+      "bestChunkHeadingLevel": 2,
+      "bestChunkTitle": "Architecture",
+      "bestChunkContent": "...",
+      "bestChunkId": "<uuid>",
+      "bestChunkIndex": 2,
+      "createdAt": "2026-04-26T...",
+      "updatedAt": "2026-04-27T..."
+    }
+  ],
+  "mode": "fts",
+  "totalMatches": 12,
+  "totalDocuments": 4
+}
+```
+
+**Response (`?by=chunk` — legacy `SearchResponse`):** `200 OK`
 ```json
 {
   "hits": [
@@ -1046,6 +1080,7 @@ Hybrid / semantic / FTS search.
       "score": 4.12,
       "docTitle": "Auth service design",
       "docSource": "user-ingest: /Users/.../design.md",
+      "docAuthor": "claude-code",
       "docProjectId": "<uuid>",
       "docProjectName": "cf-ecosystem",
       "docMetadata": { "role": "dev" }
@@ -1056,7 +1091,7 @@ Hybrid / semantic / FTS search.
 }
 ```
 
-**Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON.
+**Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON; `400` for `by` not in {`doc`, `chunk`}.
 
 ### GET /api/clio/documents
 

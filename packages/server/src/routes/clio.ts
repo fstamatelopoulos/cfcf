@@ -174,9 +174,24 @@ export function registerClioRoutes(app: Hono): void {
     }
     if (minScore === undefined) minScore = 0.5;
 
+    // Doc-level vs chunk-level dedup. Cerefox's primary `cerefox_search`
+    // returns one row per matching document; cfcf matches that as the
+    // default (`?by=doc`). `?by=chunk` returns the raw chunk-level
+    // result (one row per matching chunk -- useful for debugging or
+    // for callers that want to see the chunk-level ranking explicitly).
+    // Default is `doc` for Cerefox parity. 5.12 follow-up.
+    const byRaw = c.req.query("by");
+    const by: "doc" | "chunk" = byRaw === "chunk" ? "chunk" : "doc";
+    if (byRaw && byRaw !== "doc" && byRaw !== "chunk") {
+      return c.json({ error: "by must be 'doc' or 'chunk'" }, 400);
+    }
+
     try {
       const backend = getClioBackend();
-      const res = await backend.search({ query: q, project, matchCount, mode, metadata, minScore });
+      const reqShape = { query: q, project, matchCount, mode, metadata, minScore };
+      const res = by === "doc"
+        ? await backend.searchDocuments(reqShape)
+        : await backend.search(reqShape);
       return c.json(res);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
