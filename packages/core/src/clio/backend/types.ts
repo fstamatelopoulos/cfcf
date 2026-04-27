@@ -193,6 +193,42 @@ export interface MemoryBackend {
   close(): Promise<void>;
 }
 
+/**
+ * Pre-flight summary for `cfcf clio embedder set <name>`. Surfaced to
+ * the CLI + Web UI so users can see what'll happen before they confirm.
+ *
+ *   - `embeddedChunkCount`: chunks already carrying an embedding from
+ *     the CURRENT active embedder. These become inconsistent after
+ *     the switch unless `--reindex` is also passed.
+ *   - `chunksOverNewCeiling`: chunks whose `char_count` exceeds the
+ *     NEW embedder's `recommendedChunkMaxChars`. The new model would
+ *     silently truncate these inputs at embed time, degrading quality.
+ *     Fix is `cfcf clio reindex --rechunk` (planned, item 6.23).
+ *   - `configMaxOverCeiling`: when the user has set
+ *     `clio.maxChunkChars` to a value larger than the new embedder's
+ *     ceiling, future ingests will be capped at the ceiling. The
+ *     config value isn't honoured verbatim.
+ *
+ * 5.12+ follow-up.
+ */
+export interface EmbedderSwitchImpact {
+  newName: string;
+  newDim: number;
+  newRecommendedChunkMaxChars: number;
+  currentName: string | null;
+  currentRecommendedChunkMaxChars: number | null;
+  /** Total chunks in the live (non-archived) set. */
+  totalChunkCount: number;
+  /** Of those, how many already carry an embedding (any model). */
+  embeddedChunkCount: number;
+  /** Of those, how many exceed the NEW embedder's recommended max chars. */
+  chunksOverNewCeiling: number;
+  /** Currently-configured `clio.maxChunkChars`, if set. */
+  configMaxChunkChars: number | null;
+  /** True iff configMaxChunkChars is set AND > newRecommendedChunkMaxChars. */
+  configMaxOverCeiling: boolean;
+}
+
 export interface ReindexOptions {
   /** Restrict to a single Clio Project (by name or id). */
   project?: string;

@@ -13,6 +13,26 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-04-27 — Embedder-recommended chunk size as a safety ceiling, plus pre-flight warnings on switch + reindex
+
+**Context.** Each embedder in the catalogue declares a `recommendedChunkMaxChars` calibrated for its tokenizer's `model_max_length` minus a safety margin (e.g. 1800 chars ≈ 4 chars/token × 0.9 × 512 tokens for a `bge-small-en-v1.5`-class context). Two related risks emerged once `clio.maxChunkChars` became user-configurable:
+
+1. User sets `clio.maxChunkChars` larger than the active embedder's `recommendedChunkMaxChars`. Inputs above that ceiling get silently truncated by transformers.js / ORT to `model_max_length`, degrading embedding quality with no error path.
+2. User runs `cfcf clio embedder set <new>` to switch to a model with a smaller ceiling. Existing chunks now exceed the new model's context window AND existing embeddings live in the old model's vector space.
+
+**Decisions.**
+
+1. **Treat `recommendedChunkMaxChars` as a ceiling, not a fixed override.** Smaller user values are honoured (smaller-is-safe; sometimes better for retrieval precision). Larger user values get capped at the embedder's ceiling with one stderr warning per ingest call. Without an active embedder there's no ceiling.
+2. **Pre-flight warnings on `cfcf clio embedder set`.** New `GET /api/clio/embedders/:name/switch-impact` returns three counts: `embeddedChunkCount` (existing-embedding mismatch), `chunksOverNewCeiling` (truncation risk), `configMaxOverCeiling` (config setting will be capped). The CLI prompts y/N when any signal fires, requires `--yes` for non-interactive use. The existing `--force` (recovery, no checks) and `--reindex` (switch + re-embed atomically) remain.
+3. **Pre-flight confirmation on `cfcf clio reindex`.** Reindex re-embeds many chunks under the active embedder; non-trivial cost. CLI prints active embedder + scope + cost hint, prompts y/N. `--yes` skips for non-interactive use; `--force` already skipped by historical contract.
+4. **Web UI Server Info page surfaces all of these.** The new chunk-size input shows the cap warning inline when its value exceeds the active embedder's ceiling. The preferred-embedder line includes guidance on switching safely (`--reindex` recommended, `--force` for recovery only).
+
+**Why warning-and-prompt instead of auto-correct.** Same principle as on-demand version retention (item 6.22): silent rewrites of corpus state surprise users in unattended-agent workflows. The user sees the impact and explicitly opts in.
+
+**Out of scope (tracked).** The `--rechunk` capability (re-run the chunker per doc when switching to a model with a smaller ceiling) is plan item 6.23. Until then, the warning text recommends `cfcf clio reindex --rechunk` (planned).
+
+---
+
 ## 2026-04-27 — Hybrid search algorithm: alpha-weighted score blending over RRF
 
 **Context.** The Clio hybrid-search engine fuses an FTS (keyword) candidate set with a vector (semantic) candidate set into a single ranked list. The original implementation used Reciprocal Rank Fusion (RRF) with `k=60`; a side-by-side audit against Cerefox surfaced that Cerefox uses **alpha-weighted score blending** (`α × cosine + (1−α) × ts_rank_cd`, default `α=0.7`) and exposes `α` as a tunable per-call. cfcf had no equivalent knob.

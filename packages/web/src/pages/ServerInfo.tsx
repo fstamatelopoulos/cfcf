@@ -60,6 +60,15 @@ export function ServerInfo() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Active embedder + its recommendedChunkMaxChars — needed to warn
+  // when the user sets clio.maxChunkChars above the embedder's ceiling.
+  // 5.12+ follow-up; safe to fetch once, doesn't change while the page
+  // is open without an explicit `cfcf clio embedder set` from elsewhere.
+  const [activeEmbedder, setActiveEmbedder] = useState<{
+    name: string;
+    dim: number;
+    recommendedChunkMaxChars: number;
+  } | null>(null);
 
   // Initial + periodic fetch of read-only server status (version, uptime, etc.)
   useEffect(() => {
@@ -69,6 +78,17 @@ export function ServerInfo() {
     load();
     const id = setInterval(load, 10000);
     return () => clearInterval(id);
+  }, []);
+
+  // Fetch active embedder once on mount. Used by the chunk-size
+  // warning below (cap behaviour when user sets a value > ceiling).
+  useEffect(() => {
+    fetch("/api/clio/stats")
+      .then((r) => r.json())
+      .then((s: { activeEmbedder?: { name: string; dim: number; recommendedChunkMaxChars: number } | null }) => {
+        if (s.activeEmbedder) setActiveEmbedder(s.activeEmbedder);
+      })
+      .catch(() => { /* non-fatal; warning just won't render */ });
   }, []);
 
   // Initial fetch of the config (editable). Only fetched once; the user
@@ -427,7 +447,7 @@ export function ServerInfo() {
                       <option value="auto">auto (hybrid if embedder active, else fts)</option>
                       <option value="fts">fts (keyword only)</option>
                       <option value="semantic">semantic (vector only)</option>
-                      <option value="hybrid">hybrid (RRF over both)</option>
+                      <option value="hybrid">hybrid (α-weighted blend of cosine + normalised BM25)</option>
                     </select>
                     <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
                       Used when <code>cfcf clio search</code> is invoked without an explicit <code>--mode</code> flag (or when <code>/api/clio/search</code> is called without <code>?mode=</code>). Per-call overrides always win.
@@ -460,11 +480,160 @@ export function ServerInfo() {
                     </div>
                   </td>
                 </tr>
+                <tr>
+                  <th>Hybrid blend (α)</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={draft.clio?.hybridAlpha ?? 0.7}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseFloat(e.target.value);
+                        if (!Number.isFinite(n) || n < 0 || n > 1) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), hybridAlpha: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "5rem" }}
+                    />
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Hybrid score = <code>α × cosine + (1−α) × normalised_BM25</code>. Higher α biases toward semantic similarity; lower α biases toward keyword match. Default 0.7 (Cerefox parity). Per-call <code>--alpha</code> always wins.
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th>Small-doc threshold</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={draft.clio?.smallDocThreshold ?? 20000}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isFinite(n) || n < 0) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), smallDocThreshold: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "8rem" }}
+                    /> chars
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Documents whose total content is at most this size return the FULL document content in each search hit (small-to-big). Larger documents return the matched chunk + context window. Default 20000 (Cerefox parity). Set 0 to always use chunk + window.
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th>Context window</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={5}
+                      step={1}
+                      value={draft.clio?.contextWindow ?? 1}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isFinite(n) || n < 0) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), contextWindow: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "5rem" }}
+                    /> chunks
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      For documents larger than the small-doc threshold: how many sibling chunks to include on each side of the matched chunk. Default 1 (3-chunk window: prev + match + next). 0 returns just the matched chunk.
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th>Max chunk size</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={500}
+                      step={500}
+                      value={draft.clio?.maxChunkChars ?? 4000}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isFinite(n) || n < 500) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), maxChunkChars: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "8rem" }}
+                    /> chars
+                    {activeEmbedder && (draft.clio?.maxChunkChars ?? 4000) > activeEmbedder.recommendedChunkMaxChars && (
+                      <div style={{
+                        color: "var(--color-warning, #b8860b)",
+                        background: "rgba(255, 200, 0, 0.08)",
+                        border: "1px solid rgba(255, 200, 0, 0.3)",
+                        padding: "0.5rem 0.6rem",
+                        borderRadius: "4px",
+                        fontSize: "0.85rem",
+                        marginTop: "0.5rem",
+                      }}>
+                        ⚠ Exceeds <code>{activeEmbedder.name}</code>'s recommended max
+                        ({activeEmbedder.recommendedChunkMaxChars} chars). At ingest time the value will be
+                        capped to {activeEmbedder.recommendedChunkMaxChars} so the model doesn't silently
+                        truncate inputs.
+                      </div>
+                    )}
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Target maximum size per chunk during ingest. The active embedder's recommended max acts as a safety ceiling — values above it get capped. Default 4000 (Cerefox parity).
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th>Min chunk size</th>
+                  <td>
+                    <input
+                      type="number"
+                      min={50}
+                      step={50}
+                      value={draft.clio?.minChunkChars ?? 100}
+                      onChange={(e) => {
+                        if (!draft) return;
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isFinite(n) || n < 50) return;
+                        setDraft({
+                          ...draft,
+                          clio: { ...(draft.clio ?? {}), minChunkChars: n },
+                        });
+                        setSavedAt(null);
+                      }}
+                      style={{ width: "8rem" }}
+                    /> chars
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      Pieces smaller than this merge into the previous chunk during oversized-section splitting. Default 100 (Cerefox parity).
+                    </div>
+                  </td>
+                </tr>
                 {draft.clio?.preferredEmbedder && (
                   <tr>
                     <th>Preferred embedder</th>
                     <td style={{ color: "var(--color-text-muted)" }}>
-                      <code>{draft.clio.preferredEmbedder}</code> (set during <code>cfcf init</code>; change with <code>cfcf clio embedder install &lt;name&gt;</code>)
+                      <code>{draft.clio.preferredEmbedder}</code>
+                      {activeEmbedder && (
+                        <> (active: <code>{activeEmbedder.name}</code>, dim={activeEmbedder.dim}, recommended max={activeEmbedder.recommendedChunkMaxChars} chars)</>
+                      )}
+                      <div style={{ fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                        Switch with <code>cfcf clio embedder set &lt;name&gt; --reindex</code>. Without <code>--reindex</code>, existing chunk embeddings become inconsistent with the new model and vector-search quality on those chunks degrades. Use <code>--force</code> only for recovery.
+                      </div>
                     </td>
                   </tr>
                 )}

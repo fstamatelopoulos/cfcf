@@ -510,6 +510,30 @@ export function registerClioRoutes(app: Hono): void {
     }
   });
 
+  // Pre-flight: what would change if I switched to <name>? Surfaces
+  // the impact (existing-embedded count, chunks-over-new-ceiling,
+  // config-max-over-ceiling) so the CLI + Web UI can warn before
+  // confirming the switch. Read-only; no DB writes.
+  app.get("/api/clio/embedders/:name/switch-impact", async (c) => {
+    const name = c.req.param("name");
+    const backend = getClioBackend();
+    if (!(backend instanceof LocalClio)) {
+      return c.json({ error: "Active Clio backend doesn't support embedders" }, 400);
+    }
+    let configMaxChunkChars: number | null | undefined;
+    try {
+      const cfg = await readConfig();
+      configMaxChunkChars = cfg?.clio?.maxChunkChars ?? null;
+    } catch { configMaxChunkChars = null; }
+    try {
+      const impact = backend.previewEmbedderSwitch(name, { configMaxChunkChars });
+      return c.json(impact);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
   app.post("/api/clio/embedders/set", async (c) => {
     const body = await c.req.json<{ name?: string; force?: boolean; reindex?: boolean }>()
       .catch(() => ({}) as { name?: string; force?: boolean; reindex?: boolean });

@@ -9,6 +9,7 @@ import type { Command } from "commander";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 import { isServerReachable, post, get, del } from "../client.js";
+import { createInterface } from "node:readline";
 import { DEFAULT_EMBEDDER_NAME } from "@cfcf/core";
 import type {
   ClioProject,
@@ -939,12 +940,81 @@ function registerUnder(root: Command): void {
     )
     .option("--reindex", "Switch + re-embed every existing chunk under the new model. Preferred over --force.")
     .option("--force", "Switch without reindex. Only for recovery; vector search is degraded until you run `cfcf clio reindex`.")
+    .option("-y, --yes", "Skip the impact-summary confirmation prompt (non-interactive use).")
     .action(async (name: string, opts) => {
       if (!(await checkServer())) return;
       if (opts.force && opts.reindex) {
         console.error("Pass either --reindex or --force, not both. --reindex is the safe path.");
         process.exit(1);
       }
+
+      // Pre-flight: pull the impact summary so we can warn the user
+      // before the switch. Three classes of issue:
+      //   1. Existing chunks have embeddings from a different model →
+      //      they go stale unless --reindex is also passed.
+      //   2. Existing chunk char_counts exceed the new embedder's
+      //      recommended max → silent truncation at embed time.
+      //   3. Configured `clio.maxChunkChars` exceeds the new ceiling →
+      //      future ingests get capped, not honoured verbatim.
+      const impactRes = await get<{
+        newName: string;
+        newRecommendedChunkMaxChars: number;
+        currentName: string | null;
+        currentRecommendedChunkMaxChars: number | null;
+        totalChunkCount: number;
+        embeddedChunkCount: number;
+        chunksOverNewCeiling: number;
+        configMaxChunkChars: number | null;
+        configMaxOverCeiling: boolean;
+        error?: string;
+      }>(`/api/clio/embedders/${encodeURIComponent(name)}/switch-impact`);
+      if (!impactRes.ok) {
+        console.error(`Set failed (preview): ${impactRes.error}`);
+        process.exit(1);
+      }
+      const impact = impactRes.data!;
+      const warnings: string[] = [];
+      if (impact.embeddedChunkCount > 0 && !opts.reindex && impact.currentName !== name) {
+        warnings.push(
+          `${impact.embeddedChunkCount} chunk(s) carry embeddings from "${impact.currentName ?? "(none)"}". ` +
+          `Without --reindex they become inconsistent with "${name}"'s embedding space. ` +
+          `Vector search quality on those chunks will degrade. Recommended: re-run with --reindex.`,
+        );
+      }
+      if (impact.chunksOverNewCeiling > 0) {
+        warnings.push(
+          `${impact.chunksOverNewCeiling} existing chunk(s) exceed "${name}"'s recommended max ` +
+          `(${impact.newRecommendedChunkMaxChars} chars). The model will silently truncate those inputs ` +
+          `at embed time, degrading quality. Re-chunking is tracked under plan item 6.23.`,
+        );
+      }
+      if (impact.configMaxOverCeiling) {
+        warnings.push(
+          `Your config's clio.maxChunkChars (${impact.configMaxChunkChars}) exceeds "${name}"'s ceiling ` +
+          `(${impact.newRecommendedChunkMaxChars}). Future ingests will be capped to ${impact.newRecommendedChunkMaxChars}; ` +
+          `the config value won't be honoured verbatim.`,
+        );
+      }
+      if (warnings.length > 0 && !opts.yes && !opts.force) {
+        console.log(`Switching active embedder: ${impact.currentName ?? "(none)"} → ${name}`);
+        console.log();
+        for (const w of warnings) console.log(`  ⚠ ${w}`);
+        console.log();
+        if (!process.stdin.isTTY) {
+          console.error(
+            "Refusing to proceed: stdin is not a TTY and -y/--yes was not passed. " +
+            "Pass --yes (acknowledge warnings + proceed), --reindex (proceed + re-embed), " +
+            "or --force (recovery; switch without reindex).",
+          );
+          process.exit(1);
+        }
+        const proceed = await promptYesNo("Proceed with the switch?");
+        if (!proceed) {
+          console.log("Aborted. No changes were made.");
+          return;
+        }
+      }
+
       // The --reindex path runs the server-side embedder loop over
       // every chunk and can take several seconds. Spinner only when
       // --reindex is set; the bare set is just a DB row update.
@@ -978,9 +1048,39 @@ function registerUnder(root: Command): void {
     .option("-p, --project <name>", "Restrict to one Clio Project")
     .option("--force", "Re-embed every chunk even if it already matches the active embedder")
     .option("--batch-size <n>", "Embedder batch size (default 32)", (v) => parseInt(v, 10))
+    .option("-y, --yes", "Skip the confirmation prompt (non-interactive use).")
     .option("--json", "Emit the raw JSON result")
     .action(async (opts) => {
       if (!(await checkServer())) return;
+      // Pre-flight confirmation: reindex re-embeds many chunks under
+      // the active embedder; for a non-trivial corpus that's many
+      // seconds of compute + writes. Show the active embedder + the
+      // active project scope before we run, prompt unless --yes/--force.
+      if (!opts.yes && !opts.force && !opts.json) {
+        const activeRes = await get<{ active: { name: string; dim: number } | null }>(
+          "/api/clio/embedders/active",
+        );
+        const activeName = activeRes.ok && activeRes.data?.active
+          ? activeRes.data.active.name
+          : "(no active embedder)";
+        console.log(`Reindex will re-embed chunks under: ${activeName}`);
+        if (opts.project) console.log(`Scope: project "${opts.project}"`);
+        else console.log(`Scope: ALL projects (pass --project to narrow)`);
+        console.log("Idempotent: chunks already matching the active embedder + dim are skipped.");
+        console.log("Cost: a few seconds per ~30 chunks (model-dependent).");
+        if (!process.stdin.isTTY) {
+          console.error(
+            "Refusing to proceed: stdin is not a TTY and -y/--yes was not passed. " +
+            "Pass --yes to accept the impact summary above.",
+          );
+          process.exit(1);
+        }
+        const proceed = await promptYesNo("Proceed?");
+        if (!proceed) {
+          console.log("Aborted. No changes were made.");
+          return;
+        }
+      }
       // Reindex is the slowest cfcf command -- the server runs
       // embedder.embed() in batches over every chunk in scope. For a
       // non-trivial corpus this is many seconds; spinner provides
@@ -1147,6 +1247,22 @@ function formatBytes(bytes: number): string {
     i++;
   }
   return `${value.toFixed(value < 10 ? 2 : value < 100 ? 1 : 0)} ${units[i]}`;
+}
+
+/**
+ * Tiny y/N prompt using `node:readline`. Returns true on `y` / `yes`;
+ * any other answer (including empty) is treated as no. Caller is
+ * responsible for ensuring stdin is a TTY before calling -- this just
+ * does the readline dance.
+ */
+async function promptYesNo(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`${question} [y/N] `, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
 }
 
 async function readStdin(): Promise<string> {

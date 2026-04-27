@@ -185,6 +185,50 @@ export class LocalClio implements MemoryBackend {
    * Read the active-embedder record. Exposed on the backend so HTTP +
    * CLI can surface it without reaching into private state.
    */
+  /**
+   * Pre-flight summary for switching the active embedder (or
+   * inspecting "what would happen if?"). Read-only: no DB writes.
+   * Optionally takes the user's currently-configured
+   * `clio.maxChunkChars` so the response can flag whether that value
+   * exceeds the new embedder's ceiling. 5.12+ follow-up. See
+   * `EmbedderSwitchImpact` for the field meanings.
+   */
+  previewEmbedderSwitch(
+    newName: string,
+    opts: { configMaxChunkChars?: number | null } = {},
+  ): import("./types.js").EmbedderSwitchImpact {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { findEmbedderEntry } = require("../embedders/catalogue.js") as typeof import("../embedders/catalogue.js");
+    const newEntry = findEmbedderEntry(newName);
+    if (!newEntry) throw new Error(`Unknown embedder "${newName}"`);
+    const current = this.getActiveEmbedderRecord();
+    const totalRow = this.db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM clio_chunks WHERE version_id IS NULL`,
+    ).get();
+    const embeddedRow = this.db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM clio_chunks
+        WHERE version_id IS NULL AND embedding IS NOT NULL`,
+    ).get();
+    const overRow = this.db.query<{ n: number }, [number]>(
+      `SELECT COUNT(*) AS n FROM clio_chunks
+        WHERE version_id IS NULL AND char_count > ?`,
+    ).get(newEntry.recommendedChunkMaxChars);
+    const configMax = opts.configMaxChunkChars ?? null;
+    return {
+      newName: newEntry.name,
+      newDim: newEntry.dim,
+      newRecommendedChunkMaxChars: newEntry.recommendedChunkMaxChars,
+      currentName: current?.name ?? null,
+      currentRecommendedChunkMaxChars: current?.recommendedChunkMaxChars ?? null,
+      totalChunkCount: totalRow?.n ?? 0,
+      embeddedChunkCount: embeddedRow?.n ?? 0,
+      chunksOverNewCeiling: overRow?.n ?? 0,
+      configMaxChunkChars: configMax,
+      configMaxOverCeiling:
+        configMax !== null && configMax > newEntry.recommendedChunkMaxChars,
+    };
+  }
+
   getActiveEmbedderRecord(): ActiveEmbedderRecord | null {
     return getActiveEmbedder(this.db);
   }
@@ -438,19 +482,16 @@ export class LocalClio implements MemoryBackend {
     const title = req.title;
     const embedder = await this.getEmbedder();
     // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
-    //   - max: embedder-recommended wins (context window matters more
-    //     than a hand-tuned global). FTS-only mode + no embedder →
-    //     IngestRequest.chunkMaxChars (server forwards from config) →
-    //     4000 default.
+    //   - The embedder's `recommendedChunkMaxChars` is a SAFETY CEILING
+    //     when an embedder is active -- inputs above that risk being
+    //     silently truncated by transformers.js to the model's
+    //     `model_max_length`, which silently degrades embedding
+    //     quality. We honour smaller user values; cap larger ones with
+    //     an explicit warning. Without an embedder there's no ceiling.
+    //   - max default 4000 (Cerefox parity).
     //   - min: IngestRequest.chunkMinChars (server forwards from
-    //     config) → 100 default. Caller-side; no embedder override.
-    const chunkOpts: { maxChunkChars?: number; minChunkChars?: number } = {};
-    if (embedder) {
-      chunkOpts.maxChunkChars = embedder.recommendedChunkMaxChars;
-    } else if (req.chunkMaxChars !== undefined) {
-      chunkOpts.maxChunkChars = req.chunkMaxChars;
-    }
-    if (req.chunkMinChars !== undefined) chunkOpts.minChunkChars = req.chunkMinChars;
+    //     config) → 100 default. Caller-side; no embedder ceiling.
+    const chunkOpts = resolveChunkOpts(req, embedder);
     const chunks = chunkMarkdown(req.content, chunkOpts);
     const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, title);
 
@@ -537,19 +578,16 @@ export class LocalClio implements MemoryBackend {
 
     const embedder = await this.getEmbedder();
     // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
-    //   - max: embedder-recommended wins (context window matters more
-    //     than a hand-tuned global). FTS-only mode + no embedder →
-    //     IngestRequest.chunkMaxChars (server forwards from config) →
-    //     4000 default.
+    //   - The embedder's `recommendedChunkMaxChars` is a SAFETY CEILING
+    //     when an embedder is active -- inputs above that risk being
+    //     silently truncated by transformers.js to the model's
+    //     `model_max_length`, which silently degrades embedding
+    //     quality. We honour smaller user values; cap larger ones with
+    //     an explicit warning. Without an embedder there's no ceiling.
+    //   - max default 4000 (Cerefox parity).
     //   - min: IngestRequest.chunkMinChars (server forwards from
-    //     config) → 100 default. Caller-side; no embedder override.
-    const chunkOpts: { maxChunkChars?: number; minChunkChars?: number } = {};
-    if (embedder) {
-      chunkOpts.maxChunkChars = embedder.recommendedChunkMaxChars;
-    } else if (req.chunkMaxChars !== undefined) {
-      chunkOpts.maxChunkChars = req.chunkMaxChars;
-    }
-    if (req.chunkMinChars !== undefined) chunkOpts.minChunkChars = req.chunkMinChars;
+    //     config) → 100 default. Caller-side; no embedder ceiling.
+    const chunkOpts = resolveChunkOpts(req, embedder);
     const chunks = chunkMarkdown(req.content, chunkOpts);
     const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, resolvedTitle);
 
@@ -2028,6 +2066,64 @@ export class LocalClio implements MemoryBackend {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
+
+// Default chunk-size knobs (Cerefox parity). Used when neither the
+// caller nor the active embedder supplies a value.
+const DEFAULT_CHUNK_MAX_CHARS = 4000;
+
+/**
+ * Resolve the chunker options for an ingest call. Implements the
+ * "embedder-recommended is a safety ceiling" rule:
+ *
+ *   - When no embedder is active: honour `req.chunkMaxChars` (or the
+ *     4000 default). No ceiling to enforce.
+ *   - When an embedder is active: cap `req.chunkMaxChars` at
+ *     `embedder.recommendedChunkMaxChars`. Smaller values are honoured
+ *     verbatim (smaller-is-safe, sometimes better for retrieval
+ *     precision). When capped, emit ONE stderr warning per ingest call
+ *     so a batch run doesn't spam.
+ *
+ * Decisions-log entry "Chunker ceiling" (2026-04-27) captures the
+ * rationale + the silent-truncation failure mode this guards against.
+ */
+function resolveChunkOpts(
+  req: IngestRequest,
+  embedder: Embedder | null,
+): { maxChunkChars?: number; minChunkChars?: number } {
+  const userMax = req.chunkMaxChars;
+  const ceiling = embedder?.recommendedChunkMaxChars;
+  let resolvedMax: number | undefined;
+  let capped = false;
+
+  if (userMax !== undefined && ceiling !== undefined) {
+    if (userMax > ceiling) {
+      resolvedMax = ceiling;
+      capped = true;
+    } else {
+      resolvedMax = userMax;
+    }
+  } else if (userMax !== undefined) {
+    resolvedMax = userMax;
+  } else if (ceiling !== undefined) {
+    resolvedMax = ceiling;
+  } else {
+    resolvedMax = DEFAULT_CHUNK_MAX_CHARS;
+  }
+
+  if (capped && embedder) {
+    process.stderr.write(
+      `[clio] warning: configured chunk size ${userMax} exceeds ${embedder.name}'s ` +
+      `recommended max (${ceiling}); capping. Larger inputs would be silently ` +
+      `truncated by the model and degrade embedding quality.\n`,
+    );
+  }
+
+  const out: { maxChunkChars?: number; minChunkChars?: number } = {
+    maxChunkChars: resolvedMax,
+  };
+  if (req.chunkMinChars !== undefined) out.minChunkChars = req.chunkMinChars;
+  return out;
+}
 
 /**
  * Clamp the hybrid-search alpha (vector vs FTS blend weight) to
