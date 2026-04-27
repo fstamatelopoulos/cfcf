@@ -33,9 +33,28 @@ OUT_DIR="${OUT_DIR:-$REPO_ROOT/dist}"
 
 PLATFORM="$("$SCRIPT_DIR/detect-platform.sh")"
 
+# ── Cache the libsqlite3 + sqlite-vec downloads/builds across runs ────
+#
+# stage-dist.sh wipes dist/ on every invocation, so the per-platform
+# native package gets rebuilt every time -- which means re-downloading
+# the SQLite amalgamation (~3 MB) + recompiling, plus re-downloading
+# the sqlite-vec release asset. The compiled binaries are
+# deterministic given a (version, platform) pair, so caching them in
+# ~/.cache/cfcf-build/ skips both the network and the compile on
+# subsequent runs.
+#
+# build-sqlite.sh + fetch-sqlite-vec.sh honour CFCF_BUILD_CACHE_DIR
+# when set; release.yml does NOT set it (CI runners are ephemeral and
+# the env var stays unset, preserving the original "fresh download
+# every time" behaviour with no risk of stale cache hits in releases).
+# Override the path with CFCF_BUILD_CACHE_DIR=<path> stage-dist.sh.
+export CFCF_BUILD_CACHE_DIR="${CFCF_BUILD_CACHE_DIR:-$HOME/.cache/cfcf-build}"
+mkdir -p "$CFCF_BUILD_CACHE_DIR"
+
 echo "[stage-dist] version:  $VERSION_INPUT (npm form: $VERSION)"
 echo "[stage-dist] platform: $PLATFORM"
 echo "[stage-dist] out:      $OUT_DIR"
+echo "[stage-dist] cache:    $CFCF_BUILD_CACHE_DIR"
 echo
 
 # Wipe the prior dist/ to avoid stale tarballs lingering. tsbuildinfo

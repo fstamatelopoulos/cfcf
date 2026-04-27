@@ -31,10 +31,30 @@ case "$PLATFORM" in
     exit 1 ;;
 esac
 
+mkdir -p "$OUT_DIR"
+dest="$OUT_DIR/sqlite-vec.${ext}"
+
+# ── Optional cache (CFCF_BUILD_CACHE_DIR) ─────────────────────────────
+# Local-dev speedup: stage-dist.sh sets CFCF_BUILD_CACHE_DIR; release.yml
+# does not. When set, we skip the GitHub Releases download (~3 MB
+# tarball + extract) on subsequent runs with the same (version, platform).
+# CI runs are unaffected because the env var is unset there.
+if [[ -n "${CFCF_BUILD_CACHE_DIR:-}" ]]; then
+  cache_dir="$CFCF_BUILD_CACHE_DIR/sqlite-vec/$SQLITE_VEC_VERSION/$PLATFORM"
+  if [[ -f "$cache_dir/sqlite-vec.${ext}" ]]; then
+    echo "[fetch-sqlite-vec] cache hit: $cache_dir/sqlite-vec.${ext} (sqlite-vec v$SQLITE_VEC_VERSION, $PLATFORM)"
+    cp "$cache_dir/sqlite-vec.${ext}" "$dest"
+    chmod +r "$dest"
+    bytes="$(wc -c < "$dest" | tr -d ' ')"
+    echo "[fetch-sqlite-vec] ✓ $dest  ($bytes bytes, from cache)"
+    exit 0
+  fi
+  echo "[fetch-sqlite-vec] cache miss: $cache_dir/sqlite-vec.${ext}"
+fi
+
 asset="sqlite-vec-${SQLITE_VEC_VERSION}-loadable-${sv_platform}.tar.gz"
 url="https://github.com/asg017/sqlite-vec/releases/download/v${SQLITE_VEC_VERSION}/${asset}"
 
-mkdir -p "$OUT_DIR"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -53,8 +73,18 @@ if [[ -z "$src" ]]; then
   exit 1
 fi
 
-dest="$OUT_DIR/sqlite-vec.${ext}"
+# `dest` was set up top to drive the cache lookup; reuse it here.
 cp "$src" "$dest"
 chmod +r "$dest"
+
+# Populate the cache after a successful fetch + extract so the next
+# invocation with the same (version, platform) gets a cache hit.
+# Only fires when CFCF_BUILD_CACHE_DIR is set.
+if [[ -n "${CFCF_BUILD_CACHE_DIR:-}" ]]; then
+  mkdir -p "$cache_dir"
+  cp "$dest" "$cache_dir/sqlite-vec.${ext}"
+  echo "[fetch-sqlite-vec] cached: $cache_dir/sqlite-vec.${ext}"
+fi
+
 bytes="$(wc -c < "$dest" | tr -d ' ')"
 echo "[fetch-sqlite-vec] ✓ $dest  ($bytes bytes, sqlite-vec v${SQLITE_VEC_VERSION})"
