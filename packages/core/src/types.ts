@@ -146,6 +146,51 @@ export interface ClioGlobalConfig {
    * "Hybrid search threshold" for rationale + calibration notes.
    */
   minSearchScore?: number;
+  /**
+   * Hybrid-search blend weight (0.0–1.0). Mirrors Cerefox's `p_alpha`
+   * RPC parameter. The fused score is:
+   *   score = α × normalised_vec_score + (1 − α) × normalised_fts_score
+   * Higher α biases toward semantic similarity; lower α biases toward
+   * keyword (FTS) match. Defaults to 0.7 (Cerefox parity). Per-call
+   * value (`?alpha=` query param / `--alpha` CLI flag) wins over this
+   * config. See `docs/decisions-log.md` 2026-04-27 "Hybrid algorithm:
+   * RRF → alpha-weighted score blending" for the BM25 renormalisation
+   * + algorithm rationale.
+   */
+  hybridAlpha?: number;
+  /**
+   * Per-document chunker target maximum chars. Mirrors Cerefox's
+   * `CEREFOX_MAX_CHUNK_CHARS`. Defaults to 4000. Per-embedder
+   * `recommendedChunkMaxChars` (from the catalogue) overrides this
+   * when an embedder is active -- the embedder's context window
+   * generally produces better retrieval quality than a hand-tuned
+   * global default. Set this to bias new ingests toward smaller /
+   * larger chunks regardless of embedder.
+   */
+  maxChunkChars?: number;
+  /**
+   * Minimum chunk size in chars. Pieces smaller than this are merged
+   * into the previous chunk during oversized-section splitting.
+   * Mirrors Cerefox's `CEREFOX_MIN_CHUNK_CHARS`. Defaults to 100.
+   */
+  minChunkChars?: number;
+  /**
+   * Document-size threshold (chars) for the search "small-to-big"
+   * decision. Documents whose live content is at most this size get
+   * the FULL doc returned in `bestChunkContent` of every search hit;
+   * larger docs get the matched chunk + `contextWindow` neighbours on
+   * each side. Mirrors Cerefox's `p_small_to_big_threshold`. Default
+   * 20000. Set to 0 to disable the small-doc-full-content path
+   * (always return chunk + neighbours).
+   */
+  smallDocThreshold?: number;
+  /**
+   * Context window for large-doc search hits: how many sibling chunks
+   * to include on each side of the matched chunk. Mirrors Cerefox's
+   * `p_context_window`. Default 1 (3-chunk window: prev + match +
+   * next). Set to 0 to return only the matched chunk.
+   */
+  contextWindow?: number;
 }
 
 export type ReadinessGate = NonNullable<CfcfGlobalConfig["readinessGate"]>;

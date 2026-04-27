@@ -9,6 +9,76 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+This entry covers everything on the `iteration-5/clio-update-api` branch — items **5.11** (update-doc API + version snapshots), **5.12** (agent-parity API surface), **5.13** (audit log + soft-delete), plus a Cerefox-parity audit pass that landed several follow-ups. Targeted version: v0.11.0.
+
+### Cerefox-parity, agent-facing search
+
+- **Doc-level search is now the default.** `cfcf clio search` returns one row per matching document (Cerefox parity), with `versionCount` + `matchingChunks` + `isPartial` + the best-scoring chunk's content per hit. `--by-chunk` falls back to the raw chunk-level view for debugging or callers that need the engine's per-chunk ranking explicitly. HTTP: `GET /api/clio/search?by=doc` (default) / `?by=chunk`.
+- **Hybrid search switched from RRF to α-weighted score blending** (`α × cosine + (1−α) × normalised_BM25`, default α=0.7). Min-max normalisation of FTS5's BM25 score within the candidate pool makes it comparable to cosine. Per-call `--alpha` / `?alpha=` overrides; global `clio.hybridAlpha`.
+- **Small-to-big retrieval is now per-document** (Cerefox parity). Documents whose `total_chars` is at most `clio.smallDocThreshold` (default 20000) return the FULL document content per hit; larger documents return matched chunk + `clio.contextWindow` (default 1) neighbours. New `isPartial: bool` field on `DocumentSearchHit`. Per-call `--small-doc-threshold` / `--context-window` overrides.
+
+### Update-doc API + versioning + soft-delete (5.11)
+
+- **`cfcf clio ingest --document-id <uuid>`** — deterministic update by UUID; preserves existing title/author/metadata when the caller omits them.
+- **`cfcf clio ingest --update-if-exists`** — title-based update; matches by exact title within the same Project, falls through to create on miss.
+- **`IngestResult.action`** — `"created" | "updated" | "skipped"`. Legacy `created: boolean` kept for backward compat.
+- **Version snapshots** — every update path archives prior chunks into `clio_document_versions`; `version_id IS NULL` on a chunk means "live".
+- **`cfcf clio versions <doc-id>`** + `GET /api/clio/documents/:id/versions` — list archived versions.
+- **`cfcf clio get <doc-id> [--version-id <uuid>]`** + `GET /api/clio/documents/:id/content?version_id=<uuid>` — reconstruct full content for live or archived versions.
+- **`cfcf clio delete <id>` / `cfcf clio restore <id>`** + `DELETE` / `POST /api/clio/documents/:id/restore` — soft-delete + restore (idempotent). `cfcf clio docs list [--include-deleted | --deleted-only]` with `[DELETED]` prefix on tombstones.
+
+### Agent-parity API surface (5.12)
+
+- **`author` is a typed first-class column** on `clio_documents`. Surfaced in search hits, listings, and version rows. Default `'agent'`.
+- **Search-result `[id: <full-uuid>]` rendering** (CLI + audit + docs list) so agents can copy-paste doc IDs into follow-up `--document-id` updates without manual lookup.
+- **`cfcf clio metadata-search`** + `POST /api/clio/metadata-search` — exact-match metadata filter (no FTS query required); supports `updated_since` for catch-up workflows.
+- **`cfcf clio metadata-keys`** + `GET /api/clio/metadata-keys` — discover which metadata keys + sample values exist in the corpus.
+- **Pre-flight warnings on embedder switch** — new `GET /api/clio/embedders/:name/switch-impact` returns `embeddedChunkCount` + `chunksOverNewCeiling` + `configMaxOverCeiling`. CLI prompts y/N (refuses in non-TTY without `--yes`) when any signal fires.
+- **Confirmation prompt on `cfcf clio reindex`** — shows active embedder + scope + cost hint before running. `--yes` skips for non-interactive use.
+- **Embedder-recommended chunk size acts as a SAFETY CEILING.** Smaller user `clio.maxChunkChars` values are honoured; larger values are capped at the active embedder's recommendation with a stderr warning at ingest. Without an embedder, no ceiling.
+
+### Audit log (5.13)
+
+- **`cfcf clio audit`** + `GET /api/clio/audit-log` — query mutation events (`create` / `update-content` / `edit-metadata` / `delete` / `restore` / `migrate-project`) with filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`.
+- Write-only by design. Reads (search, get, list) intentionally not logged — would dwarf real mutation entries; the trust story is "who changed what". Cerefox precedent.
+- Audit writes are best-effort, outside the mutation transaction. A failure warns to stderr without rolling back the underlying operation.
+
+### Metadata-only edit (5.13 follow-up, Cerefox parity)
+
+- **`cfcf clio docs edit <id>`** + `PATCH /api/clio/documents/:id` — mutate `title`, `author`, Clio Project, and metadata WITHOUT re-ingesting content. Closes the last Cerefox-parity gap: previously the only way to change these fields was a full content update, which forced a version snapshot for what isn't a content change.
+- **No version snapshot is taken** on metadata edits. Versions exist to protect chunks/content from accidental overwrite; metadata edits don't touch chunks. The audit log carries a before/after diff under one `edit-metadata` row.
+- **Set/unset metadata semantics** (`--set-meta key=value`, `--unset-meta key`) — incremental rather than full-blob replace. Avoids the read-modify-write footgun where an agent accidentally drops keys it didn't know about. A future `CerefoxRemote` adapter can reconstruct the full blob from these deltas at the abstraction boundary if upstream demands it.
+- **Idempotent**: an edit that makes no actual changes is a no-op (no audit row, no `updated_at` bump). Useful for agents that re-apply the same set/unset on every iteration.
+- Move docs between Projects via `--project <name>` (or `projectName` / `projectId` in the JSON body). Closes the gap that previously required either a SQL one-liner or a delete-and-reingest dance.
+
+### Configuration knobs (`ClioGlobalConfig`)
+
+New fields, all editable via the Web UI Server Info page:
+
+- `hybridAlpha` (default 0.7)
+- `smallDocThreshold` (default 20000)
+- `contextWindow` (default 1)
+- `maxChunkChars` (default 4000) — capped at the active embedder's `recommendedChunkMaxChars` when one is active
+- `minChunkChars` (default 100)
+
+### CLI ergonomics
+
+- **Stderr spinners** on the slow embedder-bound paths: `cfcf clio ingest`, `cfcf clio reindex`, `cfcf clio embedder set --reindex`. TTY-only; suppressed under `--json`.
+- **`docs list` shows `versions=N`** when N > 0, plus `[DELETED]` prefix + restore hint for tombstones. `--deleted-only` for the trash-bin view.
+- **Project names surfaced consistently** in `cfcf clio search` (was missing entirely), `docs list`, `metadata-search`, `get`, and `ingest` result rendering. Display format: `<name> [<id>]` so the human-friendly name is primary and the UUID stays available for scripts that want to copy it. Powered by a new optional `ClioDocument.projectName` field populated via SQL JOIN on read paths.
+- **Version banner unified.** `cfcf --version`, `cfcf server start`, `cfcf server status`, and `GET /api/health` all report the same string, resolved at runtime from the installed package's `package.json` (or workspace's `package.json` with `-dev` suffix in source mode).
+
+### Schema + tooling
+
+- **Migration runner** gained an explicit `-- @migration-flags: disable-foreign-keys` marker for the rare cases where a migration drops + rebuilds a parent table with `ON DELETE CASCADE` children. The pragma is bracketed outside the wrapping transaction (the only place it takes effect).
+- **Migrations consolidated** to a single `0001_initial.sql` representing the v0.11.0 schema. Pre-public housekeeping; future migrations are forward-only.
+- **`cfcf server stop` waits** for the server's HTTP port to actually free + the OS process to exit before returning, so a follow-up `cfcf server start` doesn't race for the port.
+
+### Out of scope (tracked for iter-6)
+
+- **6.22**: on-demand version retention cleanup (`cfcf clio cleanup-versions`).
+- **6.23**: re-chunk on embedder switch (`cfcf clio reindex --rechunk`).
+
 ## [0.10.0] -- 2026-04-26
 
 This release ships the **installer + distribution rewrite (item 5.5)**, a UX polish for re-running `cfcf init --force` (item 6.21), and the post-pivot dogfood fixes that surfaced when the new install was exercised on Intel Mac. Plan item 6.17 (Clio update-doc API) was newly flagged and prioritised but not implemented in this release.

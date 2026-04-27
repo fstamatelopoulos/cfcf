@@ -2,14 +2,80 @@
  * Constants and defaults for cfcf.
  */
 
+import { readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
 /** Default server port */
 export const DEFAULT_PORT = 7233;
 
-/** cfcf version (updated on release; must match package.json) */
-export const VERSION = "0.10.0";
+/**
+ * Read the running cfcf version once at module load. Single source of
+ * truth: every caller (`cfcf --version`, `cfcf server start`,
+ * `/api/health`, `/api/status`) ends up agreeing.
+ *
+ * Resolution order (first match wins):
+ *   1. **Installed mode**: `@cerefox/cfcf-cli/package.json` via
+ *      `require.resolve` (the published package; `bun install -g` puts
+ *      it in the global node_modules tree). Returns the published
+ *      version verbatim.
+ *   2. **Bundled relative**: `../package.json` next to `import.meta.url`.
+ *      In a bundled install (`dist/cfcf.js` → `package.json` is the
+ *      sibling of `dist/`) this is the same file as #1; this branch
+ *      catches the case where the package isn't reachable as a named
+ *      import (e.g. an unusual install layout).
+ *   3. **Dev-mode workspace**: `../../package.json` (from
+ *      `packages/core/src/constants.ts` → `packages/core/package.json`).
+ *      Bun workspaces don't materialize @cfcf/core in node_modules, so
+ *      `require.resolve("@cfcf/core/package.json")` doesn't work. The
+ *      relative-path fallback is the dev-mode escape hatch. Suffixed
+ *      `-dev` so the binary is visibly distinguishable from a release.
+ *   4. **Last resort**: `"0.0.0-unknown"` -- the bundler somehow stripped
+ *      every package.json (shouldn't happen in practice).
+ *
+ * Previous behaviour was a hardcoded `"0.10.0"` constant that drifted
+ * from the actual installed version (caught 2026-04-27: `cfcf
+ * --version` showed "0.0.0-dev" but `cfcf server start` showed
+ * "v0.10.0").
+ */
+function resolveVersion(): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createRequire } = require("node:module") as typeof import("node:module");
+  const req = createRequire(import.meta.url);
+
+  // 1. Installed mode: the published name is reachable via the named
+  //    import. Bun workspaces don't materialise `@cfcf/*` in
+  //    node_modules so this branch only fires post-`bun install -g`.
+  try {
+    const pkgPath = req.resolve("@cerefox/cfcf-cli/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    if (typeof pkg.version === "string") return pkg.version;
+  } catch { /* fall through */ }
+
+  // 2. Walk up from `import.meta.url` looking for the nearest
+  //    package.json. The relative path differs between bundled (dist/)
+  //    and unbundled (src/) layouts -- we try a few candidates.
+  //    Discriminate by the `name` field: `@cerefox/cfcf-cli` = installed,
+  //    `@cfcf/*` = dev workspace (suffix `-dev`). This catches odd
+  //    installs where the named-import path didn't resolve, and gives
+  //    `bun run dev:cli` a clean dev-mode label.
+  for (const candidate of ["../package.json", "../../package.json", "../../../package.json"]) {
+    try {
+      const url = new URL(candidate, import.meta.url).pathname;
+      const pkg = JSON.parse(readFileSync(url, "utf8"));
+      if (typeof pkg.version !== "string") continue;
+      if (pkg.name === "@cerefox/cfcf-cli") return pkg.version;
+      if (typeof pkg.name === "string" && pkg.name.startsWith("@cfcf/")) {
+        return `${pkg.version}-dev`;
+      }
+    } catch { /* try next candidate */ }
+  }
+
+  return "0.0.0-unknown";
+}
+
+/** cfcf version (resolved once at module load; see resolveVersion above). */
+export const VERSION = resolveVersion();
 
 /** Config file format version */
 export const CONFIG_VERSION = 1;

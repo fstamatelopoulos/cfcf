@@ -7,6 +7,26 @@ import { DEFAULT_PORT, VERSION } from "@cfcf/core";
 import { readPidFile, isProcessRunning, removePidFile, writePidFile } from "@cfcf/core";
 import { get, isServerReachable, post } from "../client.js";
 
+/**
+ * Wait until the cfcf server has actually exited: the HTTP port is
+ * unreachable AND (when we know the pid) the OS process is gone. Used
+ * by `cfcf server stop` so a follow-up `cfcf server start` doesn't
+ * race the prior process for port 7233.
+ *
+ * Caps at ~3 seconds so a stuck server doesn't hang the CLI; if we
+ * time out, downstream code falls through to the PID-file fallback
+ * which can SIGTERM/SIGKILL the stragglers.
+ */
+async function waitForServerToExit(pid?: number): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const portFree = !(await isServerReachable());
+    const procDead = pid === undefined ? true : !isProcessRunning(pid);
+    if (portFree && procDead) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 export function registerServerCommands(program: Command): void {
   const server = program
     .command("server")
@@ -89,8 +109,15 @@ export function registerServerCommands(program: Command): void {
         const res = await post("/api/shutdown");
         if (res.ok) {
           console.log("cfcf server is shutting down...");
-          // Wait briefly then verify
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          // Wait until the server has actually released the port AND
+          // the OS process has exited. A fixed sleep (the previous 500ms)
+          // races: the server's event loop may still be holding the
+          // listening socket when stop returns, so an immediate `cfcf
+          // server start` would fail to bind port 7233. Poll instead.
+          // Cap at ~3s -- well under the 5s start-readiness budget on
+          // the next invocation.
+          const pidInfo = await readPidFile();
+          await waitForServerToExit(pidInfo?.pid);
           await removePidFile();
           console.log("cfcf server stopped.");
           return;
@@ -101,6 +128,7 @@ export function registerServerCommands(program: Command): void {
       const pidInfo = await readPidFile();
       if (pidInfo && isProcessRunning(pidInfo.pid)) {
         process.kill(pidInfo.pid, "SIGTERM");
+        await waitForServerToExit(pidInfo.pid);
         await removePidFile();
         console.log(`cfcf server stopped (pid: ${pidInfo.pid})`);
         return;

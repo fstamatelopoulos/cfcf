@@ -409,13 +409,17 @@ Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md
 
 ```bash
 # Search. Modes: fts | hybrid | semantic. Default mode is auto:
-#   - active embedder present → hybrid (RRF over FTS + vector)
+#   - active embedder present → hybrid (α-weighted blend of cosine + normalised BM25)
 #   - no active embedder      → fts
 # Override per-call with --mode, or set clio.defaultSearchMode in the
 # global config (visible + editable in the Web UI's Server Info page).
-cfcf clio search "flaky auth tests"
+cfcf clio search "flaky auth tests"                              # default: one row per matching DOC (Cerefox parity)
+cfcf clio search "flaky auth tests" --by-chunk                   # legacy raw view: one row per matching CHUNK
 cfcf clio search "flaky auth tests" --mode hybrid                # force a mode
 cfcf clio search "flaky auth tests" --min-score 0.4              # widen vector recall (default 0.5)
+cfcf clio search "flaky auth tests" --alpha 0.3                  # bias toward keyword (default 0.7 = bias toward semantic)
+cfcf clio search "flaky auth tests" --small-doc-threshold 0      # disable full-doc-for-small-docs path
+cfcf clio search "flaky auth tests" --context-window 2           # widen the chunk window in the large-doc path (default 1)
 cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
                                     --metadata '{"role":"reflection"}' --json
 
@@ -423,9 +427,47 @@ cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
 cfcf clio ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
 cat note.md | cfcf clio ingest --stdin --project cf-ecosystem --title "Note"
 
+# Update an existing doc instead of creating a new one (item 5.11):
+#   --update-if-exists matches by title within the same Project
+#   --document-id <uuid> is the deterministic update path (wins if both passed)
+# When an update happens, the prior content is snapshotted into a version row;
+# recall it with `cfcf clio get <id> --version-id <uuid>`.
+cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --update-if-exists --author claude-code
+cfcf clio ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
+
 # Browse / retrieve
-cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--json]   # newest first
-cfcf clio get <document-id> [--json]
+cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted | --deleted-only] [--json]
+cfcf clio get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
+cfcf clio versions <document-id> [--json]                                   # archived version history
+
+# Metadata-only search + discovery (5.12, Cerefox parity)
+cfcf clio metadata-search --filter '{"role":"reflection"}' [--updated-since 2026-04-01T00:00:00Z] [--project <name>] [--include-deleted]
+cfcf clio metadata-keys [--project <name>]                                  # what keys + sample values exist
+
+# Soft-delete + restore (5.11, Cerefox parity)
+cfcf clio delete <document-id> [--author <name>]                            # excludes from search; restorable
+cfcf clio restore <document-id> [--author <name>]                           # idempotent
+
+# Metadata-only edit (5.13 follow-up, Cerefox parity)
+# Mutate title / author / Clio Project / metadata WITHOUT re-ingesting content.
+# No version snapshot is taken (versions exist to protect chunks). One audit row
+# per non-empty edit, with a before/after diff.
+cfcf clio docs edit <document-id> \
+    [--title "..."]               # rename
+    [--author "..."]              # set/clear author (empty string clears to 'agent')
+    [--project <name>]            # move to a different Clio Project (by name or UUID)
+    [--set-meta key=value ...]    # incremental metadata add/overwrite (repeatable)
+    [--unset-meta key ...]        # incremental metadata removal (repeatable)
+    [--actor <name>]              # audit-log attribution; defaults to 'agent'
+    [--json]
+# Examples
+cfcf clio docs edit 8a3f… --title "Decisions log (renamed)"
+cfcf clio docs edit 8a3f… --project cfcf
+cfcf clio docs edit 8a3f… --set-meta reviewed_by=fotis --set-meta status=approved --unset-meta draft
+
+# Audit log (5.13)
+cfcf clio audit [--event-type create|update-content|edit-metadata|delete|restore|migrate-project] \
+                [--actor <name>] [--project <p>] [--document-id <id>] [--since <iso>] [--limit 100] [--json]
 
 # Projects (grouping of workspaces by knowledge domain)
 cfcf clio projects [--json]
@@ -438,13 +480,16 @@ cfcf clio embedder list                            # catalogue with active marke
 cfcf clio embedder active                          # current active embedder (or "none")
 cfcf clio embedder install                         # uses clio.preferredEmbedder from config
 cfcf clio embedder install nomic-embed-text-v1.5   # explicit
-cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks
+cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks under the new model
 cfcf clio embedder set <name> --force              # recovery only; degrades vector search until reindex
+cfcf clio embedder set <name>                      # prompts y/N with impact summary (existing-embedding mismatch,
+                                                   #   chunks-over-new-ceiling, config-max-over-ceiling).
+                                                   #   In non-TTY: refuses unless -y/--yes is passed.
 
-# Re-embed existing chunks under the active embedder. Idempotent
-# (skips chunks already matching). Pair with `embedder set --reindex`
-# for the canonical switch flow.
-cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [--json]
+# Re-embed existing chunks under the active embedder. Prompts y/N with
+# the active embedder + scope before running; pass -y/--yes for non-
+# interactive use. Idempotent (skips chunks already matching).
+cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [-y|--yes] [--json]
 
 # Introspection
 cfcf clio stats [--json]

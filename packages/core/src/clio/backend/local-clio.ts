@@ -16,14 +16,28 @@ import { chunkMarkdown } from "../chunking/markdown.js";
 import type {
   ClioProject,
   ClioDocument,
+  ClioDocumentVersion,
+  EditDocumentRequest,
   IngestRequest,
   IngestResult,
   SearchRequest,
   SearchResponse,
   SearchHit,
+  DocumentSearchResponse,
+  DocumentSearchHit,
   ClioStats,
 } from "../types.js";
-import type { MemoryBackend, ReindexOptions, ReindexResult } from "./types.js";
+import type {
+  MemoryBackend,
+  ReindexOptions,
+  ReindexResult,
+  DocumentContent,
+  MetadataSearchRequest,
+  MetadataSearchResponse,
+  MetadataKeyInfo,
+  AuditLogQuery,
+} from "./types.js";
+import type { ClioAuditEntry } from "../types.js";
 import {
   getActiveEmbedder,
   embeddingToBlob,
@@ -40,6 +54,27 @@ const FTS_CANDIDATE_MULTIPLIER = 5;
 // UUID v4 pattern (loose). Used to distinguish "project id" from "project name".
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Row shape returned when SELECTing from `clio_documents`. */
+interface DocumentRow {
+  id: string;
+  project_id: string;
+  title: string;
+  source: string;
+  author: string;
+  content_hash: string;
+  metadata: string;
+  review_status: string;
+  chunk_count: number;
+  total_chars: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  /** Optional: present when the SELECT joins on clio_document_versions. */
+  version_count?: number;
+  /** Optional: present when the SELECT joins on clio_projects. */
+  project_name?: string;
+}
+
 /** Row shape returned by the candidate-fetching queries in hybrid / semantic search. */
 interface VectorCandidateRow {
   chunk_id: string;
@@ -52,6 +87,7 @@ interface VectorCandidateRow {
   embedding: Uint8Array | null;
   doc_title: string;
   doc_source: string;
+  doc_author: string;
   doc_project_id: string;
   doc_project_name: string;
   doc_metadata: string;
@@ -152,6 +188,50 @@ export class LocalClio implements MemoryBackend {
    * Read the active-embedder record. Exposed on the backend so HTTP +
    * CLI can surface it without reaching into private state.
    */
+  /**
+   * Pre-flight summary for switching the active embedder (or
+   * inspecting "what would happen if?"). Read-only: no DB writes.
+   * Optionally takes the user's currently-configured
+   * `clio.maxChunkChars` so the response can flag whether that value
+   * exceeds the new embedder's ceiling. 5.12+ follow-up. See
+   * `EmbedderSwitchImpact` for the field meanings.
+   */
+  previewEmbedderSwitch(
+    newName: string,
+    opts: { configMaxChunkChars?: number | null } = {},
+  ): import("./types.js").EmbedderSwitchImpact {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { findEmbedderEntry } = require("../embedders/catalogue.js") as typeof import("../embedders/catalogue.js");
+    const newEntry = findEmbedderEntry(newName);
+    if (!newEntry) throw new Error(`Unknown embedder "${newName}"`);
+    const current = this.getActiveEmbedderRecord();
+    const totalRow = this.db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM clio_chunks WHERE version_id IS NULL`,
+    ).get();
+    const embeddedRow = this.db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM clio_chunks
+        WHERE version_id IS NULL AND embedding IS NOT NULL`,
+    ).get();
+    const overRow = this.db.query<{ n: number }, [number]>(
+      `SELECT COUNT(*) AS n FROM clio_chunks
+        WHERE version_id IS NULL AND char_count > ?`,
+    ).get(newEntry.recommendedChunkMaxChars);
+    const configMax = opts.configMaxChunkChars ?? null;
+    return {
+      newName: newEntry.name,
+      newDim: newEntry.dim,
+      newRecommendedChunkMaxChars: newEntry.recommendedChunkMaxChars,
+      currentName: current?.name ?? null,
+      currentRecommendedChunkMaxChars: current?.recommendedChunkMaxChars ?? null,
+      totalChunkCount: totalRow?.n ?? 0,
+      embeddedChunkCount: embeddedRow?.n ?? 0,
+      chunksOverNewCeiling: overRow?.n ?? 0,
+      configMaxChunkChars: configMax,
+      configMaxOverCeiling:
+        configMax !== null && configMax > newEntry.recommendedChunkMaxChars,
+    };
+  }
+
   getActiveEmbedderRecord(): ActiveEmbedderRecord | null {
     return getActiveEmbedder(this.db);
   }
@@ -273,86 +353,170 @@ export class LocalClio implements MemoryBackend {
     if (!req.content || !req.content.trim()) {
       throw new Error("ingest: content is empty");
     }
-    if (!req.title || !req.title.trim()) {
-      throw new Error("ingest: title is empty");
-    }
+    // Title is required for create paths. On `--document-id` updates
+    // (Branch 1 below) we may take the existing doc's title -- so the
+    // emptiness check moves into the create-path resolver instead of
+    // here.
 
     // Resolve (or auto-create) the Project. The caller is expected to
     // pass a slug; UUID inputs skip auto-create (see resolveProject).
     const project = await this.resolveProject(req.project, { createIfMissing: true });
-
     const contentHash = sha256Hex(req.content);
 
-    // Dedup by content_hash across the whole DB (same as Cerefox).
-    const existingRow = this.db.query<
-      {
-        id: string;
-        project_id: string;
-        title: string;
-        source: string;
-        content_hash: string;
-        metadata: string;
-        review_status: string;
-        chunk_count: number;
-        total_chars: number;
-        created_at: string;
-        updated_at: string;
-        deleted_at: string | null;
-      },
-      [string]
-    >(`SELECT * FROM clio_documents WHERE content_hash = ? LIMIT 1`).get(contentHash);
+    // The audit-write call lives at the bottom of this function so a
+    // single mutation produces a single audit row regardless of which
+    // branch ran. We also surface IngestRequest.author into every
+    // entry's `actor` column for write attribution (5.12 + 5.13).
+    const actor = req.author?.trim() || "agent";
+
+    // ── Branch 1: update by document_id (deterministic). ──────────────
+    //
+    // Mirrors Cerefox's `cerefox_ingest(document_id=...)`. The caller
+    // explicitly named which document to update; we error if it's
+    // missing or soft-deleted rather than silently fall through to a
+    // create. `updateIfExists` is overridden when both are passed.
+    if (req.documentId) {
+      const target = await this.getDocument(req.documentId);
+      if (!target || target.deletedAt) {
+        throw new Error(`ingest: document_id "${req.documentId}" not found`);
+      }
+      const result = await this.updateDocument(target, req, contentHash);
+      if (req.updateIfExists) {
+        result.note = "documentId provided; updateIfExists flag was overridden";
+      }
+      this.writeAudit({
+        eventType: "update-content",
+        actor,
+        projectId: result.document.projectId,
+        documentId: result.id,
+        metadata: {
+          version_id: result.versionId,
+          version_number: result.versionNumber,
+          chunks: result.chunksInserted,
+          total_chars: result.document.totalChars,
+          title_preserved: req.title === undefined,
+          author_preserved: req.author === undefined,
+        },
+      });
+      return result;
+    }
+
+    // ── Branch 2: update by title (within same Project). ──────────────
+    //
+    // Mirrors Cerefox's `update_if_exists`. Looks up by exact title in
+    // the resolved Project; on hit, snapshot+replace; on miss, fall
+    // through to the create path.
+    if (req.updateIfExists) {
+      // Title is the lookup key for this branch -- required.
+      if (!req.title || !req.title.trim()) {
+        throw new Error("ingest: title is required when --update-if-exists is set");
+      }
+      const existing = await this.findDocumentByTitle(project.id, req.title);
+      if (existing) {
+        const result = await this.updateDocument(existing, req, contentHash);
+        this.writeAudit({
+          eventType: "update-content",
+          actor,
+          projectId: result.document.projectId,
+          documentId: result.id,
+          metadata: {
+            version_id: result.versionId,
+            version_number: result.versionNumber,
+            chunks: result.chunksInserted,
+            total_chars: result.document.totalChars,
+            matched_by: "title",
+          },
+        });
+        return result;
+      }
+      // Fall through to create.
+    }
+
+    // ── Branch 3: dedup by content_hash. ──────────────────────────────
+    //
+    // PR1 behaviour: if the exact same content already lives in Clio
+    // under any document, skip and return the existing record. The
+    // caller can opt out of this dedup by passing `updateIfExists` or
+    // `documentId` (both branches above bypass this lookup).
+    const existingRow = this.db.query<DocumentRow, [string]>(
+      `SELECT * FROM clio_documents WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1`,
+    ).get(contentHash);
     if (existingRow) {
       return {
         id: existingRow.id,
+        action: "skipped",
         created: false,
         document: this.mapDocument(existingRow),
         chunksInserted: 0,
       };
     }
 
-    // Use embedder-aware chunk size when an embedder is active; fall back
-    // to the Cerefox default when not.
+    // ── Branch 4: create. ─────────────────────────────────────────────
+    const created = await this.createDocument(project.id, req, contentHash);
+    this.writeAudit({
+      eventType: "create",
+      actor,
+      projectId: created.document.projectId,
+      documentId: created.id,
+      metadata: {
+        chunks: created.chunksInserted,
+        total_chars: created.document.totalChars,
+      },
+    });
+    return created;
+  }
+
+  // ── Ingest helpers (5.11) ──────────────────────────────────────────────
+
+  /**
+   * Insert a brand-new document + its chunks. Embeds chunks before
+   * opening the write transaction so we don't hold a write lock during
+   * the (slow) embedder call.
+   */
+  private async createDocument(
+    projectId: string,
+    req: IngestRequest,
+    contentHash: string,
+  ): Promise<IngestResult> {
+    // Title is required on create paths (no existing doc to inherit from).
+    if (!req.title || !req.title.trim()) {
+      throw new Error("ingest: title is required when creating a new document");
+    }
+    const title = req.title;
     const embedder = await this.getEmbedder();
-    const chunkOpts = embedder
-      ? { maxChunkChars: embedder.recommendedChunkMaxChars }
-      : undefined;
+    // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
+    //   - The embedder's `recommendedChunkMaxChars` is a SAFETY CEILING
+    //     when an embedder is active -- inputs above that risk being
+    //     silently truncated by transformers.js to the model's
+    //     `model_max_length`, which silently degrades embedding
+    //     quality. We honour smaller user values; cap larger ones with
+    //     an explicit warning. Without an embedder there's no ceiling.
+    //   - max default 4000 (Cerefox parity).
+    //   - min: IngestRequest.chunkMinChars (server forwards from
+    //     config) → 100 default. Caller-side; no embedder ceiling.
+    const chunkOpts = resolveChunkOpts(req, embedder);
     const chunks = chunkMarkdown(req.content, chunkOpts);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, title);
+
     const docId = randomUUID();
     const now = new Date().toISOString();
     const metadata = JSON.stringify(req.metadata ?? {});
     const totalChars = req.content.length;
 
-    // Compute embeddings up front (outside the transaction). Embedding
-    // is the slow part; we don't want to hold a write lock during it.
-    let embeddings: Uint8Array[] | null = null;
-    if (embedder && chunks.length > 0) {
-      try {
-        const texts = chunks.map((c) => c.content);
-        const vectors = await embedder.embed(texts);
-        embeddings = vectors.map((v) => embeddingToBlob(v));
-      } catch (err) {
-        // Embedding failure downgrades to FTS-only for this document.
-        // Chunks still index in FTS5; vector search just won't match them.
-        console.warn(
-          `[clio] embedder failed for "${req.title}" -- ingesting without embeddings: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        embeddings = null;
-      }
-    }
-
-    // All-or-nothing: document + chunks insert in one transaction.
+    const author = req.author?.trim() || "agent";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare(`
         INSERT INTO clio_documents
-          (id, project_id, title, source, content_hash, metadata, review_status,
+          (id, project_id, title, source, author, content_hash, metadata, review_status,
            chunk_count, total_chars, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         docId,
-        project.id,
-        req.title,
+        projectId,
+        title,
         req.source ?? "manual",
+        author,
         contentHash,
         metadata,
         req.reviewStatus ?? "approved",
@@ -361,33 +525,7 @@ export class LocalClio implements MemoryBackend {
         now,
         now,
       );
-
-      const insertChunk = this.db.prepare(`
-        INSERT INTO clio_chunks
-          (id, document_id, chunk_index, heading_path, heading_level, title,
-           content, char_count, embedding, embedder, embedding_dim, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const emb = embeddings ? embeddings[i] : null;
-        insertChunk.run(
-          randomUUID(),
-          docId,
-          chunk.chunkIndex,
-          JSON.stringify(chunk.headingPath),
-          chunk.headingLevel,
-          chunk.title || null,
-          chunk.content,
-          chunk.charCount,
-          emb,
-          embedder ? embedder.name : null,
-          embedder ? embedder.dim : null,
-          now,
-          now,
-        );
-      }
-
+      this.insertChunkBatch(docId, chunks, embeddings, embedder, now);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
@@ -396,31 +534,349 @@ export class LocalClio implements MemoryBackend {
 
     const doc = await this.getDocument(docId);
     if (!doc) throw new Error(`Clio ingest wrote doc ${docId} but could not read it back`);
-    return { id: docId, created: true, document: doc, chunksInserted: chunks.length };
+    return {
+      id: docId,
+      action: "created",
+      created: true,
+      document: doc,
+      chunksInserted: chunks.length,
+    };
+  }
+
+  /**
+   * Snapshot the existing live chunks into a new version row, then
+   * replace them with new chunks from `req.content`. Mirrors Cerefox's
+   * `cerefox_ingest_document` UPDATE branch (rpcs.sql) which delegates
+   * to `cerefox_snapshot_version` for the archive-prior-chunks step.
+   *
+   * Embedding is done before the transaction (same reasoning as
+   * createDocument). The transaction holds:
+   *   1. INSERT clio_document_versions row   (the snapshot record)
+   *   2. UPDATE clio_chunks SET version_id = <new> WHERE document_id = ?
+   *      AND version_id IS NULL  (FTS triggers fire here -- prior chunks
+   *      drop out of the FTS index because trigger predicate
+   *      `WHEN new.version_id IS NULL` no longer matches)
+   *   3. UPDATE clio_documents SET title=, content_hash=, metadata=,
+   *      chunk_count=, total_chars=, updated_at=
+   *   4. INSERT new chunks (FTS triggers fire on insert -- new chunks
+   *      enter the FTS index)
+   * All four steps are atomic; rollback restores the prior state.
+   */
+  private async updateDocument(
+    target: ClioDocument,
+    req: IngestRequest,
+    contentHash: string,
+  ): Promise<IngestResult> {
+    // 5.11 follow-up: on `--document-id` update, preserve target's
+    // title + author + metadata when the caller didn't pass them.
+    // Rationale: agents typically want to update CONTENT only; the
+    // file-ingest CLI defaults `title` to the file basename which
+    // would otherwise silently clobber a deliberately-named doc.
+    // Caller can still override either field by passing it explicitly.
+    const resolvedTitle = req.title?.trim() ? req.title : target.title;
+    const titlePreserved = req.title === undefined;
+    const newAuthor = req.author?.trim() ? req.author.trim() : target.author;
+    const authorPreserved = req.author === undefined;
+    const resolvedMetadata = req.metadata ?? target.metadata;
+
+    const embedder = await this.getEmbedder();
+    // Chunker config resolution (Cerefox parity for MAX/MIN_CHUNK_CHARS):
+    //   - The embedder's `recommendedChunkMaxChars` is a SAFETY CEILING
+    //     when an embedder is active -- inputs above that risk being
+    //     silently truncated by transformers.js to the model's
+    //     `model_max_length`, which silently degrades embedding
+    //     quality. We honour smaller user values; cap larger ones with
+    //     an explicit warning. Without an embedder there's no ceiling.
+    //   - max default 4000 (Cerefox parity).
+    //   - min: IngestRequest.chunkMinChars (server forwards from
+    //     config) → 100 default. Caller-side; no embedder ceiling.
+    const chunkOpts = resolveChunkOpts(req, embedder);
+    const chunks = chunkMarkdown(req.content, chunkOpts);
+    const embeddings = await this.embedChunks(chunks.map((c) => c.content), embedder, resolvedTitle);
+
+    const now = new Date().toISOString();
+    const versionId = randomUUID();
+    const metadata = JSON.stringify(resolvedMetadata);
+    const totalChars = req.content.length;
+    // The `source` column on clio_document_versions records WHO WROTE
+    // the content being archived (i.e. the prior live author), not
+    // who is triggering this update. That way `cfcf clio versions` +
+    // future audit queries answer "who wrote v3?" with `versions[0]
+    // .source` rather than requiring a JOIN with the audit log.
+    // Cerefox's same column conflates "trigger label" + "author"; we
+    // pick the more useful interpretation.
+    const archivedAuthor = target.author || "agent";
+    // Suppress unused-warning by referencing the resolved values above.
+    void titlePreserved; void authorPreserved;
+
+    let versionNumber = 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Compute the next version number (sequential per document). Mirrors
+      // cerefox_snapshot_version's MAX(version_number) + 1.
+      const maxRow = this.db.query<{ max_n: number | null }, [string]>(
+        `SELECT MAX(version_number) AS max_n FROM clio_document_versions WHERE document_id = ?`,
+      ).get(target.id);
+      versionNumber = (maxRow?.max_n ?? 0) + 1;
+
+      // Count current chunks for the snapshot's chunk_count + total_chars.
+      const liveCounts = this.db.query<{ n: number; chars: number | null }, [string]>(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(char_count), 0) AS chars
+           FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL`,
+      ).get(target.id);
+      const priorChunkCount = liveCounts?.n ?? 0;
+      const priorTotalChars = liveCounts?.chars ?? 0;
+
+      // 1. Create the snapshot row. `source` records the author of
+      //    the OUTGOING content (target.author). Future audit / version
+      //    listing answers "who wrote v3?" without JOINing the audit log.
+      this.db.prepare(`
+        INSERT INTO clio_document_versions
+          (id, document_id, version_number, source, metadata, chunk_count, total_chars, archived, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(versionId, target.id, versionNumber, archivedAuthor, "{}", priorChunkCount, priorTotalChars, now);
+
+      // 2. Archive prior live chunks under the new version. The
+      //    fts-update trigger fires per row: `WHEN old.version_id IS NULL OR new.version_id IS NULL`
+      //    matches old=NULL, so the trigger removes the row from FTS.
+      this.db.prepare(`
+        UPDATE clio_chunks
+           SET version_id = ?, updated_at = ?
+         WHERE document_id = ? AND version_id IS NULL
+      `).run(versionId, now, target.id);
+
+      // 3. Update the document row in place. `title`/`author`/`metadata`
+      //    use the preserve-or-override values resolved above.
+      this.db.prepare(`
+        UPDATE clio_documents
+           SET title = ?, source = ?, author = ?, content_hash = ?, metadata = ?,
+               review_status = ?, chunk_count = ?, total_chars = ?, updated_at = ?
+         WHERE id = ?
+      `).run(
+        resolvedTitle,
+        req.source ?? target.source,
+        newAuthor,
+        contentHash,
+        metadata,
+        req.reviewStatus ?? target.reviewStatus,
+        chunks.length,
+        totalChars,
+        now,
+        target.id,
+      );
+
+      // 4. Insert the new live chunks.
+      this.insertChunkBatch(target.id, chunks, embeddings, embedder, now);
+
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+
+    const doc = await this.getDocument(target.id);
+    if (!doc) throw new Error(`Clio update wrote doc ${target.id} but could not read it back`);
+    return {
+      id: target.id,
+      action: "updated",
+      created: false,
+      document: doc,
+      chunksInserted: chunks.length,
+      versionId,
+      versionNumber,
+    };
+  }
+
+  /**
+   * Run the embedder over all chunk texts and convert the resulting
+   * vectors into BLOBs. Returns null when no embedder is active OR when
+   * the embedder call fails -- in either case the caller proceeds to
+   * insert chunks without embeddings (FTS still works; vector search
+   * skips them). Same semantics as the original PR1 inline block.
+   */
+  private async embedChunks(
+    texts: string[],
+    embedder: Embedder | null,
+    docTitleForLog: string,
+  ): Promise<Uint8Array[] | null> {
+    if (!embedder || texts.length === 0) return null;
+    try {
+      const vectors = await embedder.embed(texts);
+      return vectors.map((v) => embeddingToBlob(v));
+    } catch (err) {
+      console.warn(
+        `[clio] embedder failed for "${docTitleForLog}" -- ingesting without embeddings: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * INSERT one chunk per row with the live (`version_id IS NULL`) state.
+   * Caller MUST be inside an open write transaction.
+   */
+  private insertChunkBatch(
+    documentId: string,
+    chunks: ReturnType<typeof chunkMarkdown>,
+    embeddings: Uint8Array[] | null,
+    embedder: Embedder | null,
+    nowIso: string,
+  ): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO clio_chunks
+        (id, document_id, chunk_index, heading_path, heading_level, title,
+         content, char_count, embedding, embedder, embedding_dim, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const emb = embeddings ? embeddings[i] : null;
+      stmt.run(
+        randomUUID(),
+        documentId,
+        chunk.chunkIndex,
+        JSON.stringify(chunk.headingPath),
+        chunk.headingLevel,
+        chunk.title || null,
+        chunk.content,
+        chunk.charCount,
+        emb,
+        embedder ? embedder.name : null,
+        embedder ? embedder.dim : null,
+        nowIso,
+        nowIso,
+      );
+    }
   }
 
   async getDocument(id: string): Promise<ClioDocument | null> {
-    const row = this.db.query<{
-      id: string;
-      project_id: string;
-      title: string;
-      source: string;
-      content_hash: string;
-      metadata: string;
-      review_status: string;
-      chunk_count: number;
-      total_chars: number;
-      created_at: string;
-      updated_at: string;
-      deleted_at: string | null;
-    }, [string]>(`SELECT * FROM clio_documents WHERE id = ? LIMIT 1`).get(id);
+    // Subquery for version_count is cheap (the index on
+    // clio_document_versions.document_id resolves it in O(versions)).
+    // LEFT JOIN on clio_projects pulls project_name for human-facing
+    // CLI/web rendering (5.13 follow-up).
+    const row = this.db.query<DocumentRow, [string]>(
+      `SELECT d.*,
+              p.name AS project_name,
+              (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+         FROM clio_documents d
+         LEFT JOIN clio_projects p ON p.id = d.project_id
+        WHERE d.id = ?
+        LIMIT 1`,
+    ).get(id);
     if (!row) return null;
     return this.mapDocument(row);
   }
 
-  async listDocuments(opts: { project?: string; limit?: number; offset?: number } = {}): Promise<ClioDocument[]> {
+  /**
+   * Look up a live document by exact title within a Project. Used by
+   * the `updateIfExists` ingest path. Returns the most recently
+   * updated match if multiple documents share the same title (this can
+   * happen if `updateIfExists` was never used and the user ingested
+   * the same title twice; the newer one wins). Soft-deleted documents
+   * are excluded.
+   */
+  async findDocumentByTitle(projectId: string, title: string): Promise<ClioDocument | null> {
+    const row = this.db.query<DocumentRow, [string, string]>(
+      `SELECT * FROM clio_documents
+        WHERE project_id = ? AND title = ? AND deleted_at IS NULL
+        ORDER BY updated_at DESC
+        LIMIT 1`,
+    ).get(projectId, title);
+    if (!row) return null;
+    return this.mapDocument(row);
+  }
+
+  /**
+   * Reconstruct full Markdown content for a document. Default = the
+   * live (current) version (`version_id IS NULL`); pass
+   * `opts.versionId` to retrieve an archived version returned by
+   * `listDocumentVersions`. Mirrors Cerefox's `cerefox_get_document`.
+   *
+   * Content is the chunks joined with "\n\n" in chunk_index order --
+   * round-trip-faithful with the chunker's split convention.
+   */
+  async getDocumentContent(id: string, opts?: { versionId?: string }): Promise<DocumentContent | null> {
+    const doc = await this.getDocument(id);
+    if (!doc) return null;
+    const versionFilter = opts?.versionId ?? null;
+
+    let rows: { content: string; char_count: number }[];
+    if (versionFilter === null) {
+      rows = this.db.query<{ content: string; char_count: number }, [string]>(
+        `SELECT content, char_count FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL
+          ORDER BY chunk_index ASC`,
+      ).all(id);
+    } else {
+      rows = this.db.query<{ content: string; char_count: number }, [string, string]>(
+        `SELECT content, char_count FROM clio_chunks
+          WHERE document_id = ? AND version_id = ?
+          ORDER BY chunk_index ASC`,
+      ).all(id, versionFilter);
+    }
+    if (rows.length === 0 && versionFilter !== null) {
+      // Specific version was requested but no chunks under it.
+      return null;
+    }
+
+    const content = rows.map((r) => r.content).join("\n\n");
+    const totalChars = rows.reduce((acc, r) => acc + r.char_count, 0);
+    return {
+      document: doc,
+      content,
+      chunkCount: rows.length,
+      totalChars,
+      versionId: versionFilter,
+    };
+  }
+
+  /**
+   * List archived versions for a document, newest-first. Empty array
+   * for documents that have never been updated. Mirrors Cerefox's
+   * `cerefox_list_document_versions`.
+   */
+  async listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]> {
+    const rows = this.db.query<{
+      id: string;
+      document_id: string;
+      version_number: number;
+      source: string | null;
+      metadata: string;
+      chunk_count: number;
+      total_chars: number;
+      archived: number;
+      created_at: string;
+    }, [string]>(
+      `SELECT id, document_id, version_number, source, metadata,
+              chunk_count, total_chars, archived, created_at
+         FROM clio_document_versions
+        WHERE document_id = ?
+        ORDER BY version_number DESC`,
+    ).all(documentId);
+    return rows.map((r) => ({
+      id: r.id,
+      documentId: r.document_id,
+      versionNumber: r.version_number,
+      source: r.source,
+      metadata: parseJsonObject(r.metadata),
+      chunkCount: r.chunk_count,
+      totalChars: r.total_chars,
+      archived: r.archived !== 0,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async listDocuments(opts: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    deletedFilter?: "exclude" | "include" | "only";
+  } = {}): Promise<ClioDocument[]> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
     const offset = Math.max(opts.offset ?? 0, 0);
+    const deletedFilter = opts.deletedFilter ?? "exclude";
+
     let projectId: string | null = null;
     if (opts.project) {
       // Resolve name → id; if neither name nor id matches, return empty.
@@ -428,25 +884,373 @@ export class LocalClio implements MemoryBackend {
       if (!proj) return [];
       projectId = proj.id;
     }
-    const sql = projectId
-      ? `SELECT * FROM clio_documents WHERE deleted_at IS NULL AND project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
-      : `SELECT * FROM clio_documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-    const bindings: (string | number)[] = projectId ? [projectId, limit, offset] : [limit, offset];
-    const rows = this.db.query<{
-      id: string;
-      project_id: string;
-      title: string;
-      source: string;
-      content_hash: string;
-      metadata: string;
-      review_status: string;
-      chunk_count: number;
-      total_chars: number;
-      created_at: string;
-      updated_at: string;
-      deleted_at: string | null;
-    }, (string | number)[]>(sql).all(...bindings);
+    const where: string[] = [];
+    if (deletedFilter === "exclude") where.push("d.deleted_at IS NULL");
+    else if (deletedFilter === "only") where.push("d.deleted_at IS NOT NULL");
+    // 'include' adds no clause -- both live and tombstoned docs.
+    if (projectId) where.push("d.project_id = ?");
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const sql = `
+      SELECT d.*,
+             p.name AS project_name,
+             (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+        FROM clio_documents d
+        LEFT JOIN clio_projects p ON p.id = d.project_id
+        ${whereClause}
+       ORDER BY d.created_at DESC
+       LIMIT ? OFFSET ?
+    `;
+    const bindings: (string | number)[] = projectId
+      ? [projectId, limit, offset]
+      : [limit, offset];
+    const rows = this.db.query<DocumentRow, (string | number)[]>(sql).all(...bindings);
     return rows.map((r) => this.mapDocument(r));
+  }
+
+  async deleteDocument(id: string, opts: { author?: string } = {}): Promise<void> {
+    // Look up first so we can distinguish "doesn't exist" (throws) from
+    // "already soft-deleted" (no-op). Mirrors cerefox_delete_document's
+    // RAISE EXCEPTION behaviour.
+    const actor = opts.author?.trim() || "agent";
+    const target = this.db.query<{ id: string; project_id: string; deleted_at: string | null }, [string]>(
+      `SELECT id, project_id, deleted_at FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
+    if (!target) throw new Error(`deleteDocument: document "${id}" not found`);
+    if (target.deleted_at) return; // already deleted; idempotent (no audit row)
+    this.db.prepare(
+      `UPDATE clio_documents SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+    ).run(id);
+    this.writeAudit({
+      eventType: "delete", actor,
+      projectId: target.project_id, documentId: id,
+    });
+  }
+
+  async metadataSearch(opts: MetadataSearchRequest): Promise<MetadataSearchResponse> {
+    if (!opts.metadataFilter || Object.keys(opts.metadataFilter).length === 0) {
+      throw new Error("metadataSearch: metadataFilter must contain at least one key");
+    }
+    const matchCount = Math.min(Math.max(opts.matchCount ?? 50, 1), 500);
+
+    let projectId: string | null = null;
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return { documents: [], metadataFilter: opts.metadataFilter };
+      projectId = proj.id;
+    }
+
+    const conds: string[] = [];
+    const bindings: (string | number | boolean)[] = [];
+
+    if (!opts.includeDeleted) conds.push("d.deleted_at IS NULL");
+    if (projectId) {
+      conds.push("d.project_id = ?");
+      bindings.push(projectId);
+    }
+    if (opts.updatedSince) {
+      conds.push("d.updated_at >= ?");
+      bindings.push(opts.updatedSince);
+    }
+    // Per-key json_extract equality. Top-level keys only (matches
+    // Cerefox v1; nested-object containment is a future ask).
+    for (const [k, v] of Object.entries(opts.metadataFilter)) {
+      conds.push(`json_extract(d.metadata, ?) = ?`);
+      bindings.push(`$.${k}`);
+      bindings.push(v);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    // LEFT JOIN clio_projects so mapDocument populates projectName for
+    // human-facing CLI/web rendering. 5.13 follow-up.
+    const sql = `SELECT d.*, p.name AS project_name
+                   FROM clio_documents d
+                   LEFT JOIN clio_projects p ON p.id = d.project_id
+                   ${where}
+                  ORDER BY d.updated_at DESC LIMIT ?`;
+    bindings.push(matchCount);
+
+    const rows = this.db.query<DocumentRow, (string | number | boolean)[]>(sql).all(...bindings);
+    return {
+      documents: rows.map((r) => this.mapDocument(r)),
+      metadataFilter: opts.metadataFilter,
+    };
+  }
+
+  async listMetadataKeys(opts: { project?: string } = {}): Promise<MetadataKeyInfo[]> {
+    let projectId: string | null = null;
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return [];
+      projectId = proj.id;
+    }
+    // Pull every live doc's metadata + walk it in JS. SQLite has no
+    // native "list JSON keys across rows" without recursive CTE
+    // contortions; the corpus is small enough that an N-row scan is
+    // fine. Cerefox does this server-side via PG's jsonb_each; we
+    // emulate the contract.
+    const sql = projectId
+      ? `SELECT metadata FROM clio_documents WHERE deleted_at IS NULL AND project_id = ?`
+      : `SELECT metadata FROM clio_documents WHERE deleted_at IS NULL`;
+    const rows = projectId
+      ? this.db.query<{ metadata: string }, [string]>(sql).all(projectId)
+      : this.db.query<{ metadata: string }, []>(sql).all();
+
+    const keyToCount = new Map<string, number>();
+    const keyToValues = new Map<string, Set<string>>(); // values stringified for set comparison
+
+    for (const r of rows) {
+      const m = parseJsonObject(r.metadata);
+      for (const [k, v] of Object.entries(m)) {
+        keyToCount.set(k, (keyToCount.get(k) ?? 0) + 1);
+        // Only collect scalar values for the sample set; arrays/objects
+        // would dilute the signal and aren't valid metadata_search
+        // filter values anyway (top-level scalars only in v1).
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          let set = keyToValues.get(k);
+          if (!set) { set = new Set(); keyToValues.set(k, set); }
+          if (set.size < 5) set.add(JSON.stringify(v));
+        }
+      }
+    }
+
+    const out: MetadataKeyInfo[] = [];
+    for (const [key, documentCount] of keyToCount) {
+      const samples = Array.from(keyToValues.get(key) ?? []).map((s) => JSON.parse(s));
+      out.push({ key, documentCount, valueSamples: samples });
+    }
+    // Most-used keys first (handy for the agent discovering the schema).
+    out.sort((a, b) => b.documentCount - a.documentCount);
+    return out;
+  }
+
+  async restoreDocument(id: string, opts: { author?: string } = {}): Promise<void> {
+    const actor = opts.author?.trim() || "agent";
+    const target = this.db.query<{ id: string; project_id: string; deleted_at: string | null }, [string]>(
+      `SELECT id, project_id, deleted_at FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
+    if (!target) throw new Error(`restoreDocument: document "${id}" not found`);
+    if (!target.deleted_at) return; // already live; idempotent (no audit row)
+    this.db.prepare(
+      `UPDATE clio_documents SET deleted_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+    ).run(id);
+    this.writeAudit({
+      eventType: "restore", actor,
+      projectId: target.project_id, documentId: id,
+    });
+  }
+
+  async editDocument(
+    id: string,
+    edits: EditDocumentRequest,
+    opts: { author?: string } = {},
+  ): Promise<ClioDocument> {
+    const actor = opts.author?.trim() || "agent";
+
+    // Lookup target. Throws on missing or soft-deleted -- editing a
+    // tombstone is almost certainly a bug; restore first if you mean it.
+    const target = await this.getDocument(id);
+    if (!target) throw new Error(`editDocument: document "${id}" not found`);
+    if (target.deletedAt) {
+      throw new Error(`editDocument: document "${id}" is soft-deleted; restore it first`);
+    }
+
+    // Resolve projectId/projectName. projectId wins if both provided.
+    let nextProjectId: string | undefined;
+    if (edits.projectId !== undefined && edits.projectId !== null) {
+      const proj = await this.getProject(edits.projectId);
+      if (!proj) {
+        throw new Error(`editDocument: project "${edits.projectId}" not found`);
+      }
+      nextProjectId = proj.id;
+    } else if (edits.projectName !== undefined && edits.projectName !== null) {
+      const proj = await this.getProject(edits.projectName);
+      if (!proj) {
+        throw new Error(`editDocument: project "${edits.projectName}" not found`);
+      }
+      nextProjectId = proj.id;
+    }
+
+    // Build the new metadata blob from the set/unset deltas.
+    const beforeMeta = target.metadata ?? {};
+    let nextMeta: Record<string, unknown> | undefined;
+    const setKeys = edits.metadataSet ? Object.keys(edits.metadataSet) : [];
+    const unsetKeys = edits.metadataUnset ?? [];
+    if (setKeys.length > 0 || unsetKeys.length > 0) {
+      nextMeta = { ...beforeMeta };
+      for (const k of setKeys) nextMeta[k] = (edits.metadataSet as Record<string, unknown>)[k];
+      for (const k of unsetKeys) delete nextMeta[k];
+    }
+
+    // Validate / normalise scalar fields.
+    let nextTitle: string | undefined;
+    if (edits.title !== undefined) {
+      const t = edits.title.trim();
+      if (!t) throw new Error("editDocument: title cannot be empty");
+      nextTitle = t;
+    }
+    let nextAuthor: string | undefined;
+    if (edits.author !== undefined) {
+      // Empty string clears (sets to default 'agent') -- mirrors
+      // Cerefox where author has a default.
+      nextAuthor = edits.author.trim() || "agent";
+    }
+
+    // Compute the actual diff. If nothing changed, no audit row, no UPDATE.
+    const diff: Record<string, { before: unknown; after: unknown }> = {};
+    if (nextTitle !== undefined && nextTitle !== target.title) {
+      diff.title = { before: target.title, after: nextTitle };
+    }
+    if (nextAuthor !== undefined && nextAuthor !== target.author) {
+      diff.author = { before: target.author, after: nextAuthor };
+    }
+    if (nextProjectId !== undefined && nextProjectId !== target.projectId) {
+      diff.projectId = { before: target.projectId, after: nextProjectId };
+    }
+    if (nextMeta !== undefined) {
+      // Only record metadata in the diff if a key actually changed
+      // (set or unset). Pure no-ops (e.g. setting key=value when it
+      // already equals value) shouldn't bump updated_at.
+      const beforeKeys = new Set(Object.keys(beforeMeta));
+      const afterKeys = new Set(Object.keys(nextMeta));
+      const allKeys = new Set([...beforeKeys, ...afterKeys]);
+      const changedKeys: string[] = [];
+      for (const k of allKeys) {
+        if (JSON.stringify(beforeMeta[k]) !== JSON.stringify(nextMeta[k])) {
+          changedKeys.push(k);
+        }
+      }
+      if (changedKeys.length > 0) {
+        const afterMeta = nextMeta; // capture for closure (TS narrowing)
+        diff.metadata = {
+          before: Object.fromEntries(changedKeys.map((k) => [k, beforeMeta[k]])),
+          after:  Object.fromEntries(changedKeys.map((k) => [k, afterMeta[k]])),
+        };
+      } else {
+        nextMeta = undefined; // no actual change -- skip the UPDATE column
+      }
+    }
+
+    if (Object.keys(diff).length === 0) {
+      // Idempotent no-op. Return the unchanged record without writing.
+      return target;
+    }
+
+    // Apply the UPDATE in a single statement. We only set columns the
+    // caller actually changed -- updated_at always bumps.
+    const sets: string[] = [];
+    const bindings: (string | null)[] = [];
+    if (nextTitle !== undefined && diff.title) {
+      sets.push("title = ?"); bindings.push(nextTitle);
+    }
+    if (nextAuthor !== undefined && diff.author) {
+      sets.push("author = ?"); bindings.push(nextAuthor);
+    }
+    if (nextProjectId !== undefined && diff.projectId) {
+      sets.push("project_id = ?"); bindings.push(nextProjectId);
+    }
+    if (nextMeta !== undefined && diff.metadata) {
+      const metaJson = JSON.stringify(nextMeta);
+      sets.push("metadata = ?"); bindings.push(metaJson);
+    }
+    sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+    bindings.push(id);
+    this.db.prepare(`UPDATE clio_documents SET ${sets.join(", ")} WHERE id = ?`).run(...bindings);
+
+    this.writeAudit({
+      eventType: "edit-metadata", actor,
+      projectId: nextProjectId ?? target.projectId,
+      documentId: id,
+      metadata: { diff },
+    });
+
+    const updated = await this.getDocument(id);
+    if (!updated) throw new Error(`editDocument: doc ${id} disappeared after UPDATE`);
+    return updated;
+  }
+
+  // ── Audit log (5.13) ───────────────────────────────────────────────────
+
+  /**
+   * Internal: write one row to clio_audit_log. Called from the public
+   * mutation paths (ingest create/update, deleteDocument, restoreDocument,
+   * migrateDocumentsBetweenProjects). Reads (search, get, listDocuments,
+   * etc.) intentionally do NOT call this -- the volume would dwarf the
+   * write events and the trust story is about who-wrote-what.
+   *
+   * Failures are swallowed (best-effort): we don't want a stuck audit
+   * write to fail an otherwise-successful ingest. The mutation has
+   * already committed when this fires.
+   */
+  private writeAudit(entry: {
+    eventType: ClioAuditEntry["eventType"];
+    actor: string | null;
+    projectId?: string | null;
+    documentId?: string | null;
+    query?: string | null;
+    metadata?: Record<string, unknown>;
+  }): void {
+    try {
+      this.db.prepare(
+        `INSERT INTO clio_audit_log (event_type, actor, project_id, document_id, query, metadata)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        entry.eventType,
+        entry.actor,
+        entry.projectId ?? null,
+        entry.documentId ?? null,
+        entry.query ?? null,
+        JSON.stringify(entry.metadata ?? {}),
+      );
+    } catch (err) {
+      // Last-resort warn; never throw from the audit path.
+      // eslint-disable-next-line no-console
+      console.warn(`[clio] audit write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async getAuditLog(opts: AuditLogQuery = {}): Promise<ClioAuditEntry[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+    const conds: string[] = [];
+    const bindings: (string | number)[] = [];
+
+    if (opts.eventType) { conds.push("event_type = ?"); bindings.push(opts.eventType); }
+    if (opts.actor)     { conds.push("actor = ?");      bindings.push(opts.actor); }
+    if (opts.documentId){ conds.push("document_id = ?"); bindings.push(opts.documentId); }
+    if (opts.since)     { conds.push("timestamp >= ?"); bindings.push(opts.since); }
+    if (opts.project) {
+      const proj = await this.getProject(opts.project);
+      if (!proj) return [];
+      conds.push("project_id = ?");
+      bindings.push(proj.id);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sql = `SELECT id, timestamp, event_type, actor, project_id, document_id, query, metadata
+                 FROM clio_audit_log ${where}
+                 ORDER BY id DESC LIMIT ?`;
+    bindings.push(limit);
+
+    const rows = this.db.query<{
+      id: number;
+      timestamp: string;
+      event_type: string;
+      actor: string | null;
+      project_id: string | null;
+      document_id: string | null;
+      query: string | null;
+      metadata: string | null;
+    }, (string | number)[]>(sql).all(...bindings);
+
+    return rows.map((r) => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      eventType: r.event_type as ClioAuditEntry["eventType"],
+      actor: r.actor,
+      projectId: r.project_id,
+      documentId: r.document_id,
+      query: r.query,
+      metadata: r.metadata ? parseJsonObject(r.metadata) : {},
+    }));
   }
 
   // ── Search ─────────────────────────────────────────────────────────────
@@ -487,6 +1291,187 @@ export class LocalClio implements MemoryBackend {
 
     // FTS path (default, or fallback when no embedder is active).
     return await this.searchFts(req, matchCount, projectFilterId);
+  }
+
+  /**
+   * Document-level search. The agent-facing default: one row per
+   * matching document (Cerefox-style), not per chunk. Mirrors
+   * `cerefox_search_docs` behaviour:
+   *   1. Run chunk-level search with `matchCount × 5` candidates so
+   *      dedup has enough material to fill `matchCount` unique docs.
+   *   2. Group hits by `document_id`, keep the best-scoring chunk as
+   *      the representative.
+   *   3. Truncate to `matchCount` distinct documents.
+   *   4. Decorate each hit with `versionCount` + `matchingChunks`
+   *      (counts inside the candidate pool, not all chunks).
+   *
+   * For human/agent search ("which docs match X?") this is far cleaner
+   * than chunk-level (which surfaces multiple chunks of the same doc
+   * + makes near-irrelevant docs that share ONE keyword sit between
+   * chunks of the right doc). Chunk-level remains available via
+   * `search()` for callers that need the raw view.
+   */
+  async searchDocuments(req: SearchRequest): Promise<DocumentSearchResponse> {
+    // Doc-level matchCount default is smaller (5) than chunk-level (10):
+    // a doc-level "show me top N matches" is more useful with fewer,
+    // higher-quality entries than a long list. Cerefox's default is 5.
+    const matchCount = Math.max(1, Math.min(req.matchCount ?? 5, 50));
+
+    // Cerefox-style small-to-big knobs (with sensible defaults that
+    // match Cerefox's RPC defaults). These can be overridden per-call
+    // (when callers pass them on `SearchRequest`) but the global
+    // config is the usual source of truth -- the route layer reads
+    // it once and forwards.
+    const smallDocThreshold = req.smallDocThreshold ?? 20000;
+    const contextWindow = Math.max(0, req.contextWindow ?? 1);
+
+    // Fetch a 5x candidate pool so dedup has enough material.
+    const chunkRes = await this.search({ ...req, matchCount: matchCount * 5 });
+
+    // Group by documentId, keep the highest-scoring chunk as the
+    // representative. Hits are already ordered by score descending,
+    // so the first chunk per doc encountered IS the best.
+    const seen = new Map<string, SearchHit & { _matching: number }>();
+    for (const hit of chunkRes.hits) {
+      const existing = seen.get(hit.documentId);
+      if (existing) {
+        existing._matching++;
+      } else {
+        seen.set(hit.documentId, { ...hit, _matching: 1 });
+      }
+    }
+
+    // Take the top `matchCount` unique docs.
+    const ranked = Array.from(seen.values()).slice(0, matchCount);
+
+    // Pull versionCount + chunkCount + timestamps in one query for
+    // efficiency rather than calling getDocument N times.
+    const docIds = ranked.map((h) => h.documentId);
+    const docMeta = new Map<string, {
+      chunk_count: number;
+      total_chars: number;
+      version_count: number;
+      created_at: string;
+      updated_at: string;
+    }>();
+    if (docIds.length > 0) {
+      const placeholders = docIds.map(() => "?").join(",");
+      const rows = this.db.query<{
+        id: string;
+        chunk_count: number;
+        total_chars: number;
+        version_count: number;
+        created_at: string;
+        updated_at: string;
+      }, string[]>(
+        `SELECT d.id, d.chunk_count, d.total_chars, d.created_at, d.updated_at,
+                (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
+           FROM clio_documents d
+          WHERE d.id IN (${placeholders})`,
+      ).all(...docIds);
+      for (const r of rows) {
+        docMeta.set(r.id, {
+          chunk_count: r.chunk_count,
+          total_chars: r.total_chars,
+          version_count: r.version_count,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        });
+      }
+    }
+
+    // Cerefox-style small-to-big content resolution per hit:
+    //   - small doc (total_chars ≤ smallDocThreshold) → return FULL
+    //     document content as bestChunkContent. is_partial=false.
+    //   - large doc → return matched chunk + contextWindow neighbours
+    //     on each side. is_partial=true.
+    // Threshold of 0 disables the small-doc-full-content path entirely.
+    const fullContentByDoc = new Map<string, string>();
+    if (smallDocThreshold > 0) {
+      const smallDocIds = ranked
+        .filter((h) => (docMeta.get(h.documentId)?.total_chars ?? Infinity) <= smallDocThreshold)
+        .map((h) => h.documentId);
+      if (smallDocIds.length > 0) {
+        const placeholders = smallDocIds.map(() => "?").join(",");
+        const chunks = this.db.query<{ document_id: string; content: string; chunk_index: number }, string[]>(
+          `SELECT document_id, content, chunk_index
+             FROM clio_chunks
+            WHERE document_id IN (${placeholders})
+              AND version_id IS NULL
+            ORDER BY document_id, chunk_index ASC`,
+        ).all(...smallDocIds);
+        const byDoc = new Map<string, string[]>();
+        for (const c of chunks) {
+          const arr = byDoc.get(c.document_id) ?? [];
+          arr.push(c.content);
+          byDoc.set(c.document_id, arr);
+        }
+        for (const [docId, arr] of byDoc) {
+          fullContentByDoc.set(docId, arr.join("\n\n"));
+        }
+      }
+    }
+
+    // For large docs (NOT in fullContentByDoc), build the chunk +
+    // contextWindow neighbour window FROM THE DB explicitly. We don't
+    // reuse `h.content` because the chunk-level search already ran its
+    // own `expandSmallToBig` (with a fixed dim-based radius) which
+    // would otherwise leak into the doc-level result, ignoring our
+    // contextWindow knob entirely. Fetching fresh from clio_chunks is
+    // the only way to honour contextWindow=0 (bare chunk) and any
+    // per-call override.
+    const partialContent = new Map<string, string>(); // chunkId → final content for the partial path
+    const largeDocs = ranked.filter((h) => !fullContentByDoc.has(h.documentId));
+    for (const h of largeDocs) {
+      const lo = Math.max(0, h.chunkIndex - contextWindow);
+      const hi = h.chunkIndex + contextWindow;
+      const rows = this.db.query<{ content: string; chunk_index: number }, [string, number, number]>(
+        `SELECT content, chunk_index FROM clio_chunks
+          WHERE document_id = ? AND version_id IS NULL
+            AND chunk_index BETWEEN ? AND ?
+          ORDER BY chunk_index ASC`,
+      ).all(h.documentId, lo, hi);
+      partialContent.set(h.chunkId, rows.map((r) => r.content).join("\n\n"));
+    }
+
+    const hits: DocumentSearchHit[] = ranked.map((h) => {
+      const meta = docMeta.get(h.documentId);
+      const fullDocContent = fullContentByDoc.get(h.documentId);
+      const isPartial = fullDocContent === undefined;
+      const content = fullDocContent
+        ?? partialContent.get(h.chunkId)
+        ?? h.content; // last-resort fallback; should never fire
+      return {
+        documentId: h.documentId,
+        docTitle: h.docTitle,
+        docSource: h.docSource,
+        docAuthor: h.docAuthor ?? "agent",
+        docProjectId: h.docProjectId,
+        docProjectName: h.docProjectName,
+        docMetadata: h.docMetadata,
+        chunkCount: meta?.chunk_count ?? 0,
+        totalChars: meta?.total_chars ?? 0,
+        versionCount: meta?.version_count ?? 0,
+        matchingChunks: h._matching,
+        bestScore: h.score,
+        bestChunkHeadingPath: h.headingPath,
+        bestChunkHeadingLevel: h.headingLevel,
+        bestChunkTitle: h.title,
+        bestChunkContent: content,
+        bestChunkId: h.chunkId,
+        bestChunkIndex: h.chunkIndex,
+        createdAt: meta?.created_at ?? "",
+        updatedAt: meta?.updated_at ?? "",
+        isPartial,
+      };
+    });
+
+    return {
+      hits,
+      mode: chunkRes.mode,
+      totalMatches: chunkRes.totalMatches,
+      totalDocuments: seen.size,
+    };
   }
 
   /**
@@ -538,6 +1523,7 @@ export class LocalClio implements MemoryBackend {
              f.bm25_rank,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata
@@ -567,6 +1553,7 @@ export class LocalClio implements MemoryBackend {
         bm25_rank: number;
         doc_title: string;
         doc_source: string;
+        doc_author: string;
         doc_project_id: string;
         doc_project_name: string;
         doc_metadata: string;
@@ -587,6 +1574,7 @@ export class LocalClio implements MemoryBackend {
       score: -r.bm25_rank,
       docTitle: r.doc_title,
       docSource: r.doc_source,
+      docAuthor: r.doc_author ?? "agent",
       docProjectId: r.doc_project_id,
       docProjectName: r.doc_project_name,
       docMetadata: parseJsonObject(r.doc_metadata),
@@ -632,10 +1620,28 @@ export class LocalClio implements MemoryBackend {
   }
 
   /**
-   * Hybrid search: Reciprocal Rank Fusion (RRF) of FTS top-N + vector
-   * top-N. Matches the design doc's §4.3 formula:
-   *   score(d) = sum over engines: 1 / (k + rank_engine(d))
-   * with k = 60.
+   * Hybrid search: alpha-weighted score blending of normalised FTS
+   * BM25 + raw cosine similarity. Cerefox parity (their `p_alpha`
+   * RPC parameter; default 0.7).
+   *
+   * Why renormalisation: SQLite FTS5's `bm25()` returns values in
+   * `[-∞, 0]` where more-negative is more relevant -- corpus-relative,
+   * unbounded, not directly comparable to cosine `[0, 1]`. We min-max
+   * normalise BM25 within the candidate pool, flip sign, scale to
+   * `[0, 1]`. Trade-off: the same query against different filter
+   * combinations can produce different ABSOLUTE blended scores
+   * (because the candidate pool changes), but RELATIVE ranking is
+   * preserved -- which is what hybrid search cares about. Cerefox
+   * doesn't have this problem because Postgres' `ts_rank_cd` is
+   * already in `[0, 1]`.
+   *
+   * Formula (each chunk):
+   *   blended = α × cosine + (1 − α) × normalised_bm25
+   *
+   * FTS-matched chunks ALWAYS pass through regardless of cosine
+   * (mirrors Cerefox's threshold semantics: minScore filters only
+   * vector-only candidates). Decisions-log 2026-04-25 + 2026-04-27
+   * captures the choice + the algorithm switch from RRF.
    */
   private async searchHybrid(
     req: SearchRequest,
@@ -643,61 +1649,68 @@ export class LocalClio implements MemoryBackend {
     matchCount: number,
     projectFilterId: string | null,
   ): Promise<SearchResponse> {
-    const RRF_K = 60;
+    const alpha = clampAlpha(req.alpha ?? 0.7);
     const candidateCount = Math.max(matchCount * 5, 30);
+    const minScore = req.minScore ?? 0;
 
-    // Run FTS candidates (same filters as searchFts but raw ranks).
+    // FTS candidate pool. Each row's `bm25_rank` is BM25 in [-∞, 0]
+    // where more-negative = more relevant (we negate below).
     const ftsRows = this.fetchFtsCandidates(req, projectFilterId, candidateCount);
-    // Run vector candidates.
+    // Vector candidates + raw cosine per chunk.
     const queryVector = (await embedder.embed([req.query]))[0];
     const vecRows = this.fetchVectorCandidates(req, projectFilterId, embedder);
-    const vecRanked = vecRows
+    const vecScored = vecRows
       .map((row) => ({
         row,
-        score: cosineSimilarity(
+        cosine: cosineSimilarity(
           queryVector,
           blobToEmbedding(new Uint8Array(row.embedding as Uint8Array), embedder.dim),
         ),
       }))
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.cosine - a.cosine)
       .slice(0, candidateCount);
 
-    // Build an id -> rank map for each engine so fusion is cheap.
-    const ftsRank = new Map<string, number>();
-    ftsRows.forEach((r, i) => ftsRank.set(r.chunk_id, i + 1));
-    const vecRank = new Map<string, number>();
-    vecRanked.forEach(({ row }, i) => vecRank.set(row.chunk_id, i + 1));
-    // Raw cosine per chunk; we need this to apply the threshold to the
-    // vector-only branch below.
-    const vecCosine = new Map<string, number>();
-    vecRanked.forEach(({ row, score }) => vecCosine.set(row.chunk_id, score));
-    const minScore = req.minScore ?? 0;
-
-    const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
-    // Seed with whichever engine produced each candidate; take the first
-    // sighting as the canonical row.
-    for (const r of ftsRows) {
-      // FTS-matched chunks ALWAYS pass through, regardless of vector
-      // score (matches Cerefox's threshold semantics: the threshold
-      // only filters vector-only candidates). See decisions-log
-      // 2026-04-25 "Hybrid search threshold".
-      const rrf = 1 / (RRF_K + (ftsRank.get(r.chunk_id) ?? 1));
-      fused.set(r.chunk_id, { row: r, score: rrf });
-    }
-    for (const { row } of vecRanked) {
-      const extra = 1 / (RRF_K + (vecRank.get(row.chunk_id) ?? 1));
-      const cur = fused.get(row.chunk_id);
-      if (cur) {
-        // Already from FTS — boost via co-occurrence regardless of
-        // cosine. The FTS match already attests relevance.
-        cur.score += extra;
-      } else {
-        // Vector-only candidate — apply the threshold here. Below the
-        // floor we drop the candidate entirely rather than fusing it
-        // into the result set with a tiny RRF score.
-        if (minScore > 0 && (vecCosine.get(row.chunk_id) ?? 0) < minScore) continue;
-        fused.set(row.chunk_id, { row, score: extra });
+    // Min-max normalise BM25 across the FTS candidate pool. Convert
+    // to a "higher = better" `[0, 1]` scale comparable to cosine.
+    // Edge case: if every candidate has the same BM25 score (or only
+    // one candidate), all normalise to 1.0 -- the FTS branch's
+    // contribution becomes uniform across hits, which is fine
+    // (degenerate input → degenerate ranking; α biases stay sensible).
+    const ftsNormalised = new Map<string, number>();
+    if (ftsRows.length > 0) {
+      // bm25_rank is more-negative-better. Lower number = better.
+      const ranks = ftsRows.map((r) => r.bm25_rank);
+      const minRank = Math.min(...ranks); // most-negative (best)
+      const maxRank = Math.max(...ranks); // least-negative (worst)
+      const range = maxRank - minRank;
+      for (const r of ftsRows) {
+        // Flip so best=1, worst=0. When range is 0 (all equal), score=1.
+        const normalised = range > 0 ? (maxRank - r.bm25_rank) / range : 1;
+        ftsNormalised.set(r.chunk_id, normalised);
       }
+    }
+    const vecCosine = new Map<string, number>();
+    vecScored.forEach(({ row, cosine }) => vecCosine.set(row.chunk_id, cosine));
+
+    // Build fused candidate set. Seed with FTS rows (always pass
+    // through). Then add vector rows that either: (a) co-occurred in
+    // FTS (boost via the vector contribution), or (b) are vector-only
+    // and clear the minScore floor.
+    const fused = new Map<string, { row: VectorCandidateRow; score: number }>();
+    for (const r of ftsRows) {
+      const ftsScore = ftsNormalised.get(r.chunk_id) ?? 0;
+      const cosineScore = vecCosine.get(r.chunk_id) ?? 0;
+      // FTS-matched chunks ALWAYS pass through (no minScore filter on this branch).
+      const blended = alpha * cosineScore + (1 - alpha) * ftsScore;
+      fused.set(r.chunk_id, { row: r, score: blended });
+    }
+    for (const { row, cosine } of vecScored) {
+      if (fused.has(row.chunk_id)) continue; // already counted via FTS branch
+      // Vector-only: apply minScore floor.
+      if (minScore > 0 && cosine < minScore) continue;
+      // No FTS match → ftsScore = 0 contribution.
+      const blended = alpha * cosine + (1 - alpha) * 0;
+      fused.set(row.chunk_id, { row, score: blended });
     }
 
     const ordered = Array.from(fused.values()).sort((a, b) => b.score - a.score);
@@ -782,6 +1795,7 @@ export class LocalClio implements MemoryBackend {
              c.embedding,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
@@ -830,6 +1844,7 @@ export class LocalClio implements MemoryBackend {
              c.embedding,
              d.title AS doc_title,
              d.source AS doc_source,
+             d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
@@ -879,6 +1894,7 @@ export class LocalClio implements MemoryBackend {
       score,
       docTitle: row.doc_title,
       docSource: row.doc_source,
+      docAuthor: row.doc_author ?? "agent",
       docProjectId: row.doc_project_id,
       docProjectName: row.doc_project_name,
       docMetadata: parseJsonObject(row.doc_metadata),
@@ -953,7 +1969,25 @@ export class LocalClio implements MemoryBackend {
         ).run(toProjectId, fromProjectId, opts.workspaceId!);
       }
       this.db.exec("COMMIT");
-      return Number(result.changes);
+      const changes = Number(result.changes);
+      if (changes > 0) {
+        // One audit row per migrate call (not per moved doc -- that
+        // would balloon the log on big sweeps). The metadata JSON
+        // captures from/to projects + the scope decision.
+        this.writeAudit({
+          eventType: "migrate-project",
+          actor: "agent",
+          projectId: toProjectId,
+          metadata: {
+            from_project_id: fromProjectId,
+            to_project_id: toProjectId,
+            workspace_id: opts.workspaceId ?? null,
+            scope: opts.allInProject ? "all-in-project" : "workspace",
+            documents_moved: changes,
+          },
+        });
+      }
+      return changes;
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -1138,25 +2172,13 @@ export class LocalClio implements MemoryBackend {
     };
   }
 
-  private mapDocument(row: {
-    id: string;
-    project_id: string;
-    title: string;
-    source: string;
-    content_hash: string;
-    metadata: string;
-    review_status: string;
-    chunk_count: number;
-    total_chars: number;
-    created_at: string;
-    updated_at: string;
-    deleted_at: string | null;
-  }): ClioDocument {
+  private mapDocument(row: DocumentRow): ClioDocument {
     return {
       id: row.id,
       projectId: row.project_id,
       title: row.title,
       source: row.source,
+      author: row.author ?? "agent",
       contentHash: row.content_hash,
       metadata: parseJsonObject(row.metadata),
       reviewStatus: row.review_status === "pending_review" ? "pending_review" : "approved",
@@ -1165,6 +2187,16 @@ export class LocalClio implements MemoryBackend {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at ?? null,
+      // version_count is populated only when the calling SELECT joined
+      // on clio_document_versions (listDocuments + getDocument do).
+      // Other paths (search-hit doc rows, internal lookups) leave it
+      // undefined so callers that don't need it pay no JOIN cost.
+      versionCount: row.version_count,
+      // Same pattern: projectName is populated when the SELECT JOINed
+      // clio_projects (listDocuments / getDocument / metadataSearch).
+      // Keeps human-facing listings showing names; ingest-side paths
+      // skip the JOIN.
+      projectName: row.project_name,
     };
   }
 
@@ -1183,6 +2215,77 @@ export class LocalClio implements MemoryBackend {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
+
+// Default chunk-size knobs (Cerefox parity). Used when neither the
+// caller nor the active embedder supplies a value.
+const DEFAULT_CHUNK_MAX_CHARS = 4000;
+
+/**
+ * Resolve the chunker options for an ingest call. Implements the
+ * "embedder-recommended is a safety ceiling" rule:
+ *
+ *   - When no embedder is active: honour `req.chunkMaxChars` (or the
+ *     4000 default). No ceiling to enforce.
+ *   - When an embedder is active: cap `req.chunkMaxChars` at
+ *     `embedder.recommendedChunkMaxChars`. Smaller values are honoured
+ *     verbatim (smaller-is-safe, sometimes better for retrieval
+ *     precision). When capped, emit ONE stderr warning per ingest call
+ *     so a batch run doesn't spam.
+ *
+ * Decisions-log entry "Chunker ceiling" (2026-04-27) captures the
+ * rationale + the silent-truncation failure mode this guards against.
+ */
+function resolveChunkOpts(
+  req: IngestRequest,
+  embedder: Embedder | null,
+): { maxChunkChars?: number; minChunkChars?: number } {
+  const userMax = req.chunkMaxChars;
+  const ceiling = embedder?.recommendedChunkMaxChars;
+  let resolvedMax: number | undefined;
+  let capped = false;
+
+  if (userMax !== undefined && ceiling !== undefined) {
+    if (userMax > ceiling) {
+      resolvedMax = ceiling;
+      capped = true;
+    } else {
+      resolvedMax = userMax;
+    }
+  } else if (userMax !== undefined) {
+    resolvedMax = userMax;
+  } else if (ceiling !== undefined) {
+    resolvedMax = ceiling;
+  } else {
+    resolvedMax = DEFAULT_CHUNK_MAX_CHARS;
+  }
+
+  if (capped && embedder) {
+    process.stderr.write(
+      `[clio] warning: configured chunk size ${userMax} exceeds ${embedder.name}'s ` +
+      `recommended max (${ceiling}); capping. Larger inputs would be silently ` +
+      `truncated by the model and degrade embedding quality.\n`,
+    );
+  }
+
+  const out: { maxChunkChars?: number; minChunkChars?: number } = {
+    maxChunkChars: resolvedMax,
+  };
+  if (req.chunkMinChars !== undefined) out.minChunkChars = req.chunkMinChars;
+  return out;
+}
+
+/**
+ * Clamp the hybrid-search alpha (vector vs FTS blend weight) to
+ * [0, 1]. Out-of-range inputs (NaN, negatives, > 1) fall back to 0.7
+ * (Cerefox default). Used by `searchHybrid` so the engine always sees
+ * a sane blend weight regardless of upstream validation.
+ */
+function clampAlpha(alpha: number): number {
+  if (typeof alpha !== "number" || Number.isNaN(alpha) || alpha < 0 || alpha > 1) {
+    return 0.7;
+  }
+  return alpha;
+}
 
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");

@@ -1,7 +1,9 @@
 # Cross-project knowledge layer — design research (item 5.7)
 
 **Status:** Research draft, 2026-04-20. **Outcome →** Design chosen and detailed in [`docs/design/clio-memory-layer.md`](../design/clio-memory-layer.md) (codename **Clio**, 2026-04-21). This doc stays as the design-space survey that led to the pick; the design doc is the implementable spec.
-**Owner:** Fotis + Claude.
+
+> **Historical record.** Several specifics in this draft were superseded by implementation decisions logged on 2026-04-27. Most notably: hybrid search now uses **alpha-weighted score blending** (`α × cosine + (1−α) × normalised_BM25`), NOT Reciprocal Rank Fusion (RRF k=60) as discussed below. The change matched Cerefox's existing algorithm + exposed `α` as a per-call knob. See `docs/decisions-log.md` 2026-04-27 entries for the full rationale.
+
 **Scope:** plan item `5.7` (iteration 5, currently ❌). Not a commitment to any single approach — the document surveys the design space, identifies the tensions, and sketches a few viable paths so the next session can narrow and pick one.
 
 ---

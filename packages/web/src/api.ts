@@ -85,6 +85,12 @@ export interface GlobalConfig {
     preferredEmbedder?: string;
     defaultSearchMode?: "auto" | "fts" | "semantic" | "hybrid";
     minSearchScore?: number;
+    /** 5.12+ follow-ups (Cerefox parity). All optional. */
+    hybridAlpha?: number;
+    smallDocThreshold?: number;
+    contextWindow?: number;
+    maxChunkChars?: number;
+    minChunkChars?: number;
   };
 }
 

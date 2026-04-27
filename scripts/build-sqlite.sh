@@ -22,6 +22,35 @@ SQLITE_VERSION="${SQLITE_VERSION:-3530000}"      # 3.53.0 (verified 2026-04-26)
 SQLITE_YEAR="${SQLITE_YEAR:-2026}"               # path component on sqlite.org
 
 mkdir -p "$OUT_DIR"
+
+# ── Optional cache (CFCF_BUILD_CACHE_DIR) ─────────────────────────────
+# Local-dev speedup: stage-dist.sh sets CFCF_BUILD_CACHE_DIR; release.yml
+# does not. When set, we keep compiled libsqlite3 binaries keyed by
+# (version, platform) so repeated stage-dist.sh runs skip the
+# ~3 MB download + clang/gcc compile (~2-3s saved per platform per run).
+# Cache hits print "[build-sqlite] cache hit"; misses fall through to
+# the full build and populate the cache for next time. CI runs are
+# unaffected because the env var is unset there.
+final_dl_ext=".dylib"
+case "$PLATFORM" in
+  darwin-*) final_dl_ext=".dylib" ;;
+  linux-*)  final_dl_ext=".so" ;;
+  windows-*) final_dl_ext=".dll" ;;
+esac
+final_name="libsqlite3${final_dl_ext}"
+
+if [[ -n "${CFCF_BUILD_CACHE_DIR:-}" ]]; then
+  cache_dir="$CFCF_BUILD_CACHE_DIR/libsqlite3/$SQLITE_VERSION/$PLATFORM"
+  if [[ -f "$cache_dir/$final_name" ]]; then
+    echo "[build-sqlite] cache hit: $cache_dir/$final_name (SQLite $SQLITE_VERSION, $PLATFORM)"
+    cp "$cache_dir/$final_name" "$OUT_DIR/$final_name"
+    bytes="$(wc -c < "$OUT_DIR/$final_name" | tr -d ' ')"
+    echo "[build-sqlite] ✓ $OUT_DIR/$final_name  ($bytes bytes, from cache)"
+    exit 0
+  fi
+  echo "[build-sqlite] cache miss: $cache_dir/$final_name"
+fi
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -76,10 +105,7 @@ esac
 # Move into the output dir using the canonical filename Database.setCustomSQLite
 # expects on each platform (db.ts §11.1). Windows always lands as
 # libsqlite3.dll for consistency with the macOS/Linux naming.
-final_name="libsqlite3${out##libsqlite3}"
-case "$out" in
-  sqlite3.dll) final_name="libsqlite3.dll" ;;
-esac
+# (final_name was set up top to drive the cache lookup; reuse it here.)
 cp "$out" "$OUT_DIR/$final_name"
 
 echo "[build-sqlite] verifying loadExtension symbol present"
@@ -94,6 +120,15 @@ if [[ "$symbol_tool" != ":" ]]; then
     echo "[build-sqlite] (the SQLITE_ENABLE_LOAD_EXTENSION=1 flag may have been stripped — check the compile invocation)" >&2
     exit 1
   fi
+fi
+
+# Populate the cache after a successful build so the next invocation
+# of this script with the same (version, platform) gets a cache hit.
+# Only fires when CFCF_BUILD_CACHE_DIR is set.
+if [[ -n "${CFCF_BUILD_CACHE_DIR:-}" ]]; then
+  mkdir -p "$cache_dir"
+  cp "$OUT_DIR/$final_name" "$cache_dir/$final_name"
+  echo "[build-sqlite] cached: $cache_dir/$final_name"
 fi
 
 bytes="$(wc -c < "$OUT_DIR/$final_name" | tr -d ' ')"

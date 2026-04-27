@@ -10,10 +10,14 @@
 import type {
   ClioProject,
   ClioDocument,
+  ClioDocumentVersion,
+  ClioAuditEntry,
+  EditDocumentRequest,
   IngestRequest,
   IngestResult,
   SearchRequest,
   SearchResponse,
+  DocumentSearchResponse,
   ClioStats,
 } from "../types.js";
 
@@ -34,15 +38,123 @@ export interface MemoryBackend {
   ingest(req: IngestRequest): Promise<IngestResult>;
   getDocument(id: string): Promise<ClioDocument | null>;
   /**
-   * List documents, newest-first, optionally scoped to one Clio Project.
-   * Soft-deleted documents are excluded. `limit` defaults to 50 to keep
-   * the response compact for the CLI; pagination via `offset`. Used by
-   * `cfcf clio docs list`.
+   * Look up a live (non-deleted) document by exact title within a Clio
+   * Project. Returns null if no match. Used by the `updateIfExists` ingest
+   * path; exposed on the interface so future remote backends (e.g.
+   * `CerefoxRemote`) can implement the same lookup with their own SQL.
+   * 5.11 / Clio v2.
    */
-  listDocuments(opts?: { project?: string; limit?: number; offset?: number }): Promise<ClioDocument[]>;
+  findDocumentByTitle(projectId: string, title: string): Promise<ClioDocument | null>;
+  /**
+   * Reconstruct full Markdown content for a document from its chunks.
+   * Defaults to the live version (`version_id IS NULL`); pass
+   * `opts.versionId` (returned by `listDocumentVersions`) to retrieve an
+   * archived state. Returns null if the document or version doesn't
+   * exist. 5.11 / Clio v2.
+   */
+  getDocumentContent(id: string, opts?: { versionId?: string }): Promise<DocumentContent | null>;
+  /**
+   * List archived versions for a document, newest-first. Each row is one
+   * snapshot taken at the moment the document was updated. The "live"
+   * (current) chunks are NOT a version row -- they live in `clio_chunks`
+   * with `version_id IS NULL`. A document that has never been updated
+   * returns an empty array. 5.11 / Clio v2.
+   */
+  listDocumentVersions(documentId: string): Promise<ClioDocumentVersion[]>;
+  /**
+   * List documents, newest-first, optionally scoped to one Clio Project.
+   *
+   * Soft-deleted handling (three-state, mutually-exclusive — default
+   * `'exclude'`):
+   *   - `'exclude'`: live documents only (default; original PR1 behaviour).
+   *   - `'include'`: live AND soft-deleted documents.
+   *   - `'only'`:    only soft-deleted documents (trash-bin view).
+   *
+   * `limit` defaults to 50, capped at 500. Pagination via `offset`.
+   * Used by `cfcf clio docs list`.
+   */
+  listDocuments(opts?: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    deletedFilter?: "exclude" | "include" | "only";
+  }): Promise<ClioDocument[]>;
+  /**
+   * Find documents by metadata-only filter (no FTS query). Mirrors
+   * Cerefox `cerefox_metadata_search`. Use cases: catch-up workflows
+   * (`metadata_search({type:"decision-log"}, updated_since:"…")`),
+   * cross-cutting filters (find all reflection-analyses across
+   * Projects), audit-style queries.
+   *
+   * Soft-deleted docs are excluded by default (override via
+   * `includeDeleted: true`). 5.12 / Clio v2.
+   */
+  metadataSearch(opts: MetadataSearchRequest): Promise<MetadataSearchResponse>;
+  /**
+   * Discovery: list every top-level metadata key currently used by any
+   * live document, with sample values. Mirrors Cerefox
+   * `cerefox_list_metadata_keys`. Use case: agents inspecting
+   * "what filters can I apply?" before crafting a metadata_search.
+   * 5.12 / Clio v2.
+   */
+  listMetadataKeys(opts?: { project?: string }): Promise<MetadataKeyInfo[]>;
+  /**
+   * Metadata-only edit. Updates any combination of title / author /
+   * projectId / metadata without re-ingesting content. **No version
+   * snapshot is taken** -- versions protect chunks/content from
+   * accidental overwrite, and metadata edits don't touch chunks.
+   * Writes one `edit-metadata` audit-log entry with a before/after
+   * diff of the fields that actually changed.
+   *
+   * Throws if the document doesn't exist or is soft-deleted, or if
+   * `projectName` resolves to no project. Idempotent: an edit that
+   * makes no actual changes is a no-op (no audit row).
+   *
+   * Returns the updated document. 5.13 follow-up.
+   */
+  editDocument(
+    id: string,
+    edits: EditDocumentRequest,
+    opts?: { author?: string },
+  ): Promise<ClioDocument>;
+  /**
+   * Soft-delete a document. Sets `deleted_at = now`; downstream search
+   * and `getDocument` (default-args) treat it as gone, but the row +
+   * its chunks + its versions remain in the DB so a `restoreDocument`
+   * call can undo it. Mirrors Cerefox `cerefox_delete_document`. The
+   * `author` argument is recorded in the audit log when 5.13 lands.
+   * Idempotent: deleting an already-deleted doc is a no-op.
+   * Throws if the document doesn't exist. 5.11.
+   */
+  deleteDocument(id: string, opts?: { author?: string }): Promise<void>;
+  /**
+   * Undo a soft-delete. Clears `deleted_at`. Idempotent: restoring an
+   * already-live doc is a no-op (does not error). Throws if the doc
+   * doesn't exist. Mirrors Cerefox `cerefox_restore_document`. 5.11.
+   */
+  restoreDocument(id: string, opts?: { author?: string }): Promise<void>;
 
   // ── Search ────────────────────────────────────────────────────────────
+  /**
+   * Chunk-level search. One result per matching chunk, ordered by
+   * engine score. Useful for the raw view (`cfcf clio search
+   * --by-chunk`) + internal tooling that wants to inspect individual
+   * chunk hits. Most agent / user code should call `searchDocuments`
+   * instead -- doc-level dedup matches Cerefox's primary
+   * `cerefox_search` and is what humans read intuitively.
+   */
   search(req: SearchRequest): Promise<SearchResponse>;
+  /**
+   * Document-level search. Internally fetches `matchCount × 5` chunk
+   * candidates via `search`, groups by `document_id`, keeps the
+   * best-scoring chunk as the representative, and returns up to
+   * `matchCount` unique documents (default 5; chunk-level default
+   * is 10 because chunks are smaller hits). Mirrors Cerefox's
+   * `cerefox_search_docs` behaviour. 5.12 follow-up. Each hit carries
+   * `versionCount` + `matchingChunks` so agents can spot edit-history
+   * + multi-chunk-match signals without a follow-up call.
+   */
+  searchDocuments(req: SearchRequest): Promise<DocumentSearchResponse>;
 
   // ── Introspection ─────────────────────────────────────────────────────
   stats(): Promise<ClioStats>;
@@ -71,6 +183,17 @@ export interface MemoryBackend {
     opts?: { workspaceId?: string; allInProject?: boolean },
   ): Promise<number>;
 
+  // ── Audit log (5.13) ──────────────────────────────────────────────────
+  /**
+   * Query the audit log. All filters are optional; combining them
+   * AND's the conditions. Results are newest-first.
+   *
+   * The audit log records every mutation: `create`, `update-content`,
+   * `delete`, `restore`, `migrate-project`. Reads (search, get, list)
+   * are NOT recorded.
+   */
+  getAuditLog(opts?: AuditLogQuery): Promise<ClioAuditEntry[]>;
+
   // ── Reindex ───────────────────────────────────────────────────────────
   /**
    * Re-embed chunks under the currently-active embedder. Chunks whose
@@ -90,6 +213,42 @@ export interface MemoryBackend {
   close(): Promise<void>;
 }
 
+/**
+ * Pre-flight summary for `cfcf clio embedder set <name>`. Surfaced to
+ * the CLI + Web UI so users can see what'll happen before they confirm.
+ *
+ *   - `embeddedChunkCount`: chunks already carrying an embedding from
+ *     the CURRENT active embedder. These become inconsistent after
+ *     the switch unless `--reindex` is also passed.
+ *   - `chunksOverNewCeiling`: chunks whose `char_count` exceeds the
+ *     NEW embedder's `recommendedChunkMaxChars`. The new model would
+ *     silently truncate these inputs at embed time, degrading quality.
+ *     Fix is `cfcf clio reindex --rechunk` (planned, item 6.23).
+ *   - `configMaxOverCeiling`: when the user has set
+ *     `clio.maxChunkChars` to a value larger than the new embedder's
+ *     ceiling, future ingests will be capped at the ceiling. The
+ *     config value isn't honoured verbatim.
+ *
+ * 5.12+ follow-up.
+ */
+export interface EmbedderSwitchImpact {
+  newName: string;
+  newDim: number;
+  newRecommendedChunkMaxChars: number;
+  currentName: string | null;
+  currentRecommendedChunkMaxChars: number | null;
+  /** Total chunks in the live (non-archived) set. */
+  totalChunkCount: number;
+  /** Of those, how many already carry an embedding (any model). */
+  embeddedChunkCount: number;
+  /** Of those, how many exceed the NEW embedder's recommended max chars. */
+  chunksOverNewCeiling: number;
+  /** Currently-configured `clio.maxChunkChars`, if set. */
+  configMaxChunkChars: number | null;
+  /** True iff configMaxChunkChars is set AND > newRecommendedChunkMaxChars. */
+  configMaxOverCeiling: boolean;
+}
+
 export interface ReindexOptions {
   /** Restrict to a single Clio Project (by name or id). */
   project?: string;
@@ -103,6 +262,78 @@ export interface ReindexOptions {
   batchSize?: number;
   /** Optional progress callback invoked after each batch. */
   onProgress?: (info: { processed: number; total: number }) => void;
+}
+
+/**
+ * Request shape for `MemoryBackend.metadataSearch`.
+ *
+ * `metadataFilter` is an exact-match JSON-containment filter against
+ * `clio_documents.metadata`: every key/value pair must match. Top-level
+ * keys only (matches Cerefox's behaviour for v1 -- nested object
+ * containment lands when callers ask for it).
+ *
+ * `updatedSince` is an ISO-8601 timestamp; only documents whose
+ * `updated_at >= updatedSince` are returned. Drives the catch-up
+ * workflow ("what's changed since last sync?").
+ */
+export interface MetadataSearchRequest {
+  metadataFilter: Record<string, string | number | boolean>;
+  /** Optional Clio Project scope (name or id). */
+  project?: string;
+  /** ISO-8601 timestamp; results filtered to `updated_at >= updatedSince`. */
+  updatedSince?: string;
+  /** Include soft-deleted docs (default false). */
+  includeDeleted?: boolean;
+  /** Max docs to return (default 50, cap 500). */
+  matchCount?: number;
+}
+
+export interface MetadataSearchResponse {
+  documents: import("../types.js").ClioDocument[];
+  /** Echoed back so callers can confirm the filter was understood. */
+  metadataFilter: Record<string, string | number | boolean>;
+}
+
+/**
+ * One row in the response of `MemoryBackend.listMetadataKeys`.
+ * `valueSamples` holds up to 5 distinct values seen for this key in
+ * the corpus, useful for agents discovering the metadata vocabulary.
+ */
+export interface MetadataKeyInfo {
+  key: string;
+  documentCount: number;
+  valueSamples: (string | number | boolean)[];
+}
+
+/**
+ * Filter shape for `MemoryBackend.getAuditLog`. All fields optional.
+ */
+export interface AuditLogQuery {
+  /** Restrict by event type (Cerefox-style vocabulary). */
+  eventType?: ClioAuditEntry["eventType"];
+  /** Restrict by actor (exact match). Useful for "what did claude-code write?" */
+  actor?: string;
+  /** Restrict by Clio Project (name or id). */
+  project?: string;
+  /** Restrict by document UUID. */
+  documentId?: string;
+  /** ISO-8601 timestamp; only entries with timestamp >= this. */
+  since?: string;
+  /** Max entries to return (default 100, cap 1000). */
+  limit?: number;
+}
+
+/**
+ * Returned by `MemoryBackend.getDocumentContent`. Carries the document
+ * record alongside its reconstructed Markdown body. `versionId` echoes
+ * which version was reconstructed (null = live/current).
+ */
+export interface DocumentContent {
+  document: ClioDocument;
+  content: string;
+  chunkCount: number;
+  totalChars: number;
+  versionId: string | null;
 }
 
 export interface ReindexResult {

@@ -109,6 +109,42 @@ export async function put<T = unknown>(path: string, body?: unknown): Promise<Cl
 }
 
 /**
+ * Make a PATCH request to the cfcf server. Used for partial updates
+ * (e.g. `cfcf clio docs edit` → `PATCH /api/clio/documents/:id`).
+ */
+export async function patch<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
+  try {
+    const res = await fetch(`${getBaseUrl()}${path}`, {
+      method: "PATCH",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return await readJsonOrTextError<T>(res);
+  } catch (err: unknown) {
+    return mapFetchError(err);
+  }
+}
+
+/**
+ * Make a DELETE request to the cfcf server. Optional body for callers
+ * that need to attach attribution / metadata to the request (e.g.
+ * `cfcf clio delete <id> --author <name>` mapped to
+ * `DELETE /api/clio/documents/:id`).
+ */
+export async function del<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
+  try {
+    const res = await fetch(`${getBaseUrl()}${path}`, {
+      method: "DELETE",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return await readJsonOrTextError<T>(res);
+  } catch (err: unknown) {
+    return mapFetchError(err);
+  }
+}
+
+/**
  * Check if the server is reachable.
  */
 export async function isServerReachable(): Promise<boolean> {

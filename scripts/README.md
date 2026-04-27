@@ -13,7 +13,7 @@ Development and release utility scripts.
 | `install.sh` | The curl-bash installer. Bootstraps Bun if missing, then `bun install -g <tarball>`, then hands off to `cfcf init`. |
 | `uninstall.sh` | One-liner wrapper around `bun remove -g @cerefox/cfcf-cli`. |
 | `smoke-tarball.sh <cli-tarball> [native-tarball]` | Installs a freshly-built tarball into an isolated sandbox and runs `cfcf --version` + `cfcf doctor`. |
-| `stage-dist.sh [version]` | Convenience wrapper: wipes `dist/`, builds the cli + host-platform native tarballs, copies `install.sh`, writes `MANIFEST.txt`. After it runs, `dist/` is ready for a `file://` dogfood install via the printed one-liner. |
+| `stage-dist.sh [version]` | Convenience wrapper: wipes `dist/`, builds the cli + host-platform native tarballs, copies `install.sh`, writes `MANIFEST.txt`. After it runs, `dist/` is ready for a `file://` dogfood install via the printed one-liner. **Caches** compiled libsqlite3 + downloaded sqlite-vec under `~/.cache/cfcf-build/` (override via `CFCF_BUILD_CACHE_DIR`); subsequent runs skip the network + compile. CI (`release.yml`) does NOT set the env var, so release builds always do a clean download + compile. |
 | `serve-dist.ts` | Phase-0 dev helper: serves `dist/` over HTTP so `install.sh` can hit `http://localhost:8080/...`. |
 | `detect-platform.sh` | Prints the cfcf platform tag (`darwin-arm64`, `darwin-x64`, …) for the current machine. |
 

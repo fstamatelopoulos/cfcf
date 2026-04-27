@@ -120,35 +120,26 @@ SQLite ships FTS5 built-in; no extension required. Create a `clio_chunks_fts` vi
 
 ### 4.3 Hybrid search
 
-Reciprocal Rank Fusion (RRF, Cormack/Clarke/Buettcher) with k=60 — the de-facto standard for combining dense + sparse without per-system rank calibration. Same approach Cerefox's `cerefox_hybrid_search` Postgres RPC uses.
+**Alpha-weighted score blending** (Cerefox parity): each chunk's score is
 
 ```
-score(d) = Σ over engines: 1 / (k + rank_engine(d))
+score(c) = α × cosine(c) + (1 − α) × normalised_bm25(c)
 ```
 
-SQLite CTE that does it in one query:
+with `α = 0.7` default. SQLite FTS5's `bm25()` returns negative values where more-negative = more relevant; we min-max normalise within the candidate pool to `[0, 1]` higher-is-better so the two scores are comparable. Cerefox's `ts_rank_cd` is already roughly `[0, 1]` so they don't need this step. See `docs/decisions-log.md` 2026-04-27 entry "Hybrid search algorithm: alpha-weighted score blending over RRF" for the full rationale (why we switched from RRF, and the renormalisation trade-off).
 
-```sql
-WITH
-  fts_hits AS (
-    SELECT chunk_id, row_number() OVER (ORDER BY bm25(clio_chunks_fts)) AS r
-    FROM clio_chunks_fts WHERE clio_chunks_fts MATCH :query LIMIT :fts_k
-  ),
-  vec_hits AS (
-    SELECT id AS chunk_id, row_number() OVER (ORDER BY vec_distance_cosine(embedding, :q_vec)) AS r
-    FROM clio_chunks WHERE version_id IS NULL LIMIT :vec_k
-  ),
-  fused AS (
-    SELECT chunk_id, (1.0/(60+r)) AS score FROM fts_hits
-    UNION ALL
-    SELECT chunk_id, (1.0/(60+r)) AS score FROM vec_hits
-  )
-SELECT chunk_id, SUM(score) AS rrf_score FROM fused GROUP BY chunk_id ORDER BY rrf_score DESC LIMIT :match_count;
-```
+`α` is a per-call knob (`?alpha=` query param / `--alpha` CLI flag) defaulting to `clio.hybridAlpha` from global config (default 0.7). FTS-matched chunks always pass the `minScore` (cosine) floor regardless of vector score; only vector-only candidates are filtered.
 
-### 4.4 Small-to-big retrieval
+### 4.4 Small-to-big retrieval (per-document)
 
-After ranking chunks, pull each winner's **sibling chunks** from the same document (same `document_id`, ±N in `chunk_index`, `version_id IS NULL`) for full-passage context. Same pattern as Cerefox — precision from chunk-level match, coherence from passage-level return.
+**Per-document decision** (Cerefox parity), driven by the document's `total_chars`:
+
+- **Small docs** (`total_chars ≤ clio.smallDocThreshold`, default 20000): each search hit's `bestChunkContent` is the **full reconstructed document** (all live chunks joined in `chunk_index` order). The agent reads the entire doc inline from the search result.
+- **Large docs**: each hit's `bestChunkContent` is the matched chunk + `clio.contextWindow` (default 1) sibling chunks on each side, joined in chunk-index order.
+
+The `DocumentSearchHit.isPartial` field tells the caller which path was taken (`true` for chunk-window, `false` for full doc). Both knobs are tunable per-call (`?small_doc_threshold=` / `--small-doc-threshold`, `?context_window=` / `--context-window`).
+
+Note: the chunk-level engine (used by `cfcf clio search --by-chunk` and internal callers) still applies a fixed-radius per-chunk neighbour expansion. The doc-level path bypasses that expansion entirely so `contextWindow=0` actually means "bare matched chunk".
 
 ## 5. Schema
 
@@ -382,6 +373,24 @@ v1 ships with `install`, `list`, `active`, and `set` verbs. `reindex` and `unins
 
 `onnxruntime-node` provides platform binaries (darwin-arm64 / darwin-x64 / linux-x64 / win32-x64) around 30 MB each. The ONNX model file itself is separate. As of v0.10.0 (item 5.5): `onnxruntime-node` is a transitive dep of `@huggingface/transformers` and is fetched by `bun install -g` from npmjs.com into the user's global `node_modules/`. The embedder model itself is downloaded lazily by transformers from HuggingFace into `~/.cfcf/models/` on first Clio use. The earlier "bundled into cfcf-binary via asset embedding" approach (described in this section before the npm-format pivot) is superseded — see [`installer-design.md`](../research/installer-design.md) §3.
 
+### 6.5 Configuration knobs (`ClioGlobalConfig`)
+
+Tunable via `cfcf config edit` / the Web UI Server Info page / `PUT /api/config`. All optional — defaults match Cerefox where applicable.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `ingestPolicy` | `"summaries-only"` | What gets auto-ingested by the iteration loop. `"all"` includes every artifact; `"off"` disables auto-ingest. |
+| `preferredEmbedder` | (unset) | The embedder picked during `cfcf init`; default for the no-arg `cfcf clio embedder install`. |
+| `defaultSearchMode` | `"auto"` | Resolves at search time: `"auto"` → hybrid if an embedder is active, else fts. Per-call `--mode` overrides. |
+| `minSearchScore` | `0.5` | Cosine floor for vector-only candidates in hybrid mode and every result in semantic mode. FTS-matched chunks bypass. Cerefox parity. |
+| `hybridAlpha` | `0.7` | Hybrid blend weight: `α × cosine + (1−α) × normalised_BM25`. Higher = more semantic; lower = more keyword. Cerefox parity. |
+| `smallDocThreshold` | `20000` | Doc-level small-to-big threshold (chars). Docs ≤ this size return full content per hit; larger docs return chunk + window. `0` disables the full-doc path. Cerefox parity. |
+| `contextWindow` | `1` | Sibling chunks per side around matched chunks for large docs. `0` returns just the matched chunk. Cerefox parity. |
+| `maxChunkChars` | `4000` | Chunker target maximum (Cerefox `MAX_CHUNK_CHARS`). The active embedder's `recommendedChunkMaxChars` acts as a safety **ceiling** — values above it are capped at ingest with a stderr warning. Smaller values are honored verbatim. |
+| `minChunkChars` | `100` | Chunker minimum (Cerefox `MIN_CHUNK_CHARS`). Pieces smaller than this merge into the previous chunk. |
+
+Per-call overrides for the search-side knobs (`alpha`, `small_doc_threshold`, `context_window`, `min_score`, `mode`, `match_count`, `by`, `metadata`) are accepted as query params on `/api/clio/search` and as CLI flags on `cfcf clio search`.
+
 ## 7. API design
 
 Two surfaces: **HTTP** on the cf² server, **CLI** commands that call the HTTP surface. Both mirror the Cerefox MCP tool verbs for semantic compatibility.
@@ -392,16 +401,19 @@ All under `/api/clio/*`. JSON bodies, same auth / error-shape conventions as the
 
 | Method | Path | Purpose | v1? |
 |---|---|---|---|
-| `POST` | `/api/clio/ingest` | Ingest a document (chunk + embed + store). Cerefox-compatible body shape. | ✅ |
-| `GET`  | `/api/clio/search` | Hybrid search. Query params: `q`, `project`, `match_count`, `metadata`, `mode` (`hybrid` / `fts` / `semantic`). | ✅ |
-| `GET`  | `/api/clio/documents/:id` | Retrieve a document by id. Optional `?version_id=` (v2+). | ✅ (v1 without version param) |
+| `POST` | `/api/clio/ingest` | Ingest or update a document. Body fields: `documentId`, `updateIfExists`, `author` — Cerefox-parity since 5.11. Returns `action`: `created` / `updated` / `skipped`. | ✅ (5.11) |
+| `GET`  | `/api/clio/search` | Default doc-level dedup (`?by=doc`); `?by=chunk` returns the raw chunk-level shape. Query params: `q`, `project`, `match_count`, `metadata`, `mode`, `min_score`, `alpha`, `small_doc_threshold`, `context_window`, `by`. | ✅ |
+| `GET`  | `/api/clio/embedders/:name/switch-impact` | Pre-flight summary for embedder switches: `embeddedChunkCount`, `chunksOverNewCeiling`, `configMaxOverCeiling`. Surfaced by CLI + Web UI before the actual switch. | ✅ (5.12+) |
+| `GET`  | `/api/clio/documents/:id` | Retrieve a document's metadata row by id. | ✅ |
+| `GET`  | `/api/clio/documents/:id/content` | Reconstruct full content from chunks. Optional `?version_id=` for archived versions. | ✅ (5.11) |
+| `GET`  | `/api/clio/documents/:id/versions` | List archived versions, newest first. | ✅ (5.11) |
+| `DELETE` | `/api/clio/documents/:id` | Soft-delete (idempotent). Body: `{author}`. | ✅ (5.11) |
+| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted (idempotent). Body: `{author}`. | ✅ (5.11) |
+| `PATCH` | `/api/clio/documents/:id` | Metadata-only edit (title/author/projectId/projectName/metadataSet/metadataUnset). NO version snapshot; one `edit-metadata` audit row with before/after diff. Idempotent no-ops write nothing. | ✅ (5.13 follow-up) |
+| `POST` | `/api/clio/metadata-search` | Exact-match metadata filter (no FTS). Body: `{metadataFilter, project?, updatedSince?, includeDeleted?, matchCount?}`. | ✅ (5.12) |
+| `GET`  | `/api/clio/metadata-keys` | List metadata keys + sample values, most-used first. Optional `?project=`. | ✅ (5.12) |
+| `GET`  | `/api/clio/audit-log` | Query mutation events (create/update-content/edit-metadata/delete/restore/migrate-project). Filters: `event_type`, `actor`, `project`, `document_id`, `since`, `limit`. | ✅ (5.13) |
 | `GET`  | `/api/clio/projects` | List Clio Projects (name, id, document_count). | ✅ |
-| `GET`  | `/api/clio/metadata/keys` | List all metadata keys used by any document in a project. | v2 |
-| `POST` | `/api/clio/metadata/search` | Exact-match metadata filter; returns matching documents without text scoring. | v2 |
-| `GET`  | `/api/clio/documents/:id/versions` | List archived versions. | v2 |
-| `GET`  | `/api/clio/audit-log` | Query the audit log with filters. | v2 |
-| `DELETE` | `/api/clio/documents/:id` | Soft-delete. | v2 |
-| `POST` | `/api/clio/documents/:id/restore` | Restore soft-deleted. | v2 |
 | `GET`  | `/api/clio/stats` | DB size, chunk count per project, index health. | ✅ |
 
 ### 7.2 CLI commands
@@ -442,6 +454,11 @@ cfcf clio embedder active
 
 # Reindex (v2+): re-embed all chunks with the active embedder
 cfcf clio reindex --project cf-ecosystem
+
+# Metadata-only edit (5.13 follow-up; mutate metadata without re-ingesting content)
+# No version snapshot; one edit-metadata audit entry with before/after diff.
+cfcf clio docs edit <document-id> --title "..." --project cfcf \
+                                  --set-meta reviewed_by=fotis --unset-meta draft
 
 # Introspection
 cfcf clio stats
@@ -529,7 +546,7 @@ What we copy from `../cerefox`:
 
 | Cerefox artifact | Clio equivalent | Reuse mode |
 |---|---|---|
-| `src/cerefox/db/rpcs.sql` (1649 lines Postgres) | `packages/core/src/clio/sql/*.sql` + TS code using better-sqlite3 | **Port, don't copy.** Postgres-specific (`pgvector`, `tsvector`, `ts_rank`). Rewrite for SQLite + sqlite-vec + FTS5. Algorithms preserved (RRF, small-to-big expansion, metadata filter, dedup by content_hash). ~1000 lines SQLite, half as many TS helpers around it. |
+| `src/cerefox/db/rpcs.sql` (1649 lines Postgres) | `packages/core/src/clio/sql/*.sql` + TS code using better-sqlite3 | **Port, don't copy.** Postgres-specific (`pgvector`, `tsvector`, `ts_rank`). Rewrite for SQLite + sqlite-vec + FTS5. Algorithms preserved (alpha-weighted hybrid blending — see §4.3 — small-to-big expansion, metadata filter, dedup by content_hash). ~1000 lines SQLite, half as many TS helpers around it. |
 | `src/cerefox/chunking/markdown.py` (305 Python) | `packages/core/src/clio/chunking/markdown.ts` | **Port to TypeScript.** Heading-aware Markdown chunker using `unified` + `remark-parse`. Algorithm 1:1 (chunk-boundary heuristics, heading_path, heading_level assignment, chunk-size targeting). ~250 TS lines. |
 | `src/cerefox/embeddings/base.py` + `cloud.py` | `packages/core/src/clio/embedders/*.ts` | **Port.** Local ONNX embedder is cf²-specific (Cerefox uses cloud embeddings). Interface shape from `base.py` is reused; implementation is new. |
 | `supabase/functions/cerefox-search/index.ts` | `packages/server/src/routes/clio/search.ts` | **Reference — reimplement.** Argument parsing, response envelope, and query-composition logic are structurally similar but Hono + SQLite is different enough that we rewrite rather than copy. |
@@ -590,7 +607,9 @@ What we copy from `../cerefox`:
 
 ## 11.5 Ranking + boosting (scratchpad, will become its own doc)
 
-RRF over FTS5 + sqlite-vec gets us hybrid search out of the box. But raw RRF treats every document equally, which loses information — a `reflection-analysis` is strategically curated; an `iteration-log` is a raw trace; a `design-guideline` is authoritative; a `meeting-notes` is casual. Clio should rank these differently.
+> **Note (2026-04-27).** This section was written when hybrid search used RRF (k=60). The engine has since switched to **alpha-weighted score blending** (see §4.3). Boost ideas below still apply — they'd multiply / add against the blended score instead of the RRF score. Conceptual structure unchanged; just substitute "blended score" for "RRF score" wherever it appears.
+
+Hybrid search treats every document equally, which loses information — a `reflection-analysis` is strategically curated; an `iteration-log` is a raw trace; a `design-guideline` is authoritative; a `meeting-notes` is casual. Clio should rank these differently.
 
 This section captures the scratchpad of ideas for later iteration. **Expected to grow into its own design doc** (`docs/design/clio-ranking.md`) once we have enough signal to choose between them. v1 ships the simplest defensible boost set; v2+ iterates.
 

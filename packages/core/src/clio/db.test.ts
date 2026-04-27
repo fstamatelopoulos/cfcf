@@ -12,6 +12,11 @@ import { join } from "path";
 import { Database } from "bun:sqlite";
 import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, getSqliteVecPath, type ClioMigration } from "./db.js";
 
+// Load migration SQL via the same `with { type: "text" }` import the
+// db.ts production code uses, so tests exercise the real bytes.
+import m0001Sql from "./migrations/0001_initial.sql" with { type: "text" };
+function m0001(): string { return m0001Sql; }
+
 const tempDirs: string[] = [];
 function makeTempDbPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "cfcf-clio-db-test-"));
@@ -32,10 +37,11 @@ describe("openClioDb", () => {
     const db = openClioDb({ path });
 
     // Applied migrations list: every embedded migration has been run.
+    // 2026-04-27: collapsed to a single 0001_initial.sql; future schema
+    // changes will add 0002_*.sql, 0003_*.sql, ...
     const applied = listAppliedMigrations(db);
-    expect(applied.length).toBeGreaterThanOrEqual(2);
+    expect(applied.length).toBeGreaterThanOrEqual(1);
     expect(applied[0]).toContain("0001_initial.sql");
-    expect(applied[1]).toContain("0002_active_embedder.sql");
 
     // Core tables exist
     const tables = db.query<{ name: string }, []>(
@@ -190,7 +196,55 @@ describe("applyCustomSqlite + getSqliteVecPath", () => {
 });
 
 describe("schema shape", () => {
-  it("enforces content_hash uniqueness on clio_documents", () => {
+  // The original 0003 -- which rebuilt clio_documents and silently
+  // cascade-deleted every clio_chunks row via the FK ON DELETE CASCADE --
+  // shipped pre-merge on `iteration-5/clio-update-api`, was fixed by
+  // adding the `-- @migration-flags: disable-foreign-keys` marker that
+  // tells the migration runner to bracket the BEGIN/COMMIT with
+  // `PRAGMA foreign_keys = OFF / ON` (the only place that pragma takes
+  // effect). The migration was then collapsed into 0001 (2026-04-27)
+  // since cfcf has no public users yet, but the runner mechanism stays
+  // for any future migration that needs to drop+rebuild a parent table.
+  //
+  // This test exercises the marker mechanism directly so a future
+  // migration with the same shape can rely on it.
+  it("runMigrations honours the @migration-flags: disable-foreign-keys marker", () => {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const db = new Database(":memory:", { create: true });
+    db.exec("PRAGMA foreign_keys = ON");
+
+    // Stand up a tiny parent/child schema with ON DELETE CASCADE.
+    db.exec(`
+      CREATE TABLE parent (id TEXT PRIMARY KEY);
+      CREATE TABLE child  (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id) ON DELETE CASCADE);
+    `);
+    db.run("INSERT INTO parent (id) VALUES ('p')");
+    db.run("INSERT INTO child  (id, parent_id) VALUES ('c', 'p')");
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM child").get()?.n).toBe(1);
+
+    // A migration that DROPs the parent (canonical SQLite "rebuild
+    // table" pattern), with the disable-foreign-keys flag on line 1.
+    const flagged = `-- @migration-flags: disable-foreign-keys
+CREATE TABLE parent_new (id TEXT PRIMARY KEY);
+INSERT INTO parent_new SELECT * FROM parent;
+DROP TABLE parent;
+ALTER TABLE parent_new RENAME TO parent;`;
+
+    runMigrations(db, [{ filename: "9999_rebuild_parent.sql", sql: flagged }]);
+
+    // Without the marker, the DROP TABLE would have cascade-deleted
+    // the child row. With the marker, it survives.
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM child").get()?.n).toBe(1);
+    db.close();
+  });
+
+  // Migration 0003 (item 5.11) relaxed the UNIQUE constraint on
+  // clio_documents.content_hash so legitimate updates whose new content
+  // happens to match another doc don't deadlock. Application-level dedup
+  // still happens in LocalClio.ingest's create branch (returns
+  // action="skipped" for the existing match); the schema just doesn't
+  // enforce one-doc-per-hash anymore.
+  it("does NOT enforce content_hash uniqueness at the schema level (relaxed in 0003)", () => {
     const path = makeTempDbPath();
     const db = openClioDb({ path });
 
@@ -200,12 +254,13 @@ describe("schema shape", () => {
       VALUES ('d1', 'p1', 't1', 'src', 'abc123')
     `);
 
+    // Used to throw on the duplicate hash; now succeeds silently.
     expect(() =>
       db.run(`
         INSERT INTO clio_documents (id, project_id, title, source, content_hash)
         VALUES ('d2', 'p1', 't2', 'src2', 'abc123')
       `),
-    ).toThrow(/UNIQUE constraint failed/);
+    ).not.toThrow();
 
     db.close();
   });

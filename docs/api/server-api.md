@@ -820,7 +820,7 @@ Stop a running or paused loop.
 
 ## Clio (cross-workspace memory, item 5.7)
 
-All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). As of v0.9.0: FTS5 keyword search + ONNX-embedder hybrid (RRF) + semantic (cosine) search, all behind the same shape — clients pick via `mode`. Default mode is `auto` (hybrid if an embedder is active, else fts).
+All Clio endpoints live under `/api/clio/*`. Backed by a single SQLite DB at `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). FTS5 keyword search + ONNX-embedder hybrid (α-weighted blend of cosine + normalised BM25, default α=0.7) + semantic (cosine) search, all behind the same shape — clients pick via `mode`. Default mode is `auto` (hybrid if an embedder is active, else fts).
 
 ### GET /api/clio/projects
 
@@ -854,7 +854,12 @@ Fetch a single Clio Project by UUID or name (case-insensitive).
 
 ### POST /api/clio/ingest
 
-Ingest a Markdown document. Chunks the content via the heading-aware chunker, sha256-dedups by content, inserts document + chunks in one transaction.
+Ingest a Markdown document. Chunks the content via the heading-aware chunker, then takes one of four branches based on the request body:
+
+1. `documentId` provided → **deterministic update**. Snapshots the named doc's current chunks into a new version row and replaces them with the new content. 404s if the doc doesn't exist or is soft-deleted. Wins over `updateIfExists` (returns a `note` if both passed). Mirrors Cerefox `cerefox_ingest(document_id=...)`.
+2. `updateIfExists: true` → **title-based update**. Looks up an existing live (non-deleted) doc with the same title in the same Project; if found, updates in place (snapshot + replace); if not, falls through to create. Mirrors Cerefox `cerefox_ingest(update_if_exists=true)`.
+3. Content matches an existing live doc's `content_hash` → **skip** (idempotent no-op; returns the existing record). PR1 behaviour preserved.
+4. Otherwise → **create** a brand-new document.
 
 **Request body:**
 ```json
@@ -864,31 +869,236 @@ Ingest a Markdown document. Chunks the content via the heading-aware chunker, sh
   "content": "# Markdown body\n\n...",
   "source": "optional origin hint",
   "metadata": { "role": "dev", "artifact_type": "iteration-log" },
-  "reviewStatus": "approved"
+  "reviewStatus": "approved",
+  "documentId": "<uuid, optional>",     // 5.11: deterministic update
+  "updateIfExists": false,              // 5.11: title-based update fallback
+  "author": "claude-code"               // 5.11: stored on version rows for attribution
 }
 ```
 
 **Responses:**
-- `201 Created` on a fresh ingest — returns `{ id, created: true, document, chunksInserted }`.
-- `200 OK` when the content_hash matches an existing document (idempotent no-op) — returns `{ id, created: false, document, chunksInserted: 0 }`.
-- `400` for missing required fields / empty title or content.
+- `201 Created` on a fresh ingest — returns `{ id, action: "created", created: true, document, chunksInserted }`.
+- `200 OK` on update — returns `{ id, action: "updated", created: false, document, chunksInserted, versionId, versionNumber, note? }`. The `versionId` points at the snapshot row holding the prior content.
+- `200 OK` on dedup skip — returns `{ id, action: "skipped", created: false, document, chunksInserted: 0 }`.
+- `400` for missing required fields / empty title or content / malformed metadata.
+- `404` when `documentId` doesn't resolve.
+
+**Backwards compatibility:** the legacy `created` boolean is still set (`true` iff `action === "created"`), so PR1 callers continue to work. New code should prefer `action`.
+
+### GET /api/clio/documents/:id/content
+
+**5.11.** Reconstruct the full Markdown content of a document by joining its chunks (newline-separated, in `chunk_index` order). Mirrors Cerefox `cerefox_get_document(p_document_id, p_version_id)`.
+
+**Path:** `:id` — document UUID.
+
+**Query params:**
+- `version_id` (optional) — UUID of an archived version (from `GET /api/clio/documents/:id/versions`). When omitted, returns the live (current) version.
+
+**Response:** `200 OK`
+```json
+{
+  "document": { /* ClioDocument */ },
+  "content": "# Reconstructed markdown body\n\n...",
+  "chunkCount": 12,
+  "totalChars": 7430,
+  "versionId": null
+}
+```
+
+**Errors:** `404` when the doc doesn't exist or `version_id` doesn't belong to it.
+
+### GET /api/clio/documents/:id/versions
+
+**5.11.** List archived versions for a document, newest first. Empty array when the doc has never been updated. Mirrors Cerefox `cerefox_list_document_versions`.
+
+**Response:** `200 OK`
+```json
+{
+  "versions": [
+    {
+      "id": "<version uuid>",
+      "documentId": "<doc uuid>",
+      "versionNumber": 3,
+      "source": "claude-code",
+      "metadata": {},
+      "chunkCount": 12,
+      "totalChars": 7430,
+      "archived": false,
+      "createdAt": "2026-04-26T08:11:42.054Z"
+    }
+    // ...older versions...
+  ]
+}
+```
+
+**Errors:** `404` when the doc doesn't exist.
+
+### DELETE /api/clio/documents/:id
+
+**5.11.** Soft-delete. Sets `deleted_at`; the row + chunks + versions remain. Idempotent. Mirrors Cerefox `cerefox_delete_document`.
+
+**Body (optional):** `{ "author": "claude-code" }` — recorded on the audit log entry.
+
+**Response:** `200 OK` with `{ deleted: true, document }`. `404` for unknown doc.
+
+### POST /api/clio/documents/:id/restore
+
+**5.11.** Undo a soft-delete. Idempotent: restoring an already-live doc returns `{ restored: false, document }`.
+
+**Response:** `200 OK`. `404` for unknown doc.
+
+### PATCH /api/clio/documents/:id
+
+**5.13 follow-up.** Metadata-only edit. Mutate `title`, `author`, Clio Project, and metadata WITHOUT re-ingesting content. **No version snapshot is taken** — versions exist to protect chunks from accidental overwrite, and metadata edits don't touch chunks. Writes one `edit-metadata` audit-log entry with a before/after diff.
+
+**Body (all fields optional):**
+```json
+{
+  "title":         "New name",
+  "author":        "claude-code",       // empty string clears to default 'agent'
+  "projectId":     "<uuid>",            // OR
+  "projectName":   "cfcf",              // (one of the two -- projectId wins if both)
+  "metadataSet":   { "reviewed_by": "fotis", "status": "approved" },
+  "metadataUnset": ["draft"],
+  "actor":         "claude-code"        // audit-log attribution; defaults to 'agent'
+}
+```
+
+`metadataSet` adds/overwrites keys; existing keys not mentioned survive. `metadataUnset` removes keys (idempotent — no-op if absent). The set/unset split (vs Cerefox's full-blob replace) avoids the read-modify-write footgun where an agent accidentally drops keys it didn't know about; a future `CerefoxRemote` adapter can reconstruct the full blob from these deltas at the abstraction boundary if upstream demands it.
+
+**Response:** `200 OK` with `{ updated: boolean, document: ClioDocument }`.
+- `updated: true` — at least one field actually changed; one `edit-metadata` audit row was written.
+- `updated: false` — every requested edit already matched the current state; no audit row, no `updated_at` bump.
+
+**Errors:**
+- `400` — empty `title`, unknown `projectId` / `projectName`, or doc is soft-deleted (restore first).
+- `404` — doc not found.
+
+### POST /api/clio/metadata-search
+
+**5.12.** Find documents by metadata-only filter. Mirrors Cerefox `cerefox_metadata_search`.
+
+**Body:**
+```json
+{
+  "metadataFilter": { "role": "reflection", "tier": "semantic" },
+  "project": "cf-ecosystem",                      // optional
+  "updatedSince": "2026-04-01T00:00:00Z",         // optional ISO timestamp
+  "includeDeleted": false,                        // optional
+  "matchCount": 50                                 // optional, default 50, cap 500
+}
+```
+
+**Response:** `200 OK` with `{ documents: ClioDocument[], metadataFilter }`. `400` for missing/empty `metadataFilter`.
+
+### GET /api/clio/metadata-keys
+
+**5.12.** List metadata keys + sample values currently in the corpus. Mirrors Cerefox `cerefox_list_metadata_keys`.
+
+**Query params:** `project` (optional name or id; restricts the scan to that Clio Project).
+
+**Response:** `200 OK`
+```json
+{
+  "keys": [
+    { "key": "role", "documentCount": 42, "valueSamples": ["reflection", "dev", "architect"] },
+    { "key": "artifact_type", "documentCount": 18, "valueSamples": ["reflection-analysis", "iteration-log"] }
+  ]
+}
+```
+
+Most-used keys first. Array values produce `valueSamples: []` (only top-level scalars are sampled — they're the only valid values for `metadata-search` filters anyway).
+
+### GET /api/clio/audit-log
+
+**5.13.** Query the audit log. Mirrors Cerefox `cerefox_get_audit_log`. Newest first.
+
+The audit log records every Clio **mutation**: `create`, `update-content`, `edit-metadata`, `delete`, `restore`, `migrate-project`. Reads (search, get, list) are NOT recorded — write attribution is the trust story.
+
+**Query params (all optional, AND-combined):**
+- `event_type` — `create` | `update-content` | `edit-metadata` | `delete` | `restore` | `migrate-project`
+- `actor` — exact match (e.g. `claude-code`)
+- `project` — Clio Project name or id
+- `document_id` — UUID
+- `since` — ISO-8601 timestamp; only entries with `timestamp >= this`
+- `limit` — default 100, cap 1000
+
+**Response:** `200 OK`
+```json
+{
+  "entries": [
+    {
+      "id": 42,
+      "timestamp": "2026-04-26T08:11:42.054Z",
+      "eventType": "update-content",
+      "actor": "claude-code",
+      "projectId": "<uuid>",
+      "documentId": "<uuid>",
+      "query": null,
+      "metadata": { "version_id": "<uuid>", "version_number": 3, "chunks": 12, "total_chars": 7430 }
+    }
+  ]
+}
+```
+
+**Errors:** `400` for unknown `event_type`.
 
 ### GET /api/clio/search
 
-Hybrid / semantic / FTS search.
+Hybrid / semantic / FTS search. Default returns one row per matching **document** (Cerefox parity); `?by=chunk` returns one row per matching chunk.
 
 **Query params:**
 - `q` (required) — free-text query. FTS operator characters are stripped server-side, so clients don't need to escape.
+- `by` (optional, default `doc`) — `doc` returns deduplicated document-level hits (one per unique `documentId`, ordered by best-chunk score, with `matchingChunks` + `versionCount` + the best chunk's content). `chunk` returns the raw chunk-level hits ordered by score. Doc-level is the default since 5.12 (Cerefox `cerefox_search` parity); chunk-level is preserved for callers that want to see the engine's per-chunk ranking explicitly.
 - `project` (optional) — Clio Project name or id. Scopes to that Project only.
 - `mode` (optional) — `"fts"` · `"hybrid"` · `"semantic"`. When omitted, the server resolves in this order:
   - `clio.defaultSearchMode` from the global config (`auto` | concrete value),
   - `auto` (hybrid if `clio_active_embedder` row exists, else fts).
   Hybrid + semantic require an active embedder; calling them without one returns a 400.
 - `min_score` (optional) — cosine threshold (0.0–1.0) for the **vector branch** of hybrid (FTS-matched chunks bypass) and for **every** result of semantic. Per-call value wins over `clio.minSearchScore` in the global config; absent both, default 0.5 (Cerefox parity). Ignored for `mode=fts`.
-- `match_count` (optional) — max hits to return (default 10, cap 100).
+- `alpha` (optional) — hybrid blend weight (0.0–1.0). `α × cosine + (1−α) × normalised_BM25`. Higher = more semantic; lower = more keyword. Per-call value wins over `clio.hybridAlpha`; absent both, default 0.7 (Cerefox parity). Ignored for `mode=fts` and `mode=semantic`.
+- `small_doc_threshold` (optional) — doc-level small-to-big threshold (chars). Documents whose live `total_chars` is at most this value return the full document content as `bestChunkContent`; larger docs return matched chunk + `context_window` neighbours. Per-call value wins over `clio.smallDocThreshold`; absent both, default 20000 (Cerefox parity). Set 0 to always use the chunk-window form. Only meaningful for `?by=doc`.
+- `context_window` (optional) — sibling chunks per side around the matched chunk in the large-doc path. Per-call value wins over `clio.contextWindow`; absent both, default 1 (Cerefox parity). `0` returns only the matched chunk. Only meaningful for `?by=doc`.
+- `match_count` (optional) — max hits to return. Default 10 for `?by=chunk`, 5 for `?by=doc` (Cerefox parity). Cap 100 for chunks, 50 for docs.
 - `metadata` (optional) — JSON-encoded object for exact-match filtering against `clio_documents.metadata`, e.g. `metadata={"role":"reflection","tier":"semantic"}`.
 
-**Response:** `200 OK`
+**Response (default, `?by=doc` — `DocumentSearchResponse`):** `200 OK`
+```json
+{
+  "hits": [
+    {
+      "documentId": "<uuid>",
+      "docTitle": "Auth service design",
+      "docSource": "user-ingest: /Users/.../design.md",
+      "docAuthor": "claude-code",
+      "docProjectId": "<uuid>",
+      "docProjectName": "cf-ecosystem",
+      "docMetadata": { "role": "dev" },
+      "chunkCount": 9,
+      "totalChars": 5320,
+      "versionCount": 2,
+      "matchingChunks": 3,
+      "bestScore": 4.12,
+      "bestChunkHeadingPath": ["Overview", "Architecture"],
+      "bestChunkHeadingLevel": 2,
+      "bestChunkTitle": "Architecture",
+      "bestChunkContent": "...",
+      "bestChunkId": "<uuid>",
+      "bestChunkIndex": 2,
+      "createdAt": "2026-04-26T...",
+      "updatedAt": "2026-04-27T...",
+      "isPartial": true
+    }
+  ],
+  "mode": "hybrid",
+  "totalMatches": 12,
+  "totalDocuments": 4
+}
+```
+
+`isPartial` (Cerefox `is_partial` parity): `true` when `bestChunkContent` is the matched chunk + `context_window` neighbours (large-doc path); `false` when it's the full document content (small-doc path: `total_chars ≤ small_doc_threshold`).
+
+**Response (`?by=chunk` — legacy `SearchResponse`):** `200 OK`
 ```json
 {
   "hits": [
@@ -903,6 +1113,7 @@ Hybrid / semantic / FTS search.
       "score": 4.12,
       "docTitle": "Auth service design",
       "docSource": "user-ingest: /Users/.../design.md",
+      "docAuthor": "claude-code",
       "docProjectId": "<uuid>",
       "docProjectName": "cf-ecosystem",
       "docMetadata": { "role": "dev" }
@@ -913,7 +1124,7 @@ Hybrid / semantic / FTS search.
 }
 ```
 
-**Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON.
+**Errors:** `400` for missing / empty `q`; `400` for malformed `metadata` JSON; `400` for `by` not in {`doc`, `chunk`}.
 
 ### GET /api/clio/documents
 
@@ -923,6 +1134,8 @@ List documents, newest first. Soft-deleted docs are excluded.
 - `project` (optional) — Clio Project name or id. When unknown, returns an empty list.
 - `limit` (optional, default 50, cap 500).
 - `offset` (optional, default 0).
+- `include_deleted` (optional, default `false`) — when `true`, soft-deleted docs appear alongside live ones.
+- `deleted_only` (optional, default `false`) — trash-bin view: only soft-deleted docs are returned. Wins over `include_deleted` when both are passed.
 
 **Response:** `200 OK`
 ```json
@@ -961,6 +1174,35 @@ Install + activate an embedder. Triggers the HuggingFace download via `@huggingf
 ```
 
 **Responses:** `200 OK` with `{ active: { name, dim, recommendedChunkMaxChars }, downloaded: true|false }` · `400` for unknown name · `409` when existing embeddings would be invalidated and `force` is not set.
+
+### GET /api/clio/embedders/:name/switch-impact
+
+**5.12+ follow-up.** Pre-flight summary for an embedder switch — surfaced by the CLI + Web UI before the user confirms the change. Read-only; no DB writes.
+
+**Path:** `:name` — the candidate embedder name (must be in the catalogue).
+
+**Response:** `200 OK`
+```json
+{
+  "newName": "bge-small-en-v1.5",
+  "newDim": 384,
+  "newRecommendedChunkMaxChars": 1800,
+  "currentName": "nomic-embed-text-v1.5",
+  "currentRecommendedChunkMaxChars": 7000,
+  "totalChunkCount": 89,
+  "embeddedChunkCount": 89,
+  "chunksOverNewCeiling": 67,
+  "configMaxChunkChars": null,
+  "configMaxOverCeiling": false
+}
+```
+
+Three signals the CLI / UI use to warn:
+- `embeddedChunkCount > 0` and switching to a different model → existing embeddings become inconsistent unless `--reindex` is also passed.
+- `chunksOverNewCeiling > 0` → existing chunks exceed the new model's `recommendedChunkMaxChars`; the model would silently truncate inputs at embed time. Recommended remediation: `cfcf clio reindex --rechunk` (planned, item 6.23).
+- `configMaxOverCeiling: true` → the user's `clio.maxChunkChars` exceeds the new embedder's ceiling; future ingests will be capped at the ceiling, not honoured verbatim.
+
+**Errors:** `400` for unknown embedder name; `400` when the active backend doesn't support embedders (only `LocalClio` does today).
 
 ### POST /api/clio/embedders/set
 
