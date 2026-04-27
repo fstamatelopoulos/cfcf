@@ -71,6 +71,8 @@ interface DocumentRow {
   deleted_at: string | null;
   /** Optional: present when the SELECT joins on clio_document_versions. */
   version_count?: number;
+  /** Optional: present when the SELECT joins on clio_projects. */
+  project_name?: string;
 }
 
 /** Row shape returned by the candidate-fetching queries in hybrid / semantic search. */
@@ -751,10 +753,14 @@ export class LocalClio implements MemoryBackend {
   async getDocument(id: string): Promise<ClioDocument | null> {
     // Subquery for version_count is cheap (the index on
     // clio_document_versions.document_id resolves it in O(versions)).
+    // LEFT JOIN on clio_projects pulls project_name for human-facing
+    // CLI/web rendering (5.13 follow-up).
     const row = this.db.query<DocumentRow, [string]>(
       `SELECT d.*,
+              p.name AS project_name,
               (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
          FROM clio_documents d
+         LEFT JOIN clio_projects p ON p.id = d.project_id
         WHERE d.id = ?
         LIMIT 1`,
     ).get(id);
@@ -886,8 +892,10 @@ export class LocalClio implements MemoryBackend {
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const sql = `
       SELECT d.*,
+             p.name AS project_name,
              (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
         FROM clio_documents d
+        LEFT JOIN clio_projects p ON p.id = d.project_id
         ${whereClause}
        ORDER BY d.created_at DESC
        LIMIT ? OFFSET ?
@@ -934,25 +942,31 @@ export class LocalClio implements MemoryBackend {
     const conds: string[] = [];
     const bindings: (string | number | boolean)[] = [];
 
-    if (!opts.includeDeleted) conds.push("deleted_at IS NULL");
+    if (!opts.includeDeleted) conds.push("d.deleted_at IS NULL");
     if (projectId) {
-      conds.push("project_id = ?");
+      conds.push("d.project_id = ?");
       bindings.push(projectId);
     }
     if (opts.updatedSince) {
-      conds.push("updated_at >= ?");
+      conds.push("d.updated_at >= ?");
       bindings.push(opts.updatedSince);
     }
     // Per-key json_extract equality. Top-level keys only (matches
     // Cerefox v1; nested-object containment is a future ask).
     for (const [k, v] of Object.entries(opts.metadataFilter)) {
-      conds.push(`json_extract(metadata, ?) = ?`);
+      conds.push(`json_extract(d.metadata, ?) = ?`);
       bindings.push(`$.${k}`);
       bindings.push(v);
     }
 
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-    const sql = `SELECT * FROM clio_documents ${where} ORDER BY updated_at DESC LIMIT ?`;
+    // LEFT JOIN clio_projects so mapDocument populates projectName for
+    // human-facing CLI/web rendering. 5.13 follow-up.
+    const sql = `SELECT d.*, p.name AS project_name
+                   FROM clio_documents d
+                   LEFT JOIN clio_projects p ON p.id = d.project_id
+                   ${where}
+                  ORDER BY d.updated_at DESC LIMIT ?`;
     bindings.push(matchCount);
 
     const rows = this.db.query<DocumentRow, (string | number | boolean)[]>(sql).all(...bindings);
@@ -2178,6 +2192,11 @@ export class LocalClio implements MemoryBackend {
       // Other paths (search-hit doc rows, internal lookups) leave it
       // undefined so callers that don't need it pay no JOIN cost.
       versionCount: row.version_count,
+      // Same pattern: projectName is populated when the SELECT JOINed
+      // clio_projects (listDocuments / getDocument / metadataSearch).
+      // Keeps human-facing listings showing names; ingest-side paths
+      // skip the JOIN.
+      projectName: row.project_name,
     };
   }
 

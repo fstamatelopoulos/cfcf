@@ -65,6 +65,7 @@ New fields, all editable via the Web UI Server Info page:
 
 - **Stderr spinners** on the slow embedder-bound paths: `cfcf clio ingest`, `cfcf clio reindex`, `cfcf clio embedder set --reindex`. TTY-only; suppressed under `--json`.
 - **`docs list` shows `versions=N`** when N > 0, plus `[DELETED]` prefix + restore hint for tombstones. `--deleted-only` for the trash-bin view.
+- **Project names surfaced consistently** in `cfcf clio search` (was missing entirely), `docs list`, `metadata-search`, `get`, and `ingest` result rendering. Display format: `<name> [<id>]` so the human-friendly name is primary and the UUID stays available for scripts that want to copy it. Powered by a new optional `ClioDocument.projectName` field populated via SQL JOIN on read paths.
 - **Version banner unified.** `cfcf --version`, `cfcf server start`, `cfcf server status`, and `GET /api/health` all report the same string, resolved at runtime from the installed package's `package.json` (or workspace's `package.json` with `-dev` suffix in source mode).
 
 ### Schema + tooling

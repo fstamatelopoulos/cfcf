@@ -1354,6 +1354,32 @@ describe("LocalClio.editDocument (5.13 follow-up: metadata-only edit)", () => {
     await clio.close();
   });
 
+  it("listDocuments + getDocument + metadataSearch populate projectName via JOIN", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "named-proj", description: "for name surfacing test" });
+    const r = await clio.ingest({
+      project: "named-proj",
+      title: "Doc",
+      content: "body",
+      metadata: { role: "spec" },
+    });
+
+    // listDocuments
+    const list = await clio.listDocuments({ project: "named-proj" });
+    expect(list.length).toBe(1);
+    expect(list[0].projectName).toBe("named-proj");
+
+    // getDocument
+    const single = await clio.getDocument(r.id);
+    expect(single?.projectName).toBe("named-proj");
+
+    // metadataSearch
+    const meta = await clio.metadataSearch({ metadataFilter: { role: "spec" } });
+    expect(meta.documents.length).toBe(1);
+    expect(meta.documents[0].projectName).toBe("named-proj");
+    await clio.close();
+  });
+
   it("clearing author with empty string falls back to 'agent'", async () => {
     const clio = makeClio();
     const r = await clio.ingest({ project: "p1", title: "Doc", content: "x", author: "fotis" });

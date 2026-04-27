@@ -48,6 +48,15 @@ export interface ClioDocument {
    * `cerefox_search_docs.version_count`. 5.12 follow-up.
    */
   versionCount?: number;
+  /**
+   * Convenience: the document's Clio Project name, populated via JOIN
+   * on read paths that surface human-facing listings (`listDocuments`,
+   * `getDocument`, `metadataSearch`). Lets the CLI render the project
+   * name where it currently shows just `projectId`. Optional because
+   * write paths (ingest result construction, internal lookups) skip
+   * the JOIN to avoid a needless cost. 5.13 follow-up.
+   */
+  projectName?: string;
 }
 
 export interface ClioChunk {

@@ -335,17 +335,20 @@ function registerUnder(root: Command): void {
       }
 
       const chunksLabel = `${data.chunksInserted} chunk${data.chunksInserted === 1 ? "" : "s"}`;
+      const ingestProjectLabel = data.document.projectName
+        ? `${data.document.projectName} [${data.document.projectId}]`
+        : data.document.projectId;
       switch (data.action) {
         case "created":
           console.log(`Ingested: ${data.document.title} (${chunksLabel})`);
           console.log(`  id:      ${data.id}`);
-          console.log(`  project: ${data.document.projectId}`);
+          console.log(`  project: ${ingestProjectLabel}`);
           console.log(`  source:  ${data.document.source}`);
           break;
         case "updated":
           console.log(`Updated: ${data.document.title} (${chunksLabel}, prior version v${data.versionNumber})`);
           console.log(`  id:           ${data.id}`);
-          console.log(`  project:      ${data.document.projectId}`);
+          console.log(`  project:      ${ingestProjectLabel}`);
           console.log(`  prior version_id: ${data.versionId}`);
           console.log(`  Recall the prior content via:`);
           console.log(`    cfcf clio get ${data.id} --version-id ${data.versionId}`);
@@ -398,10 +401,13 @@ function registerUnder(root: Command): void {
         if (!data.content.endsWith("\n")) process.stdout.write("\n");
         return;
       }
+      const getProjectLabel = doc.projectName
+        ? `${doc.projectName} [${doc.projectId}]`
+        : doc.projectId;
       console.log(`# ${doc.title}`);
       console.log();
       console.log(`  id:            ${doc.id}`);
-      console.log(`  project:       ${doc.projectId}`);
+      console.log(`  project:       ${getProjectLabel}`);
       console.log(`  source:        ${doc.source}`);
       console.log(`  content_hash:  ${doc.contentHash}`);
       console.log(`  review_status: ${doc.reviewStatus}`);
@@ -564,9 +570,12 @@ function registerUnder(root: Command): void {
       console.log(`${docs.length} document(s) match ${JSON.stringify(metadataFilter)}:`);
       console.log();
       for (const d of docs) {
+        const projectLabel = d.projectName
+          ? `${d.projectName} [${d.projectId}]`
+          : d.projectId;
         console.log(`  ${d.title}`);
         console.log(`     [id: ${d.id}]  author: ${d.author}`);
-        console.log(`     project: ${d.projectId}`);
+        console.log(`     project: ${projectLabel}`);
         console.log(`     updated: ${d.updatedAt}`);
         if (d.deletedAt) console.log(`     deleted_at: ${d.deletedAt}`);
         console.log();
@@ -722,9 +731,12 @@ function registerUnder(root: Command): void {
         const versionsHint = d.versionCount && d.versionCount > 0
           ? `  versions=${d.versionCount}`
           : "";
+        const projectLabel = d.projectName
+          ? `${d.projectName} [${d.projectId}]`
+          : d.projectId;
         console.log(`  ${titlePrefix}${d.title}`);
         console.log(`    [id: ${d.id}]  author: ${d.author}${versionsHint}`);
-        console.log(`    project: ${d.projectId}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
+        console.log(`    project: ${projectLabel}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
         console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
         console.log(`    source=${d.source}`);
         console.log(`    created=${d.createdAt}`);
@@ -1294,7 +1306,7 @@ function printDocHit(rank: number, h: DocumentSearchHit): void {
     : `  (full doc, ${h.totalChars} chars)`;
   console.log(`  ${rank}. [${h.bestScore.toFixed(3)}] ${h.docTitle}${heading}`);
   console.log(`     [id: ${h.documentId}]  author: ${h.docAuthor}${versionsStr}${matchesStr}`);
-  console.log(`     ${h.docSource}${partialHint}`);
+  console.log(`     project: ${h.docProjectName}  source: ${h.docSource}${partialHint}`);
   const snippet = h.bestChunkContent.trim().split("\n").slice(0, 3).join(" ").slice(0, 160);
   console.log(`     ${snippet}${h.bestChunkContent.length > 160 ? "…" : ""}`);
   console.log();
