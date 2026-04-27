@@ -26,6 +26,12 @@ permissions:
   contents: write      # gh release create
   actions: read
 
+# Force JavaScript-based actions onto Node 24 (workaround for the
+# Node 20 deprecation warning on `actions/upload-artifact@v5` etc.).
+# Drop this once all the actions we use ship a Node 24 default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   group: release-${{ inputs.tag }}
   cancel-in-progress: false
@@ -37,7 +43,7 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -75,7 +81,7 @@ jobs:
             platform: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag }}
 
@@ -86,10 +92,10 @@ jobs:
       - name: Build native package
         run: scripts/build-native-package.sh "${{ matrix.platform }}" "${{ inputs.tag }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: cfcf-native-${{ matrix.platform }}
-          retention-days: 14
+          retention-days: 1
           path: |
             dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz
             dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz.sha256
@@ -102,7 +108,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag }}
 
@@ -116,10 +122,10 @@ jobs:
       - name: Build CLI tarball
         run: scripts/build-cli.sh "${{ inputs.tag }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: cfcf-cli
-          retention-days: 14
+          retention-days: 1
           path: |
             dist/cfcf-*.tgz
             dist/cfcf-*.tgz.sha256
@@ -129,11 +135,11 @@ jobs:
     needs: [build-native, build-cli]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true

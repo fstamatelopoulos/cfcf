@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Force JavaScript-based actions onto Node 24 (workaround for the
+# Node 20 deprecation warning on `actions/upload-artifact@v5` etc.).
+# GitHub's announcement: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+# Drop this once all the actions we use ship a Node 24 default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -64,4 +71,8 @@ jobs:
           path: |
             dist/cfcf-*.tgz
             dist/cfcf-*.tgz.sha256
-          retention-days: 7
+          # 1 day is enough -- this is a smoke artifact only useful for
+          # debugging a failed build. Reducing from 7d helps with the
+          # GitHub Actions artifact-storage quota (we hit it 2026-04-27;
+          # see decisions-log).
+          retention-days: 1
