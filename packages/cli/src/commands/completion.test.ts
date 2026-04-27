@@ -161,24 +161,42 @@ describe("renderBashCompletion", () => {
 });
 
 describe("renderZshCompletion", () => {
-  it("emits a #compdef directive + _cfcf function", () => {
+  it("emits a #compdef directive at the top (the autoload binding)", () => {
     const program = buildSampleProgram();
     const tree = walkCommands(program);
     const script = renderZshCompletion(tree);
 
+    // Standard zsh autoload-via-fpath structure: file MUST start with
+    // `#compdef cfcf` for compinit to bind it. Body IS the completion
+    // code (no _cfcf() wrapper -- that pattern is for sourced files,
+    // not autoloaded ones, and it didn't work end-to-end on macOS zsh).
     expect(script.startsWith("#compdef cfcf")).toBe(true);
-    expect(script).toContain("_cfcf()");
-    expect(script).toContain("compdef _cfcf cfcf");
+    // The compadd call is the actual completion mechanism.
+    expect(script).toContain("compadd -a _cfcf_candidates");
+    // No leftover wrapper-pattern artefacts from the previous version.
+    expect(script).not.toContain("_cfcf()");
+    expect(script).not.toContain("compdef _cfcf cfcf");
   });
 
   it("the embedded JSON tree is parseable", () => {
     const program = buildSampleProgram();
     const tree = walkCommands(program);
     const script = renderZshCompletion(tree);
-    const m = script.match(/local tree='(\{.*?\})'/);
+    const m = script.match(/local _cfcf_tree='(\{.*?\})'/);
     expect(m).not.toBeNull();
     const parsed = JSON.parse(m![1]);
     expect(parsed.children.length).toBeGreaterThan(0);
+  });
+
+  it("avoids the `path` variable name (zsh's special $PATH alias)", () => {
+    const program = buildSampleProgram();
+    const tree = walkCommands(program);
+    const script = renderZshCompletion(tree);
+    // We use `_cfcf_path` instead. Catching this in a test so a future
+    // refactor doesn't accidentally reintroduce the zsh-special-name bug.
+    expect(script).toContain("_cfcf_path");
+    expect(script).not.toContain("local -a path");
+    expect(script).not.toContain("local path");
   });
 });
 
