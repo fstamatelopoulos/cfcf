@@ -9,7 +9,11 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-Working on plan item **5.8** (user manual + CLI verb normalisation). Target: v0.12.0.
+_Nothing yet. Continuing on plan item **5.8**: PR2 (user manual) and PR3 (embed docs in installer + web UI Help tab + `cfcf help`)._
+
+## [0.12.0] -- 2026-04-27
+
+Plan item **5.8 PR1**: Clio CLI verb normalisation. BREAKING — no deprecation aliases (single user, pre-OSS-launch).
 
 ### CLI verb normalisation (BREAKING)
 
