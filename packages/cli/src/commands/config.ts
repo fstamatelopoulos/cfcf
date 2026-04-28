@@ -35,6 +35,9 @@ export function registerConfigCommands(program: Command): void {
       if (cfg.reflectionAgent) {
         console.log(`Reflection agent: ${formatAgent(cfg.reflectionAgent)}`);
       }
+      if (cfg.helpAssistantAgent) {
+        console.log(`Help Assistant:   ${formatAgent(cfg.helpAssistantAgent)}`);
+      }
       console.log(`Max iterations:   ${cfg.maxIterations}`);
       console.log(`Pause every:      ${cfg.pauseEvery === 0 ? "never" : `${cfg.pauseEvery} iterations`}`);
       console.log(`Reflect safeguard: force after ${cfg.reflectSafeguardAfter ?? 3} consecutive opt-outs`);

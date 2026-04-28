@@ -77,8 +77,9 @@ function fmtHub(): string {
   rows.push("                         Permission-gated: it asks before every mutation.");
   rows.push("");
   rows.push("Other entry points:");
-  rows.push("  cfcf doctor            Self-check + common-issue diagnostics");
+  rows.push("  cfcf --help            List every cfcf command + top-level flags");
   rows.push("  cfcf <command> --help  Per-command flag reference");
+  rows.push("  cfcf doctor            Self-check + common-issue diagnostics");
   rows.push("");
   rows.push("Tip: pipe through a Markdown renderer for richer output:");
   rows.push("  cfcf help workflow | glow");
@@ -86,10 +87,58 @@ function fmtHub(): string {
   return rows.join("\n");
 }
 
+/**
+ * Levenshtein distance for "did you mean?" suggestions on unknown
+ * topics. Pure DP; small inputs (slug names + "assistant"), so the
+ * O(n*m) cost is irrelevant.
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * Find the closest known help topic / verb to a user-supplied slug,
+ * within an edit distance of 2. Returns null if nothing's close.
+ * Catches typos like "assitant" -> "assistant", "trubleshoot" ->
+ * "troubleshooting", etc.
+ */
+function suggestTopic(slug: string): string | null {
+  const candidates = [
+    "assistant",
+    ...listHelpTopics().flatMap((t) => [t.slug, ...t.aliases]),
+  ];
+  let best: { name: string; dist: number } | null = null;
+  const lower = slug.toLowerCase();
+  for (const c of candidates) {
+    const d = levenshtein(lower, c.toLowerCase());
+    if (d <= 2 && (best === null || d < best.dist)) {
+      best = { name: c, dist: d };
+    }
+  }
+  return best?.name ?? null;
+}
+
 function printTopic(slug: string): void {
   const topic = resolveHelpTopic(slug);
   if (!topic) {
-    console.error(`Unknown help topic: ${slug}\n`);
+    console.error(`Unknown help topic: ${slug}`);
+    const suggestion = suggestTopic(slug);
+    if (suggestion) {
+      console.error(`Did you mean: cfcf help ${suggestion}?`);
+    }
+    console.error("");
     console.error(fmtHub());
     process.exit(1);
   }
@@ -221,36 +270,21 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
 }
 
 export function registerHelpCommand(program: Command): void {
-  program
+  // Parent command: `cfcf help [topic]`. Default action (no arg) is the
+  // hub; with an arg it prints that topic in full. Topic resolution
+  // honours aliases (cli -> cli-usage.md, memory -> clio-quickstart.md).
+  // The `assistant` subcommand below intercepts `cfcf help assistant`
+  // BEFORE this action sees it, because Commander matches subcommands
+  // first.
+  const helpCmd = program
     .command("help [topic]")
     .description("Print user-facing documentation, or launch the interactive Help Assistant.")
     .option("--list", "Show the topic hub (legacy alias of `cfcf help` no-arg)")
     .option("--full", "Print the user manual in full (long-form; ~280 lines)")
-    // HA-specific flags. Only meaningful when topic == "assistant".
-    .option("--workspace <name>", "(assistant) Include workspace state in the system prompt")
-    .option("--agent <name>", "(assistant) Override config.helpAssistantAgent (claude-code, codex)")
-    .option("--print-prompt", "(assistant) Print the assembled system prompt + exit; don't launch")
-    .action((topic: string | undefined, opts: {
-      list?: boolean;
-      full?: boolean;
-      workspace?: string;
-      agent?: string;
-      printPrompt?: boolean;
-    }) => {
-      // Special-cased slug: `cfcf help assistant` launches the
-      // interactive Help Assistant (a cf² role running the configured
-      // agent CLI with a curated system prompt + Clio memory).
-      // Reserved name; not a real doc topic.
-      if (topic === "assistant") {
-        launchAssistant({
-          workspace: opts.workspace,
-          agent: opts.agent,
-          printPrompt: opts.printPrompt,
-        });
-        return;
-      }
+    .action((topic: string | undefined, opts: { list?: boolean; full?: boolean }) => {
       if (topic) {
         // Explicit topic always wins: `cfcf help cli` -> cli-usage.md.
+        // Typos suggest a near-match via Levenshtein distance.
         printTopic(topic);
         return;
       }
@@ -260,5 +294,29 @@ export function registerHelpCommand(program: Command): void {
       }
       // Default + --list both land here: terse hub.
       console.log(fmtHub());
+    });
+
+  // Subcommand: `cfcf help assistant`. Real subcommand (not a special-
+  // cased topic value) so:
+  //   - tab completion picks it up automatically (the completion
+  //     generator walks subcommands; topics are positional-arg values)
+  //   - typos like `cfcf help assitant` fall through to the parent's
+  //     positional, which suggests the correction via suggestTopic()
+  //   - HA-specific flags (--workspace, --agent, --print-prompt) only
+  //     show on `cfcf help assistant --help`, not on `cfcf help --help`
+  //
+  // Plan item 5.8 PR4. Design: docs/research/help-assistant.md.
+  helpCmd
+    .command("assistant")
+    .description("Launch the interactive Help Assistant (cf² support agent).")
+    .option("--workspace <name>", "Include this workspace's state in the system prompt")
+    .option("--agent <name>", "Override config.helpAssistantAgent (claude-code, codex)")
+    .option("--print-prompt", "Print the assembled system prompt + exit; don't launch")
+    .action((opts: { workspace?: string; agent?: string; printPrompt?: boolean }) => {
+      launchAssistant({
+        workspace: opts.workspace,
+        agent: opts.agent,
+        printPrompt: opts.printPrompt,
+      });
     });
 }

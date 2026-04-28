@@ -27,6 +27,7 @@ export interface WorkspaceConfig {
   architectAgent: AgentConfig;
   documenterAgent: AgentConfig;
   reflectionAgent?: AgentConfig;
+  helpAssistantAgent?: AgentConfig;
   reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;
