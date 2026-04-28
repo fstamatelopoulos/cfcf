@@ -62,18 +62,21 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): { com
       return { command: "claude", args };
     }
     case "codex": {
-      // Codex's interactive mode reads a system prompt via -i (file)
-      // or inline. We use the same in-argv approach as claude-code
-      // for symmetry; if Codex hits an arg-length limit on a specific
-      // system, we'll switch to a tempfile-based form.
-      // No flag for "always prompt before mutations" -- Codex's
-      // default in interactive mode already prompts; the dangerous
-      // mode is opt-in.
-      const args: string[] = ["--system-prompt", systemPrompt];
-      if (agent.model) {
-        args.push("--model", agent.model);
-      }
-      return { command: "codex", args };
+      // codex v1 doesn't expose a system-prompt CLI flag. The path to
+      // inject one is via ~/.codex/config.toml's
+      // `experimental_instructions_file` -- a config-file mutation,
+      // not a one-line CLI flag like claude-code's
+      // `--append-system-prompt`. For HA v1 we bail with a clear
+      // hint: configure HA to use claude-code (or wait for codex HA
+      // support in iter-6 once we've worked out the config-file
+      // approach + cleanup-on-exit semantics).
+      throw new Error(
+        "Help Assistant doesn't yet support the codex agent (codex's CLI " +
+        "has no --system-prompt flag; injecting via ~/.codex/config.toml " +
+        "is iter-6 work). Workaround: configure HA to use claude-code " +
+        "via `cfcf config edit` (look for 'Help Assistant agent'), " +
+        "or pass `--agent claude-code` per-call.",
+      );
     }
     default:
       throw new Error(

@@ -250,8 +250,10 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   }
 
   // 6. Print a one-line preface so the user knows what's happening,
-  // then hand off to the agent's TUI.
-  console.error(`[ha] launching ${agent.adapter}${agent.model ? ` (${agent.model})` : ""}; type your question. Ctrl-D to exit.`);
+  // then hand off to the agent's TUI. Spell out "Help Assistant" the
+  // first time it appears so the [ha] prefix in subsequent log lines
+  // is self-explanatory (the abbreviation is otherwise opaque).
+  console.error(`[Help Assistant (ha)] launching ${agent.adapter}${agent.model ? ` (${agent.model})` : ""}; type your question. Ctrl-D to exit.`);
   console.error("");
 
   try {

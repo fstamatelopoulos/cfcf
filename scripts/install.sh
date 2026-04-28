@@ -116,34 +116,48 @@ native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
 # dup keys, so a round-trip yields a clean object). Best-effort;
 # never fails the install. Same fix mirrored in cfcf self-update.
 dedup_bun_global() {
-  # Bun's bug isn't simple "append the same line"; it's "append the
-  # same key with a normalised variant of the value" -- e.g. one
-  # entry with `"@foo": "/path/x.tgz"` then another with
-  # `"@foo": "file:///path/x.tgz"`. So a naive line-dedup misses it.
-  # We need KEY-based dedup that keeps the LAST occurrence (matches
-  # JSON.parse's last-wins semantics). 1-line lookahead via awk:
-  # buffer one line, when the next line has the same key, replace
-  # the buffer (drop the older one); otherwise flush.
+  # Bun's bug: every `bun install -g <local-tarball>` appends a
+  # duplicate `"<key>": <value>` entry to bun.lock + package.json.
+  # The dups can have the SAME KEY but DIFFERENT VALUES (e.g.
+  # `"@x": "/path"` and `"@x": "file:///path"`) and may be non-
+  # consecutive (interleaved with other keys).
+  #
+  # Approach: process "runs" of consecutive object-entry lines.
+  # Within each run, keep only the LAST occurrence of each key
+  # (matches JSON.parse last-wins semantics). Runs are delimited by
+  # any non-entry line (`{`, `}`, blank, etc.), so dedup is naturally
+  # scoped to a single object literal -- the same key in different
+  # sections of bun.lock (e.g. workspaces."".dependencies vs
+  # packages) is preserved.
   #
   # Works on both files. bun.lock isn't strict JSON (has JSON5-style
-  # trailing commas) so a JSON.parse round-trip would fail; this
-  # text-based approach handles both formats.
+  # trailing commas + non-quoted forms) so JSON.parse would fail;
+  # this text-based approach handles both.
   for f in "$HOME/.bun/install/global/package.json" "$HOME/.bun/install/global/bun.lock"; do
     [[ -f "$f" ]] || continue
     tmp="${f}.cfcf-dedup.$$"
     if awk '
-      BEGIN { have_buf = 0 }
-      {
-        k = ""
-        if ($0 ~ /^[[:space:]]*"[^"]+"[[:space:]]*:/) {
-          s = $0; sub(/^[[:space:]]*"/, "", s); sub(/".*$/, "", s); k = s
+      function flush_run(    i, k) {
+        for (i = 1; i <= run_len; i++) {
+          k = run_keys[i]
+          if (k == "" || i == last_idx_for_key[k]) print run_lines[i]
         }
-        if (have_buf) {
-          if (k != "" && k == buf_key) { buf = $0; buf_key = k }
-          else { print buf; buf = $0; buf_key = k }
-        } else { buf = $0; buf_key = k; have_buf = 1 }
+        delete last_idx_for_key
+        run_len = 0
       }
-      END { if (have_buf) print buf }
+      /^[[:space:]]*"[^"]+"[[:space:]]*:/ {
+        s = $0; sub(/^[[:space:]]*"/, "", s); sub(/".*$/, "", s); k = s
+        run_len++
+        run_lines[run_len] = $0
+        run_keys[run_len] = k
+        last_idx_for_key[k] = run_len  # index, not content -- same-key/same-value lines were both matching the content check
+        next
+      }
+      {
+        if (run_len > 0) flush_run()
+        print
+      }
+      END { if (run_len > 0) flush_run() }
     ' "$f" > "$tmp" 2>/dev/null; then
       mv "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
     else

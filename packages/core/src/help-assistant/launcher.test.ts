@@ -36,24 +36,16 @@ describe("buildLaunchArgs", () => {
     expect(args[idx + 1]).toBe("sonnet-4.5");
   });
 
-  it("codex: invokes `codex --system-prompt <prompt>` interactively", () => {
-    const { command, args } = buildLaunchArgs(
-      { adapter: "codex" },
-      "FAKE_SYSTEM_PROMPT",
-    );
-    expect(command).toBe("codex");
-    expect(args).toContain("--system-prompt");
-    expect(args).toContain("FAKE_SYSTEM_PROMPT");
-  });
-
-  it("codex: appends --model when provided", () => {
-    const { args } = buildLaunchArgs(
-      { adapter: "codex", model: "gpt-5" },
-      "x",
-    );
-    const idx = args.indexOf("--model");
-    expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe("gpt-5");
+  it("codex: bails with an actionable error (no system-prompt CLI flag in codex v1)", () => {
+    // codex doesn't expose --system-prompt at the CLI; injecting via
+    // config.toml is iter-6 work. v1 explicitly fails with a hint
+    // pointing the user at claude-code as the HA agent.
+    expect(() =>
+      buildLaunchArgs({ adapter: "codex" }, "FAKE_SYSTEM_PROMPT"),
+    ).toThrow(/codex/);
+    expect(() =>
+      buildLaunchArgs({ adapter: "codex" }, "x"),
+    ).toThrow(/cfcf config edit/);
   });
 
   it("rejects unknown adapters with an actionable error", () => {
