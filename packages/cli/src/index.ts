@@ -41,6 +41,7 @@ import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerSelfUpdateCommand } from "./commands/self-update.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerHelpCommand } from "./commands/help.js";
+import { registerSpecCommand } from "./commands/spec.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -91,6 +92,7 @@ registerConfigCommands(program);
 registerRunCommand(program);
 registerResumeCommand(program);
 registerStopCommand(program);
+registerSpecCommand(program);
 registerReviewCommand(program);
 registerDocumentCommand(program);
 registerReflectCommand(program);

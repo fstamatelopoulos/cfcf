@@ -76,6 +76,13 @@ function fmtHub(): string {
   rows.push("                         the full cf² docs + your Clio memory in its system prompt.");
   rows.push("                         Permission-gated: it asks before every mutation.");
   rows.push("");
+  rows.push("SDLC roles (top-level verbs; see `cfcf --help` for the full list):");
+  rows.push("  cfcf spec              Product Architect (interactive Problem Pack authoring)");
+  rows.push("  cfcf review            Solution Architect (review Problem Pack + emit plan)");
+  rows.push("  cfcf run               Start the dev/judge/reflect loop");
+  rows.push("  cfcf reflect           Ad-hoc strategic reflection");
+  rows.push("  cfcf document          Final docs (auto on SUCCESS)");
+  rows.push("");
   rows.push("Other entry points:");
   rows.push("  cfcf --help            List every cfcf command + top-level flags");
   rows.push("  cfcf <command> --help  Per-command flag reference");
@@ -284,6 +291,7 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   }
 }
 
+
 export function registerHelpCommand(program: Command): void {
   // Parent command: `cfcf help [topic]`. Default action (no arg) is the
   // hub; with an arg it prints that topic in full. Topic resolution
@@ -334,4 +342,5 @@ export function registerHelpCommand(program: Command): void {
         printPrompt: opts.printPrompt,
       });
     });
+
 }

@@ -24,3 +24,4 @@ export * from "./notifications/index.js";
 export * from "./clio/index.js";
 export * from "./help.js";
 export * from "./help-assistant/index.js";
+export * from "./product-architect/index.js";

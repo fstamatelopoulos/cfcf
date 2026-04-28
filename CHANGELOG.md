@@ -9,7 +9,55 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_Iter-6 backlog: Product Architect role (5.8 PR5), CLI verb-rename audit for the remaining cfcf top-level verbs, Clio FTS title boost (6.24), Web UI Help Assistant button._
+### Product Architect role v1 (5.14)
+
+Plan item **5.14**: the **Product Architect (PA)** is a first-class cf² SDLC role responsible for authoring + iterating the **Problem Pack** (`problem.md` / `success.md` / `process.md` / `constraints.md`) — the spec the dev/judge/reflect loop satisfies. Peer to dev / judge / Solution Architect / reflection / documenter; sits at the START of the development flow:
+
+```
+cfcf workspace init   →   cfcf spec   →   cfcf review   →   cfcf run   →   cfcf reflect / cfcf document
+                          ↑
+                          PA: interactive Problem Pack authoring
+```
+
+**Verb**: `cfcf spec [task...]` (top-level, peer to `cfcf review` / `cfcf reflect` / `cfcf document`). PA is **not** under the `cfcf help` namespace — that's reserved for cf²-itself documentation + the Help Assistant.
+
+**Interactive by design.** Unlike the other SDLC role verbs (`review` / `reflect` / `document`), which run non-interactively (fire-and-forget agent process; structured signal-file workflow), PA's agent CLI takes over the user's current shell until exit — same operational pattern as `cfcf help assistant`. Live spec iteration with the user is inherent to PA's job; no signal-file workflow could substitute for back-and-forth refinement. This is the one trait PA inherits from HA's launcher seam.
+
+**Hard "no implementation drift" boundary** in the system prompt: PA declines requests to write code, design architecture, or implement features and redirects to dev (`cfcf run`) / Solution Architect (`cfcf review`) / Help Assistant (`cfcf help assistant`).
+
+Architecture (vs HA):
+
+- **Pattern B injection**. Where HA uses `--append-system-prompt` (claude-code) or an ephemeral `model_instructions_file` tempfile (codex), PA writes its system prompt to **`<repo>/cfcf-docs/AGENTS.md`** (codex auto-load) and **`<repo>/cfcf-docs/CLAUDE.md`** (claude-code auto-load), then spawns the agent with `--cd <repo>/cfcf-docs/` so each CLI loads the briefing as the deepest-scope file. The cf²-owned block is sentinel-marked (`<!-- cfcf:begin --> ... <!-- cfcf:end -->`) so user content outside the markers is preserved byte-for-byte across launches — same convention as the iteration-time CLAUDE.md/AGENTS.md merge.
+- **Pattern B is required** because PA mutates the user's repo (writes the four Problem Pack files) AND needs durable per-workspace context for multi-session spec iteration. HA's tempfile pattern would lose continuity between sessions.
+- **Pre-flight gate**: PA refuses to launch when `<repo>/cfcf-docs/` doesn't exist and prints a `cfcf workspace init` hint. (`--bootstrap` mode that lets PA do that itself is on the v2 roadmap.)
+- **Defaults**: `productArchitectAgent` backfills to `architectAgent`'s adapter (broad-context / strong-reasoning profile, closer to PA's spec-iteration workload than dev's). For claude-code the default model is **Sonnet** (HA defaults to Haiku for its Q&A workload; PA's multi-turn judgement calls benefit from a stronger model). Codex stays account-tied — no `--model` forced; users can switch mid-session via `/fast`.
+- **Memory**: PA reads `cfcf-memory-pa` (workspace-scoped spec sessions / decisions / rejections / summaries) and `cfcf-memory-global` (cross-role user preferences shared with HA). System prompt embeds an inventory at session start; PA writes back at session end with user approval.
+- **Scope boundary** is enforced by the system prompt, not by capability gating. The user CAN override after PA explains the trade-off, but PA pushes back first and explains why.
+
+CLI surface:
+
+```
+cfcf spec [task...]                       # interactive PA session on cwd
+cfcf spec --repo <path>                   # explicit repo path
+cfcf spec --agent claude-code             # override config.productArchitectAgent
+cfcf spec --print-prompt                  # debug: emit prompt + exit
+cfcf spec "Tighten the success.md auth criteria"   # opens with this task
+```
+
+Plumbing:
+
+- `productArchitectAgent: AgentConfig` on `CfcfGlobalConfig`, backfilled to `architectAgent` (or dev when architect isn't set).
+- `cfcf init` 7th picker (Product Architect alongside the existing six roles); `cfcf config show` prints the row; `cfcf config edit` covers it via the existing init-rerun.
+- Web UI: `productArchitectAgent` listed in the Server Info page's agent-roles section (alongside the other six roles).
+- `cfcf doctor` "Product Architect prerequisites" check verifies a supported agent CLI is reachable and reports whether the current cwd has a `cfcf-docs/` to anchor the briefing files.
+- `packages/core/src/product-architect/` module: prompt assembler + workspace-state reader + Clio-memory reader + sentinel-marked briefing-file writers + Pattern B launcher. 27 unit tests.
+- `packages/cli/src/commands/spec.ts` (NEW): wires the top-level `cfcf spec` command.
+
+Open questions deferred to a follow-up (captured in `docs/research/product-architect.md` §10): `--bootstrap` mode for fresh repos, hand-off mechanics PA→Architect→loop, cross-role memory merge semantics with HA. v1 ships the smallest useful surface; dogfood will tell us which to revisit.
+
+Design baseline: `docs/research/product-architect.md`.
+
+_Other iter-6 backlog: web UI integration research for HA + PA roles (5.15), CLI verb-rename audit for the remaining cfcf top-level verbs, Clio FTS title boost (6.24)._
 
 ## [0.15.0] -- 2026-04-28
 

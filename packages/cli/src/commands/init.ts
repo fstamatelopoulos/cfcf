@@ -136,6 +136,9 @@ export function registerInitCommand(program: Command): void {
           if (config.helpAssistantAgent?.adapter) {
             config.helpAssistantAgent.adapter = heal(config.helpAssistantAgent.adapter, config.devAgent.adapter);
           }
+          if (config.productArchitectAgent?.adapter) {
+            config.productArchitectAgent.adapter = heal(config.productArchitectAgent.adapter, config.architectAgent.adapter);
+          }
         }
       }
 
@@ -145,12 +148,13 @@ export function registerInitCommand(program: Command): void {
       console.log("Detected agents:");
       available.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
       console.log();
-      console.log("Six agent roles (each independently configurable):");
+      console.log("Seven agent roles (each independently configurable):");
       console.log("  - Dev agent: writes code, runs tests");
       console.log("  - Judge agent: reviews iterations (encouraged to differ from dev)");
-      console.log("  - Architect agent: reviews Problem Pack, creates plan outline");
+      console.log("  - Architect agent (Solution Architect): reviews Problem Pack, creates plan outline");
       console.log("  - Documenter agent: produces final polished documentation");
       console.log("  - Reflection agent: cross-iteration strategic review");
+      console.log("  - Product Architect: interactive Problem Pack authoring (cfcf spec)");
       console.log("  - Help Assistant: interactive cf² support agent (cfcf help assistant)");
       console.log();
 
@@ -187,6 +191,11 @@ export function registerInitCommand(program: Command): void {
         // file reads, tool use -- same profile as dev).
         const haDefault = config.helpAssistantAgent?.adapter ?? config.devAgent.adapter;
         config.helpAssistantAgent = { adapter: await pickAgent("Help Assistant", haDefault) };
+        // Product Architect: defaults to the architect agent (broad-
+        // context, strong-reasoning -- closer to PA's spec-iteration
+        // workload than dev's implement-and-test profile).
+        const paDefault = config.productArchitectAgent?.adapter ?? config.architectAgent.adapter;
+        config.productArchitectAgent = { adapter: await pickAgent("Product Architect", paDefault) };
       } else {
         console.log(`Only one agent detected (${available[0]}); using for all roles.`);
         config.devAgent.adapter = available[0];
@@ -195,6 +204,7 @@ export function registerInitCommand(program: Command): void {
         config.documenterAgent.adapter = available[0];
         config.reflectionAgent = { adapter: available[0] };
         config.helpAssistantAgent = { adapter: available[0] };
+        config.productArchitectAgent = { adapter: available[0] };
       }
 
       // Model selection per role
@@ -227,6 +237,10 @@ export function registerInitCommand(program: Command): void {
       if (config.helpAssistantAgent) {
         const haModel = await prompt("Help Assistant model", config.helpAssistantAgent.model ?? "");
         config.helpAssistantAgent.model = haModel || undefined;
+      }
+      if (config.productArchitectAgent) {
+        const paModel = await prompt("Product Architect model", config.productArchitectAgent.model ?? "");
+        config.productArchitectAgent.model = paModel || undefined;
       }
 
       console.log();

@@ -1,9 +1,35 @@
 # Product Architect — design baseline
 
-**Status**: Design baseline for iter-6 implementation. **No code yet.** This doc captures the ideas + concepts agreed during iter-5 (post-HA) so iter-6 has a solid starting point. Will be refreshed at iter-6 kickoff.
-**Plan item**: 5.8 PR5 (iter-6).
+**Status**: Implementation baseline. PA v1 ships in iter-5 on `iteration-5/product-architect-spec` (the original `iteration-5/product-architect` branch was deleted with PR #21 during the verb-rename pivot; commit `86a01c7` was recovered from reflog before the rename).
+**Plan item**: 5.14.
 **Builds on**: [`docs/research/help-assistant.md`](help-assistant.md) (HA established the role-based-agent architecture + the launcher seam PA reuses).
 **Related**: [`docs/decisions-log.md`](../decisions-log.md) entries on role-based memory + the Pattern A/B comparison.
+
+## Verb shape: `cfcf spec` (decided 2026-04-28)
+
+Open question #1 resolved: **PA is invoked via the top-level `cfcf spec [task...]` verb**, NOT `cfcf help architect`. PA is a first-class cf² SDLC role — peer to dev / judge / Solution Architect / reflection / documenter — and belongs alongside `cfcf review` / `cfcf run` / `cfcf reflect` / `cfcf document`, not under the `cfcf help` namespace (which is for cf²-itself documentation + the Help Assistant).
+
+The chosen verb follows the same pattern as the other role-output top-level verbs:
+
+| Verb | What the role outputs |
+|---|---|
+| `cfcf spec` (PA) | Problem Pack (`{problem,success,process,constraints}.md`) |
+| `cfcf review` (Solution Architect) | Plan outline + readiness verdict |
+| `cfcf reflect` (reflection) | Cross-iteration analysis |
+| `cfcf document` (documenter) | Final docs |
+
+Field name correspondingly renamed `helpArchitectAgent` → `productArchitectAgent`.
+
+## Interactivity: the one trait inherited from HA
+
+PA differs from `cfcf review` / `cfcf reflect` / `cfcf document` in one important way: **PA runs interactively**. The configured agent CLI's TUI takes over the user's current shell until exit, exactly like `cfcf help assistant`. The other SDLC role verbs run **non-interactively** — they spawn a fire-and-forget agent process and communicate via structured signal files (`cfcf-iteration-signals.json`, `cfcf-architect-signals.json`, etc.).
+
+Why interactive for PA?
+- **Spec authoring is iterative by nature.** "What's the success criterion for the auth flow?" → user answers → PA drafts → user pushes back → PA refines. A fire-and-forget signal-file workflow can't substitute for that loop.
+- **The user is the source of truth on intent.** Unlike dev (who works against fixed specs) or reflection (which analyses a fixed history), PA is co-authoring with the user. It needs the user in the room.
+- **The output is small + reviewable.** The four Problem Pack files are short enough that the user can eyeball each draft and respond inline. There's no need for a structured "verdict" signal file.
+
+So PA inherits HA's launcher seam (Pattern A/B mechanics, `inherit` stdio, no `--dangerously-skip-permissions`) but lives in the SDLC-role namespace verb-wise. This is the one operational similarity to HA; everything else (memory schema, file ownership, scope) is PA-specific.
 
 ---
 
@@ -18,7 +44,7 @@ The PA's scope is deliberately narrow:
 
 The hard constraint is **PA refuses to drift into implementation**, even if the user insists. PA's job ends when the Problem Pack is good enough to feed the loop; from there the user runs `cfcf review` (Solution Architect) or `cfcf run` directly.
 
-PA is invoked via `cfcf help architect` (provisional verb — open question, see §10).
+PA is invoked via `cfcf spec [task...]` (decided 2026-04-28; see §"Verb shape" above).
 
 ---
 
@@ -135,7 +161,7 @@ PA's role briefing lives in `<workspace-repo>/cfcf-docs/AGENTS.md` (and a CLAUDE
 
 The user's existing iteration-time `AGENTS.md` (at the repo root, used by cf² runs) is at a *different* path so the two roles don't collide. Codex's auto-load walks parent dirs, but the PA's `cfcf-docs/AGENTS.md` is loaded LAST (deepest scope wins) — so PA's directives effectively override anything inherited.
 
-### `helpArchitectAgent` config field
+### `productArchitectAgent` config field
 
 By symmetry with `helpAssistantAgent`. Backfilled to `architectAgent`'s adapter when missing (the existing Architect agent's profile — broad-context, strong-reasoning — is closest to PA's).
 
@@ -143,7 +169,7 @@ By symmetry with `helpAssistantAgent`. Backfilled to `architectAgent`'s adapter 
 interface CfcfGlobalConfig {
   // ... existing roles ...
   helpAssistantAgent?: AgentConfig;   // shipped in v0.15.0
-  helpArchitectAgent?: AgentConfig;   // iter-6
+  productArchitectAgent?: AgentConfig; // iter-5 (5.14)
 }
 ```
 
@@ -255,28 +281,17 @@ Approximately 5-8 KB. Plus the workspace-state injection (the current Problem Pa
 
 ## CLI surface
 
-### `cfcf help architect`
-
-Verb is provisional. See open questions §10.
+### `cfcf spec [task...]`
 
 ```bash
-cfcf help architect                                # interactive PA session, current workspace
-cfcf help architect --workspace <name>             # explicit workspace
-cfcf help architect --bootstrap                    # PA helps create a new workspace from scratch
-cfcf help architect --agent claude-code            # override config.helpArchitectAgent
-cfcf help architect --print-prompt                 # debug
+cfcf spec                                          # interactive PA session on cwd
+cfcf spec --repo <path>                            # explicit repo path
+cfcf spec --agent claude-code                      # override config.productArchitectAgent
+cfcf spec --print-prompt                           # debug: emit prompt + exit
+cfcf spec "Tighten the success.md auth criteria"   # opens with this task as user's first message
 ```
 
-`--bootstrap` mode is the "I don't have a project yet" entry point — PA guides the user through `cfcf workspace init` AND the spec writing in one session.
-
-### `cfcf workspace plan` (alternative verb)
-
-Possibly cleaner than `cfcf help architect` because:
-- "plan" reads as "do something" rather than "ask for help"
-- It's a sibling of `cfcf workspace init` (workspace lifecycle)
-- It doesn't conflate with `cfcf help` (which is documentation-leaning)
-
-Not yet decided — see §10.
+PA refuses to launch when `<repo>/cfcf-docs/` doesn't exist (Pattern B requires it as the auto-load anchor) and prints a `cfcf workspace init` hint. **`--bootstrap` mode**, where PA itself runs `cfcf workspace init` (with permission), is on the v2 roadmap — see §10.
 
 ---
 
@@ -285,8 +300,8 @@ Not yet decided — see §10.
 ### What ships in iter-6
 
 - `packages/core/src/product-architect/` — system-prompt assembler, workspace-state reader, Clio-memory reader (parallel to `help-assistant/`)
-- `packages/cli/src/commands/{help,workspace}.ts` updates — wire whichever verb wins (`cfcf help architect` or `cfcf workspace plan`)
-- `helpArchitectAgent` field on `CfcfGlobalConfig`, backfilled to `architectAgent`'s adapter
+- `packages/cli/src/commands/spec.ts` (NEW, top-level `cfcf spec`)
+- `productArchitectAgent` field on `CfcfGlobalConfig`, backfilled to `architectAgent`'s adapter
 - Launcher refactor: extract per-pattern argv builder so HA (Pattern A) + PA (Pattern B) share the seam without duplication
 - `cfcf-docs/AGENTS.md` + `cfcf-docs/CLAUDE.md` PA briefing files: written/refreshed by the launcher; sentinel-marked so user content outside the markers is preserved (same convention as the rc-edit + iteration-time CLAUDE.md/AGENTS.md)
 - Tests: prompt assembler, workspace-state reader, the per-role launcher dispatch
@@ -305,14 +320,10 @@ Not yet decided — see §10.
 
 (Captured here for iter-6 kickoff. Not blocking the PA design baseline.)
 
-1. **Verb shape**:
-   - `cfcf help architect` (mirrors `cfcf help assistant`)
-   - `cfcf workspace plan` (mirrors `cfcf workspace init` — workspace lifecycle)
-   - `cfcf workspace plan` is leaning ahead because PA is more "do something" than "ask for help", but `cfcf help architect` discoverability is real (users searching for help find it).
-   - **Provisional**: `cfcf help architect`, with `cfcf workspace plan` as an alias. Decide at iter-6 kickoff.
+1. **Verb shape** ✅ RESOLVED 2026-04-28: `cfcf spec [task...]` (top-level, peer to `cfcf review` / `cfcf reflect` / `cfcf document`). `cfcf help architect` was rejected: PA is a first-class SDLC role, not a help-namespace concept. `cfcf workspace plan` was rejected: PA's work is creative role output, not workspace-lifecycle admin, AND "plan" collides with `plan.md` (Solution Architect's output). See §"Verb shape" at the top of this doc.
 
 2. **PA agent default**:
-   - `helpArchitectAgent` defaults to `architectAgent`'s adapter (broad context, strong reasoning)
+   - `productArchitectAgent` defaults to `architectAgent`'s adapter (broad context, strong reasoning)
    - Or: defaults to `devAgent` (HA's choice — interactive Q&A profile)
    - **Lean**: architect agent default. PA's spec-iteration workload is closer to architect's "review + plan" profile than dev's "implement + test" one.
 
@@ -321,7 +332,7 @@ Not yet decided — see §10.
    - **Lean**: Sonnet for claude-code (HA = Haiku; PA = Sonnet). For codex, account-default + `/fast` hint same as HA.
 
 4. **`--bootstrap` mode flag vs separate verb**:
-   - `cfcf help architect --bootstrap` (one verb, mode flag)
+   - `cfcf spec --bootstrap` (one verb, mode flag)
    - `cfcf workspace bootstrap` (different verb)
    - **Lean**: mode flag. Same role, same agent, same memory; the bootstrap step is the FIRST iteration of a normal PA session.
 

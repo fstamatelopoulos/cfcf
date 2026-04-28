@@ -342,7 +342,7 @@ When PA lands, the launcher should support **both patterns** and pick per-role:
 
 The launcher's per-adapter argv-builder is the right seam to extend. claude-code's analog of pattern B is `CLAUDE.md` auto-loading from cwd — same shape, different filename.
 
-**Full PA design baseline**: [`product-architect.md`](product-architect.md). It captures the role's specific scope (Problem Pack authoring + iteration), the discovery → bootstrap → spec-iteration → hand-off flow, the hard "no implementation drift" boundary, the `cfcf-memory-pa` schema, the `helpArchitectAgent` config field, and seven open questions tagged for iter-6 kickoff (verb shape, agent default, model default, bootstrap mode, sentinels in `cfcf-docs/AGENTS.md`, hand-off mechanics, cross-role memory merging).
+**Full PA design baseline**: [`product-architect.md`](product-architect.md). It captures the role's specific scope (Problem Pack authoring + iteration), the discovery → bootstrap → spec-iteration → hand-off flow, the hard "no implementation drift" boundary, the `cfcf-memory-pa` schema, the `productArchitectAgent` config field, and the verb decision (`cfcf spec` — top-level, peer to `cfcf review` / `cfcf reflect` / `cfcf document`, NOT under `cfcf help`).
 
 ## v1 implementation scope
 
@@ -357,7 +357,7 @@ The launcher's per-adapter argv-builder is the right seam to extend. claude-code
 
 ### What's deferred to iter-6
 
-- **Product Architect role** — same machine, different system prompt, write access to Problem Pack files. Will be invoked as `cfcf help architect` (TBD; could be `cfcf workspace plan` to match the workspace-creation use case better).
+- **Product Architect role** — same machine, different system prompt, write access to Problem Pack files. Decided to ship as item 5.14 (not 6.x), invoked via top-level `cfcf spec` (NOT `cfcf help architect` — PA is a first-class SDLC role peer to `cfcf review` / `cfcf reflect` / `cfcf document`, not a help-namespace concept). See `docs/research/product-architect.md`.
 - **Web UI Help Assistant button** — once the CLI flow is dogfooded.
 - **Multi-turn session persistence** — resume conversations across cf² restarts. v1 sessions are ephemeral.
 - **Smarter memory retrieval** — currently dumps the whole memory project; iter-6 retrieves selectively based on query.
