@@ -29,7 +29,17 @@ describe("buildLaunchArgs", () => {
     expect(tempPromptFile).toBeNull();
   });
 
-  it("claude-code: appends --model when provided", () => {
+  it("claude-code: defaults to haiku (HA's Q&A workload doesn't benefit from a top-tier model)", () => {
+    const { args } = buildLaunchArgs(
+      { adapter: "claude-code" },
+      "x",
+    );
+    const idx = args.indexOf("--model");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("haiku");
+  });
+
+  it("claude-code: explicit model in config wins over the haiku default", () => {
     const { args } = buildLaunchArgs(
       { adapter: "claude-code", model: "sonnet-4.5" },
       "x",

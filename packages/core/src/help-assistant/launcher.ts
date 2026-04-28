@@ -88,10 +88,15 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       // prompt. NO --dangerously-skip-permissions: the agent will
       // prompt the user for tool/file/bash use, which is the v1
       // permission model we want.
+      //
+      // Default to Haiku for HA. The HA workload is interactive Q&A
+      // ("how do I X?", "explain Y") -- doesn't benefit from a
+      // top-tier model + Haiku is ~10x faster + ~12x cheaper than
+      // Sonnet. Power users can override via config.helpAssistantAgent
+      // or `--agent`-flow tweaks. (Codex has a similar concept via
+      // its in-session `/fast` command; see codex case below.)
       const args: string[] = ["--append-system-prompt", systemPrompt];
-      if (agent.model) {
-        args.push("--model", agent.model);
-      }
+      args.push("--model", agent.model ?? "haiku");
       return { command: "claude", args, tempPromptFile: null };
     }
     case "codex": {

@@ -253,7 +253,20 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   // then hand off to the agent's TUI. Spell out "Help Assistant" the
   // first time it appears so the [ha] prefix in subsequent log lines
   // is self-explanatory (the abbreviation is otherwise opaque).
-  console.error(`[Help Assistant (ha)] launching ${agent.adapter}${agent.model ? ` (${agent.model})` : ""}; type your question. Ctrl-D to exit.`);
+  //
+  // For claude-code we default to Haiku (HA's Q&A workload doesn't
+  // benefit from a top-tier model). For codex, the model is account-
+  // tied -- the user's ChatGPT account controls available models,
+  // and `--model` errors out for many account types -- so we don't
+  // force one. Codex users can switch to a faster/cheaper variant
+  // mid-session via `/fast`. We hint at this on launch.
+  const modelLabel = agent.adapter === "claude-code"
+    ? ` (${agent.model ?? "haiku"})`
+    : agent.model ? ` (${agent.model})` : "";
+  console.error(`[Help Assistant (ha)] launching ${agent.adapter}${modelLabel}; type your question. Ctrl-D to exit.`);
+  if (agent.adapter === "codex") {
+    console.error("[Help Assistant (ha)] tip: type `/fast` inside codex to switch to a faster/cheaper model for this session.");
+  }
   console.error("");
 
   try {
