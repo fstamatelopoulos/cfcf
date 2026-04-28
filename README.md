@@ -6,6 +6,8 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 **cfcf is not another AI agent.** It is the orchestration layer that manages agent lifecycles, assembles context, evaluates results via a separate judge agent, and decides whether to continue, adjust, or stop. The agents do the creative coding work; cfcf does the plumbing.
 
+> **New here?** Start with the [User Manual](docs/guides/manual.md) — 3-minute getting started + concepts + pointers to focused guides. After install, the same content is available offline via `cfcf help`.
+
 ## Status
 
 Early development. Iteration 5 largely complete; iteration 6 on deck.
