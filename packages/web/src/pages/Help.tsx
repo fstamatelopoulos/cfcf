@@ -358,8 +358,12 @@ function rewriteLink(url: string): string {
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────
-// Inline styles to keep the help tab self-contained; matches the
-// minimal-CSS convention used by ServerInfo.tsx.
+// Inline styles using the theme tokens defined in packages/web/src/
+// styles/app.css (--color-bg, --color-surface, --color-text, etc.).
+// This keeps the Help tab's contrast correct in the cfcf dark theme
+// (the only theme today). Hardcoded #-colors here would render
+// unreadable on the dark background -- which is exactly what shipped
+// in v0.14.0 and is the bug this revision fixes.
 
 const pageStyle: React.CSSProperties = {
   display: "grid",
@@ -367,17 +371,18 @@ const pageStyle: React.CSSProperties = {
   gap: "24px",
   padding: "16px 24px",
   alignItems: "start",
+  color: "var(--color-text)",
 };
 const asideStyle: React.CSSProperties = {
   position: "sticky",
   top: 16,
-  borderRight: "1px solid #e5e7eb",
+  borderRight: "1px solid var(--color-border)",
   paddingRight: "12px",
 };
 const asideHeadingStyle: React.CSSProperties = {
   fontSize: "0.95rem",
   margin: "0 0 12px 0",
-  color: "#6b7280",
+  color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 };
@@ -393,24 +398,24 @@ const topicButtonStyle = (active: boolean): React.CSSProperties => ({
   padding: "8px 10px",
   marginBottom: "4px",
   border: "none",
-  borderRadius: "6px",
+  borderRadius: "var(--radius)",
   cursor: "pointer",
-  background: active ? "#eef2ff" : "transparent",
-  color: active ? "#1e3a8a" : "inherit",
+  background: active ? "color-mix(in srgb, var(--color-primary) 18%, transparent)" : "transparent",
+  color: active ? "var(--color-primary-hover)" : "var(--color-text)",
   fontFamily: "inherit",
   fontSize: "0.95rem",
 });
 const slugStyle: React.CSSProperties = {
   display: "block",
   fontSize: "0.8rem",
-  color: "#6b7280",
-  fontFamily: "monospace",
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-mono)",
   marginTop: "2px",
 };
 const tipStyle: React.CSSProperties = {
   marginTop: "20px",
   fontSize: "0.85rem",
-  color: "#6b7280",
+  color: "var(--color-text-muted)",
 };
 
 const articleStyle: React.CSSProperties = {
@@ -419,54 +424,58 @@ const articleStyle: React.CSSProperties = {
 };
 const metaStyle: React.CSSProperties = {
   fontSize: "0.85rem",
-  color: "#6b7280",
+  color: "var(--color-text-muted)",
   marginBottom: "16px",
   display: "flex",
   gap: "16px",
 };
 const errorStyle: React.CSSProperties = {
   padding: "16px",
-  background: "#fef2f2",
-  border: "1px solid #fecaca",
-  borderRadius: "8px",
+  background: "color-mix(in srgb, var(--color-error) 12%, transparent)",
+  border: "1px solid color-mix(in srgb, var(--color-error) 50%, transparent)",
+  borderRadius: "var(--radius)",
+  color: "var(--color-text)",
 };
 
 const mdRootStyle: React.CSSProperties = {
   lineHeight: 1.6,
-  color: "#1f2937",
+  color: "var(--color-text)",
 };
 const headingStyle = (level: number): React.CSSProperties => ({
   marginTop: level === 1 ? "0" : "28px",
   marginBottom: "12px",
   fontSize: ["", "1.8rem", "1.4rem", "1.15rem", "1.05rem", "1rem", "0.95rem"][level],
   fontWeight: level <= 2 ? 700 : 600,
-  borderBottom: level === 1 || level === 2 ? "1px solid #e5e7eb" : undefined,
+  color: "var(--color-text)",
+  borderBottom: level === 1 || level === 2 ? "1px solid var(--color-border)" : undefined,
   paddingBottom: level === 1 || level === 2 ? "6px" : undefined,
 });
 const paraStyle: React.CSSProperties = { margin: "0 0 14px 0" };
 const preStyle: React.CSSProperties = {
-  background: "#f5f5f5",
-  border: "1px solid #e5e7eb",
-  borderRadius: "6px",
+  background: "var(--color-surface-alt)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius)",
   padding: "12px 14px",
   margin: "10px 0 14px 0",
   fontSize: "0.85rem",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  fontFamily: "var(--font-mono)",
+  color: "var(--color-text)",
   overflowX: "auto",
   whiteSpace: "pre",
 };
 const inlineCodeStyle: React.CSSProperties = {
-  background: "rgba(175, 184, 193, 0.2)",
+  background: "color-mix(in srgb, var(--color-border) 60%, transparent)",
+  color: "var(--color-info)",
   padding: "1px 5px",
-  borderRadius: "4px",
+  borderRadius: "var(--radius-sm)",
   fontSize: "0.9em",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  fontFamily: "var(--font-mono)",
 };
 const blockquoteStyle: React.CSSProperties = {
-  borderLeft: "4px solid #d1d5db",
+  borderLeft: "4px solid var(--color-border)",
   margin: "12px 0",
   padding: "4px 16px",
-  color: "#4b5563",
+  color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
 const listStyle: React.CSSProperties = {
@@ -475,6 +484,6 @@ const listStyle: React.CSSProperties = {
 };
 const hrStyle: React.CSSProperties = {
   border: "none",
-  borderTop: "1px solid #e5e7eb",
+  borderTop: "1px solid var(--color-border)",
   margin: "20px 0",
 };

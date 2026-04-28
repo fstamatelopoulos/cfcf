@@ -11,6 +11,13 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _Continuing on iter-6 (incl. CLI verb-rename audit, Clio FTS title boost, Ask-the-Agent v1 implementation)._
 
+## [0.14.1] -- 2026-04-27
+
+Two UX fixes for the v0.14.0 user-manual + Help-tab work, both flagged immediately in dogfood:
+
+- **Web UI Help tab: dark-mode contrast.** v0.14.0 hardcoded light-mode hex colors (`#1f2937`, `#6b7280`, `#f5f5f5`, …) inline. On the cfcf dark theme (`--color-bg: #0f1117`) they rendered as low-contrast / unreadable. Switched every inline style to use the existing CSS-variable theme tokens (`--color-text`, `--color-surface-alt`, `--color-border`, etc.), which is what the rest of the web UI already does. Topic list, code blocks, headings, blockquotes, links — everything now reads correctly.
+- **`cfcf help` (no arg) now prints a glanceable hub** instead of the full ~280-line manual. Same shape as `git help`, `gh help`, `kubectl help`: one-line summary per topic + drill-in tips. The full manual is still available via `cfcf help --full`. Explicit topics (`cfcf help workflow`) still print in full as before. Discoverability without the wall-of-text.
+
 ## [0.14.0] -- 2026-04-27
 
 Plan item **5.8 PR2 + PR3 + PR4 (design only)** combined. User manual + embedded help bundle + `cfcf help` + web UI Help tab. Ask-the-Agent design captured for iter-6 implementation.
