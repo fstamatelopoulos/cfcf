@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
 
 interface CheckResult {
   name: string;
@@ -276,6 +277,71 @@ function checkClioDb(): CheckResult {
   }
 }
 
+/**
+ * Check whether shell tab-completion is wired up. We're best-effort
+ * here: this is a quality-of-life feature, not a correctness one, so
+ * the worst-case status is `warn` (never `fail`).
+ *
+ * Three things have to be true for completion to actually fire:
+ *   1. $SHELL is bash or zsh (we don't ship completion for fish/sh).
+ *   2. Our completion script file exists at the canonical path.
+ *   3. The user's rc file references our completion (either via the
+ *      cfcf-managed sentinel block, or via a manual fpath/source line).
+ *
+ * Failure of any of (1)-(3) downgrades to `warn` with a specific hint
+ * so users can fix it themselves without filing an issue.
+ */
+function checkShellCompletion(): CheckResult {
+  const shell = detectShell();
+  const name = "Shell tab completion";
+  if (shell === null) {
+    return {
+      name,
+      status: "warn",
+      detail: `unsupported shell ($SHELL=${process.env.SHELL ?? "unset"}); cfcf ships completion for bash + zsh only`,
+    };
+  }
+
+  const scriptPath = shell === "zsh" ? zshCompletionPath() : bashCompletionPath();
+  if (!existsSync(scriptPath)) {
+    return {
+      name,
+      status: "warn",
+      detail: `completion script missing at ${scriptPath} -- run: cfcf completion install`,
+    };
+  }
+
+  const rcFile = shell === "zsh"
+    ? join(homedir(), ".zshrc")
+    : join(homedir(), ".bashrc");
+  if (!existsSync(rcFile)) {
+    return {
+      name,
+      status: "warn",
+      detail: `${rcFile} doesn't exist; tab-complete won't fire. Run: cfcf completion install`,
+    };
+  }
+
+  const content = readFileSync(rcFile, "utf-8");
+  const hasOurBlock = content.includes("# >>> cfcf shell completion");
+  const hasManualSetup = shell === "zsh"
+    ? /^\s*fpath=.*\.zsh\/completions/m.test(content)
+    : /source\s+.*\.cfcf-completion\.bash/.test(content);
+  if (!hasOurBlock && !hasManualSetup) {
+    return {
+      name,
+      status: "warn",
+      detail: `${rcFile} doesn't reference cfcf completion -- run: cfcf completion install`,
+    };
+  }
+
+  return {
+    name,
+    status: "ok",
+    detail: `${shell} (${scriptPath})`,
+  };
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 function fmt(r: CheckResult): string {
@@ -301,6 +367,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkRuntimeDeps());
       results.push(...checkAgentClis());
       results.push(checkClioDb());
+      results.push(checkShellCompletion());
 
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));

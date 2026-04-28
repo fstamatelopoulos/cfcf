@@ -18,6 +18,8 @@ import {
   regenerateShellCompletion,
   bashCompletionPath,
   zshCompletionPath,
+  installShellRcEntry,
+  uninstallShellCompletion,
 } from "./completion.js";
 
 function buildSampleProgram(): Command {
@@ -328,6 +330,217 @@ describe("regenerateShellCompletion", () => {
     expect(result.freshInstall).toBe(false);  // file existed
     expect(readFileSync(zshCompletionPath(), "utf-8")).not.toBe("old contents");
     expect(readFileSync(zshCompletionPath(), "utf-8")).toContain("#compdef cfcf");
+  });
+});
+
+describe("installShellRcEntry", () => {
+  let tempHome: string;
+  let savedHome: string | undefined;
+  let savedShell: string | undefined;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "cfcf-rc-test-"));
+    savedHome = process.env.HOME;
+    savedShell = process.env.SHELL;
+    process.env.HOME = tempHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedShell === undefined) delete process.env.SHELL; else process.env.SHELL = savedShell;
+    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("appends a sentinel-marked block when ~/.zshrc has no cfcf section", () => {
+    process.env.SHELL = "/bin/zsh";
+    const rc = join(tempHome, ".zshrc");
+    writeFileSync(rc, "# user content\nexport FOO=bar\n");
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("added");
+    expect(r.rcFile).toBe(rc);
+    const after = readFileSync(rc, "utf-8");
+    expect(after).toContain("# user content");
+    expect(after).toContain("export FOO=bar");
+    expect(after).toContain("# >>> cfcf shell completion");
+    expect(after).toContain("fpath=(~/.zsh/completions $fpath)");
+    expect(after).toContain("# <<< cfcf shell completion");
+  });
+
+  it("creates ~/.zshrc if it doesn't exist (cleanly)", () => {
+    process.env.SHELL = "/bin/zsh";
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("added");
+    expect(existsSync(join(tempHome, ".zshrc"))).toBe(true);
+    expect(readFileSync(join(tempHome, ".zshrc"), "utf-8")).toContain("# >>> cfcf shell completion");
+  });
+
+  it("appends to ~/.bashrc with the bash-flavoured block", () => {
+    process.env.SHELL = "/bin/bash";
+    const rc = join(tempHome, ".bashrc");
+    writeFileSync(rc, "alias ll='ls -la'\n");
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("added");
+    const after = readFileSync(rc, "utf-8");
+    expect(after).toContain("alias ll='ls -la'");
+    expect(after).toContain("source \"$HOME/.cfcf-completion.bash\"");
+  });
+
+  it("re-running is idempotent (action='unchanged') when block matches", () => {
+    process.env.SHELL = "/bin/zsh";
+    writeFileSync(join(tempHome, ".zshrc"), "# user content\n");
+
+    installShellRcEntry();
+    const r2 = installShellRcEntry();
+
+    expect(r2.action).toBe("unchanged");
+  });
+
+  it("refreshes the block (action='updated') when its contents drift", () => {
+    process.env.SHELL = "/bin/zsh";
+    const rc = join(tempHome, ".zshrc");
+    writeFileSync(rc, [
+      "# user content",
+      "# >>> cfcf shell completion (managed by `cfcf completion install`) >>>",
+      "# OLD CONTENTS THAT NEED REFRESH",
+      "fpath=(/old/path $fpath)",
+      "# <<< cfcf shell completion <<<",
+      "# trailing user content",
+    ].join("\n") + "\n");
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("updated");
+    const after = readFileSync(rc, "utf-8");
+    expect(after).toContain("# user content");
+    expect(after).toContain("# trailing user content");
+    expect(after).toContain("fpath=(~/.zsh/completions $fpath)");
+    expect(after).not.toContain("OLD CONTENTS");
+    expect(after).not.toContain("/old/path");
+  });
+
+  it("skips when user has a manual fpath line (no sentinel)", () => {
+    process.env.SHELL = "/bin/zsh";
+    const rc = join(tempHome, ".zshrc");
+    writeFileSync(rc, "fpath=(~/.zsh/completions $fpath)\nautoload -U compinit && compinit\n");
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("skipped-manual");
+    // Untouched.
+    expect(readFileSync(rc, "utf-8")).not.toContain("# >>> cfcf shell completion");
+  });
+
+  it("skips when user has a manual `source ~/.cfcf-completion.bash` line", () => {
+    process.env.SHELL = "/bin/bash";
+    const rc = join(tempHome, ".bashrc");
+    writeFileSync(rc, "source ~/.cfcf-completion.bash\n");
+
+    const r = installShellRcEntry();
+
+    expect(r.action).toBe("skipped-manual");
+  });
+
+  it("returns shell:'unsupported' for fish/sh", () => {
+    process.env.SHELL = "/usr/bin/fish";
+    const r = installShellRcEntry();
+    expect(r.action).toBe("skipped-unsupported");
+    expect(r.rcFile).toBeNull();
+  });
+
+  it("user content outside the sentinel block is preserved byte-for-byte across updates", () => {
+    process.env.SHELL = "/bin/zsh";
+    const rc = join(tempHome, ".zshrc");
+    const userBefore = "# my custom prompt\nPROMPT='%~ %# '\n# end of prompt\n";
+    const userAfter = "# my aliases\nalias g='git'\n";
+    writeFileSync(rc, userBefore);
+
+    installShellRcEntry();
+    // Simulate user adding more content after our block.
+    const middleState = readFileSync(rc, "utf-8");
+    writeFileSync(rc, middleState + userAfter);
+
+    // Force a refresh by tampering with the block.
+    const tampered = readFileSync(rc, "utf-8")
+      .replace("fpath=(~/.zsh/completions $fpath)", "fpath=(/old $fpath)");
+    writeFileSync(rc, tampered);
+
+    installShellRcEntry();
+
+    const final = readFileSync(rc, "utf-8");
+    expect(final).toContain(userBefore.trim());
+    expect(final).toContain(userAfter.trim());
+    expect(final).toContain("fpath=(~/.zsh/completions $fpath)");
+  });
+});
+
+describe("uninstallShellCompletion", () => {
+  let tempHome: string;
+  let savedHome: string | undefined;
+  let savedShell: string | undefined;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "cfcf-uninstall-test-"));
+    savedHome = process.env.HOME;
+    savedShell = process.env.SHELL;
+    process.env.HOME = tempHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedShell === undefined) delete process.env.SHELL; else process.env.SHELL = savedShell;
+    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("removes both the rc block and the completion script (zsh)", () => {
+    process.env.SHELL = "/bin/zsh";
+    const program = buildSampleProgram();
+    regenerateShellCompletion(program);
+    installShellRcEntry();
+    const rc = join(tempHome, ".zshrc");
+    expect(existsSync(rc)).toBe(true);
+    expect(existsSync(zshCompletionPath())).toBe(true);
+
+    const r = uninstallShellCompletion();
+
+    expect(r.removedRcBlock).toBe(true);
+    expect(r.removedFile).toBe(true);
+    expect(readFileSync(rc, "utf-8")).not.toContain("# >>> cfcf shell completion");
+    expect(existsSync(zshCompletionPath())).toBe(false);
+  });
+
+  it("preserves user content outside the sentinel block", () => {
+    process.env.SHELL = "/bin/zsh";
+    const rc = join(tempHome, ".zshrc");
+    writeFileSync(rc, "# my prompt\nPROMPT='%# '\n");
+    installShellRcEntry();
+    writeFileSync(rc, readFileSync(rc, "utf-8") + "\nalias x='echo'\n");
+
+    uninstallShellCompletion();
+
+    const after = readFileSync(rc, "utf-8");
+    expect(after).toContain("# my prompt");
+    expect(after).toContain("PROMPT='%# '");
+    expect(after).toContain("alias x='echo'");
+    expect(after).not.toContain("# >>> cfcf shell completion");
+  });
+
+  it("idempotent: removing twice is a no-op the second time", () => {
+    process.env.SHELL = "/bin/bash";
+    const program = buildSampleProgram();
+    regenerateShellCompletion(program);
+    installShellRcEntry();
+
+    uninstallShellCompletion();
+    const r2 = uninstallShellCompletion();
+
+    expect(r2.removedRcBlock).toBe(false);
+    expect(r2.removedFile).toBe(false);
   });
 });
 

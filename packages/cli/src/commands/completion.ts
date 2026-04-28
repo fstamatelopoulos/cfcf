@@ -23,7 +23,7 @@
  */
 
 import type { Command } from "commander";
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -277,6 +277,174 @@ export interface RegenerateResult {
 }
 
 /**
+ * Sentinel-marked block we append to the user's shell rc file. Same
+ * convention as the `<!-- cfcf:begin --> ... <!-- cfcf:end -->` markers
+ * in CLAUDE.md / AGENTS.md: cfcf only modifies content between these
+ * markers; the rest of the user's rc file is untouched. The block can
+ * be safely deleted by the user to opt out.
+ */
+const RC_BLOCK_BEGIN = "# >>> cfcf shell completion (managed by `cfcf completion install`) >>>";
+const RC_BLOCK_END   = "# <<< cfcf shell completion <<<";
+
+function rcBlockBody(shell: "bash" | "zsh"): string {
+  if (shell === "zsh") {
+    return [
+      RC_BLOCK_BEGIN,
+      "# Auto-added on cfcf install/upgrade. Delete this block (begin to end markers)",
+      "# to opt out; cfcf only modifies content between the >>> and <<< sentinels.",
+      "fpath=(~/.zsh/completions $fpath)",
+      "autoload -U compinit && compinit",
+      RC_BLOCK_END,
+    ].join("\n");
+  }
+  // bash
+  return [
+    RC_BLOCK_BEGIN,
+    "# Auto-added on cfcf install/upgrade. Delete this block (begin to end markers)",
+    "# to opt out; cfcf only modifies content between the >>> and <<< sentinels.",
+    '[ -s "$HOME/.cfcf-completion.bash" ] && source "$HOME/.cfcf-completion.bash"',
+    RC_BLOCK_END,
+  ].join("\n");
+}
+
+function rcFilePath(shell: "bash" | "zsh"): string {
+  return shell === "zsh"
+    ? join(userHome(), ".zshrc")
+    : join(userHome(), ".bashrc");
+}
+
+/**
+ * Pattern indicating the user already wired completion up by hand. We
+ * detect this and skip our auto-edit so we don't fight their setup.
+ *
+ * For zsh: any `fpath` line that includes `.zsh/completions` or any
+ * `source` line that points at our completion file.
+ * For bash: any `source` line referencing our `.cfcf-completion.bash`.
+ *
+ * Conservative: we'd rather skip when ambiguous than duplicate.
+ */
+function rcHasManualSetup(shell: "bash" | "zsh", rcContent: string): boolean {
+  if (shell === "zsh") {
+    if (/^\s*fpath=.*\.zsh\/completions/m.test(rcContent)) return true;
+    if (/source\s+.*\.zsh\/completions\/_cfcf/.test(rcContent)) return true;
+    return false;
+  }
+  return /source\s+.*\.cfcf-completion\.bash/.test(rcContent);
+}
+
+export interface InstallRcResult {
+  /** Always set when an action was attempted; null when shell is unsupported. */
+  rcFile: string | null;
+  /**
+   * What we did:
+   *   - `added`     : sentinel block didn't exist; we appended it.
+   *   - `updated`   : sentinel block existed; we replaced it (verbatim
+   *                   or with refreshed contents).
+   *   - `unchanged` : sentinel block existed AND matched the desired
+   *                   content; nothing written.
+   *   - `skipped-manual` : the user has an existing manual setup
+   *                   (e.g. their own `fpath=(...)` line). We don't
+   *                   want to fight their config, so we leave it
+   *                   alone.
+   *   - `skipped-unsupported` : $SHELL isn't bash or zsh. No-op.
+   */
+  action: "added" | "updated" | "unchanged" | "skipped-manual" | "skipped-unsupported";
+}
+
+/**
+ * Append (or update) the cfcf completion block in the user's shell rc
+ * file. Idempotent: re-running this on an already-installed setup is a
+ * no-op (`unchanged`). Trust principle: cfcf only modifies content
+ * between the sentinel markers; the rest of the user's rc file is
+ * untouched.
+ *
+ * Detects pre-existing manual setup and skips with `skipped-manual` so
+ * users who hand-managed their fpath/source line don't get duplicated.
+ *
+ * Best-effort: file-write errors are returned via the result, never
+ * thrown. The caller decides how loud to be.
+ */
+export function installShellRcEntry(): InstallRcResult {
+  const shell = detectShell();
+  if (shell === null) return { rcFile: null, action: "skipped-unsupported" };
+
+  const rcFile = rcFilePath(shell);
+  const desiredBlock = rcBlockBody(shell);
+
+  let existing = "";
+  if (existsSync(rcFile)) existing = readFileSync(rcFile, "utf-8");
+
+  // 1. Manual-setup detection comes first: if the user wired things up
+  //    themselves, leave their rc alone.
+  if (existing && rcHasManualSetup(shell, existing) && !existing.includes(RC_BLOCK_BEGIN)) {
+    return { rcFile, action: "skipped-manual" };
+  }
+
+  // 2. Sentinel block already present? Replace its contents (idempotent
+  //    refresh, in case future cfcf versions tweak the block).
+  if (existing.includes(RC_BLOCK_BEGIN) && existing.includes(RC_BLOCK_END)) {
+    const startIdx = existing.indexOf(RC_BLOCK_BEGIN);
+    const endIdx = existing.indexOf(RC_BLOCK_END) + RC_BLOCK_END.length;
+    const next = existing.slice(0, startIdx) + desiredBlock + existing.slice(endIdx);
+    if (next === existing) {
+      return { rcFile, action: "unchanged" };
+    }
+    writeFileSync(rcFile, next, { mode: 0o644 });
+    return { rcFile, action: "updated" };
+  }
+
+  // 3. Append to the end of the rc file (creating it if missing).
+  const sep = existing === "" ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
+  writeFileSync(rcFile, existing + sep + desiredBlock + "\n", { mode: 0o644 });
+  return { rcFile, action: "added" };
+}
+
+/**
+ * Remove the cfcf-managed sentinel block from the user's rc file (if
+ * present) AND delete the completion file we wrote. Symmetrical with
+ * `installShellRcEntry` + `regenerateShellCompletion`. Used by
+ * `cfcf completion uninstall`. Best-effort: missing files are no-ops.
+ */
+export function uninstallShellCompletion(): {
+  shell: "bash" | "zsh" | "none";
+  removedRcBlock: boolean;
+  removedFile: boolean;
+  rcFile: string | null;
+  completionFile: string | null;
+} {
+  const shell = detectShell();
+  if (shell === null) {
+    return { shell: "none", removedRcBlock: false, removedFile: false, rcFile: null, completionFile: null };
+  }
+
+  const rcFile = rcFilePath(shell);
+  const completionFile = shell === "zsh" ? zshCompletionPath() : bashCompletionPath();
+
+  let removedRcBlock = false;
+  if (existsSync(rcFile)) {
+    const content = readFileSync(rcFile, "utf-8");
+    if (content.includes(RC_BLOCK_BEGIN) && content.includes(RC_BLOCK_END)) {
+      const startIdx = content.indexOf(RC_BLOCK_BEGIN);
+      const endIdx = content.indexOf(RC_BLOCK_END) + RC_BLOCK_END.length;
+      // Trim a trailing newline introduced by `installShellRcEntry`'s append.
+      let stripped = content.slice(0, startIdx) + content.slice(endIdx);
+      if (stripped.startsWith("\n\n")) stripped = stripped.slice(1); // collapse double-blank we may have inserted
+      if (stripped.endsWith("\n\n")) stripped = stripped.slice(0, -1);
+      writeFileSync(rcFile, stripped, { mode: 0o644 });
+      removedRcBlock = true;
+    }
+  }
+
+  let removedFile = false;
+  if (existsSync(completionFile)) {
+    unlinkSync(completionFile);
+    removedFile = true;
+  }
+
+  return { shell, removedRcBlock, removedFile, rcFile, completionFile };
+}
+
+/**
  * Regenerate the shell completion file(s) for the user's shell.
  * Idempotent: writing over an existing file leaves the user's
  * `source` line in their rc untouched. The first run (file didn't
@@ -350,47 +518,103 @@ export function registerCompletionCommand(program: Command): void {
 
   completionCmd
     .command("install")
-    .description("Install tab completion for the detected shell (writes ~/.cfcf-completion.bash or ~/.zsh/completions/_cfcf)")
+    .description("Install tab completion + auto-add the rc entry (sentinel-marked, easy to remove)")
     .option("--print-only", "Don't write any files; just print the manual setup instructions")
-    .action((opts: { printOnly?: boolean }) => {
+    .option("--no-rc-edit", "Write the completion script but DON'T touch your shell rc file")
+    .action((opts: { printOnly?: boolean; rcEdit?: boolean }) => {
       const detected = detectShell();
       if (opts.printOnly || detected === null) {
         printCompletionInstructions(detected);
         return;
       }
 
-      // Auto-write path. Same trust principle as elsewhere: cfcf only
-      // touches files it owns (~/.cfcf-completion.bash + ~/.zsh/...).
-      // It never edits ~/.bashrc / ~/.zshrc -- that one-time `source`
-      // line is the user's call.
-      const result = regenerateShellCompletion(program);
-      const path = result.written[0];
+      // Step 1: write the completion script. Same paths as before --
+      // ~/.cfcf-completion.bash for bash, ~/.zsh/completions/_cfcf for zsh.
+      const fileResult = regenerateShellCompletion(program);
+      const scriptPath = fileResult.written[0];
+
+      // Step 2: append (or refresh) the cfcf-managed block in ~/.zshrc
+      // or ~/.bashrc, unless --no-rc-edit was passed. The block is
+      // sentinel-marked: cfcf only touches content between the
+      // >>> and <<< markers; the user's rc file is otherwise untouched.
+      // The block can be removed by deleting the marked region or by
+      // running `cfcf completion uninstall`.
+      const rcEdit = opts.rcEdit !== false;  // default true; --no-rc-edit flips
+      const rcResult = rcEdit
+        ? installShellRcEntry()
+        : { rcFile: null, action: "skipped-unsupported" as const };
+
       console.log(`cfcf shell completion installed for ${detected}.`);
-      console.log(`  wrote: ${path}`);
-      console.log();
-      if (result.freshInstall) {
-        console.log("One-time setup -- add this line to your shell rc and reopen the shell:");
-        if (detected === "bash") {
-          console.log(`  echo 'source ${path}' >> ~/.bashrc`);
-          console.log(`  # then: source ~/.bashrc`);
-        } else {
-          // zsh: the file is auto-loaded if its parent dir is on $fpath.
-          console.log("  # Add to ~/.zshrc (if not already present):");
-          console.log("  fpath=(~/.zsh/completions $fpath)");
-          console.log("  autoload -U compinit && compinit");
-          console.log("  # then: exec zsh");
+      console.log(`  wrote completion script: ${scriptPath}`);
+
+      if (rcEdit) {
+        switch (rcResult.action) {
+          case "added":
+            console.log(`  added rc entry:           ${rcResult.rcFile}`);
+            break;
+          case "updated":
+            console.log(`  refreshed rc entry:       ${rcResult.rcFile}`);
+            break;
+          case "unchanged":
+            console.log(`  rc entry already current: ${rcResult.rcFile}`);
+            break;
+          case "skipped-manual":
+            console.log(`  rc file: ${rcResult.rcFile} (left alone -- detected an existing manual fpath/source line)`);
+            break;
+          case "skipped-unsupported":
+            // Shouldn't reach here because we early-returned on shell=null.
+            break;
         }
       } else {
-        console.log("Already installed; regenerated to pick up any new verbs.");
+        console.log("  rc entry skipped (--no-rc-edit). Manual setup:");
+        if (detected === "zsh") {
+          console.log("    Add to ~/.zshrc: fpath=(~/.zsh/completions $fpath); autoload -U compinit && compinit");
+        } else {
+          console.log(`    Add to ~/.bashrc: source ${scriptPath}`);
+        }
       }
+
       console.log();
-      console.log("After re-sourcing, tab-complete works on every cfcf verb:");
+      const needsActivation = rcResult.action === "added" || rcResult.action === "updated" || !rcEdit;
+      if (needsActivation) {
+        console.log(`Activate now:  exec ${detected}`);
+        console.log("(or just open a new terminal)");
+        console.log();
+      }
+      console.log("Tab-complete works on every cfcf verb:");
       console.log("  cfcf <TAB>            → top-level commands");
-      console.log("  cfcf clio <TAB>       → search audit reindex stats docs metadata projects embedder");
+      console.log("  cfcf clio <TAB>       → docs metadata projects embedder search audit reindex stats");
       console.log("  cfcf clio docs <TAB>  → list ingest get edit delete restore versions");
       console.log();
-      console.log("Auto-regenerated by scripts/install.sh and `cfcf self-update`; you should");
-      console.log("rarely need to re-run this command yourself.");
+      console.log("Auto-regenerated on every cfcf install + `cfcf self-update`. Rarely");
+      console.log("needs to be re-run. To opt out / remove: `cfcf completion uninstall`.");
+    });
+
+  completionCmd
+    .command("uninstall")
+    .description("Remove cfcf shell completion (rc-file block + completion script)")
+    .action(() => {
+      const result = uninstallShellCompletion();
+      if (result.shell === "none") {
+        console.log("Couldn't detect your shell from $SHELL. Nothing to uninstall.");
+        return;
+      }
+      console.log(`cfcf shell completion uninstall for ${result.shell}:`);
+      if (result.removedRcBlock) {
+        console.log(`  ✓ removed rc block from: ${result.rcFile}`);
+      } else {
+        console.log(`  - rc block already absent: ${result.rcFile}`);
+      }
+      if (result.removedFile) {
+        console.log(`  ✓ removed completion script: ${result.completionFile}`);
+      } else {
+        console.log(`  - completion script already absent: ${result.completionFile}`);
+      }
+      if (result.removedRcBlock || result.removedFile) {
+        console.log();
+        console.log(`Run \`exec ${result.shell}\` (or open a new terminal) to deactivate.`);
+        console.log("Re-install any time with: cfcf completion install");
+      }
     });
 }
 
