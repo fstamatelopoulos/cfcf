@@ -9,7 +9,11 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-Working on plan item **5.8** follow-ups: tab completion + CI fixes. Target: v0.12.1.
+_Nothing yet. Continuing on plan item **5.8**: PR2 (canonical user manual + restructured `cli-usage.md`) and PR3 (embed manual in installer + web UI Help tab + `cfcf help <topic>`)._
+
+## [0.13.0] -- 2026-04-27
+
+Plan item **5.8 PR1b**: tab completion (zero-config across every install path) + Bun-bug workaround + GitHub Actions hardening + iter-6 plan entry for Clio FTS title boosting.
 
 ### Tab completion (5.8 follow-up)
 
