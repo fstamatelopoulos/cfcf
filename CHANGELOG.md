@@ -9,7 +9,11 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-Working on plan item **5.8 PR2/PR3** (combined): user manual + embedded help content + `cfcf help` + web UI Help tab. Target: v0.14.0.
+_Continuing on iter-6 (incl. CLI verb-rename audit, Clio FTS title boost, Ask-the-Agent v1 implementation)._
+
+## [0.14.0] -- 2026-04-27
+
+Plan item **5.8 PR2 + PR3 + PR4 (design only)** combined. User manual + embedded help bundle + `cfcf help` + web UI Help tab. Ask-the-Agent design captured for iter-6 implementation.
 
 ### User manual + help content (5.8 PR2/PR3, combined)
 
