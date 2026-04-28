@@ -114,21 +114,21 @@ For each supported agent, we use the flags that:
 
 **claude-code** (per its CLI):
 ```bash
-claude-code \
-    --append-system-prompt "$(cat /tmp/cfcf-ha-prompt-XXXX)" \
-    --permission-mode default
+claude --append-system-prompt "<full prompt>"
 ```
-`default` permission mode prompts for any tool invocation; that's our v1 read-only-with-mutations-approved-per-command behaviour.
+Default permission mode prompts for any tool invocation; matches our v1 read-only-with-mutations-approved-per-command behaviour.
 
-**codex** (per its CLI):
+**codex** (researched empirically 2026-04-28):
 ```bash
-codex \
-    --system "$(cat /tmp/cfcf-ha-prompt-XXXX)" \
-    --approval-mode auto-edit-with-confirm   # or whatever codex's equivalent is
+codex -c model_instructions_file="<path to tempfile>"
 ```
-We'll verify the exact flag at implementation time; the principle is the same.
+codex doesn't have a direct system-prompt CLI flag, but its generic `-c <key>=<value>` config override accepts the `model_instructions_file` key (the new key — `experimental_instructions_file` is still accepted but emits a deprecation warning). The launcher writes the prompt to a tempfile, passes the path via `-c`, and cleans up the tempfile after the agent exits (`finally` block, runs even on Ctrl-C).
 
-If the agent CLI's flags change, the launcher knows about it via the agent's adapter (existing pattern in `packages/core/src/adapters/`).
+Default approval policy on codex interactive mode (`untrusted`) prompts before any tool use — same shape as claude-code's default.
+
+Why not use codex's `AGENTS.md` convention (auto-loaded from cwd)? That would either pollute the user's repo with a temp instructions file or require running codex from a tempdir (losing the user's actual cwd context for diagnostics). Path-via-config-override is the cleaner approach.
+
+If either agent CLI's flag set changes, only `packages/core/src/help-assistant/launcher.ts` needs an update.
 
 ### Local environment access
 

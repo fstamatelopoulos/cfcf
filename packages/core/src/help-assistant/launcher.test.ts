@@ -6,11 +6,12 @@
  */
 
 import { describe, it, expect } from "bun:test";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { buildLaunchArgs } from "./launcher.js";
 
 describe("buildLaunchArgs", () => {
-  it("claude-code: invokes `claude --append-system-prompt <prompt>` interactively", () => {
-    const { command, args } = buildLaunchArgs(
+  it("claude-code: invokes `claude --append-system-prompt <prompt>` interactively (no tempfile)", () => {
+    const { command, args, tempPromptFile } = buildLaunchArgs(
       { adapter: "claude-code" },
       "FAKE_SYSTEM_PROMPT",
     );
@@ -24,6 +25,8 @@ describe("buildLaunchArgs", () => {
     // not one-shot print mode.
     expect(args).not.toContain("-p");
     expect(args).not.toContain("--prompt");
+    // claude-code passes the prompt inline; no tempfile needed.
+    expect(tempPromptFile).toBeNull();
   });
 
   it("claude-code: appends --model when provided", () => {
@@ -36,16 +39,45 @@ describe("buildLaunchArgs", () => {
     expect(args[idx + 1]).toBe("sonnet-4.5");
   });
 
-  it("codex: bails with an actionable error (no system-prompt CLI flag in codex v1)", () => {
-    // codex doesn't expose --system-prompt at the CLI; injecting via
-    // config.toml is iter-6 work. v1 explicitly fails with a hint
-    // pointing the user at claude-code as the HA agent.
-    expect(() =>
-      buildLaunchArgs({ adapter: "codex" }, "FAKE_SYSTEM_PROMPT"),
-    ).toThrow(/codex/);
-    expect(() =>
-      buildLaunchArgs({ adapter: "codex" }, "x"),
-    ).toThrow(/cfcf config edit/);
+  it("codex: invokes `codex -c model_instructions_file=<tempfile>` interactively", () => {
+    const { command, args, tempPromptFile } = buildLaunchArgs(
+      { adapter: "codex" },
+      "FAKE_SYSTEM_PROMPT",
+    );
+    expect(command).toBe("codex");
+
+    // -c key=value override pointing at a tempfile.
+    const cIdx = args.indexOf("-c");
+    expect(cIdx).toBeGreaterThanOrEqual(0);
+    const override = args[cIdx + 1];
+    expect(override).toMatch(/^model_instructions_file="[^"]+"$/);
+
+    // Tempfile actually exists with our content.
+    expect(tempPromptFile).not.toBeNull();
+    expect(existsSync(tempPromptFile!)).toBe(true);
+    expect(readFileSync(tempPromptFile!, "utf-8")).toBe("FAKE_SYSTEM_PROMPT");
+
+    // Overridden path matches the returned tempfile path.
+    const expected = `model_instructions_file="${tempPromptFile!.replace(/"/g, '\\"')}"`;
+    expect(override).toBe(expected);
+
+    // No deprecation: we use the new key, not experimental_instructions_file.
+    expect(override).not.toContain("experimental_instructions_file");
+
+    // Cleanup the tempfile created during this test.
+    rmSync(tempPromptFile!.replace(/\/[^/]+$/, ""), { recursive: true, force: true });
+  });
+
+  it("codex: appends --model when provided", () => {
+    const { args, tempPromptFile } = buildLaunchArgs(
+      { adapter: "codex", model: "gpt-5" },
+      "x",
+    );
+    const idx = args.indexOf("--model");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("gpt-5");
+    // Cleanup
+    if (tempPromptFile) rmSync(tempPromptFile.replace(/\/[^/]+$/, ""), { recursive: true, force: true });
   });
 
   it("rejects unknown adapters with an actionable error", () => {
