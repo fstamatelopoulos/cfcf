@@ -22,7 +22,16 @@
  */
 
 import type { Command } from "commander";
-import { listHelpTopics, resolveHelpTopic, getHelpContent } from "@cfcf/core";
+import {
+  listHelpTopics,
+  resolveHelpTopic,
+  getHelpContent,
+  readConfig,
+  assembleHelpAssistantPrompt,
+  launchHelpAssistant,
+  loadMemoryInventory,
+  type AgentConfig,
+} from "@cfcf/core";
 
 /**
  * One-line summary per topic. Hand-curated so the hub reads like a
@@ -47,7 +56,7 @@ const TOPIC_SUMMARIES: Record<string, string> = {
  */
 function fmtHub(): string {
   const rows: string[] = [];
-  rows.push("cfcf -- Cerefox Code Factory (cf²)");
+  rows.push("cf² -- Cerefox Code Factory");
   rows.push("Deterministic orchestration harness for AI coding agents.");
   rows.push("");
   rows.push("Topics:");
@@ -61,9 +70,16 @@ function fmtHub(): string {
   rows.push("  cfcf help --full       Print the user manual (long-form)");
   rows.push("  cfcf help --list       Same as `cfcf help` (legacy)");
   rows.push("");
+  rows.push("Interactive:");
+  rows.push("  cfcf help assistant    Launch the Help Assistant (interactive cf² support agent)");
+  rows.push("                         -- runs your configured dev agent (claude-code/codex) with");
+  rows.push("                         the full cf² docs + your Clio memory in its system prompt.");
+  rows.push("                         Permission-gated: it asks before every mutation.");
+  rows.push("");
   rows.push("Other entry points:");
-  rows.push("  cfcf doctor            Self-check + common-issue diagnostics");
+  rows.push("  cfcf --help            List every cfcf command + top-level flags");
   rows.push("  cfcf <command> --help  Per-command flag reference");
+  rows.push("  cfcf doctor            Self-check + common-issue diagnostics");
   rows.push("");
   rows.push("Tip: pipe through a Markdown renderer for richer output:");
   rows.push("  cfcf help workflow | glow");
@@ -71,10 +87,58 @@ function fmtHub(): string {
   return rows.join("\n");
 }
 
+/**
+ * Levenshtein distance for "did you mean?" suggestions on unknown
+ * topics. Pure DP; small inputs (slug names + "assistant"), so the
+ * O(n*m) cost is irrelevant.
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * Find the closest known help topic / verb to a user-supplied slug,
+ * within an edit distance of 2. Returns null if nothing's close.
+ * Catches typos like "assitant" -> "assistant", "trubleshoot" ->
+ * "troubleshooting", etc.
+ */
+function suggestTopic(slug: string): string | null {
+  const candidates = [
+    "assistant",
+    ...listHelpTopics().flatMap((t) => [t.slug, ...t.aliases]),
+  ];
+  let best: { name: string; dist: number } | null = null;
+  const lower = slug.toLowerCase();
+  for (const c of candidates) {
+    const d = levenshtein(lower, c.toLowerCase());
+    if (d <= 2 && (best === null || d < best.dist)) {
+      best = { name: c, dist: d };
+    }
+  }
+  return best?.name ?? null;
+}
+
 function printTopic(slug: string): void {
   const topic = resolveHelpTopic(slug);
   if (!topic) {
-    console.error(`Unknown help topic: ${slug}\n`);
+    console.error(`Unknown help topic: ${slug}`);
+    const suggestion = suggestTopic(slug);
+    if (suggestion) {
+      console.error(`Did you mean: cfcf help ${suggestion}?`);
+    }
+    console.error("");
     console.error(fmtHub());
     process.exit(1);
   }
@@ -90,15 +154,152 @@ function printTopic(slug: string): void {
   process.stderr.write(`\n--- source: ${topic.source} -- contribute via the cfcf repo\n`);
 }
 
+interface AssistantOptions {
+  workspace?: string;
+  agent?: string;
+  printPrompt?: boolean;
+}
+
+/**
+ * `cfcf help assistant` -- launch the Help Assistant.
+ *
+ * Resolves config.helpAssistantAgent (or --agent override), composes
+ * the system prompt (full embedded help bundle + Clio memory inventory
+ * + optional workspace state), and spawns the agent CLI in interactive
+ * mode in the current shell. The agent's TUI takes over until exit.
+ *
+ * Plan item 5.8 PR4. Design: docs/research/help-assistant.md.
+ */
+async function launchAssistant(opts: AssistantOptions): Promise<void> {
+  // 1. Resolve config + the HA agent.
+  let config;
+  try {
+    config = await readConfig();
+  } catch (err) {
+    console.error(`Failed to read cfcf config: ${err instanceof Error ? err.message : String(err)}`);
+    console.error("Run \`cfcf init\` to create the config first.");
+    process.exit(1);
+  }
+  if (!config) {
+    console.error("cfcf is not configured. Run \`cfcf init\` first.");
+    process.exit(1);
+  }
+  const agent: AgentConfig = opts.agent
+    ? { adapter: opts.agent }
+    : config.helpAssistantAgent ?? config.devAgent;
+
+  // 2. Best-effort: load Clio memory inventory.
+  // We deliberately don't fail the launch if Clio isn't available --
+  // the system prompt explicitly handles the "memory is empty" case.
+  let memoryInventory: string[] = [];
+  try {
+    const { getClioBackend } = await import("@cfcf/core");
+    const backend = getClioBackend();
+    memoryInventory = await loadMemoryInventory(backend);
+    // Don't close the singleton -- it's shared.
+  } catch (err) {
+    // Memory access is opportunistic; surface as a stderr note so the
+    // user knows we couldn't pull it, but don't block the launch.
+    console.error(
+      `[ha] note: couldn't read Clio memory (${err instanceof Error ? err.message : String(err)}). ` +
+      `Continuing without memory inventory; the assistant will still work.`,
+    );
+  }
+
+  // 3. Optionally pull workspace state. v1: just the name + iteration
+  // count; richer context (recent iterations, plan, decision log) is
+  // a follow-up. Done by the launcher caller, not the assembler --
+  // the assembler is a pure function over already-fetched state.
+  // For v1 we leave workspace state TODO and just note it in the
+  // system prompt if --workspace was passed.
+  let workspaceCtx: undefined | {
+    name: string;
+    repoPath: string;
+    iterationCount: number;
+    recentIterations: string[];
+  };
+  if (opts.workspace) {
+    // v1: just stub the workspace context with the name. Full state
+    // pull is a follow-up; the system prompt's workspace section
+    // says "use cfcf workspace show <name>" so the agent fetches
+    // live state itself anyway.
+    workspaceCtx = {
+      name: opts.workspace,
+      repoPath: process.cwd(),
+      iterationCount: 0,
+      recentIterations: [],
+    };
+  }
+
+  // 4. Compose the system prompt.
+  const systemPrompt = assembleHelpAssistantPrompt({
+    workspace: workspaceCtx,
+    memoryInventory,
+  });
+
+  // 5. --print-prompt escape hatch: emit the prompt + exit.
+  if (opts.printPrompt) {
+    process.stdout.write(systemPrompt);
+    if (!systemPrompt.endsWith("\n")) process.stdout.write("\n");
+    process.stderr.write(
+      `\n[ha] would have launched: ${agent.adapter}` +
+      (agent.model ? ` --model ${agent.model}` : "") +
+      ` (${memoryInventory.length} memory project(s) read; ${systemPrompt.length} chars total)\n`,
+    );
+    return;
+  }
+
+  // 6. Print a one-line preface so the user knows what's happening,
+  // then hand off to the agent's TUI. Spell out "Help Assistant" the
+  // first time it appears so the [ha] prefix in subsequent log lines
+  // is self-explanatory (the abbreviation is otherwise opaque).
+  //
+  // For claude-code we default to Haiku (HA's Q&A workload doesn't
+  // benefit from a top-tier model). For codex, the model is account-
+  // tied -- the user's ChatGPT account controls available models,
+  // and `--model` errors out for many account types -- so we don't
+  // force one. Codex users can switch to a faster/cheaper variant
+  // mid-session via `/fast`. We hint at this on launch.
+  const modelLabel = agent.adapter === "claude-code"
+    ? ` (${agent.model ?? "haiku"})`
+    : agent.model ? ` (${agent.model})` : "";
+  console.error(`[Help Assistant (ha)] launching ${agent.adapter}${modelLabel}; type your question. Ctrl-D to exit.`);
+  if (agent.adapter === "codex") {
+    console.error("[Help Assistant (ha)] tip: type `/fast` inside codex to switch to a faster/cheaper model for this session.");
+  }
+  console.error("");
+
+  try {
+    const result = await launchHelpAssistant({ agent, systemPrompt });
+    if (result.exitCode !== 0 && result.exitCode !== null) {
+      // The agent itself exited non-zero. Surface for visibility.
+      console.error(`\n[ha] agent exited with code ${result.exitCode}`);
+      process.exit(result.exitCode);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[ha] failed to launch: ${msg}`);
+    console.error("Run \`cfcf doctor\` to verify the agent CLI is on PATH.");
+    process.exit(1);
+  }
+}
+
 export function registerHelpCommand(program: Command): void {
-  program
+  // Parent command: `cfcf help [topic]`. Default action (no arg) is the
+  // hub; with an arg it prints that topic in full. Topic resolution
+  // honours aliases (cli -> cli-usage.md, memory -> clio-quickstart.md).
+  // The `assistant` subcommand below intercepts `cfcf help assistant`
+  // BEFORE this action sees it, because Commander matches subcommands
+  // first.
+  const helpCmd = program
     .command("help [topic]")
-    .description("Print user-facing documentation. With no arg: glanceable topic hub.")
+    .description("Print user-facing documentation, or launch the interactive Help Assistant.")
     .option("--list", "Show the topic hub (legacy alias of `cfcf help` no-arg)")
     .option("--full", "Print the user manual in full (long-form; ~280 lines)")
     .action((topic: string | undefined, opts: { list?: boolean; full?: boolean }) => {
       if (topic) {
         // Explicit topic always wins: `cfcf help cli` -> cli-usage.md.
+        // Typos suggest a near-match via Levenshtein distance.
         printTopic(topic);
         return;
       }
@@ -108,5 +309,29 @@ export function registerHelpCommand(program: Command): void {
       }
       // Default + --list both land here: terse hub.
       console.log(fmtHub());
+    });
+
+  // Subcommand: `cfcf help assistant`. Real subcommand (not a special-
+  // cased topic value) so:
+  //   - tab completion picks it up automatically (the completion
+  //     generator walks subcommands; topics are positional-arg values)
+  //   - typos like `cfcf help assitant` fall through to the parent's
+  //     positional, which suggests the correction via suggestTopic()
+  //   - HA-specific flags (--workspace, --agent, --print-prompt) only
+  //     show on `cfcf help assistant --help`, not on `cfcf help --help`
+  //
+  // Plan item 5.8 PR4. Design: docs/research/help-assistant.md.
+  helpCmd
+    .command("assistant")
+    .description("Launch the interactive Help Assistant (cf² support agent).")
+    .option("--workspace <name>", "Include this workspace's state in the system prompt")
+    .option("--agent <name>", "Override config.helpAssistantAgent (claude-code, codex)")
+    .option("--print-prompt", "Print the assembled system prompt + exit; don't launch")
+    .action((opts: { workspace?: string; agent?: string; printPrompt?: boolean }) => {
+      launchAssistant({
+        workspace: opts.workspace,
+        agent: opts.agent,
+        printPrompt: opts.printPrompt,
+      });
     });
 }

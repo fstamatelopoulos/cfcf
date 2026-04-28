@@ -160,6 +160,12 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
       adapter: config.architectAgent?.adapter ?? config.devAgent.adapter,
     };
   }
+  // Backfill Help Assistant role (item 5.8 PR4). Default to the dev
+  // agent because the HA's interaction profile (interactive shell,
+  // tool use, file reads) closely matches what users picked for dev.
+  if (!config.helpAssistantAgent?.adapter) {
+    config.helpAssistantAgent = { adapter: config.devAgent.adapter };
+  }
   if (typeof config.reflectSafeguardAfter !== "number" || config.reflectSafeguardAfter < 1) {
     config.reflectSafeguardAfter = 3;
   }

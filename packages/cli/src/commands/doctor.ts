@@ -378,6 +378,46 @@ function checkHelpContent(): CheckResult {
 }
 
 /**
+ * Check whether the Help Assistant prerequisites are met. The HA
+ * (`cfcf help assistant`) launches the user's configured agent CLI in
+ * interactive mode; we just need to verify at least one supported
+ * adapter is reachable on PATH. The full agent-CLI per-adapter check
+ * lives in `checkAgentClis`; this one reports HA-specific status.
+ *
+ * Best-effort: `warn` worst case (HA isn't critical for cf² to work).
+ */
+function checkHelpAssistant(): CheckResult {
+  const name = "Help Assistant prerequisites";
+  // Reuse the same per-adapter probe `checkAgentClis` runs. We can't
+  // resolve the user's config sync without rewiring doctor to async,
+  // so we just check that AT LEAST ONE supported adapter is reachable
+  // -- the HA's agent picker defaults to `devAgent` which is one of
+  // the same set, so this is a reliable proxy.
+  const probes = [
+    { name: "claude-code", cmd: ["claude", "--version"] },
+    { name: "codex",       cmd: ["codex", "--version"] },
+  ];
+  const reachable: string[] = [];
+  for (const { name: adapterName, cmd } of probes) {
+    const r = spawnSync(cmd[0]!, cmd.slice(1), { encoding: "utf8" });
+    if (r.status === 0) reachable.push(adapterName);
+  }
+  if (reachable.length === 0) {
+    return {
+      name,
+      status: "warn",
+      detail: "no supported agent CLI on PATH (claude-code or codex). " +
+              "Install one to use `cfcf help assistant`. (Other cf² flows still work.)",
+    };
+  }
+  return {
+    name,
+    status: "ok",
+    detail: `${reachable.length} agent${reachable.length === 1 ? "" : "s"} reachable: ${reachable.join(", ")}`,
+  };
+}
+
+/**
  * Check whether shell tab-completion is wired up. We're best-effort
  * here: this is a quality-of-life feature, not a correctness one, so
  * the worst-case status is `warn` (never `fail`).
@@ -468,6 +508,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkAgentClis());
       results.push(checkClioDb());
       results.push(checkHelpContent());
+      results.push(checkHelpAssistant());
       results.push(checkShellCompletion());
       results.push(checkBunGlobalPkgDups());
 

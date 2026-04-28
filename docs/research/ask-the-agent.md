@@ -1,6 +1,8 @@
-# Ask the Agent — design doc
+# Ask the Agent — design doc (SUPERSEDED)
 
-**Status**: Design only (plan item 5.8 PR4). Implementation deferred to **iteration 6**.
+> **⚠ Superseded 2026-04-27.** The current design is in [`help-assistant.md`](help-assistant.md) — same plan item (5.8 PR4), different + better architecture (interactive role + Clio memory, not one-shot launch). This document is kept as a historical record of the discarded design; **do not implement against it**.
+
+**Status**: Superseded. Original status was "design only, implementation deferred to iter-6".
 **Date**: 2026-04-27
 **Branch**: `iteration-5/user-manual` (this design ships alongside the user-manual + help-tab work; no code changes).
 

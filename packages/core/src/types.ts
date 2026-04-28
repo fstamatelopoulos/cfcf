@@ -62,6 +62,22 @@ export interface CfcfGlobalConfig {
    */
   reflectionAgent?: AgentConfig;
   /**
+   * Default Help Assistant (HA) agent configuration. The HA is launched
+   * by `cfcf help assistant`: an interactive cf²-expert support session
+   * that runs the configured agent CLI in the current shell with a
+   * curated system prompt + the embedded help bundle + Clio memory
+   * access. Read-only by default; mutations gated by the agent CLI's
+   * per-command permission prompt.
+   *
+   * Backfilled to match `devAgent` when missing. The HA can be any
+   * available agent adapter (claude-code, codex). Set explicitly via
+   * `cfcf config edit` or the web UI Server Info page when you want a
+   * different agent for HA than for iterations.
+   *
+   * Plan item 5.8 PR4. See `docs/research/help-assistant.md`.
+   */
+  helpAssistantAgent?: AgentConfig;
+  /**
    * Ceiling on the number of consecutive iterations the judge may skip
    * reflection via `reflection_needed: false`. On the (N+1)th consecutive
    * skip, cfcf forces reflection regardless. Default 3. (item 5.6 U1)

@@ -13,6 +13,38 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-04-28 — Bun-dedup workaround: lessons from getting it wrong three times
+
+**Context.** `bun install -g <local-tarball>` (and at least some non-registry URL forms) appends duplicate `"<key>": <value>` entries to `~/.bun/install/global/{package.json,bun.lock}` instead of overwriting. Functionally harmless (last-occurrence wins on parse) but produces dozens of `warn: Duplicate key` lines on every subsequent install — looks like cf² is broken when it isn't. Workaround = dedup these files before/after each `bun install -g` we trigger.
+
+**The path to the right fix.** Three iterations, each fixing a different wrong assumption:
+
+1. **First attempt: `JSON.parse` round-trip.** Naïve approach: parse the file (parser collapses dup keys to last occurrence), re-stringify. Worked on `package.json` but **failed silently** on `bun.lock` because `bun.lock` is JSON5-shaped (trailing commas, JSON Parse error on strict parse). Our try/catch swallowed the error; the dedup was a no-op on the file that mattered most. Lesson: when "best-effort" code fails silently, you don't notice until empirical testing.
+
+2. **Second attempt: dedup identical lines.** Switched to text-based: drop any object-entry line we've seen before. Caught some cases but **missed the same-key/different-value variant** — bun creates dups like `"@x": "/path/foo.tgz"` and `"@x": "file:///path/foo.tgz"` (same key, normalised value forms). Different lines, identical-line dedup misses them. Lesson: the dup pattern isn't "appended same line"; it's "appended same key with a different value form". Harder to detect via text comparison.
+
+3. **Third attempt: keep-last-occurrence by line content.** Tracked each key's last-seen line content; only emitted lines whose content matched their key's last-seen value. Worked for the path-vs-file:// case but **broke when both lines were byte-identical** (same key + same value): both lines matched the "last-seen content" check, both got printed, dedup did nothing. Lesson: when comparing "is this the canonical occurrence?", track an INDEX not the content — content equality is undecidable when content is identical.
+
+**Final fix** (works empirically, both first and second installs are dup-free):
+
+- Walk consecutive object-entry lines into a "run" array.
+- For each entry, record `last_idx_for_key[k] = current_run_index`.
+- When the run ends (non-entry line: `{`, `}`, blank), emit only entries whose run index matches the recorded last index for their key.
+- Naturally scopes dedup to a single object literal (different sections of `bun.lock` have separate runs separated by structural lines, so legitimate same-key-in-different-section entries are preserved).
+
+Implementation in `scripts/install.sh`'s `dedup_bun_global` and the equivalent JS in `packages/cli/src/commands/self-update.ts`. Used both before AND after each `bun install -g` (bun creates the dup mid-install; pre-install dedup catches accumulated mess from earlier runs, post-install catches the freshly-created dup).
+
+**Lessons worth keeping.**
+
+1. **Best-effort code that fails silently is a debugging trap.** `try { ... } catch { /* ignore */ }` masks "I don't know why this isn't working". Add at least one failure-path log line — the user shouldn't have to drop into the source to discover the silent no-op.
+2. **Empirical loop > assumptions about file structure.** I assumed `bun.lock` was JSON; it's JSON5. I assumed dups were consecutive; they were interleaved. I assumed "same content" meant "same line"; sometimes content was identical and the same content matched both members of a dup pair. Each assumption looked obvious until the empirical test broke it.
+3. **When deduping, track by stable identifier (index, line number) not by content.** Content-based identity comparisons are brittle when content can be identical.
+4. **Dump file state between operations.** The `head bun.lock` + `grep -c` pattern surfaced exactly which dup pattern bun was generating. Two minutes of empirical inspection saved an hour of speculation.
+
+**Outcome.** Tagged in v0.15.0 (the current iter-5 PR4 work). Workaround can be removed if/when bun fixes the underlying append-vs-overwrite bug; until then, our dedup runs both sides of every `bun install -g`.
+
+---
+
 ## 2026-04-27 — Brand naming: cf² in user-facing surfaces, cfcf in code
 
 **Context.** The project has two interchangeable names: **cfcf** (Cerefox Code Factory) and **cf²** (pronounced "cf square"). Both have always been valid but their usage drifted: the v0.14.0 user manual + Help-tab work mixed both forms in user-facing prose (e.g. "**cfcf** is the harness" alongside "**cf²** doesn't fight users…"). Inconsistent, confusing for new users.

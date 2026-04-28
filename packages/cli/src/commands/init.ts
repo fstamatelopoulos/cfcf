@@ -130,6 +130,12 @@ export function registerInitCommand(program: Command): void {
           config.judgeAgent.adapter      = heal(config.judgeAgent.adapter,      fresh.judgeAgent.adapter);
           config.architectAgent.adapter  = heal(config.architectAgent.adapter,  fresh.architectAgent.adapter);
           config.documenterAgent.adapter = heal(config.documenterAgent.adapter, fresh.documenterAgent.adapter);
+          if (config.reflectionAgent?.adapter) {
+            config.reflectionAgent.adapter = heal(config.reflectionAgent.adapter, config.architectAgent.adapter);
+          }
+          if (config.helpAssistantAgent?.adapter) {
+            config.helpAssistantAgent.adapter = heal(config.helpAssistantAgent.adapter, config.devAgent.adapter);
+          }
         }
       }
 
@@ -139,11 +145,13 @@ export function registerInitCommand(program: Command): void {
       console.log("Detected agents:");
       available.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
       console.log();
-      console.log("Four agent roles (each independently configurable):");
+      console.log("Six agent roles (each independently configurable):");
       console.log("  - Dev agent: writes code, runs tests");
       console.log("  - Judge agent: reviews iterations (encouraged to differ from dev)");
       console.log("  - Architect agent: reviews Problem Pack, creates plan outline");
       console.log("  - Documenter agent: produces final polished documentation");
+      console.log("  - Reflection agent: cross-iteration strategic review");
+      console.log("  - Help Assistant: interactive cf² support agent (cfcf help assistant)");
       console.log();
 
       // Pick an agent by number against the detected list. Returns the
@@ -171,12 +179,22 @@ export function registerInitCommand(program: Command): void {
         config.judgeAgent.adapter      = await pickAgent("Judge",      config.judgeAgent.adapter);
         config.architectAgent.adapter  = await pickAgent("Architect",  config.architectAgent.adapter);
         config.documenterAgent.adapter = await pickAgent("Documenter", config.documenterAgent.adapter);
+        // Reflection: defaults to the architect (broad-context, strong-
+        // reasoning profile), per validateConfig's backfill rule.
+        const reflectionDefault = config.reflectionAgent?.adapter ?? config.architectAgent.adapter;
+        config.reflectionAgent = { adapter: await pickAgent("Reflection", reflectionDefault) };
+        // Help Assistant: defaults to the dev agent (interactive shell,
+        // file reads, tool use -- same profile as dev).
+        const haDefault = config.helpAssistantAgent?.adapter ?? config.devAgent.adapter;
+        config.helpAssistantAgent = { adapter: await pickAgent("Help Assistant", haDefault) };
       } else {
         console.log(`Only one agent detected (${available[0]}); using for all roles.`);
         config.devAgent.adapter = available[0];
         config.judgeAgent.adapter = available[0];
         config.architectAgent.adapter = available[0];
         config.documenterAgent.adapter = available[0];
+        config.reflectionAgent = { adapter: available[0] };
+        config.helpAssistantAgent = { adapter: available[0] };
       }
 
       // Model selection per role
@@ -199,6 +217,17 @@ export function registerInitCommand(program: Command): void {
 
       const documenterModel = await prompt("Documenter agent model", config.documenterAgent.model ?? "");
       config.documenterAgent.model = documenterModel || undefined;
+
+      // Reflection + Help Assistant model overrides. Both are optional;
+      // empty input leaves the role on its agent's default model.
+      if (config.reflectionAgent) {
+        const reflectionModel = await prompt("Reflection agent model", config.reflectionAgent.model ?? "");
+        config.reflectionAgent.model = reflectionModel || undefined;
+      }
+      if (config.helpAssistantAgent) {
+        const haModel = await prompt("Help Assistant model", config.helpAssistantAgent.model ?? "");
+        config.helpAssistantAgent.model = haModel || undefined;
+      }
 
       console.log();
 

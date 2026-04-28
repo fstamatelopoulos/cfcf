@@ -23,3 +23,4 @@ export * from "./active-processes.js";
 export * from "./notifications/index.js";
 export * from "./clio/index.js";
 export * from "./help.js";
+export * from "./help-assistant/index.js";
