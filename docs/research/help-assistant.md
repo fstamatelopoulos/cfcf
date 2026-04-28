@@ -16,7 +16,7 @@
 - Allows mutations only through the agent's per-command permission prompt (no silent state changes)
 - Reads from + writes to a Clio "memory" namespace so cf² adapts to the user's preferences over time
 
-The HA is the **first** of two roles using this architecture. The **Product Architect (PA)** in iter-6 reuses the same machine with a narrower scope (problem-pack creation + iteration on specs/test-cases/success-criteria). Designing for both at once means iter-5's HA already establishes the patterns iter-6 inherits.
+The HA is the **first** of two roles using this architecture. The **Product Architect (PA)** in iter-6 reuses the same machine with a narrower scope (problem-pack creation + iteration on specs/test-cases/success-criteria). Designing for both at once means iter-5's HA already establishes the patterns iter-6 inherits. Full PA design baseline: [`product-architect.md`](product-architect.md).
 
 ## Why this design
 
@@ -340,7 +340,9 @@ When PA lands, the launcher should support **both patterns** and pick per-role:
 - PA → pattern B (`cfcf-docs/AGENTS.md` + `--cd <repo>/cfcf-docs/` + per-call initial task prompt)
 - Future roles can pick whichever fits their persistence + cwd profile.
 
-The launcher's per-adapter argv-builder is the right seam to extend. claude-code's analog of pattern B is `CLAUDE.md` auto-loading from cwd — same shape, different filename. Document the AGENTS.md/CLAUDE.md schema for PA as part of iter-6's design doc.
+The launcher's per-adapter argv-builder is the right seam to extend. claude-code's analog of pattern B is `CLAUDE.md` auto-loading from cwd — same shape, different filename.
+
+**Full PA design baseline**: [`product-architect.md`](product-architect.md). It captures the role's specific scope (Problem Pack authoring + iteration), the discovery → bootstrap → spec-iteration → hand-off flow, the hard "no implementation drift" boundary, the `cfcf-memory-pa` schema, the `helpArchitectAgent` config field, and seven open questions tagged for iter-6 kickoff (verb shape, agent default, model default, bootstrap mode, sentinels in `cfcf-docs/AGENTS.md`, hand-off mechanics, cross-role memory merging).
 
 ## v1 implementation scope
 
