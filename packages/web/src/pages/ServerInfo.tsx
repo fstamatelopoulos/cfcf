@@ -21,8 +21,8 @@ function formatUptime(seconds: number): string {
 
 const ROLE_KEYS: (keyof Pick<
   GlobalConfig,
-  "devAgent" | "judgeAgent" | "architectAgent" | "documenterAgent" | "reflectionAgent" | "helpAssistantAgent"
->)[] = ["devAgent", "judgeAgent", "architectAgent", "documenterAgent", "reflectionAgent", "helpAssistantAgent"];
+  "devAgent" | "judgeAgent" | "architectAgent" | "documenterAgent" | "reflectionAgent" | "helpAssistantAgent" | "helpArchitectAgent"
+>)[] = ["devAgent", "judgeAgent", "architectAgent", "documenterAgent", "reflectionAgent", "helpAssistantAgent", "helpArchitectAgent"];
 
 const ROLE_LABEL: Record<string, string> = {
   devAgent: "Dev",
@@ -31,6 +31,7 @@ const ROLE_LABEL: Record<string, string> = {
   documenterAgent: "Documenter",
   reflectionAgent: "Reflection",
   helpAssistantAgent: "Help Assistant",
+  helpArchitectAgent: "Product Architect",
 };
 
 const NOTIFICATION_EVENTS: NotificationEventType[] = [

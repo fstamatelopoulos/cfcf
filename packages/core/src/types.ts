@@ -78,6 +78,24 @@ export interface CfcfGlobalConfig {
    */
   helpAssistantAgent?: AgentConfig;
   /**
+   * Default Product Architect (PA) agent configuration. The PA is
+   * launched by `cfcf help architect`: an interactive cf²-expert role
+   * focused on **starting a new project** -- specifically, authoring +
+   * iterating the Problem Pack files (problem.md / success.md /
+   * process.md / constraints.md) the dev/judge/reflect loop will
+   * satisfy. Hard "no implementation drift" boundary: PA declines
+   * requests to write code, design architecture, or implement features
+   * and redirects to the appropriate role (dev / Solution Architect).
+   *
+   * Backfilled to match `architectAgent` when missing (PA's spec-
+   * iteration workload is closer to the architect's "review + plan"
+   * profile than dev's "implement + test" one). The PA can be any
+   * available agent adapter (claude-code, codex).
+   *
+   * Plan item 5.14. See `docs/research/product-architect.md`.
+   */
+  helpArchitectAgent?: AgentConfig;
+  /**
    * Ceiling on the number of consecutive iterations the judge may skip
    * reflection via `reflection_needed: false`. On the (N+1)th consecutive
    * skip, cfcf forces reflection regardless. Default 3. (item 5.6 U1)

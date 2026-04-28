@@ -166,6 +166,17 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (!config.helpAssistantAgent?.adapter) {
     config.helpAssistantAgent = { adapter: config.devAgent.adapter };
   }
+  // Backfill Product Architect role (item 5.14). Default to the
+  // architect agent because PA's spec-iteration workload (broad
+  // context + strong reasoning + multi-turn judgement) closely
+  // matches what the architect role does on the loop side.
+  // Falls back through architect -> dev so a config that's been
+  // hand-edited to remove architectAgent still gets a sensible PA.
+  if (!config.helpArchitectAgent?.adapter) {
+    config.helpArchitectAgent = {
+      adapter: config.architectAgent?.adapter ?? config.devAgent.adapter,
+    };
+  }
   if (typeof config.reflectSafeguardAfter !== "number" || config.reflectSafeguardAfter < 1) {
     config.reflectSafeguardAfter = 3;
   }

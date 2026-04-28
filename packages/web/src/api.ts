@@ -67,6 +67,7 @@ export interface GlobalConfig {
   documenterAgent: { adapter: string; model?: string };
   reflectionAgent?: { adapter: string; model?: string };
   helpAssistantAgent?: { adapter: string; model?: string };
+  helpArchitectAgent?: { adapter: string; model?: string };
   reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;

@@ -30,6 +30,10 @@ import {
   assembleHelpAssistantPrompt,
   launchHelpAssistant,
   loadMemoryInventory,
+  assembleProductArchitectPrompt,
+  launchProductArchitect,
+  loadPaMemoryInventory,
+  readProblemPackState,
   type AgentConfig,
 } from "@cfcf/core";
 
@@ -75,6 +79,10 @@ function fmtHub(): string {
   rows.push("                         -- runs your configured dev agent (claude-code/codex) with");
   rows.push("                         the full cf² docs + your Clio memory in its system prompt.");
   rows.push("                         Permission-gated: it asks before every mutation.");
+  rows.push("  cfcf help architect    Launch the Product Architect (interactive spec authoring)");
+  rows.push("                         -- helps you draft + iterate the four Problem Pack files");
+  rows.push("                         (problem.md / success.md / process.md / constraints.md) in");
+  rows.push("                         the current repo's cfcf-docs/. Specs only, no implementation.");
   rows.push("");
   rows.push("Other entry points:");
   rows.push("  cfcf --help            List every cfcf command + top-level flags");
@@ -117,6 +125,7 @@ function levenshtein(a: string, b: string): number {
 function suggestTopic(slug: string): string | null {
   const candidates = [
     "assistant",
+    "architect",
     ...listHelpTopics().flatMap((t) => [t.slug, ...t.aliases]),
   ];
   let best: { name: string; dist: number } | null = null;
@@ -284,6 +293,139 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   }
 }
 
+interface ArchitectOptions {
+  /**
+   * Repo path to operate on. Defaults to process.cwd(). Pattern B
+   * requires `<repoPath>/cfcf-docs/` to exist; the launcher errors
+   * with a `cfcf workspace init` hint when it doesn't.
+   */
+  repoPath?: string;
+  agent?: string;
+  printPrompt?: boolean;
+  initialTask?: string;
+}
+
+/**
+ * `cfcf help architect` -- launch the Product Architect.
+ *
+ * Resolves config.helpArchitectAgent (or --agent override), reads the
+ * current Problem Pack state from `<repo>/cfcf-docs/`, composes the
+ * system prompt, writes/refreshes sentinel-marked AGENTS.md +
+ * CLAUDE.md briefing files in cfcf-docs/, and spawns the agent CLI
+ * cd'd to that subdir so the auto-load picks the briefing up.
+ *
+ * Plan item 5.14. Design: docs/research/product-architect.md.
+ */
+async function launchArchitect(opts: ArchitectOptions): Promise<void> {
+  // 1. Resolve config + the PA agent.
+  let config;
+  try {
+    config = await readConfig();
+  } catch (err) {
+    console.error(`Failed to read cfcf config: ${err instanceof Error ? err.message : String(err)}`);
+    console.error("Run \`cfcf init\` to create the config first.");
+    process.exit(1);
+  }
+  if (!config) {
+    console.error("cfcf is not configured. Run \`cfcf init\` first.");
+    process.exit(1);
+  }
+  const agent: AgentConfig = opts.agent
+    ? { adapter: opts.agent }
+    : config.helpArchitectAgent ?? config.architectAgent ?? config.devAgent;
+
+  // 2. Best-effort: load Clio memory inventory (PA + global).
+  let memoryInventory: string[] = [];
+  try {
+    const { getClioBackend } = await import("@cfcf/core");
+    const backend = getClioBackend();
+    memoryInventory = await loadPaMemoryInventory(backend);
+  } catch (err) {
+    console.error(
+      `[pa] note: couldn't read Clio memory (${err instanceof Error ? err.message : String(err)}). ` +
+      `Continuing without memory inventory; PA will still work.`,
+    );
+  }
+
+  // 3. Read current Problem Pack state from <repo>/cfcf-docs/.
+  // Survives the missing-directory case -- the formatter renders an
+  // explicit "doesn't exist + run `cfcf workspace init`" hint that
+  // PA sees in its system prompt and the launcher itself errors out
+  // before spawn. Either way the user gets an actionable message.
+  const repoPath = opts.repoPath ?? process.cwd();
+  const workspace = await readProblemPackState(repoPath);
+
+  // 4. Compose the system prompt.
+  const systemPrompt = assembleProductArchitectPrompt({
+    workspace,
+    memoryInventory,
+    initialTask: opts.initialTask,
+  });
+
+  // 5. --print-prompt escape hatch: emit the prompt + exit.
+  if (opts.printPrompt) {
+    process.stdout.write(systemPrompt);
+    if (!systemPrompt.endsWith("\n")) process.stdout.write("\n");
+    process.stderr.write(
+      `\n[pa] would have launched: ${agent.adapter}` +
+      (agent.model ? ` --model ${agent.model}` : "") +
+      ` (${memoryInventory.length} memory project(s) read; ${systemPrompt.length} chars total; ` +
+      `cfcf-docs ${workspace.exists ? "found" : "MISSING"} at ${workspace.cfcfDocsPath})\n`,
+    );
+    return;
+  }
+
+  // 6. Pre-flight: PA requires cfcf-docs/ to exist (Pattern B). If
+  // it doesn't, refuse to launch with an actionable hint.
+  // (--bootstrap mode is on the v2 roadmap; for v1 the user runs
+  // `cfcf workspace init` first.)
+  if (!workspace.exists) {
+    console.error(`[pa] ${workspace.cfcfDocsPath} doesn't exist.`);
+    console.error("");
+    console.error("The Product Architect needs cfcf-docs/ to anchor its briefing");
+    console.error("files (the agent reads cfcf-docs/AGENTS.md or CLAUDE.md as its");
+    console.error("system prompt at session start).");
+    console.error("");
+    console.error("To bootstrap a fresh project:");
+    console.error("  1. cd into your repo (or create one: `git init <name> && cd <name>`)");
+    console.error("  2. Run \`cfcf workspace init\` to create cfcf-docs/");
+    console.error("  3. Re-run \`cfcf help architect\`");
+    console.error("");
+    console.error("(--bootstrap mode that lets PA do this for you is on the v2 roadmap.)");
+    process.exit(2);
+  }
+
+  // 7. Print a one-line preface so the user knows what's happening,
+  // then hand off to the agent's TUI.
+  const modelLabel = agent.adapter === "claude-code"
+    ? ` (${agent.model ?? "sonnet"})`
+    : agent.model ? ` (${agent.model})` : "";
+  console.error(`[Product Architect (pa)] launching ${agent.adapter}${modelLabel}; type your question. Ctrl-D to exit.`);
+  console.error(`[Product Architect (pa)] briefing: ${workspace.cfcfDocsPath}/{AGENTS,CLAUDE}.md (auto-managed; user content outside the cf² markers is preserved).`);
+  if (agent.adapter === "codex") {
+    console.error("[Product Architect (pa)] tip: type `/fast` inside codex to switch to a faster/cheaper model for this session.");
+  }
+  console.error("");
+
+  try {
+    const result = await launchProductArchitect({
+      agent,
+      repoPath,
+      systemPrompt,
+      initialTask: opts.initialTask,
+    });
+    if (result.exitCode !== 0 && result.exitCode !== null) {
+      console.error(`\n[pa] agent exited with code ${result.exitCode}`);
+      process.exit(result.exitCode);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[pa] failed to launch: ${msg}`);
+    console.error("Run \`cfcf doctor\` to verify the agent CLI is on PATH.");
+    process.exit(1);
+  }
+}
+
 export function registerHelpCommand(program: Command): void {
   // Parent command: `cfcf help [topic]`. Default action (no arg) is the
   // hub; with an arg it prints that topic in full. Topic resolution
@@ -332,6 +474,33 @@ export function registerHelpCommand(program: Command): void {
         workspace: opts.workspace,
         agent: opts.agent,
         printPrompt: opts.printPrompt,
+      });
+    });
+
+  // Subcommand: `cfcf help architect`. Launches the Product Architect
+  // role -- interactive Problem Pack authoring + iteration. Pattern B
+  // injection: system prompt lives in `<repo>/cfcf-docs/AGENTS.md` and
+  // `<repo>/cfcf-docs/CLAUDE.md` (sentinel-marked, written by the
+  // launcher), agent CLI cd'd to that subdir so the auto-load picks
+  // the briefing up.
+  //
+  // Hard "no implementation drift" boundary in the system prompt: PA
+  // declines requests to write code, design architecture, or implement
+  // features and redirects to the appropriate role.
+  //
+  // Plan item 5.14. Design: docs/research/product-architect.md.
+  helpCmd
+    .command("architect [task...]")
+    .description("Launch the interactive Product Architect (cf² spec authoring agent).")
+    .option("--repo <path>", "Repo path to operate on (defaults to current working directory)")
+    .option("--agent <name>", "Override config.helpArchitectAgent (claude-code, codex)")
+    .option("--print-prompt", "Print the assembled system prompt + exit; don't launch")
+    .action((task: string[], opts: { repo?: string; agent?: string; printPrompt?: boolean }) => {
+      launchArchitect({
+        repoPath: opts.repo,
+        agent: opts.agent,
+        printPrompt: opts.printPrompt,
+        initialTask: task.length > 0 ? task.join(" ") : undefined,
       });
     });
 }
