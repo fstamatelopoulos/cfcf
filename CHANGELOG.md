@@ -18,6 +18,13 @@ Working on plan item **5.8** follow-ups: tab completion + CI fixes. Target: v0.1
 - **`cfcf completion uninstall`** — symmetrical: removes both the rc block and the completion script. User content outside the sentinels stays untouched. Idempotent.
 - **Manual-setup detection.** If the user has their own `fpath=(~/.zsh/completions ...)` line or `source ~/.cfcf-completion.bash` line outside our sentinels, we leave their rc alone (`skipped-manual` action). cfcf doesn't fight users who hand-managed their setup.
 - **`cfcf doctor` gains a "Shell tab completion" check** — verifies the completion script exists at the canonical path AND the user's rc file references it (either via our sentinel block or via a manual fpath/source line). Specific actionable hint when something's missing (e.g. "run `cfcf completion install`"). Best-effort: `warn` worst case, never `fail` — completion is a quality-of-life feature, not a correctness one.
+- **Visible "next steps" banner** — every install path (`scripts/install.sh`, `cfcf self-update`, `bun install -g` postinstall) ends with a bordered ASCII banner showing the two one-time post-install actions: (1) reload shell to activate completion, (2) restart cfcf server if it was running. ANSI-bold the action lines (TTY-conditional). Replaces the previous walls-of-text post-install output that buried the call-to-action.
+
+### Bun bug workaround: deduplicate global package.json
+
+- **Issue.** `bun install -g <local-tarball>` (and at least some non-registry URL forms) appends a duplicate key to `~/.bun/install/global/package.json` on every install instead of overwriting. After a few iterations of `cfcf self-update` or `scripts/install.sh`, the file accumulates dozens of duplicate `"@cerefox/cfcf-cli"` keys and bun spams `warn: Duplicate key` on every subsequent install (hundreds of warnings on tarball reinstalls). Functionally harmless (last-occurrence wins on parse) but extremely noisy.
+- **Fix.** `scripts/install.sh` and `cfcf self-update` both dedup the file before invoking `bun install -g`: parse + restringify (JSON.parse keeps the last occurrence of duplicate keys, so a round-trip yields a clean object). Best-effort — never fails the install.
+- **Doctor check.** New "Bun global package.json (duplicate-key check)" diagnostic in `cfcf doctor` warns when accumulated dups are detected, with an actionable hint to re-run the installer (which auto-cleans).
 - **Auto-installed on every install path.** No manual step needed:
   - `scripts/install.sh` calls `cfcf completion install` after `bun install -g`.
   - `cfcf self-update` regenerates after the in-place upgrade finishes.

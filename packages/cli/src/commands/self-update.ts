@@ -172,6 +172,27 @@ export function registerSelfUpdateCommand(program: Command): void {
       const versionToInstall = remote.cfcf ?? target;
       console.log(`\nLaunching installer for ${versionToInstall}...\n`);
 
+      // Workaround for Bun bug: `bun install -g <local-tarball>` (and
+      // arguably tarball URLs too) appends duplicate keys to
+      // ~/.bun/install/global/package.json on every run instead of
+      // overwriting. After enough self-updates the file accumulates
+      // hundreds of dups and produces screens of `warn: Duplicate key`.
+      // Fix: dedup by parse+stringify (JSON.parse keeps the LAST
+      // occurrence so a round-trip yields a clean object). Best-effort.
+      // Same fix lives in scripts/install.sh.
+      try {
+        const fs = await import("node:fs");
+        const os = await import("node:os");
+        const path = await import("node:path");
+        const globalPkg = path.join(os.homedir(), ".bun", "install", "global", "package.json");
+        if (fs.existsSync(globalPkg)) {
+          const raw = fs.readFileSync(globalPkg, "utf-8");
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parsed = JSON.parse(raw) as Record<string, any>;
+          fs.writeFileSync(globalPkg, JSON.stringify(parsed, null, 2) + "\n");
+        }
+      } catch { /* best-effort */ }
+
       // The release uploads `cfcf-<version>.tgz` next to MANIFEST.txt.
       // baseUrl already encodes either /releases/latest/download or
       // /releases/download/<tag>; just append the tarball name.

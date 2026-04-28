@@ -278,6 +278,56 @@ function checkClioDb(): CheckResult {
 }
 
 /**
+ * Check whether bun's global package.json has accumulated duplicate
+ * keys. This is a known Bun bug on `bun install -g <local-tarball>`:
+ * each install appends instead of overwriting, so re-installs grow
+ * the file with literal duplicate keys. JSON parsers tolerate it
+ * (last-occurrence wins), but bun spams `warn: Duplicate key` on
+ * every subsequent install.
+ *
+ * `scripts/install.sh` and `cfcf self-update` both dedup the file
+ * before invoking `bun install -g`, so future installs stay clean.
+ * This check warns the user if they have an accumulated mess from
+ * before that fix landed -- with an actionable hint.
+ */
+function checkBunGlobalPkgDups(): CheckResult {
+  const name = "Bun global package.json (duplicate-key check)";
+  const path = join(homedir(), ".bun", "install", "global", "package.json");
+  if (!existsSync(path)) {
+    return { name, status: "ok", detail: "no global package.json yet" };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return { name, status: "warn", detail: `could not read ${path}` };
+  }
+  // Cheap heuristic: count occurrences of likely cfcf keys. If the
+  // raw text has more occurrences than the parsed object, dups exist.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let parsed: { dependencies?: Record<string, any> };
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {
+      name,
+      status: "warn",
+      detail: `${path} is malformed JSON; recommend: bun -e \"const fs=require('fs');const p=process.env.HOME+'/.bun/install/global/package.json';const pkg=JSON.parse(fs.readFileSync(p));fs.writeFileSync(p, JSON.stringify(pkg,null,2));\"`,
+    };
+  }
+  const cfcfRawHits = (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
+  const cfcfParsedHits = parsed.dependencies?.["@cerefox/cfcf-cli"] ? 1 : 0;
+  if (cfcfRawHits > cfcfParsedHits) {
+    return {
+      name,
+      status: "warn",
+      detail: `${cfcfRawHits} duplicate "@cerefox/cfcf-cli" keys (Bun bug; harmless but noisy). Re-run scripts/install.sh or cfcf self-update to auto-clean.`,
+    };
+  }
+  return { name, status: "ok" };
+}
+
+/**
  * Check whether shell tab-completion is wired up. We're best-effort
  * here: this is a quality-of-life feature, not a correctness one, so
  * the worst-case status is `warn` (never `fail`).
@@ -368,6 +418,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkAgentClis());
       results.push(checkClioDb());
       results.push(checkShellCompletion());
+      results.push(checkBunGlobalPkgDups());
 
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));

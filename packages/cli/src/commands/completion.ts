@@ -574,20 +574,18 @@ export function registerCompletionCommand(program: Command): void {
         }
       }
 
-      console.log();
-      const needsActivation = rcResult.action === "added" || rcResult.action === "updated" || !rcEdit;
-      if (needsActivation) {
-        console.log(`Activate now:  exec ${detected}`);
-        console.log("(or just open a new terminal)");
-        console.log();
-      }
+      // Visible "next steps" banner -- every install/upgrade path
+      // funnels through here, so the same UX appears whether the
+      // user came from scripts/install.sh, the bun postinstall hook,
+      // or `cfcf self-update`. ASCII border + bold (TTY-conditional).
+      printPostInstallBanner(detected);
+
       console.log("Tab-complete works on every cfcf verb:");
       console.log("  cfcf <TAB>            → top-level commands");
       console.log("  cfcf clio <TAB>       → docs metadata projects embedder search audit reindex stats");
       console.log("  cfcf clio docs <TAB>  → list ingest get edit delete restore versions");
       console.log();
-      console.log("Auto-regenerated on every cfcf install + `cfcf self-update`. Rarely");
-      console.log("needs to be re-run. To opt out / remove: `cfcf completion uninstall`.");
+      console.log("To opt out / remove: cfcf completion uninstall");
     });
 
   completionCmd
@@ -616,6 +614,57 @@ export function registerCompletionCommand(program: Command): void {
         console.log("Re-install any time with: cfcf completion install");
       }
     });
+}
+
+/**
+ * Render the bordered "next steps" banner printed at the end of every
+ * install path (curl install.sh, bun install postinstall, cfcf
+ * self-update). Combines the shell-completion activation hint with
+ * the cfcf-server-restart hint -- both are things the user does once
+ * after every install/upgrade.
+ *
+ * Bold (ANSI) when stdout is a TTY; plain text otherwise (CI logs,
+ * piped output, postinstall non-interactive contexts). Width fits a
+ * standard 80-column terminal.
+ *
+ * The banner is printed by `cfcf completion install`'s action handler,
+ * so every install path that runs `cfcf completion install` (all three:
+ * scripts/install.sh, postinstall hook, self-update) gets it for free.
+ */
+export function printPostInstallBanner(shell: "bash" | "zsh" | null): void {
+  const tty = process.stdout.isTTY ?? false;
+  const BOLD = tty ? "\x1b[1m" : "";
+  const RESET = tty ? "\x1b[0m" : "";
+  const reload = shell === "zsh" ? "exec zsh"
+              : shell === "bash" ? "exec bash"
+              : "open a new terminal";
+
+  // Box-drawing characters render fine on every modern macOS / Linux
+  // terminal; ASCII fallback would be uglier but more compatible.
+  // Width = 75 chars (interior 73). Each line padded to 73 + walls.
+  const lines = [
+    "Next steps -- one-time, after every install or upgrade",
+    "",
+    `${BOLD}1. Activate shell completion${RESET}: ${reload}`,
+    "   (or just open a new terminal)",
+    "",
+    `${BOLD}2. Restart cfcf server if it was running${RESET}:`,
+    "   cfcf server stop && cfcf server start",
+    "   (skip if you weren't running it)",
+  ];
+
+  // Visible-length aware padding: ANSI codes don't count toward width.
+  // eslint-disable-next-line no-control-regex
+  const visibleLen = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
+  const interior = 73;
+  console.log();
+  console.log("╔" + "═".repeat(interior) + "╗");
+  for (const line of lines) {
+    const pad = " ".repeat(Math.max(0, interior - 2 - visibleLen(line)));
+    console.log("║ " + line + pad + " ║");
+  }
+  console.log("╚" + "═".repeat(interior) + "╝");
+  console.log();
 }
 
 /**

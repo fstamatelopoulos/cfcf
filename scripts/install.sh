@@ -99,6 +99,26 @@ native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
 # package isn't there (Phase 1), bun emits a soft 404 warning. Having
 # the native package already globally installed satisfies the require
 # at runtime regardless of npm visibility.
+
+# Workaround for Bun bug where `bun install -g <local-tarball>` appends
+# duplicate keys to ~/.bun/install/global/package.json on every run
+# (instead of overwriting). Hundreds of accumulated dups produce
+# screens of `warn: Duplicate key` on every subsequent install. Fix:
+# dedup the file by parse+stringify (JSON.parse keeps the LAST
+# occurrence of a duplicate key, so a round-trip yields a clean
+# object). Best-effort; we never fail the install over this.
+global_pkg="$HOME/.bun/install/global/package.json"
+if [[ -f "$global_pkg" ]]; then
+  bun -e "
+    const fs = require('fs');
+    const p = '$global_pkg';
+    try {
+      const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+    } catch (e) { /* malformed beyond repair; leave it alone */ }
+  " 2>/dev/null || true
+fi
+
 echo "[cfcf] Installing @cerefox/cfcf-native-$platform from $native_url"
 bun install -g "$native_url"
 echo "[cfcf] Installing @cerefox/cfcf-cli from $cli_url"
