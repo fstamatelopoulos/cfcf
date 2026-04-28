@@ -9,43 +9,102 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-Working on plan item **5.8 PR4** v1 (Help Assistant). Target: v0.15.0.
+_Iter-6 backlog: Product Architect role (5.8 PR5), CLI verb-rename audit for the remaining cfcf top-level verbs, Clio FTS title boost (6.24), Web UI Help Assistant button._
+
+## [0.15.0] -- 2026-04-28
+
+Plan item **5.8 PR4** v1: Help Assistant (`cfcf help assistant`) — interactive cf² support agent that runs the user's configured dev agent (claude-code / codex) in the current shell with a curated system prompt + the full embedded help bundle + Clio memory access. Plus a substantial follow-up sweep of fixes flagged immediately in dogfood.
 
 ### Help Assistant (5.8 PR4)
 
-`cfcf help assistant` launches an interactive cf² support session — the configured dev agent (claude-code / codex) running in the user's current shell as a new specialised role with the full cf² documentation + Clio memory in its system prompt. **Read-only by default; mutations gated by the agent's per-command permission prompt** (no `--dangerously-skip-permissions`). Replaces the original "Ask the Agent" one-shot design (now superseded; see `docs/research/ask-the-agent.md`).
+`cfcf help assistant` launches an interactive cf² support session. The agent CLI's TUI takes over the current shell until exit — no new terminal, no chat UI inside cfcf, no fragile OS-spawning. **Read-only by default; mutations gated by the agent CLI's per-command permission prompt** (no `--dangerously-skip-permissions`). Replaces the original "Ask the Agent" one-shot design (now superseded; see `docs/research/ask-the-agent.md`).
 
 Architecture:
 
-- **HA is a cf² role**, like dev / judge / architect / reflection / documenter. New `helpAssistantAgent` field on `CfcfGlobalConfig` defaults to `devAgent`'s value; configurable via `cfcf config edit` and the web UI.
-- **No new terminal launcher.** The agent CLI's interactive TUI takes over the current shell until exit. Solves the OS-fragility problem of the old Ask-the-Agent design.
-- **System prompt embeds the full help bundle** (~160 KB) plus the user's HA + global Clio memory inventory. With `--workspace <name>`, also includes the workspace's recent state. Total ~170 KB, well within modern context windows.
-- **Clio "memory" Projects** are the persistence layer — `cfcf-memory-ha` (HA-specific) + `cfcf-memory-global` (cross-role). Convention recorded in `docs/decisions-log.md` and the design doc; iter-6's Product Architect role reuses the same scheme (`cfcf-memory-pa`).
+- **HA is a cf² role**, like dev / judge / architect / reflection / documenter. New `helpAssistantAgent` field on `CfcfGlobalConfig` defaults to `devAgent`'s value.
+- **System prompt** (~170 KB) embeds the full help bundle + Clio memory inventory + optional workspace state. Comfortably within modern context windows.
+- **Clio "memory" Projects** are the persistence layer:
+  - `cfcf-memory-global` — cross-role: things every cf² role should know about this user (e.g. "always TypeScript", "Pacific time zone")
+  - `cfcf-memory-ha` — HA-specific lessons / preferences
+  - Future per-role projects (`cfcf-memory-pa` etc.) reuse the same scheme
 
 CLI:
 
 ```bash
-cfcf help assistant                                    # launch with config defaults
-cfcf help assistant --workspace my-project             # include workspace state in system prompt
-cfcf help assistant --agent claude-code                # override config.helpAssistantAgent
-cfcf help assistant --print-prompt                     # debug: emit the assembled prompt + exit
+cfcf help assistant                          # launch with config defaults
+cfcf help assistant --workspace my-project   # include workspace state in system prompt
+cfcf help assistant --agent claude-code      # override config.helpAssistantAgent
+cfcf help assistant --print-prompt           # debug: emit the assembled prompt + exit
 ```
 
-Adapter support:
+Adapter support (researched empirically — both verified end-to-end):
 
-- **claude-code**: `claude --append-system-prompt <text>` (interactive mode, default permission prompts).
-- **codex**: `codex --system-prompt <text>` (interactive mode).
+| Adapter | Flag | Default model |
+|---|---|---|
+| **claude-code** | `--append-system-prompt <text>` (inline) | **`haiku`** — HA's Q&A workload doesn't need a top-tier model; haiku is ~10× faster + ~12× cheaper. Explicit model in config still wins. |
+| **codex** | `-c model_instructions_file=<tempfile>` (the canonical config key; `experimental_instructions_file` is deprecated but still accepted with a warning) | account-default; launch banner hints at `/fast` for in-session model switching since codex's `--model` is account-tied and can fail for ChatGPT-account installs |
 
-`cfcf doctor` gains a "Help Assistant prerequisites" check that verifies at least one supported agent CLI is reachable. Best-effort: `warn` worst case, never `fail` (HA isn't critical for cf² to work).
+Codex tempfile is cleaned up in a `finally` block on every exit path (success, error, Ctrl-C).
 
-Out of scope for v1 (deferred to iter-6):
+UX / discoverability:
 
-- **Product Architect (PA) role** — same architecture, narrower scope (Problem Pack creation + spec iteration). Will use `cfcf-memory-pa`.
+- **`cfcf help assistant` is a real subcommand**, not a positional value, so tab completion picks it up automatically.
+- **Levenshtein-based "did you mean?"** for typo'd topics: `cfcf help assitant` → "Did you mean: cfcf help assistant?"
+- **Launch banner** spells out the abbreviation: `[Help Assistant (ha)] launching claude-code (haiku); type your question. Ctrl-D to exit.`
+
+Configuration plumbing:
+
+- **`cfcf init`** interactive flow now prompts for both Help Assistant AND Reflection (both were previously missing — relied on backfills). Heal-on-existence covers both when re-running with `--force`. Matching model prompts.
+- **`cfcf config show`** displays Help Assistant alongside the other roles.
+- **`cfcf config edit`** delegates to `init --force`; inherits the new prompts.
+- **Web UI Server Info** agent-roles section automatically picks up `helpAssistantAgent` (the editor + readout are data-driven via `ROLE_KEYS`).
+
+Doctor:
+
+- New **"Help Assistant prerequisites"** check verifies at least one supported agent CLI is reachable. Best-effort: `warn` worst case, never `fail`.
+
+Architecture documentation (for iter-6):
+
+- `docs/research/help-assistant.md` §"Alternative approaches considered" captures **two valid patterns** for system-prompt injection:
+  - **Pattern A** — `model_instructions_file` tempfile via `-c` (used by HA): ephemeral, system-level, independent of any pre-existing AGENTS.md.
+  - **Pattern B** — `cfcf-docs/AGENTS.md` + `--cd` + initial-prompt task hint (reserved for iter-6 PA): durable per-repo guidance for the role that writes Problem Pack files. Codex auto-loads AGENTS.md from cwd; claude-code's analog is CLAUDE.md.
+- Plan item 5.8 PR5 (iter-6 PA) inherits this comparison.
+
+Deferred to iter-6:
+
+- **Product Architect (PA) role** — same architecture, narrower scope (Problem Pack creation + spec iteration); uses Pattern B (AGENTS.md/CLAUDE.md auto-load).
 - **Web UI Help Assistant button** — once CLI flow is dogfooded.
 - **Multi-turn session persistence** across cf² restarts.
-- **Smarter memory retrieval** (currently dumps the whole memory project; iter-6 retrieves selectively).
+- **Smarter memory retrieval** (v1 dumps the whole memory project; iter-6 retrieves selectively).
 
-Plan item 5.8 PR4. Design + decisions in `docs/research/help-assistant.md`.
+### Bun-dedup workaround (v3 — finally correct)
+
+`bun install -g <local-tarball>` appends duplicate `"<key>": <value>` entries to `~/.bun/install/global/{package.json,bun.lock}`. After the previous two attempts at a fix (silent `JSON.parse` round-trip; identical-line dedup; content-based keep-last) each missed a different aspect, the final fix is **run-based key-dedup keeping the LAST occurrence**, tracked by **index** (not content — content equality is undecidable when content is identical). Empirically verified: zero `Duplicate key` warnings on first AND subsequent installs.
+
+Full lessons captured in `docs/decisions-log.md` (2026-04-28 entry "Bun-dedup workaround: lessons from getting it wrong three times"):
+
+1. Best-effort code that fails silently is a debugging trap.
+2. Empirical loop > assumptions about file structure.
+3. When deduping, track by stable identifier (index) not by content.
+4. Dump file state between operations.
+
+### Brand consistency: cf² in user-facing surfaces, cfcf in code
+
+Convention now codified in `docs/decisions-log.md`:
+
+- **`cf²`** in user-facing documentation, UI labels, prose mentions, headings — the brand.
+- **`cfcf`** in source code, CLI commands, file paths, package names, env variables, sentinel comments — the keystroke-friendly form.
+
+Sweep applied to `docs/guides/manual.md`, `troubleshooting.md`, `installing.md`. Embedded help bundle regenerated.
+
+### Other UX fixes that landed alongside
+
+- **`cfcf help` (no arg) prints a glanceable hub** instead of dumping the full 280-line manual. Same shape as `git help`, `gh help`, `kubectl help`. The full manual is still available via `cfcf help --full`. Hub now mentions `cfcf --help` for the standard command listing.
+- **Web UI Help tab dark-mode contrast** fixed — switched every inline style to use the existing CSS variable theme tokens.
+- **Tab completion picks up `cfcf help assistant`** — removed a stale filter in the completion generator that was skipping the `help` command entirely (a leftover from when commander's auto-help was conflicting).
+- **`cfcf` help output** no longer shows HA-only flags on the parent command — they live on the `assistant` subcommand only.
+
+Plan item 5.8 PR4. Full design + decisions in `docs/research/help-assistant.md`.
 
 ## [0.14.2] -- 2026-04-27
 
