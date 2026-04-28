@@ -103,7 +103,7 @@ export interface CfcfGlobalConfig {
    * iteration workload is closer to the architect's "review + plan"
    * profile than dev's "implement + test" one).
    *
-   * Plan item 5.14. See `docs/research/product-architect.md`.
+   * Plan item 5.14. See `docs/research/product-architect-design.md`.
    */
   productArchitectAgent?: AgentConfig;
   /**

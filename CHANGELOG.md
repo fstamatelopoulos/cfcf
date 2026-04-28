@@ -53,9 +53,7 @@ Plumbing:
 - `packages/core/src/product-architect/` module: prompt assembler + workspace-state reader + Clio-memory reader + sentinel-marked briefing-file writers + Pattern B launcher. 27 unit tests.
 - `packages/cli/src/commands/spec.ts` (NEW): wires the top-level `cfcf spec` command.
 
-Open questions deferred to a follow-up (captured in `docs/research/product-architect.md` §10): `--bootstrap` mode for fresh repos, hand-off mechanics PA→Architect→loop, cross-role memory merge semantics with HA. v1 ships the smallest useful surface; dogfood will tell us which to revisit.
-
-Design baseline: `docs/research/product-architect.md`.
+Design baseline: [`docs/research/product-architect-design.md`](docs/research/product-architect-design.md). The v1 implementation (Pattern B, `cfcf-docs/` directory model) was committed first as a checkpoint; the v2 refactor on the same branch supersedes it (Pattern A, `<repo>/.cfcf-pa/` for memory cache, `<repo>/problem-pack/` for user specs). See the design doc's "Implementation delta — v1 → v2" section for the full list of changes.
 
 _Other iter-6 backlog: web UI integration research for HA + PA roles (5.15), CLI verb-rename audit for the remaining cfcf top-level verbs, Clio FTS title boost (6.24)._
 
