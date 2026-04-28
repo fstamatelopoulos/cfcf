@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 
 interface Route {
-  page: "dashboard" | "workspace" | "server";
+  page: "dashboard" | "workspace" | "server" | "help";
   workspaceId?: string;
+  helpTopic?: string;
 }
 
 function parseHash(): Route {
@@ -10,6 +11,10 @@ function parseHash(): Route {
   const workspaceMatch = hash.match(/^\/workspaces\/(.+)/);
   if (workspaceMatch) {
     return { page: "workspace", workspaceId: decodeURIComponent(workspaceMatch[1]) };
+  }
+  const helpMatch = hash.match(/^\/help(?:\/(.+))?$/);
+  if (helpMatch) {
+    return { page: "help", helpTopic: helpMatch[1] ? decodeURIComponent(helpMatch[1]) : undefined };
   }
   if (hash === "/server") {
     return { page: "server" };

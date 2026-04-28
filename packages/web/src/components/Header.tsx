@@ -82,6 +82,15 @@ export function Header() {
         >
           Settings
         </a>
+        <a
+          href="#/help"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo("/help");
+          }}
+        >
+          Help
+        </a>
       </nav>
       {anyActive && (
         <span className="header__activity" title="Click to open the active workspace">

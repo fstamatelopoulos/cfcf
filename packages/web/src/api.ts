@@ -207,3 +207,24 @@ export function fetchActivity(): Promise<{ active: ActivityItem[] }> {
 export function fetchHistory(workspaceId: string): Promise<HistoryEvent[]> {
   return request<HistoryEvent[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/history`);
 }
+
+// --- Help (5.8 PR2/PR3) ---
+
+export interface HelpTopicSummary {
+  slug: string;
+  title: string;
+  source: string;
+  aliases: string[];
+}
+
+export interface HelpTopic extends HelpTopicSummary {
+  content: string;
+}
+
+export function fetchHelpTopics(): Promise<{ topics: HelpTopicSummary[] }> {
+  return request<{ topics: HelpTopicSummary[] }>(`/api/help/topics`);
+}
+
+export function fetchHelpTopic(slug: string): Promise<HelpTopic> {
+  return request<HelpTopic>(`/api/help/topics/${encodeURIComponent(slug)}`);
+}

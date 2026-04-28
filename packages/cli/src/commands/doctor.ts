@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
+import { listHelpTopics } from "@cfcf/core";
 
 interface CheckResult {
   name: string;
@@ -333,6 +334,50 @@ function checkBunGlobalPkgDups(): CheckResult {
 }
 
 /**
+ * Check whether the user-facing help bundle is embedded. The bundle is
+ * generated at build time from docs/guides/*.md by
+ * scripts/embed-help-content.ts; if it's missing, `cfcf help` won't
+ * work and the web UI Help tab will return errors. Best-effort: warn,
+ * never fail.
+ */
+function checkHelpContent(): CheckResult {
+  const name = "User manual + help content";
+  try {
+    const topics = listHelpTopics();
+    if (topics.length === 0) {
+      return {
+        name,
+        status: "warn",
+        detail: "no help topics embedded; rebuild via `bun run scripts/embed-help-content.ts`",
+      };
+    }
+    // Spot-check that the canonical core topics are all present.
+    const slugs = topics.map((t) => t.slug);
+    const missing = ["manual", "workflow", "cli", "troubleshooting"].filter(
+      (req) => !slugs.includes(req),
+    );
+    if (missing.length > 0) {
+      return {
+        name,
+        status: "warn",
+        detail: `missing canonical topics: ${missing.join(", ")} — try \`cfcf self-update\``,
+      };
+    }
+    return {
+      name,
+      status: "ok",
+      detail: `${topics.length} topics embedded -- run \`cfcf help\` to read`,
+    };
+  } catch (err) {
+    return {
+      name,
+      status: "warn",
+      detail: `help bundle unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
  * Check whether shell tab-completion is wired up. We're best-effort
  * here: this is a quality-of-life feature, not a correctness one, so
  * the worst-case status is `warn` (never `fail`).
@@ -422,6 +467,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkRuntimeDeps());
       results.push(...checkAgentClis());
       results.push(checkClioDb());
+      results.push(checkHelpContent());
       results.push(checkShellCompletion());
       results.push(checkBunGlobalPkgDups());
 

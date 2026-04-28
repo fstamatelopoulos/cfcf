@@ -8,6 +8,9 @@ dist/
 # Generated asset bundle (produced by `bun run build:web`)
 packages/server/src/web-assets.generated.ts
 
+# Generated help-content bundle (produced by scripts/embed-help-content.ts)
+packages/core/src/help-content.generated.ts
+
 # Bun
 bun.lock
 

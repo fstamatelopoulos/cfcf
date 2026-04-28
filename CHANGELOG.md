@@ -9,7 +9,20 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_Nothing yet. Continuing on plan item **5.8**: PR2 (canonical user manual + restructured `cli-usage.md`) and PR3 (embed manual in installer + web UI Help tab + `cfcf help <topic>`)._
+Working on plan item **5.8 PR2/PR3** (combined): user manual + embedded help content + `cfcf help` + web UI Help tab. Target: v0.14.0.
+
+### User manual + help content (5.8 PR2/PR3, combined)
+
+- **`docs/guides/manual.md`** (NEW, hub-and-pointer style) — canonical entry point. 3-minute getting started + concepts + pointers to focused guides + Shell completion section + glossary. Replaces the implicit "read the README + scattered docs" experience with one clearly-labeled hub.
+- **`docs/guides/troubleshooting.md`** (NEW) — dedicated diagnostics page covering "tab doesn't fire", "cfcf server won't start", "cfcf init fails to download embedder", "iteration stuck", "Clio search returns nothing", Bun dup-key warnings, Node 20 deprecation noise, oh-my-zsh / prezto / starship interactions, asdf/mise/fnm Bun-version mismatch, worst-case clean reinstall.
+- **`cli-usage.md` Clio section restructured** — was a single code-block dump; now one `### subsection` per verb matching the rest of the file's style. Adds a new top-level "Shell completion" section covering `cfcf completion {bash,zsh,install,uninstall}`, sentinel-marked rc-file behaviour, `--no-rc-edit`, manual-setup detection, supported shells.
+- **`installing.md` refresh** — mentions auto-installed completion + rc-edit, links forward to `troubleshooting.md`, updates the doctor-check count.
+- **README** — new "Start here" callout pointing at `manual.md`. Same pointer reused for `cfcf help` (via the embedded bundle below).
+- **Embedded help bundle** — new `scripts/embed-help-content.ts` generator reads `docs/guides/*.md` + `docs/api/server-api.md` and emits `packages/core/src/help-content.generated.ts` (gitignored). Same pattern as `web-assets.generated.ts`. Survives `bun build --compile` and npm-format installs without external files at runtime. Wired into `scripts/build-cli.sh`.
+- **`cfcf help [topic]`** — new CLI command. With no arg → prints the manual (default topic). With arg → resolves slug or alias (`cfcf help cli` → `cli-usage.md`; `cfcf help memory` → `clio-quickstart.md`; `cfcf help install` → `installing.md`; `cfcf help troubleshoot` → `troubleshooting.md`; `cfcf help api` → `server-api.md`). `--list` shows all topics + aliases. Output is plain Markdown — pipe through `glow` or `bat -l md` for prettified terminal rendering.
+- **`/api/help/topics`** + **`/api/help/topics/:slug`** — new HTTP routes powering the web UI. Server reads from the embedded bundle; no filesystem lookup at runtime.
+- **Web UI Help tab** — new top-bar `Help` link (next to `Settings`), route `#/help` (defaults to `manual`) / `#/help/<slug>`, two-pane layout (topic list on the left, rendered Markdown on the right). Minimal in-tab Markdown renderer (~100 LOC, no external library) handles headings/paragraphs/lists/fenced-code/inline-code/bold/em/links/blockquote/hr. Intra-doc `.md` links rewrite to `#/help/<slug>` so they navigate the Help tab in-place; external URLs open in a new tab.
+- **`cfcf doctor` "User manual + help content" check** — verifies the embedded bundle is present and the canonical topics (`manual`/`workflow`/`cli`/`troubleshooting`) are all there. Best-effort: `warn` worst case.
 
 ## [0.13.0] -- 2026-04-27
 

@@ -13,6 +13,7 @@ import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { registerClioRoutes } from "./routes/clio.js";
+import { registerHelpRoutes } from "./routes/help.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -1035,6 +1036,10 @@ export function createApp() {
   // /api/clio/* plus the PUT /api/workspaces/:id/clio-project handler for
   // `cfcf workspace set --project`. Implementation in routes/clio.ts.
   registerClioRoutes(app);
+
+  // /api/help/topics + /api/help/topics/:slug -- powers the web UI
+  // Help tab. Reads from the embedded help bundle.
+  registerHelpRoutes(app);
 
   // --- Static file serving (Web GUI) ---
   //
