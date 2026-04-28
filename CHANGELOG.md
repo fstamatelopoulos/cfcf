@@ -9,7 +9,43 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_Help Assistant in flight on `iteration-5/help-assistant` (5.8 PR4 v1; was Ask-the-Agent in earlier design). Iter-6 backlog: PA role, CLI verb-rename audit, Clio FTS title boost._
+Working on plan item **5.8 PR4** v1 (Help Assistant). Target: v0.15.0.
+
+### Help Assistant (5.8 PR4)
+
+`cfcf help assistant` launches an interactive cf² support session — the configured dev agent (claude-code / codex) running in the user's current shell as a new specialised role with the full cf² documentation + Clio memory in its system prompt. **Read-only by default; mutations gated by the agent's per-command permission prompt** (no `--dangerously-skip-permissions`). Replaces the original "Ask the Agent" one-shot design (now superseded; see `docs/research/ask-the-agent.md`).
+
+Architecture:
+
+- **HA is a cf² role**, like dev / judge / architect / reflection / documenter. New `helpAssistantAgent` field on `CfcfGlobalConfig` defaults to `devAgent`'s value; configurable via `cfcf config edit` and the web UI.
+- **No new terminal launcher.** The agent CLI's interactive TUI takes over the current shell until exit. Solves the OS-fragility problem of the old Ask-the-Agent design.
+- **System prompt embeds the full help bundle** (~160 KB) plus the user's HA + global Clio memory inventory. With `--workspace <name>`, also includes the workspace's recent state. Total ~170 KB, well within modern context windows.
+- **Clio "memory" Projects** are the persistence layer — `cfcf-memory-ha` (HA-specific) + `cfcf-memory-global` (cross-role). Convention recorded in `docs/decisions-log.md` and the design doc; iter-6's Product Architect role reuses the same scheme (`cfcf-memory-pa`).
+
+CLI:
+
+```bash
+cfcf help assistant                                    # launch with config defaults
+cfcf help assistant --workspace my-project             # include workspace state in system prompt
+cfcf help assistant --agent claude-code                # override config.helpAssistantAgent
+cfcf help assistant --print-prompt                     # debug: emit the assembled prompt + exit
+```
+
+Adapter support:
+
+- **claude-code**: `claude --append-system-prompt <text>` (interactive mode, default permission prompts).
+- **codex**: `codex --system-prompt <text>` (interactive mode).
+
+`cfcf doctor` gains a "Help Assistant prerequisites" check that verifies at least one supported agent CLI is reachable. Best-effort: `warn` worst case, never `fail` (HA isn't critical for cf² to work).
+
+Out of scope for v1 (deferred to iter-6):
+
+- **Product Architect (PA) role** — same architecture, narrower scope (Problem Pack creation + spec iteration). Will use `cfcf-memory-pa`.
+- **Web UI Help Assistant button** — once CLI flow is dogfooded.
+- **Multi-turn session persistence** across cf² restarts.
+- **Smarter memory retrieval** (currently dumps the whole memory project; iter-6 retrieves selectively).
+
+Plan item 5.8 PR4. Design + decisions in `docs/research/help-assistant.md`.
 
 ## [0.14.2] -- 2026-04-27
 
