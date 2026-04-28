@@ -291,6 +291,57 @@ your conversation is gone -- so if you've learned something the user
 wants persisted, write it to memory before they exit.
 ```
 
+## Alternative approaches considered
+
+Captured 2026-04-28 after a deeper research pass on codex's instruction-injection options. The two patterns below were evaluated; both are valid, but they fit different use cases. v1 HA uses pattern A; iter-6 PA likely uses pattern B.
+
+### Pattern A: tempfile + config override via `-c` *(this design — picked for HA)*
+
+```
+codex -c model_instructions_file="<tempfile>"
+```
+
+- **Semantic level**: system instructions (codex's primary role-defining slot)
+- **Persistence**: per-session; tempfile cleaned up on exit
+- **Cwd**: inherits the user's actual cwd
+- **Independence**: doesn't interact with `AGENTS.md` auto-loading
+
+**Why this fits HA**: the role briefing IS system-level ("you ARE the cf² Help Assistant"), HA sessions are ephemeral, and we want the user's repo cwd preserved (so the agent can read `git status`, the workspace's `cfcf-docs/`, etc.) without confusion from any pre-existing `AGENTS.md` in cf²-managed workspaces.
+
+### Pattern B: AGENTS.md + initial prompt + `--cd` *(suggested by Perplexity research; right for PA)*
+
+```
+codex --cd <workspace-root> "<initial task prompt>"
+```
+
+with persistent `AGENTS.md` at `<workspace-root>/AGENTS.md` (or `<workspace-root>/cfcf-docs/AGENTS.md`).
+
+- **Semantic level**: AGENTS.md = durable agent guidance (auto-loaded by codex from cwd + every parent dir); the positional prompt is a user-level message
+- **Persistence**: AGENTS.md persists across sessions
+- **Cwd**: explicitly set via `--cd`
+- **Layered**: codex layers `~/.codex/AGENTS.md` + repo's `AGENTS.md` + subtree `AGENTS.md` files into the prompt
+
+**Why this fits the Product Architect role (iter-6)**: PA writes durable artifacts to the user's repo (`cfcf-docs/problem.md`, `success.md`, etc.). Persistent role guidance in `cfcf-docs/AGENTS.md` is the natural carrier — codex auto-loads it on every PA-spawned session, so the user gets consistent behaviour without us re-injecting the role on each invocation. The initial prompt becomes a per-call task hint ("the user wants to define a new feature; ask clarifying questions"). The user's existing iteration-time `AGENTS.md` (used during cf² runs) lives at the workspace's repo root; PA's `AGENTS.md` lives under `cfcf-docs/` and only loads when codex is run with `--cd <repo>/cfcf-docs/` or similar — keeping the two roles cleanly separated.
+
+### Why HA can't use pattern B (the conflict that motivated pattern A)
+
+If the user runs `cfcf help assistant` from inside a cf²-managed workspace (the common case), codex auto-loads the workspace's iteration-role `AGENTS.md` (telling codex "you are the dev agent, your job is to satisfy the Problem Pack…"). Adding our HA role on top would mix the two — codex would see contradictory directives. Pattern A's tempfile + config-override is independent of `AGENTS.md` loading, so HA's role briefing never collides with iteration-time instructions.
+
+### Other approaches surveyed but not chosen
+
+- **Initial prompt as carrier** (passing the full role briefing as the positional `[PROMPT]` arg). Treats it as a user message rather than system instructions; agent might still adopt the role but the semantic slot is wrong. Suboptimal for role-defining content.
+- **MCP servers** (both agents support MCP). Heavyweight: requires standing up an MCP server process, defining tools, etc. Useful for exposing specific capabilities (e.g. "give the agent live access to Clio search") but overkill for a one-shot system-prompt injection. Worth revisiting in iter-6 once the basic HA flow is dogfooded.
+
+### Implications for iter-6 PA design
+
+When PA lands, the launcher should support **both patterns** and pick per-role:
+
+- HA → pattern A (`model_instructions_file` tempfile)
+- PA → pattern B (`cfcf-docs/AGENTS.md` + `--cd <repo>/cfcf-docs/` + per-call initial task prompt)
+- Future roles can pick whichever fits their persistence + cwd profile.
+
+The launcher's per-adapter argv-builder is the right seam to extend. claude-code's analog of pattern B is `CLAUDE.md` auto-loading from cwd — same shape, different filename. Document the AGENTS.md/CLAUDE.md schema for PA as part of iter-6's design doc.
+
 ## v1 implementation scope
 
 ### What ships in iter-5
