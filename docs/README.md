@@ -20,8 +20,12 @@ docs/
     reflection-role-and-iterative-planning.md   Item 5.6 design (shipped in v0.6.0 + v0.7.0)
 
   guides/               User-facing how-tos
-    workflow.md         Full user workflow walkthrough (the main user guide)
-    cli-usage.md        CLI command reference
+    manual.md           User-manual hub -- 3-min getting started + concepts + pointers
+    workflow.md         Full workflow walkthrough (canonical for "run a loop end-to-end")
+    cli-usage.md        CLI command reference (verb-by-verb)
+    clio-quickstart.md  Clio (cross-workspace memory) onboarding
+    installing.md       Install + upgrade + uninstall
+    troubleshooting.md  Common issues + fixes
 ```
 
 ## What Goes Where

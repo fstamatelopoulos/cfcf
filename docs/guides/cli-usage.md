@@ -403,111 +403,290 @@ The iteration branch is preserved. You can review the code, then restart with `c
 
 ---
 
-## Clio — cross-workspace memory (item 5.7)
+## Clio — cross-workspace memory
 
-Clio is cf²'s persistent memory layer. See [Clio quickstart](clio-quickstart.md) for the full walkthrough; the commands are:
+Clio is cf²'s persistent memory layer (`~/.cfcf/clio.db`, shared across all workspaces, scoped by named **Clio Project**). See [Clio quickstart](clio-quickstart.md) for the conceptual walkthrough; this section is the verb-by-verb reference.
+
+The verb structure follows a single mechanical rule (see [`docs/research/cli-verb-normalisation.md`](../research/cli-verb-normalisation.md)): collection-wide / Clio-wide / headline operations stay top-level (`search`, `audit`, `reindex`, `stats`); operations that act on a noun-instance live under that noun's namespace (`docs`, `metadata`, `projects`, `embedder`).
+
+`cfcf memory` is a top-level alias for `cfcf clio` — `cfcf memory search "..."` works identically.
+
+### `cfcf clio search`
+
+Search Clio for documents matching `<query>`. Doc-level dedup by default (one row per matching document, Cerefox parity).
 
 ```bash
-# Search. Modes: fts | hybrid | semantic. Default mode is auto:
-#   - active embedder present → hybrid (α-weighted blend of cosine + normalised BM25)
-#   - no active embedder      → fts
-# Override per-call with --mode, or set clio.defaultSearchMode in the
-# global config (visible + editable in the Web UI's Server Info page).
-cfcf clio search "flaky auth tests"                              # default: one row per matching DOC (Cerefox parity)
-cfcf clio search "flaky auth tests" --by-chunk                   # legacy raw view: one row per matching CHUNK
-cfcf clio search "flaky auth tests" --mode hybrid                # force a mode
-cfcf clio search "flaky auth tests" --min-score 0.4              # widen vector recall (default 0.5)
-cfcf clio search "flaky auth tests" --alpha 0.3                  # bias toward keyword (default 0.7 = bias toward semantic)
-cfcf clio search "flaky auth tests" --small-doc-threshold 0      # disable full-doc-for-small-docs path
-cfcf clio search "flaky auth tests" --context-window 2           # widen the chunk window in the large-doc path (default 1)
-cfcf clio search "flaky auth tests" --project <name> --match-count 5 \
-                                    --metadata '{"role":"reflection"}' --json
-
-# Ingest a markdown doc (or pipe via --stdin)
-cfcf clio docs ingest path/to/note.md --project cf-ecosystem --title "Note" [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c]
-cat note.md | cfcf clio docs ingest --stdin --project cf-ecosystem --title "Note"
-
-# Update an existing doc instead of creating a new one (item 5.11):
-#   --update-if-exists matches by title within the same Project
-#   --document-id <uuid> is the deterministic update path (wins if both passed)
-# When an update happens, the prior content is snapshotted into a version row;
-# recall it with `cfcf clio docs get <id> --version-id <uuid>`.
-cfcf clio docs ingest notes.md --project cf-ecosystem --title "Note" --update-if-exists --author claude-code
-cfcf clio docs ingest notes.md --project cf-ecosystem --title "Note" --document-id <uuid>
-
-# Browse / retrieve
-cfcf clio docs list [--project <name>] [--limit 50] [--offset 0] [--include-deleted | --deleted-only] [--json]
-cfcf clio docs get <document-id> [--version-id <uuid>] [--raw] [--json]          # full reconstructed content
-cfcf clio docs versions <document-id> [--json]                                   # archived version history
-
-# Metadata-only search + discovery (5.12, Cerefox parity)
-cfcf clio metadata search --filter '{"role":"reflection"}' [--updated-since 2026-04-01T00:00:00Z] [--project <name>] [--include-deleted]
-cfcf clio metadata keys [--project <name>]                                  # what keys + sample values exist
-
-# Soft-delete + restore (5.11, Cerefox parity)
-cfcf clio docs delete <document-id> [--author <name>]                            # excludes from search; restorable
-cfcf clio docs restore <document-id> [--author <name>]                           # idempotent
-
-# Metadata-only edit (5.13 follow-up, Cerefox parity)
-# Mutate title / author / Clio Project / metadata WITHOUT re-ingesting content.
-# No version snapshot is taken (versions exist to protect chunks). One audit row
-# per non-empty edit, with a before/after diff.
-cfcf clio docs edit <document-id> \
-    [--title "..."]               # rename
-    [--author "..."]              # set/clear author (empty string clears to 'agent')
-    [--project <name>]            # move to a different Clio Project (by name or UUID)
-    [--set-meta key=value ...]    # incremental metadata add/overwrite (repeatable)
-    [--unset-meta key ...]        # incremental metadata removal (repeatable)
-    [--actor <name>]              # audit-log attribution; defaults to 'agent'
+cfcf clio search "<query…>" \
+    [--project <name>]                    # scope to one Clio Project
+    [--mode fts|hybrid|semantic]          # default: auto (hybrid if embedder active, else fts)
+    [--alpha 0.7]                         # hybrid blend weight; α × cosine + (1−α) × normalised_BM25
+    [--min-score 0.5]                     # min cosine for vector-only candidates
+    [--small-doc-threshold 20000]         # docs ≤ N chars return FULL content per hit
+    [--context-window 1]                  # large-doc path: chunks per side around the matched chunk
+    [--match-count 5]                     # max hits (default 5 doc-level; 10 with --by-chunk)
+    [--metadata '{"role":"reflection"}']  # exact-match metadata filter
+    [--by-chunk]                          # raw view: one row per matching CHUNK (not doc-level)
     [--json]
-# Examples
-cfcf clio docs edit 8a3f… --title "Decisions log (renamed)"
-cfcf clio docs edit 8a3f… --project cfcf
-cfcf clio docs edit 8a3f… --set-meta reviewed_by=fotis --set-meta status=approved --unset-meta draft
+```
 
-# Audit log (5.13)
-cfcf clio audit [--event-type create|update-content|edit-metadata|delete|restore|migrate-project] \
-                [--actor <name>] [--project <p>] [--document-id <id>] [--since <iso>] [--limit 100] [--json]
+The mode resolves in this order: explicit `--mode` > `clio.defaultSearchMode` global config > `auto`. Per-call `--alpha`, `--small-doc-threshold`, `--context-window` override the corresponding `clio.*` config keys.
 
-# Projects (grouping of workspaces by knowledge domain)
-cfcf clio projects [--json]
-cfcf clio projects create <name> [--description "..."]
-cfcf clio projects show <name-or-id>
+### `cfcf clio audit`
 
-# Embedder (controls hybrid/semantic search). Default model installed
-# during cfcf init is nomic-embed-text-v1.5 (q8, 768d, 8k token context).
-cfcf clio embedder list                            # catalogue with active marker
-cfcf clio embedder active                          # current active embedder (or "none")
-cfcf clio embedder install                         # uses clio.preferredEmbedder from config
-cfcf clio embedder install nomic-embed-text-v1.5   # explicit
-cfcf clio embedder set <name> --reindex            # safe switch: re-embeds existing chunks under the new model
-cfcf clio embedder set <name> --force              # recovery only; degrades vector search until reindex
-cfcf clio embedder set <name>                      # prompts y/N with impact summary (existing-embedding mismatch,
-                                                   #   chunks-over-new-ceiling, config-max-over-ceiling).
-                                                   #   In non-TTY: refuses unless -y/--yes is passed.
+Query the Clio audit log (newest first). Mutation events only (reads aren't logged — would dwarf real activity).
 
-# Re-embed existing chunks under the active embedder. Prompts y/N with
-# the active embedder + scope before running; pass -y/--yes for non-
-# interactive use. Idempotent (skips chunks already matching).
+```bash
+cfcf clio audit \
+    [--event-type create|update-content|edit-metadata|delete|restore|migrate-project] \
+    [--actor <name>]
+    [--project <p>]
+    [--document-id <id>]
+    [--since <iso>]                       # e.g. 2026-04-01T00:00:00Z
+    [--limit 100]
+    [--json]
+```
+
+### `cfcf clio reindex`
+
+Re-embed chunks under the currently-active embedder. Prompts y/N with the impact summary before running. Idempotent: skips chunks already matching the active embedder.
+
+```bash
 cfcf clio reindex [--project <name>] [--force] [--batch-size 32] [-y|--yes] [--json]
+```
 
-# Introspection
+Pair with `cfcf clio embedder set <name> --reindex` for the canonical embedder-switch flow.
+
+### `cfcf clio stats`
+
+DB size, doc + chunk counts, applied migrations, active embedder.
+
+```bash
 cfcf clio stats [--json]
 ```
 
-`cfcf memory` is a top-level alias that points at the same command tree — `cfcf memory search "..."` works identically.
+### `cfcf clio docs` — document operations
+
+Default action (no subcommand) is `list`. `cfcf clio doc` is **not** an alias — only the plural form is canonical.
+
+#### `cfcf clio docs list`
+
+```bash
+cfcf clio docs list \
+    [--project <name>]
+    [--limit 50] [--offset 0]
+    [--include-deleted]                   # include soft-deleted alongside live
+    [--deleted-only]                      # trash-bin view (mutually exclusive with --include-deleted)
+    [--json]
+```
+
+#### `cfcf clio docs ingest`
+
+Ingest a Markdown doc into Clio. Either pass a file path or pipe via `--stdin`.
+
+```bash
+cfcf clio docs ingest <file> --project <name> --title "..." \
+    [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c] \
+    [--author <name>] [--metadata '{...}'] [--source <free-text>]
+cat note.md | cfcf clio docs ingest --stdin --project <name> --title "..."
+
+# Update an existing doc instead of creating a new one:
+cfcf clio docs ingest notes.md --project <name> --title "Note" --update-if-exists
+cfcf clio docs ingest notes.md --project <name> --document-id <uuid>
+```
+
+`--update-if-exists` matches by title within the same Project; `--document-id <uuid>` is the deterministic path. When both are passed, `--document-id` wins. Updates snapshot the prior content into a version row — recall via `cfcf clio docs get <id> --version-id <uuid>`.
+
+When `--document-id` is set, `--title` becomes optional — if omitted, the existing doc's title is preserved (5.11 follow-up).
+
+#### `cfcf clio docs get`
+
+Reconstruct full document content from chunks. Defaults to the live (current) version.
+
+```bash
+cfcf clio docs get <document-id> \
+    [--version-id <uuid>]                 # retrieve an archived version (UUIDs from `cfcf clio docs versions`)
+    [--raw]                               # print only the content (no metadata header) -- useful in pipes
+    [--json]
+```
+
+#### `cfcf clio docs edit`
+
+Metadata-only edit. Mutate `title` / `author` / Clio Project / metadata WITHOUT re-ingesting content. **No version snapshot is taken** (versions protect chunks; metadata edits don't touch chunks). One `edit-metadata` audit row per non-empty edit, carrying a before/after diff.
+
+```bash
+cfcf clio docs edit <document-id> \
+    [--title "..."]                       # rename
+    [--author "..."]                      # set/clear author (empty string clears to 'agent')
+    [--project <name>]                    # move to a different Clio Project (by name or UUID)
+    [--set-meta key=value ...]            # incremental metadata add/overwrite (repeatable)
+    [--unset-meta key ...]                # incremental metadata removal (repeatable)
+    [--actor <name>]                      # audit-log attribution (defaults to 'agent')
+    [--json]
+```
+
+Examples:
+```bash
+cfcf clio docs edit 8a3f… --title "Decisions log (renamed)"
+cfcf clio docs edit 8a3f… --project cfcf
+cfcf clio docs edit 8a3f… --set-meta reviewed_by=fotis --set-meta status=approved --unset-meta draft
+```
+
+#### `cfcf clio docs delete`
+
+Soft-delete. Sets `deleted_at`; the doc, its chunks, and its versions remain in the DB. Idempotent.
+
+```bash
+cfcf clio docs delete <document-id> [--author <name>]
+```
+
+#### `cfcf clio docs restore`
+
+Undo a soft-delete. Idempotent: restoring an already-live doc returns `restored=false`.
+
+```bash
+cfcf clio docs restore <document-id> [--author <name>]
+```
+
+#### `cfcf clio docs versions`
+
+List archived versions for a document, newest first.
+
+```bash
+cfcf clio docs versions <document-id> [--json]
+```
+
+### `cfcf clio metadata` — metadata-scoped operations
+
+No default subcommand: `cfcf clio metadata` prints help.
+
+#### `cfcf clio metadata search`
+
+Find documents by metadata-only filter (no FTS query). Top-level scalar matches.
+
+```bash
+cfcf clio metadata search \
+    --filter '{"role":"reflection"}' \
+    [--updated-since 2026-04-01T00:00:00Z] \
+    [--project <name>] [--include-deleted] \
+    [--match-count 50] [--json]
+```
+
+#### `cfcf clio metadata keys`
+
+Discovery: list every top-level metadata key currently in the corpus, with sample values. Most-used keys first.
+
+```bash
+cfcf clio metadata keys [--project <name>] [--json]
+```
+
+### `cfcf clio projects` — Clio Project management
+
+Default action is `list`.
+
+```bash
+cfcf clio projects [--json]                              # list (default)
+cfcf clio projects list [--json]                         # explicit
+cfcf clio projects create <name> [--description "..."]   # create
+cfcf clio projects show <name-or-id>                     # show one
+```
+
+### `cfcf clio embedder` — embedder management
+
+Singular noun (only one embedder is active at a time). Default `cfcf init`-installed embedder is `nomic-embed-text-v1.5` (q8, 768-d, 8k-token context).
+
+```bash
+cfcf clio embedder list                                  # catalogue with active marker
+cfcf clio embedder active                                # current active embedder
+cfcf clio embedder install                               # uses clio.preferredEmbedder from config
+cfcf clio embedder install nomic-embed-text-v1.5         # explicit name
+cfcf clio embedder set <name>                            # interactive: prompts y/N with impact summary
+cfcf clio embedder set <name> --reindex                  # safe switch: re-embeds existing chunks under the new model
+cfcf clio embedder set <name> --force                    # recovery only (no checks); degrades vector search until reindex
+cfcf clio embedder set <name> -y                         # non-TTY-friendly (skip prompt)
+```
+
+The interactive prompt summarises three signals before you confirm: how many chunks already carry an embedding (will become inconsistent), how many exceed the new embedder's `recommendedChunkMaxChars` ceiling (truncation risk), and whether your `clio.maxChunkChars` config exceeds that ceiling (will be capped).
 
 ### Workspace ↔ Clio Project assignment
 
 ```bash
-# At init time
+# At init time:
 cfcf workspace init --repo <path> --name <name> --project <clio-project>   # flag-driven
 cfcf workspace init --repo <path> --name <name>                             # interactive pick
 
-# Later
+# Later:
 cfcf workspace set <name> --project <new-clio-project>                      # future ingests only
 cfcf workspace set <name> --project <new-clio-project> --migrate-history    # rekey historical docs too
 ```
+
+---
+
+## Shell completion
+
+Tab completion is auto-installed on every cfcf install/upgrade — you should rarely need to run these commands by hand.
+
+### `cfcf completion install`
+
+Auto-install completion for the detected shell. Writes the completion script to a canonical path AND appends a sentinel-marked block to your `~/.zshrc` or `~/.bashrc`.
+
+```bash
+cfcf completion install                  # auto-install for $SHELL (bash or zsh)
+cfcf completion install --no-rc-edit     # write the script but DON'T touch your rc file
+cfcf completion install --print-only     # print manual setup instructions instead of writing
+```
+
+The rc-file edit is sentinel-marked:
+```zsh
+# >>> cfcf shell completion (managed by `cfcf completion install`) >>>
+# Auto-added on cfcf install/upgrade. Delete this block (begin to end markers)
+# to opt out; cfcf only modifies content between the >>> and <<< sentinels.
+fpath=(~/.zsh/completions $fpath)
+autoload -U compinit && compinit
+# <<< cfcf shell completion <<<
+```
+
+cfcf only modifies content between the markers. The rest of your rc file is byte-for-byte preserved across updates.
+
+**Manual-setup detection.** If you already have your own `fpath=(~/.zsh/completions ...)` line outside our sentinels, cfcf leaves your rc alone (`skipped-manual` action) — we don't fight users who wired it up themselves.
+
+### `cfcf completion uninstall`
+
+Symmetric: removes the rc block AND the completion script. Idempotent.
+
+```bash
+cfcf completion uninstall
+```
+
+### `cfcf completion bash` / `cfcf completion zsh`
+
+Emit the raw completion script to stdout (for advanced users who want to redirect manually).
+
+```bash
+cfcf completion bash > ~/.cfcf-completion.bash
+cfcf completion zsh  > ~/.zsh/completions/_cfcf
+```
+
+### Auto-install paths
+
+| Install path | Auto-runs `cfcf completion install`? |
+|---|---|
+| `scripts/install.sh` (curl-based) | ✓ explicit call after `bun install -g` |
+| `cfcf self-update` | ✓ spawns the new binary post-upgrade |
+| `bun install -g @cerefox/cfcf-cli` (npmjs path) | ✓ `postinstall` hook in the published `package.json` |
+
+### Supported shells + platforms
+
+| | bash | zsh | fish | PowerShell |
+|---|---|---|---|---|
+| **macOS** | ✓ | ✓ | not supported | n/a |
+| **Linux** | ✓ | ✓ | not supported | n/a |
+| **Windows** | not supported (cfcf doesn't ship for native Windows; use WSL) | | | |
+
+If your shell isn't recognised, `cfcf completion install` is a no-op + emits a hint. fish completion is tracked as a future addition.
+
+### Diagnostics
+
+`cfcf doctor` includes a "Shell tab completion" check that verifies the script exists at the canonical path AND your rc file references it. See [troubleshooting.md](troubleshooting.md#tab-complete-doesnt-work) if tab doesn't fire.
 
 ---
 

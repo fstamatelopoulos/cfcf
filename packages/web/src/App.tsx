@@ -2,6 +2,7 @@ import { Header } from "./components/Header";
 import { Dashboard } from "./pages/Dashboard";
 import { WorkspaceDetail } from "./pages/WorkspaceDetail";
 import { ServerInfo } from "./pages/ServerInfo";
+import { HelpPage } from "./pages/Help";
 import { useRoute } from "./hooks/useRoute";
 
 export function App() {
@@ -15,6 +16,8 @@ export function App() {
           <WorkspaceDetail workspaceId={route.workspaceId} />
         ) : route.page === "server" ? (
           <ServerInfo />
+        ) : route.page === "help" ? (
+          <HelpPage />
         ) : (
           <Dashboard />
         )}

@@ -48,10 +48,15 @@ echo "[build-cli] stage:          $stage"
 echo "[build-cli] output:         $OUT_DIR/cfcf-$VERSION.tgz"
 echo
 
-# ── 1. embed web/dist into core (so the bundle picks it up) ───────────
+# ── 1. embed web/dist + help docs into core (bundle picks them up) ────
 cd "$REPO_ROOT"
-echo "[build-cli] 1/4  build web + embed into core"
+echo "[build-cli] 1/4  build web + embed help-content + bundle"
 bun run build:web
+# Generate the help-content module (docs/guides/*.md → packages/core/src/
+# help-content.generated.ts) so the user manual / focused guides ship
+# inside the bundle. `cfcf help <topic>` and the web UI Help tab read
+# from the generated module; same shape as web-assets.generated.ts.
+bun run scripts/embed-help-content.ts
 
 # ── 2. bun build the CLI ──────────────────────────────────────────────
 # --target=bun produces output that uses Bun-specific globals (Bun.spawn,

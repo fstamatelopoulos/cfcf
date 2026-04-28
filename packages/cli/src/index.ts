@@ -40,6 +40,7 @@ import { registerClioCommands } from "./commands/clio.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerSelfUpdateCommand } from "./commands/self-update.js";
 import { registerCompletionCommand } from "./commands/completion.js";
+import { registerHelpCommand } from "./commands/help.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -75,6 +76,13 @@ program
   .description("Cerefox Code Factory (cf²) -- AI coding agent orchestration")
   .version(buildVersionString());
 
+// Override commander's auto-generated `help [command]` subcommand. We
+// register our own `cfcf help [topic]` further down, which prints user
+// manual / focused guides from the embedded help content. The default
+// commander behaviour (list all subcommands) is still available via
+// the `--help` flag at every level.
+program.addHelpCommand(false);
+
 registerServerCommands(program);
 registerInitCommand(program);
 registerStatusCommand(program);
@@ -89,6 +97,7 @@ registerReflectCommand(program);
 registerClioCommands(program);
 registerDoctorCommand(program);
 registerSelfUpdateCommand(program);
+registerHelpCommand(program);
 // `completion` registers LAST so the walked tree includes every other
 // verb already attached above. See packages/cli/src/commands/completion.ts.
 registerCompletionCommand(program);

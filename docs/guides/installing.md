@@ -17,7 +17,10 @@ The script:
 1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
 2. Resolves the requested version (`CFCF_VERSION=latest` follows GitHub's release-redirect; an explicit tag is honoured verbatim).
 3. Runs `bun install -g <tarball-URL>`. Bun fetches the cfcf tarball + the platform-specific `@cerefox/cfcf-native-<platform>` package + the runtime deps (transformers, ORT-node, sharp).
-4. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
+4. Auto-installs **shell tab completion** for your `$SHELL` (writes the completion script + appends a sentinel-marked block to `~/.zshrc` or `~/.bashrc`). See the [Shell completion section in `manual.md`](manual.md#shell-completion) for what gets added.
+5. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
+
+A bordered "next steps" banner prints at the end summarising the two one-time actions (open a new terminal to activate completion; restart `cfcf server` if it was running).
 
 ## Direct install (no wrapper)
 
@@ -81,7 +84,7 @@ User data lives separately under `~/.cfcf/`:
 └── models/                   # downloaded embedder models (lazy on first use)
 ```
 
-Run `cfcf doctor` after install to verify all 11 health checks pass.
+Run `cfcf doctor` after install to verify all health checks pass (the count grows over time as we add new diagnostics — currently 13+).
 
 ## Upgrading
 
@@ -113,6 +116,8 @@ The platform-specific config dir (`~/Library/Application Support/cfcf/` on macOS
 
 ## Troubleshooting
 
+The full troubleshooting page is [`troubleshooting.md`](troubleshooting.md). The most-asked install-time issues:
+
 ### "cfcf: command not found" after install
 
 Bun's global bin (`~/.bun/bin/`) isn't on PATH. Add it:
@@ -121,6 +126,10 @@ Bun's global bin (`~/.bun/bin/`) isn't on PATH. Add it:
 echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 exec $SHELL
 ```
+
+### Tab completion doesn't fire after install
+
+90% of the time the fix is `rm ~/.zcompdump*; exec zsh` (force a clean compinit reload). See [troubleshooting.md → Tab completion doesn't work](troubleshooting.md#tab-completion-doesnt-work) for the full diagnosis.
 
 ### `cfcf doctor` reports "@cerefox/cfcf-native-<platform>: not installed"
 
@@ -144,6 +153,10 @@ bun install -g @cerefox/cfcf-cli       # or the tarball URL
 
 `cfcf doctor` will flag the issue. The most common cause is a missing `@cerefox/cfcf-native-<platform>` package — see two items up.
 
+### Bun warns about duplicate keys
+
+Known Bun bug; cfcf's installer auto-dedups. See [troubleshooting.md → bun install warnings](troubleshooting.md#bun-install--g-warns-about-duplicate-keys).
+
 ## Platform support
 
 | Platform | Status |
@@ -156,6 +169,8 @@ bun install -g @cerefox/cfcf-cli       # or the tarball URL
 
 ## See also
 
+- [`manual.md`](manual.md) — the user-manual hub (3-minute getting started + concepts + everything else)
+- [`troubleshooting.md`](troubleshooting.md) — common issues + fixes
 - [`docs/research/installer-design.md`](../research/installer-design.md) — full design + decisions
 - [`docs/decisions-log.md`](../decisions-log.md) — Bun-runtime requirement rationale + 2026-04-26 pivot to npm-format distribution
 - [`docs/guides/clio-quickstart.md`](clio-quickstart.md) — the Clio memory layer
