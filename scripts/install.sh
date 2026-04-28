@@ -100,29 +100,65 @@ native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
 # the native package already globally installed satisfies the require
 # at runtime regardless of npm visibility.
 
-# Workaround for Bun bug where `bun install -g <local-tarball>` appends
-# duplicate keys to ~/.bun/install/global/package.json on every run
-# (instead of overwriting). Hundreds of accumulated dups produce
-# screens of `warn: Duplicate key` on every subsequent install. Fix:
-# dedup the file by parse+stringify (JSON.parse keeps the LAST
-# occurrence of a duplicate key, so a round-trip yields a clean
-# object). Best-effort; we never fail the install over this.
-global_pkg="$HOME/.bun/install/global/package.json"
-if [[ -f "$global_pkg" ]]; then
-  bun -e "
-    const fs = require('fs');
-    const p = '$global_pkg';
-    try {
-      const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
-    } catch (e) { /* malformed beyond repair; leave it alone */ }
-  " 2>/dev/null || true
-fi
+# Workaround for Bun bug: every `bun install -g <local-tarball>` (and
+# at least some non-registry URL forms) APPENDS a duplicate key to
+# ~/.bun/install/global/package.json AND ~/.bun/install/global/bun.lock
+# (Bun 1.3+ ships a JSON-shaped bun.lock instead of the older binary
+# bun.lockb) instead of overwriting the existing entry. The dup is
+# created by bun DURING the install, not on subsequent reads. After
+# a few install/upgrade cycles the lockfile accumulates dozens of
+# duplicate keys and bun spams `warn: Duplicate key` on every read.
+# Functionally harmless (last-occurrence wins on parse) but
+# unprofessional UX.
+#
+# Fix: dedup BOTH files BEFORE and AFTER each bun install -g call.
+# Method: parse + restringify (JSON.parse keeps last occurrence on
+# dup keys, so a round-trip yields a clean object). Best-effort;
+# never fails the install. Same fix mirrored in cfcf self-update.
+dedup_bun_global() {
+  # Bun's bug isn't simple "append the same line"; it's "append the
+  # same key with a normalised variant of the value" -- e.g. one
+  # entry with `"@foo": "/path/x.tgz"` then another with
+  # `"@foo": "file:///path/x.tgz"`. So a naive line-dedup misses it.
+  # We need KEY-based dedup that keeps the LAST occurrence (matches
+  # JSON.parse's last-wins semantics). 1-line lookahead via awk:
+  # buffer one line, when the next line has the same key, replace
+  # the buffer (drop the older one); otherwise flush.
+  #
+  # Works on both files. bun.lock isn't strict JSON (has JSON5-style
+  # trailing commas) so a JSON.parse round-trip would fail; this
+  # text-based approach handles both formats.
+  for f in "$HOME/.bun/install/global/package.json" "$HOME/.bun/install/global/bun.lock"; do
+    [[ -f "$f" ]] || continue
+    tmp="${f}.cfcf-dedup.$$"
+    if awk '
+      BEGIN { have_buf = 0 }
+      {
+        k = ""
+        if ($0 ~ /^[[:space:]]*"[^"]+"[[:space:]]*:/) {
+          s = $0; sub(/^[[:space:]]*"/, "", s); sub(/".*$/, "", s); k = s
+        }
+        if (have_buf) {
+          if (k != "" && k == buf_key) { buf = $0; buf_key = k }
+          else { print buf; buf = $0; buf_key = k }
+        } else { buf = $0; buf_key = k; have_buf = 1 }
+      }
+      END { if (have_buf) print buf }
+    ' "$f" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+    else
+      rm -f "$tmp"
+    fi
+  done
+}
 
+dedup_bun_global    # clean any accumulated mess from prior installs
 echo "[cfcf] Installing @cerefox/cfcf-native-$platform from $native_url"
 bun install -g "$native_url"
+dedup_bun_global    # bun re-introduced a dup during its install
 echo "[cfcf] Installing @cerefox/cfcf-cli from $cli_url"
 bun install -g "$cli_url"
+dedup_bun_global    # again
 
 # Confirm cfcf is on PATH; if Bun's global bin isn't there, surface
 # the standard hint.

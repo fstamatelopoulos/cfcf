@@ -172,26 +172,56 @@ export function registerSelfUpdateCommand(program: Command): void {
       const versionToInstall = remote.cfcf ?? target;
       console.log(`\nLaunching installer for ${versionToInstall}...\n`);
 
-      // Workaround for Bun bug: `bun install -g <local-tarball>` (and
-      // arguably tarball URLs too) appends duplicate keys to
-      // ~/.bun/install/global/package.json on every run instead of
-      // overwriting. After enough self-updates the file accumulates
-      // hundreds of dups and produces screens of `warn: Duplicate key`.
-      // Fix: dedup by parse+stringify (JSON.parse keeps the LAST
-      // occurrence so a round-trip yields a clean object). Best-effort.
-      // Same fix lives in scripts/install.sh.
-      try {
-        const fs = await import("node:fs");
-        const os = await import("node:os");
-        const path = await import("node:path");
-        const globalPkg = path.join(os.homedir(), ".bun", "install", "global", "package.json");
-        if (fs.existsSync(globalPkg)) {
-          const raw = fs.readFileSync(globalPkg, "utf-8");
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const parsed = JSON.parse(raw) as Record<string, any>;
-          fs.writeFileSync(globalPkg, JSON.stringify(parsed, null, 2) + "\n");
+      // Workaround for Bun bug: every `bun install -g <local-tarball>`
+      // (and at least some non-registry URL forms) appends a duplicate
+      // key to ~/.bun/install/global/package.json AND bun.lock (Bun
+      // 1.3+ ships a JSON-shaped bun.lock instead of the older binary
+      // bun.lockb) DURING the install (not on subsequent reads).
+      // Pre-install cleanup catches accumulated dups from before this
+      // fix landed; post-install cleanup catches the dup bun just
+      // created. Same fix mirrored in scripts/install.sh. Best-effort
+      // -- never fails the upgrade.
+      const fs = await import("node:fs");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      const globalDir = path.join(os.homedir(), ".bun", "install", "global");
+      const dedupTargets = [
+        path.join(globalDir, "package.json"),
+        path.join(globalDir, "bun.lock"),
+      ];
+      const dedupBunGlobal = () => {
+        // Key-based dedup of consecutive same-key lines, keeping the
+        // LAST occurrence (matches JSON.parse last-wins semantics).
+        // Bun's bug appends the same key with a normalised value
+        // variant (e.g. "/path/x.tgz" then "file:///path/x.tgz"), so
+        // line-dedup misses it. 1-line lookahead: buffer one line,
+        // replace buf when next has same key, flush otherwise.
+        // Works on bun.lock (not strict JSON; has JSON5 trailing
+        // commas) and package.json -- text-based, no parser needed.
+        const keyRe = /^\s*"([^"]+)"\s*:/;
+        for (const p of dedupTargets) {
+          try {
+            if (!fs.existsSync(p)) continue;
+            const raw = fs.readFileSync(p, "utf-8");
+            const lines = raw.split("\n");
+            const out: string[] = [];
+            let buf: string | null = null;
+            let bufKey = "";
+            for (const line of lines) {
+              const m = line.match(keyRe);
+              const k = m ? m[1] : "";
+              if (buf !== null) {
+                if (k !== "" && k === bufKey) { buf = line; bufKey = k; }
+                else { out.push(buf); buf = line; bufKey = k; }
+              } else { buf = line; bufKey = k; }
+            }
+            if (buf !== null) out.push(buf);
+            fs.writeFileSync(p, out.join("\n"));
+          } catch { /* best-effort */ }
         }
-      } catch { /* best-effort */ }
+      };
+
+      dedupBunGlobal();   // clean accumulated mess from prior installs
 
       // The release uploads `cfcf-<version>.tgz` next to MANIFEST.txt.
       // baseUrl already encodes either /releases/latest/download or
@@ -203,6 +233,11 @@ export function registerSelfUpdateCommand(program: Command): void {
 
       proc.on("exit", (code) => {
         if (code === 0) {
+          // Dedup again -- bun re-introduced a dup during the install
+          // we just ran. Without this, the next `cfcf self-update`
+          // would emit dup-key warnings.
+          dedupBunGlobal();
+
           console.log(`\n✓ upgraded to ${versionToInstall}.`);
 
           // Regenerate shell completion to pick up any new verbs in

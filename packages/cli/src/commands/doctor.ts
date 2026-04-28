@@ -278,50 +278,55 @@ function checkClioDb(): CheckResult {
 }
 
 /**
- * Check whether bun's global package.json has accumulated duplicate
- * keys. This is a known Bun bug on `bun install -g <local-tarball>`:
+ * Check whether bun's global package.json or bun.lock has accumulated
+ * duplicate keys. Known Bun bug on `bun install -g <local-tarball>`:
  * each install appends instead of overwriting, so re-installs grow
- * the file with literal duplicate keys. JSON parsers tolerate it
- * (last-occurrence wins), but bun spams `warn: Duplicate key` on
- * every subsequent install.
+ * BOTH files (Bun 1.3+ ships a JSON-shaped bun.lock alongside
+ * package.json) with literal duplicate keys. JSON parsers tolerate
+ * it (last-occurrence wins), but bun spams `warn: Duplicate key`
+ * on every subsequent install.
  *
- * `scripts/install.sh` and `cfcf self-update` both dedup the file
- * before invoking `bun install -g`, so future installs stay clean.
- * This check warns the user if they have an accumulated mess from
- * before that fix landed -- with an actionable hint.
+ * `scripts/install.sh` and `cfcf self-update` both dedup BOTH files
+ * before AND after invoking `bun install -g`, so future installs
+ * stay clean. This check warns the user if they have accumulated
+ * mess from before those fixes landed.
  */
 function checkBunGlobalPkgDups(): CheckResult {
-  const name = "Bun global package.json (duplicate-key check)";
-  const path = join(homedir(), ".bun", "install", "global", "package.json");
-  if (!existsSync(path)) {
-    return { name, status: "ok", detail: "no global package.json yet" };
+  const name = "Bun global manifest (duplicate-key check)";
+  const dir = join(homedir(), ".bun", "install", "global");
+  const targets = [join(dir, "package.json"), join(dir, "bun.lock")];
+
+  // Cheap heuristic: count "@cerefox/cfcf-cli" occurrences in the raw
+  // text. If a single file has more than ~2 (one in deps, one in
+  // lockfile-bookkeeping), dups exist. We don't enumerate them
+  // precisely; we just want to flag the user.
+  const dups: string[] = [];
+  for (const path of targets) {
+    if (!existsSync(path)) continue;
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf-8");
+    } catch {
+      return { name, status: "warn", detail: `could not read ${path}` };
+    }
+    // Heuristic: count `"@cerefox/cfcf-cli":` occurrences. Both files
+    // legitimately mention it a few times in different contexts:
+    //   - package.json: once (top-level deps)
+    //   - bun.lock: 2-3 times (workspaces deps + packages section)
+    // Anything notably above baseline = bun-bug accumulation.
+    // We don't JSON.parse because bun.lock is JSON5-shaped (trailing
+    // commas, etc.) and would fail strict parse.
+    const hits = (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
+    const baseline = path.endsWith("bun.lock") ? 3 : 1;
+    if (hits > baseline) {
+      dups.push(`${path} (${hits} occurrences)`);
+    }
   }
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return { name, status: "warn", detail: `could not read ${path}` };
-  }
-  // Cheap heuristic: count occurrences of likely cfcf keys. If the
-  // raw text has more occurrences than the parsed object, dups exist.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let parsed: { dependencies?: Record<string, any> };
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  if (dups.length > 0) {
     return {
       name,
       status: "warn",
-      detail: `${path} is malformed JSON; recommend: bun -e \"const fs=require('fs');const p=process.env.HOME+'/.bun/install/global/package.json';const pkg=JSON.parse(fs.readFileSync(p));fs.writeFileSync(p, JSON.stringify(pkg,null,2));\"`,
-    };
-  }
-  const cfcfRawHits = (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
-  const cfcfParsedHits = parsed.dependencies?.["@cerefox/cfcf-cli"] ? 1 : 0;
-  if (cfcfRawHits > cfcfParsedHits) {
-    return {
-      name,
-      status: "warn",
-      detail: `${cfcfRawHits} duplicate "@cerefox/cfcf-cli" keys (Bun bug; harmless but noisy). Re-run scripts/install.sh or cfcf self-update to auto-clean.`,
+      detail: `accumulated duplicates (Bun bug; harmless but noisy): ${dups.join(", ")}. Re-run scripts/install.sh or cfcf self-update to auto-clean.`,
     };
   }
   return { name, status: "ok" };
