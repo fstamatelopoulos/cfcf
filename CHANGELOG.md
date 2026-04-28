@@ -9,7 +9,15 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_Continuing on iter-6 (incl. CLI verb-rename audit, Clio FTS title boost, Ask-the-Agent v1 implementation)._
+_Help Assistant in flight on `iteration-5/help-assistant` (5.8 PR4 v1; was Ask-the-Agent in earlier design). Iter-6 backlog: PA role, CLI verb-rename audit, Clio FTS title boost._
+
+## [0.14.2] -- 2026-04-27
+
+Brand-consistency fix in user-facing docs.
+
+- **Established convention** (recorded in [`docs/decisions-log.md`](docs/decisions-log.md)): **"cf²"** in user-facing documentation and UI; **"cfcf"** only in source code, CLI commands, file paths, and package names.
+- The user-manual + help-bundle work in v0.14.0 mixed both forms in the user-facing prose. Swept `docs/guides/manual.md`, `troubleshooting.md`, and `installing.md` to use `cf²` for prose mentions while preserving `cfcf` for CLI commands (`cfcf help`), config paths (`~/.cfcf/`), package names (`@cerefox/cfcf-cli`), and source-code references (`packages/core`).
+- Regenerated the embedded help bundle so `cfcf help` and the web UI Help tab pick up the corrected text.
 
 ## [0.14.1] -- 2026-04-27
 

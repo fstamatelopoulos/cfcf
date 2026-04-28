@@ -1,10 +1,10 @@
-# cfcf User Manual
+# cf² User Manual
 
-**cfcf** (Cerefox Code Factory, also written **cf²**, pronounced "cf square") is a deterministic orchestration harness that runs AI coding agents in iterative loops. It is **not** an AI agent itself — it's the plumbing that manages agent lifecycles, context assembly, evaluation, and iteration control.
+**cf²** (pronounced "cf square", also written **cfcf** — Cerefox Code Factory — in source code, CLI commands, and package names) is a deterministic orchestration harness that runs AI coding agents in iterative loops. It is **not** an AI agent itself — it's the plumbing that manages agent lifecycles, context assembly, evaluation, and iteration control.
 
 This page is the entry point. It explains the concepts in 3 minutes, points you at the focused guide for whatever you're trying to do, and covers the two topics that don't fit any other guide: **shell completion** and **troubleshooting**.
 
-> **Looking for the version on disk?** After install, `cfcf help` prints this same content. `cfcf help <topic>` opens a focused guide (e.g. `cfcf help workflow`).
+> **Looking for the version on disk?** After install, `cfcf help` prints this same content. `cfcf help <topic>` opens a focused guide (e.g. `cfcf help workflow`). The CLI command stays `cfcf` everywhere — `cf²` is the human-readable form, `cfcf` is the keystroke-friendly form.
 
 ---
 
@@ -24,7 +24,7 @@ cfcf server start
 # 4. Register your first workspace
 cfcf workspace init --repo /path/to/your/repo --name my-project
 
-# 5. Define the problem (edit the four files cfcf creates in your repo)
+# 5. Define the problem (edit the four files cf² creates in your repo)
 cd /path/to/your/repo
 $EDITOR cfcf-docs/problem.md cfcf-docs/success.md cfcf-docs/process.md cfcf-docs/constraints.md
 
@@ -36,7 +36,7 @@ The full walkthrough — concepts, what each agent does, how the Problem Pack wo
 
 ---
 
-## What problem cfcf solves
+## What problem cf² solves
 
 You want to put an AI coding agent on a long-running task and walk away. Today, that's hard:
 
@@ -45,9 +45,9 @@ You want to put an AI coding agent on a long-running task and walk away. Today, 
 - Debugging a stuck loop means scrolling through thousands of lines of agent output.
 - You can't compose multiple agents (one writes, one reviews) without bespoke glue.
 
-cfcf is the harness. It commits work in deterministic three-step iterations (dev → judge → reflect-when-needed), enforces a Problem Pack the agents must satisfy, runs a Solution Architect review on demand, and gives you a web UI to watch the loop without reading raw transcripts.
+cf² is the harness. It commits work in deterministic three-step iterations (dev → judge → reflect-when-needed), enforces a Problem Pack the agents must satisfy, runs a Solution Architect review on demand, and gives you a web UI to watch the loop without reading raw transcripts.
 
-**You are NOT in the loop. You are ON the loop.** cfcf only pings you at fixed intervals or when reflection flags `recommend_stop`.
+**You are NOT in the loop. You are ON the loop.** cf² only pings you at fixed intervals or when reflection flags `recommend_stop`.
 
 ---
 
@@ -95,14 +95,14 @@ A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory 
 
 | If you want to… | Read |
 |---|---|
-| **Install or upgrade cfcf** | [`installing.md`](installing.md) |
+| **Install or upgrade cf²** | [`installing.md`](installing.md) |
 | **Run your first loop end-to-end** | [`workflow.md`](workflow.md) — the canonical user guide |
 | **Look up a specific CLI command** | [`cli-usage.md`](cli-usage.md) — verb-by-verb reference |
 | **Get started with Clio (cross-workspace memory)** | [`clio-quickstart.md`](clio-quickstart.md) |
-| **Wire cfcf into your own automation** | [`../api/server-api.md`](../api/server-api.md) — HTTP API |
+| **Wire cf² into your own automation** | [`../api/server-api.md`](../api/server-api.md) — HTTP API |
 | **Diagnose something that's not working** | [Troubleshooting](#troubleshooting) (below) or [`troubleshooting.md`](troubleshooting.md) |
 | **Set up shell tab-completion** | [Shell completion](#shell-completion) (below) — auto-installed in v0.13+ |
-| **Understand cfcf's architecture** | [`../design/technical-design.md`](../design/technical-design.md) |
+| **Understand cf²'s architecture** | [`../design/technical-design.md`](../design/technical-design.md) |
 | **See what's planned next** | [`../plan.md`](../plan.md) — living roadmap |
 
 ---
@@ -132,9 +132,9 @@ autoload -U compinit && compinit
 # <<< cfcf shell completion <<<
 ```
 
-**cfcf only modifies content between the `>>>` and `<<<` markers.** The rest of your rc file is byte-for-byte preserved. Delete the block to opt out.
+**cf² only modifies content between the `>>>` and `<<<` markers.** The rest of your rc file is byte-for-byte preserved. Delete the block to opt out.
 
-If you already have your own `fpath=(~/.zsh/completions ...)` line outside our sentinels, cfcf detects it and **leaves your rc alone** (action: `skipped-manual`). cfcf doesn't fight users who wired completion up themselves.
+If you already have your own `fpath=(~/.zsh/completions ...)` line outside our sentinels, cf² detects it and **leaves your rc alone** (action: `skipped-manual`). cf² doesn't fight users who wired completion up themselves.
 
 ### Trying it
 
@@ -163,7 +163,7 @@ Or delete the sentinel-marked block from your rc file by hand. Symmetric.
 |---|---|---|---|---|
 | **macOS** | ✓ | ✓ | not supported | n/a |
 | **Linux** | ✓ | ✓ | not supported | n/a |
-| **Windows native** | not supported — cfcf doesn't ship for native Windows. Use WSL | | | |
+| **Windows native** | not supported — cf² doesn't ship for native Windows. Use WSL | | | |
 
 Fish completion is tracked as a future addition. PowerShell isn't planned (cfcf's runtime requirement is Bun, which has limited Windows support and no PowerShell-completion convention we can target).
 
@@ -196,8 +196,8 @@ When in doubt, run `cfcf doctor` first. It checks your install across 13+ dimens
 - **Iteration history** — `cfcf-docs/iteration-history.md`. Rebuilt from per-iteration log files on every iteration so it survives server restarts.
 - **Problem Pack** — the four user-owned Markdown files (`problem.md` / `success.md` / `process.md` / `constraints.md`) that define the work the dev agent does. Read by every agent on every iteration.
 - **Readiness gate** — an optional step before `cfcf run` enters the loop, where the Solution Architect must say READY. Gated by the `readinessGate` config flag.
-- **Sentinel block** — a `>>> ... <<<` (or `<!-- begin --> ... <!-- end -->`) marked region in a user-owned file (`CLAUDE.md`, `~/.zshrc`, etc.) that cfcf manages. cfcf writes only between the sentinels; everything else is preserved.
-- **Workspace** — a cfcf-registered project (one git repo per workspace). Per-workspace state lives at `<cfcf-config-dir>/workspaces/<id>/`.
+- **Sentinel block** — a `>>> ... <<<` (or `<!-- begin --> ... <!-- end -->`) marked region in a user-owned file (`CLAUDE.md`, `~/.zshrc`, etc.) that cf² manages. cf² writes only between the sentinels; everything else is preserved.
+- **Workspace** — a cf²-registered project (one git repo per workspace). Per-workspace state lives at `<cfcf-config-dir>/workspaces/<id>/`.
 
 ---
 
@@ -212,7 +212,7 @@ When in doubt, run `cfcf doctor` first. It checks your install across 13+ dimens
 
 ## Versioning
 
-cfcf follows [SemVer](https://semver.org/). The current line is `0.x.y`:
+cf² follows [SemVer](https://semver.org/). The current line is `0.x.y`:
 
 - `0.<minor>` bumps for new features (every plan-item ship)
 - `0.<minor>.<patch>` for fixes

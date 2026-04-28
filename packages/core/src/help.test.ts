@@ -56,7 +56,9 @@ describe("help content surface", () => {
   it("getHelpContent returns the decoded Markdown body", () => {
     const body = getHelpContent("manual");
     expect(body).not.toBeNull();
-    expect(body!).toContain("# cfcf User Manual");
+    // Brand convention (2026-04-27): "cf²" in user-facing docs/UI;
+    // "cfcf" only in source code, CLI commands, package paths.
+    expect(body!).toContain("# cf² User Manual");
     // Spot-check that the embedded copy matches the source: the manual
     // mentions completion auto-install in its body.
     expect(body!).toContain("Shell completion");

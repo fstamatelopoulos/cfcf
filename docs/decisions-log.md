@@ -13,6 +13,38 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-04-27 — Brand naming: cf² in user-facing surfaces, cfcf in code
+
+**Context.** The project has two interchangeable names: **cfcf** (Cerefox Code Factory) and **cf²** (pronounced "cf square"). Both have always been valid but their usage drifted: the v0.14.0 user manual + Help-tab work mixed both forms in user-facing prose (e.g. "**cfcf** is the harness" alongside "**cf²** doesn't fight users…"). Inconsistent, confusing for new users.
+
+**Decision.** Codify the existing implicit principle:
+
+- **Use `cf²` in user-facing documentation, UI labels, and prose mentions.** This is the brand. It's what users say out loud and read in headings.
+- **Use `cfcf` in source code, CLI commands, file paths, package names, environment variables, and any technical identifier.** This is the keystroke-friendly form. It's what users type and what tools recognise.
+
+Specifically:
+
+| Context | Form | Examples |
+|---|---|---|
+| H1 / H2 in user docs | `cf²` | `# cf² User Manual`, `## What problem cf² solves` |
+| Prose ("cf² is", "cf² does") | `cf²` | "cf² only modifies content between sentinels" |
+| CLI command literals | `cfcf` | `cfcf help`, `cfcf init`, `cfcf clio search` |
+| File paths | `cfcf` | `~/.cfcf/clio.db`, `cfcf-docs/problem.md` |
+| Package names | `cfcf` | `@cerefox/cfcf-cli`, `@cfcf/core` |
+| Sentinel comments | `cfcf` | `# >>> cfcf shell completion >>>` |
+| Source-code identifiers | `cfcf` | `cfcf-config-dir`, `CFCF_PORT` |
+| Conversation / headlines | `cf²` | "cf² is a deterministic harness" |
+
+**Why both forms.** `cfcf` is keystroke-friendly (4 letters, all lowercase, single hand), which matters every time a user types a command. `cf²` reads as a brand and looks distinctive. Different users encounter different tradeoffs at different times; one form would compromise both.
+
+**Why this convention is sustainable.** The split is mechanical: anything a user **types** stays `cfcf` (otherwise we'd have to teach people to type a Unicode superscript). Anything a user **reads** uses `cf²` (because it's the brand name we want them to associate with the project). No judgement calls; the rule audits itself.
+
+**Outcome.** Swept `docs/guides/manual.md`, `troubleshooting.md`, `installing.md` to apply the rule. Regenerated the embedded help bundle so `cfcf help` (CLI) and the web UI Help tab serve the corrected text. Tagged v0.14.2.
+
+**Lessons.** When a project has two forms of its name, lock the convention before user-facing surfaces ship. The cost of a sweep grows linearly with how much content references both forms — cheap at v0.14.x; would have been a chore at v1.0.
+
+---
+
 ## 2026-04-27 — Clio CLI verbs: namespaced surface with a three-clause rule
 
 **Context.** The Clio CLI accreted across three iterations (5.7 → 5.11 → 5.12 → 5.13) without revisiting the overall shape. Iter-5 dogfood produced repeated "where do I do X?" friction (rename a doc, move it between projects, edit metadata) — same root cause: doc operations were scattered between top-level (`get`, `delete`, `restore`, `versions`, `ingest`) and a `docs` namespace (`docs list`, `docs edit`). Plan item 5.8 promoted this to a normalisation pass before writing the user manual.

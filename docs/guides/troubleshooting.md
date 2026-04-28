@@ -1,6 +1,6 @@
-# cfcf Troubleshooting
+# cf² Troubleshooting
 
-This page covers common cfcf issues and how to fix them. **First stop**: run `cfcf doctor` — it checks your install across 13+ dimensions (Bun runtime, native libs, agent CLIs, Clio DB, shell completion wiring, …) and emits an actionable hint for anything that's off.
+This page covers common cf² issues and how to fix them. **First stop**: run `cfcf doctor` — it checks your install across 13+ dimensions (Bun runtime, native libs, agent CLIs, Clio DB, shell completion wiring, …) and emits an actionable hint for anything that's off.
 
 When in doubt, the install can usually be repaired by running the installer again — it's idempotent and dedups its own state.
 
@@ -8,7 +8,7 @@ When in doubt, the install can usually be repaired by running the installer agai
 
 ## Tab completion doesn't work
 
-Symptoms: `cfcf <TAB>` does nothing, or completes file/folder names instead of cfcf verbs.
+Symptoms: `cfcf <TAB>` does nothing, or completes file/folder names instead of cf² verbs.
 
 ### Diagnosis
 
@@ -34,7 +34,7 @@ cfcf completion install
 exec zsh    # or `exec bash`
 ```
 
-This appends a sentinel-marked block to your rc file. cfcf only modifies content **between** the `# >>> cfcf shell completion` and `# <<< cfcf shell completion` markers; the rest is untouched.
+This appends a sentinel-marked block to your rc file. cf² only modifies content **between** the `# >>> cfcf shell completion` and `# <<< cfcf shell completion` markers; the rest is untouched.
 
 ### Fix #2: completion script missing
 
@@ -47,20 +47,20 @@ If missing → run `cfcf completion install` (writes the script + the rc-file ed
 
 ### Fix #3: stale compinit cache (zsh only)
 
-zsh caches its completion table in `~/.zcompdump*`. After a cfcf upgrade adds new verbs, the cache may serve the old verb tree until you invalidate it.
+zsh caches its completion table in `~/.zcompdump*`. After a cf² upgrade adds new verbs, the cache may serve the old verb tree until you invalidate it.
 
 ```bash
 rm -f ~/.zcompdump*
 exec zsh
 ```
 
-This is the standard "shells got weird, force-reload" dance — same fix as for `brew upgrade git` etc. Not cfcf-specific.
+This is the standard "shells got weird, force-reload" dance — same fix as for `brew upgrade git` etc. Not cf²-specific.
 
 ### Fix #4: shell isn't bash or zsh
 
-cfcf ships completion for bash + zsh only. fish is tracked as a future addition; PowerShell isn't planned.
+cf² ships completion for bash + zsh only. fish is tracked as a future addition; PowerShell isn't planned.
 
-If `echo $SHELL` reports `/usr/bin/fish` or similar, `cfcf completion install` is a no-op and `cfcf doctor` reports `unsupported shell`. You can still use cfcf, just without tab-complete.
+If `echo $SHELL` reports `/usr/bin/fish` or similar, `cfcf completion install` is a no-op and `cfcf doctor` reports `unsupported shell`. You can still use cf², just without tab-complete.
 
 ---
 
@@ -76,7 +76,7 @@ cfcf server stop            # if it's an old cfcf instance
 cfcf server start
 ```
 
-If a non-cfcf process is on `7233`, change the port:
+If a non-cf² process is on `7233`, change the port:
 
 ```bash
 CFCF_PORT=7234 cfcf server start
@@ -107,7 +107,7 @@ That's expected if you've run `cfcf init` before. Use `cfcf init --force` to rec
 
 ### "Bun not found" / "command not found: bun"
 
-cfcf requires Bun ≥ 1.3. The installer should have set this up; if it didn't:
+cf² requires Bun ≥ 1.3. The installer should have set this up; if it didn't:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -191,7 +191,7 @@ That's reflection saying it doesn't think more iterations will help. Don't overr
 cfcf clio stats
 ```
 
-Check `documentCount`. If zero, nothing's been ingested yet. cfcf auto-ingests reflection analyses + decision-log entries + iteration summaries during the loop, so a fresh workspace won't have searchable content until it's run a few iterations.
+Check `documentCount`. If zero, nothing's been ingested yet. cf² auto-ingests reflection analyses + decision-log entries + iteration summaries during the loop, so a fresh workspace won't have searchable content until it's run a few iterations.
 
 If documentCount > 0 but search still returns nothing:
 
@@ -239,7 +239,7 @@ cfcf doctor | grep "Bun global"
 
 ### "Node.js 20 is deprecated. … forced to run on Node.js 24"
 
-Expected, harmless. cfcf sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` in its GitHub Actions workflows so third-party actions (which still declare `using: 'node20'`) run on Node 24. The warning is GitHub's reminder to those action authors to update their declarations; it doesn't affect cfcf's behaviour.
+Expected, harmless. cf² sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` in its GitHub Actions workflows so third-party actions (which still declare `using: 'node20'`) run on Node 24. The warning is GitHub's reminder to those action authors to update their declarations; it doesn't affect cf²'s behaviour.
 
 This warning will go away when `actions/upload-artifact@v6` etc. ship with `using: 'node24'` natively. Out of cfcf's control.
 
@@ -265,7 +265,7 @@ If you use one of these to manage Bun, make sure the cfcf-installed `bun` is the
 
 ## Worst case: clean reinstall
 
-If something's broken in a way none of the above fixes, you can fully reset cfcf without losing your workspaces or Clio data (those live outside the install):
+If something's broken in a way none of the above fixes, you can fully reset cf² without losing your workspaces or Clio data (those live outside the install):
 
 ```bash
 # 1. Stop the server
