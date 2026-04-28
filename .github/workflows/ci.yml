@@ -66,6 +66,13 @@ jobs:
 
       - name: Upload CLI tarball
         uses: actions/upload-artifact@v5
+        # The upload is debug-only -- the build itself proves the tarball
+        # compiled. If GitHub's artifact-storage quota is hit (account-
+        # level limit, recalculates every 6-12 hours), we don't want the
+        # entire build job to fail just because we couldn't stash the
+        # smoke tarball for later inspection. Treat the upload as a
+        # best-effort post-step.
+        continue-on-error: true
         with:
           name: cfcf-cli-tarball
           path: |
