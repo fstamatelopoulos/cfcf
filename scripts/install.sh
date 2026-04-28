@@ -99,10 +99,66 @@ native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
 # package isn't there (Phase 1), bun emits a soft 404 warning. Having
 # the native package already globally installed satisfies the require
 # at runtime regardless of npm visibility.
+
+# Workaround for Bun bug: every `bun install -g <local-tarball>` (and
+# at least some non-registry URL forms) APPENDS a duplicate key to
+# ~/.bun/install/global/package.json AND ~/.bun/install/global/bun.lock
+# (Bun 1.3+ ships a JSON-shaped bun.lock instead of the older binary
+# bun.lockb) instead of overwriting the existing entry. The dup is
+# created by bun DURING the install, not on subsequent reads. After
+# a few install/upgrade cycles the lockfile accumulates dozens of
+# duplicate keys and bun spams `warn: Duplicate key` on every read.
+# Functionally harmless (last-occurrence wins on parse) but
+# unprofessional UX.
+#
+# Fix: dedup BOTH files BEFORE and AFTER each bun install -g call.
+# Method: parse + restringify (JSON.parse keeps last occurrence on
+# dup keys, so a round-trip yields a clean object). Best-effort;
+# never fails the install. Same fix mirrored in cfcf self-update.
+dedup_bun_global() {
+  # Bun's bug isn't simple "append the same line"; it's "append the
+  # same key with a normalised variant of the value" -- e.g. one
+  # entry with `"@foo": "/path/x.tgz"` then another with
+  # `"@foo": "file:///path/x.tgz"`. So a naive line-dedup misses it.
+  # We need KEY-based dedup that keeps the LAST occurrence (matches
+  # JSON.parse's last-wins semantics). 1-line lookahead via awk:
+  # buffer one line, when the next line has the same key, replace
+  # the buffer (drop the older one); otherwise flush.
+  #
+  # Works on both files. bun.lock isn't strict JSON (has JSON5-style
+  # trailing commas) so a JSON.parse round-trip would fail; this
+  # text-based approach handles both formats.
+  for f in "$HOME/.bun/install/global/package.json" "$HOME/.bun/install/global/bun.lock"; do
+    [[ -f "$f" ]] || continue
+    tmp="${f}.cfcf-dedup.$$"
+    if awk '
+      BEGIN { have_buf = 0 }
+      {
+        k = ""
+        if ($0 ~ /^[[:space:]]*"[^"]+"[[:space:]]*:/) {
+          s = $0; sub(/^[[:space:]]*"/, "", s); sub(/".*$/, "", s); k = s
+        }
+        if (have_buf) {
+          if (k != "" && k == buf_key) { buf = $0; buf_key = k }
+          else { print buf; buf = $0; buf_key = k }
+        } else { buf = $0; buf_key = k; have_buf = 1 }
+      }
+      END { if (have_buf) print buf }
+    ' "$f" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+    else
+      rm -f "$tmp"
+    fi
+  done
+}
+
+dedup_bun_global    # clean any accumulated mess from prior installs
 echo "[cfcf] Installing @cerefox/cfcf-native-$platform from $native_url"
 bun install -g "$native_url"
+dedup_bun_global    # bun re-introduced a dup during its install
 echo "[cfcf] Installing @cerefox/cfcf-cli from $cli_url"
 bun install -g "$cli_url"
+dedup_bun_global    # again
 
 # Confirm cfcf is on PATH; if Bun's global bin isn't there, surface
 # the standard hint.
@@ -114,6 +170,16 @@ if ! command -v cfcf >/dev/null 2>&1; then
 fi
 
 echo "[cfcf] cfcf $version installed."
+
+# ── 3a. Install shell completion (best-effort) ────────────────────────
+# Same regeneration `cfcf self-update` does post-upgrade and that the
+# bun-install postinstall hook does on `bun install -g` (5.5b path).
+# Keeps the user's shell completion in lock-step with the verb tree
+# they actually have. Trust principle: cfcf only touches files it
+# owns (~/.cfcf-completion.bash, ~/.zsh/completions/_cfcf); it does
+# NOT edit user rc files. Failure here doesn't fail the install.
+echo "[cfcf] Installing shell completion..."
+cfcf completion install || echo "[cfcf] (completion install skipped/failed -- run 'cfcf completion install' manually)"
 
 # ── 4. Hand off to cfcf init (interactive) ────────────────────────────
 if [[ -z "${CFCF_SKIP_INIT:-}" ]] && [[ -t 0 || -e /dev/tty ]]; then

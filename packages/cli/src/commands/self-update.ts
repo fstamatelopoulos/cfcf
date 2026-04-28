@@ -172,6 +172,57 @@ export function registerSelfUpdateCommand(program: Command): void {
       const versionToInstall = remote.cfcf ?? target;
       console.log(`\nLaunching installer for ${versionToInstall}...\n`);
 
+      // Workaround for Bun bug: every `bun install -g <local-tarball>`
+      // (and at least some non-registry URL forms) appends a duplicate
+      // key to ~/.bun/install/global/package.json AND bun.lock (Bun
+      // 1.3+ ships a JSON-shaped bun.lock instead of the older binary
+      // bun.lockb) DURING the install (not on subsequent reads).
+      // Pre-install cleanup catches accumulated dups from before this
+      // fix landed; post-install cleanup catches the dup bun just
+      // created. Same fix mirrored in scripts/install.sh. Best-effort
+      // -- never fails the upgrade.
+      const fs = await import("node:fs");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      const globalDir = path.join(os.homedir(), ".bun", "install", "global");
+      const dedupTargets = [
+        path.join(globalDir, "package.json"),
+        path.join(globalDir, "bun.lock"),
+      ];
+      const dedupBunGlobal = () => {
+        // Key-based dedup of consecutive same-key lines, keeping the
+        // LAST occurrence (matches JSON.parse last-wins semantics).
+        // Bun's bug appends the same key with a normalised value
+        // variant (e.g. "/path/x.tgz" then "file:///path/x.tgz"), so
+        // line-dedup misses it. 1-line lookahead: buffer one line,
+        // replace buf when next has same key, flush otherwise.
+        // Works on bun.lock (not strict JSON; has JSON5 trailing
+        // commas) and package.json -- text-based, no parser needed.
+        const keyRe = /^\s*"([^"]+)"\s*:/;
+        for (const p of dedupTargets) {
+          try {
+            if (!fs.existsSync(p)) continue;
+            const raw = fs.readFileSync(p, "utf-8");
+            const lines = raw.split("\n");
+            const out: string[] = [];
+            let buf: string | null = null;
+            let bufKey = "";
+            for (const line of lines) {
+              const m = line.match(keyRe);
+              const k = m ? m[1] : "";
+              if (buf !== null) {
+                if (k !== "" && k === bufKey) { buf = line; bufKey = k; }
+                else { out.push(buf); buf = line; bufKey = k; }
+              } else { buf = line; bufKey = k; }
+            }
+            if (buf !== null) out.push(buf);
+            fs.writeFileSync(p, out.join("\n"));
+          } catch { /* best-effort */ }
+        }
+      };
+
+      dedupBunGlobal();   // clean accumulated mess from prior installs
+
       // The release uploads `cfcf-<version>.tgz` next to MANIFEST.txt.
       // baseUrl already encodes either /releases/latest/download or
       // /releases/download/<tag>; just append the tarball name.
@@ -182,10 +233,30 @@ export function registerSelfUpdateCommand(program: Command): void {
 
       proc.on("exit", (code) => {
         if (code === 0) {
+          // Dedup again -- bun re-introduced a dup during the install
+          // we just ran. Without this, the next `cfcf self-update`
+          // would emit dup-key warnings.
+          dedupBunGlobal();
+
           console.log(`\n✓ upgraded to ${versionToInstall}.`);
-          console.log(`  Run \`cfcf doctor\` to verify the new install.`);
-          if (process.env.CFCF_INTERNAL_SERVE === undefined) {
-            console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
+
+          // Regenerate shell completion to pick up any new verbs in
+          // the upgraded version. We invoke the NEW cfcf binary
+          // (just installed) as a subprocess -- this process is the
+          // OLD version and its completion module's tree-walking
+          // would emit yesterday's verbs. Best-effort; a failure
+          // here doesn't fail the upgrade. Same regeneration the
+          // install.sh and postinstall paths run.
+          try {
+            const completion = spawn("cfcf", ["completion", "install"], { stdio: "inherit" });
+            completion.on("exit", () => {
+              printUpgradeFollowUp(versionToInstall);
+            });
+            completion.on("error", () => {
+              printUpgradeFollowUp(versionToInstall);
+            });
+          } catch {
+            printUpgradeFollowUp(versionToInstall);
           }
         } else {
           console.error(`\n✗ installer exited with code ${code}`);
@@ -193,4 +264,21 @@ export function registerSelfUpdateCommand(program: Command): void {
         }
       });
     });
+}
+
+/**
+ * Common follow-up messaging printed after a successful self-update,
+ * regardless of whether the post-upgrade completion regeneration
+ * succeeded. Kept in one place so the three exit-paths (completion
+ * exit, completion error, completion-spawn-throw) stay consistent.
+ */
+function printUpgradeFollowUp(version: string): void {
+  console.log(`  Run \`cfcf doctor\` to verify the new install.`);
+  if (process.env.CFCF_INTERNAL_SERVE === undefined) {
+    console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
+  }
+  // version is in the success line above the call to this helper;
+  // keep this signature unchanged so future text additions stay
+  // localised. (Currently unused but included for forward-compat.)
+  void version;
 }

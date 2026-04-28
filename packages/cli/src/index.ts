@@ -39,6 +39,7 @@ import { registerReflectCommand } from "./commands/reflect.js";
 import { registerClioCommands } from "./commands/clio.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerSelfUpdateCommand } from "./commands/self-update.js";
+import { registerCompletionCommand } from "./commands/completion.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -88,6 +89,9 @@ registerReflectCommand(program);
 registerClioCommands(program);
 registerDoctorCommand(program);
 registerSelfUpdateCommand(program);
+// `completion` registers LAST so the walked tree includes every other
+// verb already attached above. See packages/cli/src/commands/completion.ts.
+registerCompletionCommand(program);
 
 program.parse();
 }

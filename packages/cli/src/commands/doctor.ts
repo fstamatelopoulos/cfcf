@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
 
 interface CheckResult {
   name: string;
@@ -276,6 +277,126 @@ function checkClioDb(): CheckResult {
   }
 }
 
+/**
+ * Check whether bun's global package.json or bun.lock has accumulated
+ * duplicate keys. Known Bun bug on `bun install -g <local-tarball>`:
+ * each install appends instead of overwriting, so re-installs grow
+ * BOTH files (Bun 1.3+ ships a JSON-shaped bun.lock alongside
+ * package.json) with literal duplicate keys. JSON parsers tolerate
+ * it (last-occurrence wins), but bun spams `warn: Duplicate key`
+ * on every subsequent install.
+ *
+ * `scripts/install.sh` and `cfcf self-update` both dedup BOTH files
+ * before AND after invoking `bun install -g`, so future installs
+ * stay clean. This check warns the user if they have accumulated
+ * mess from before those fixes landed.
+ */
+function checkBunGlobalPkgDups(): CheckResult {
+  const name = "Bun global manifest (duplicate-key check)";
+  const dir = join(homedir(), ".bun", "install", "global");
+  const targets = [join(dir, "package.json"), join(dir, "bun.lock")];
+
+  // Cheap heuristic: count "@cerefox/cfcf-cli" occurrences in the raw
+  // text. If a single file has more than ~2 (one in deps, one in
+  // lockfile-bookkeeping), dups exist. We don't enumerate them
+  // precisely; we just want to flag the user.
+  const dups: string[] = [];
+  for (const path of targets) {
+    if (!existsSync(path)) continue;
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf-8");
+    } catch {
+      return { name, status: "warn", detail: `could not read ${path}` };
+    }
+    // Heuristic: count `"@cerefox/cfcf-cli":` occurrences. Both files
+    // legitimately mention it a few times in different contexts:
+    //   - package.json: once (top-level deps)
+    //   - bun.lock: 2-3 times (workspaces deps + packages section)
+    // Anything notably above baseline = bun-bug accumulation.
+    // We don't JSON.parse because bun.lock is JSON5-shaped (trailing
+    // commas, etc.) and would fail strict parse.
+    const hits = (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
+    const baseline = path.endsWith("bun.lock") ? 3 : 1;
+    if (hits > baseline) {
+      dups.push(`${path} (${hits} occurrences)`);
+    }
+  }
+  if (dups.length > 0) {
+    return {
+      name,
+      status: "warn",
+      detail: `accumulated duplicates (Bun bug; harmless but noisy): ${dups.join(", ")}. Re-run scripts/install.sh or cfcf self-update to auto-clean.`,
+    };
+  }
+  return { name, status: "ok" };
+}
+
+/**
+ * Check whether shell tab-completion is wired up. We're best-effort
+ * here: this is a quality-of-life feature, not a correctness one, so
+ * the worst-case status is `warn` (never `fail`).
+ *
+ * Three things have to be true for completion to actually fire:
+ *   1. $SHELL is bash or zsh (we don't ship completion for fish/sh).
+ *   2. Our completion script file exists at the canonical path.
+ *   3. The user's rc file references our completion (either via the
+ *      cfcf-managed sentinel block, or via a manual fpath/source line).
+ *
+ * Failure of any of (1)-(3) downgrades to `warn` with a specific hint
+ * so users can fix it themselves without filing an issue.
+ */
+function checkShellCompletion(): CheckResult {
+  const shell = detectShell();
+  const name = "Shell tab completion";
+  if (shell === null) {
+    return {
+      name,
+      status: "warn",
+      detail: `unsupported shell ($SHELL=${process.env.SHELL ?? "unset"}); cfcf ships completion for bash + zsh only`,
+    };
+  }
+
+  const scriptPath = shell === "zsh" ? zshCompletionPath() : bashCompletionPath();
+  if (!existsSync(scriptPath)) {
+    return {
+      name,
+      status: "warn",
+      detail: `completion script missing at ${scriptPath} -- run: cfcf completion install`,
+    };
+  }
+
+  const rcFile = shell === "zsh"
+    ? join(homedir(), ".zshrc")
+    : join(homedir(), ".bashrc");
+  if (!existsSync(rcFile)) {
+    return {
+      name,
+      status: "warn",
+      detail: `${rcFile} doesn't exist; tab-complete won't fire. Run: cfcf completion install`,
+    };
+  }
+
+  const content = readFileSync(rcFile, "utf-8");
+  const hasOurBlock = content.includes("# >>> cfcf shell completion");
+  const hasManualSetup = shell === "zsh"
+    ? /^\s*fpath=.*\.zsh\/completions/m.test(content)
+    : /source\s+.*\.cfcf-completion\.bash/.test(content);
+  if (!hasOurBlock && !hasManualSetup) {
+    return {
+      name,
+      status: "warn",
+      detail: `${rcFile} doesn't reference cfcf completion -- run: cfcf completion install`,
+    };
+  }
+
+  return {
+    name,
+    status: "ok",
+    detail: `${shell} (${scriptPath})`,
+  };
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 function fmt(r: CheckResult): string {
@@ -301,6 +422,8 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkRuntimeDeps());
       results.push(...checkAgentClis());
       results.push(checkClioDb());
+      results.push(checkShellCompletion());
+      results.push(checkBunGlobalPkgDups());
 
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));
