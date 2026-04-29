@@ -66,7 +66,7 @@ export function PaSessionDetail({
     <div className="architect-review architect-review--compact" style={containerStyle}>
       <div className="architect-review__header" style={headerStyle}>
         <span className="architect-review__readiness" style={statusStyle(event.status)}>
-          PA · {event.status}
+          Product Architect · {event.status}
         </span>
         <span className="architect-review__counts">
           {event.agent}{event.model ? `:${event.model}` : ""}

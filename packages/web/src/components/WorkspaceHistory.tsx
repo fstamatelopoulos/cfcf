@@ -122,7 +122,7 @@ function HistoryRow({
       : event.type === "reflection"
       ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
       : event.type === "pa-session"
-      ? "PA spec session"
+      ? "Product Architect"
       : "Document";
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
@@ -234,7 +234,7 @@ function HistoryRow({
               type="button"
               className="project-history__readiness-pill"
               onClick={toggle}
-              title="Click to view PA session details (scratchpad / workspace summary / meta)"
+              title="Click to view Product Architect session details (scratchpad / workspace summary / meta)"
               style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
             >
               <PaSessionResult event={paSessionEvent} />
@@ -278,7 +278,7 @@ function HistoryRow({
               type="button"
               className="btn btn--small btn--secondary"
               onClick={toggle}
-              title="Toggle PA session detail (scratchpad / summary / meta)"
+              title="Toggle Product Architect session detail (scratchpad / summary / meta)"
             >
               {expanded ? "hide" : "view"}
             </button>
