@@ -161,6 +161,18 @@ function printTopic(slug: string): void {
   process.stderr.write(`\n--- source: ${topic.source} -- contribute via the cfcf repo\n`);
 }
 
+/**
+ * Default first user message when the user runs `cfcf help assistant`
+ * without an explicit question. Triggers HA's introduction immediately
+ * so the TUI never opens to an empty prompt (Flavour A — same pattern
+ * as PA's `cfcf spec` self-introduction).
+ */
+const DEFAULT_HA_GREETING_PROMPT =
+  "Please introduce yourself briefly (you're the cf² Help Assistant), " +
+  "mention what you can help with — you have the full cf² docs in your prompt " +
+  "plus access to my Clio memory and the cfcf CLI for diagnostics — and ask " +
+  "what I'd like help with.";
+
 interface AssistantOptions {
   workspace?: string;
   agent?: string;
@@ -277,7 +289,11 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   console.error("");
 
   try {
-    const result = await launchHelpAssistant({ agent, systemPrompt });
+    const result = await launchHelpAssistant({
+      agent,
+      systemPrompt,
+      firstUserMessage: DEFAULT_HA_GREETING_PROMPT,
+    });
     if (result.exitCode !== 0 && result.exitCode !== null) {
       // The agent itself exited non-zero. Surface for visibility.
       console.error(`\n[ha] agent exited with code ${result.exitCode}`);
