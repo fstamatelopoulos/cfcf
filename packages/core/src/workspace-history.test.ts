@@ -232,11 +232,46 @@ describe("project-history PA-session events (5.14 v2)", () => {
     expect(pa.exitCode).toBe(0);
   });
 
-  test("cleanupStaleRunningEvents marks running PA sessions failed (server restart recovery)", async () => {
+  test("cleanupStaleRunningEvents does NOT touch running PA sessions (decoupled from server lifecycle)", async () => {
+    // PA's agent + launcher run in the user's terminal, not as
+    // server children. Server restart is irrelevant to their status.
+    // Cleanup must skip them, otherwise an actually-still-running
+    // session shows up in the History tab as "failed" until the user
+    // closes their PA shell (which is wrong + confusing).
     await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
     const failed = await cleanupStaleRunningEvents(PROJECT_ID);
-    expect(failed).toBeGreaterThanOrEqual(1);
+    expect(failed).toBe(0);
     const events = await readHistory(PROJECT_ID);
-    expect(events[0].status).toBe("failed");
+    expect(events[0].status).toBe("running");
+    expect((events[0] as PaSessionHistoryEvent).error).toBeUndefined();
+  });
+
+  test("cleanupStaleRunningEvents still cleans up other event types (iteration/review/document/reflection)", async () => {
+    // Mixed: a running iteration + a running PA session. Iteration
+    // gets cleaned up; PA session is left alone.
+    await appendHistoryEvent(PROJECT_ID, {
+      id: "iter-99",
+      type: "iteration",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      logFile: "iteration-099-dev.log",
+      agent: "codex",
+      iteration: 99,
+      branch: "cfcf/iteration-99",
+      devLogFile: "iteration-099-dev.log",
+      judgeLogFile: "iteration-099-judge.log",
+      devAgent: "codex",
+      judgeAgent: "codex",
+    } as IterationHistoryEvent);
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent({ id: "pa-99" }));
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(1); // only the iteration
+
+    const events = await readHistory(PROJECT_ID);
+    const iter = events.find((e) => e.id === "iter-99");
+    const pa = events.find((e) => e.id === "pa-99");
+    expect(iter?.status).toBe("failed");
+    expect(pa?.status).toBe("running");
   });
 });

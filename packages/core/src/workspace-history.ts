@@ -258,12 +258,20 @@ export async function cleanupStaleRunningEvents(
   let changed = 0;
   const now = new Date().toISOString();
   for (const event of events) {
-    if (event.status === "running") {
-      event.status = "failed";
-      event.error = reason;
-      event.completedAt = now;
-      changed++;
-    }
+    if (event.status !== "running") continue;
+    // Skip event types that aren't tied to the server's lifecycle.
+    // Product Architect (`pa-session`) sessions run in the USER's
+    // terminal — both the agent CLI + the launcher that writes the
+    // history entry are in the user's process, not the server's.
+    // Server restart doesn't affect them; their completion entry
+    // arrives whenever the user exits PA. Marking them failed at
+    // cleanup time would corrupt an actually-still-running session
+    // (and the launcher's eventual update would have to undo it).
+    if (event.type === "pa-session") continue;
+    event.status = "failed";
+    event.error = reason;
+    event.completedAt = now;
+    changed++;
   }
   if (changed > 0) {
     await writeHistory(workspaceId, events);
