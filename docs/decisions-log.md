@@ -13,6 +13,53 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-04-29 — Codex `failed to record rollout items: thread ... not found` is benign telemetry noise; we don't filter it
+
+**Context.** Dogfood on the `cfcf-calc` workspace surfaced an entry in the documenter's stderr log:
+
+```
+failed to record rollout items: thread <UUID> not found
+```
+
+The documenter completed successfully, committed the docs, and the project's tests + typecheck passed. But the warning is loud + alarming-sounding — Product Architect flagged it during a post-loop review, and a reasonable user would too. Question: **is this a cfcf bug we should fix, a codex bug we should report, or noise we should filter?**
+
+**Investigation.**
+
+The message comes from codex's **own internal rollout/session ledger** — the system codex uses to track agent threads + tool-use turns for its own observability + history features. Specifically:
+
+- Codex tags every interactive session with a `thread` UUID at startup.
+- During a session, codex periodically writes "rollout items" (tool calls, agent turns, etc.) to its rollout ledger, keyed by `thread`.
+- If the registration of the thread itself failed silently (or the thread ID got out of sync with the ledger's expectations), subsequent rollout writes can't find it → the warning fires.
+
+The warning appears specifically under our cfcf launchers because:
+
+- Both PA + iteration-time agents run codex with non-default `-c sandbox_mode=...` and `-c approval_policy=...` overrides
+- The combination occasionally trips codex's thread-registration path (the precise interaction is internal to codex; we have no API to inspect it)
+- The agent's actual work — bash tool calls, file edits, conversation turns — completes normally regardless. Only codex's internal session-history bookkeeping is affected.
+
+**Decided** — leave it alone. We don't filter, we don't redact, we don't report upstream until/unless something concrete changes:
+
+- It's a codex-internal warning, not an error our agents emit. Filtering it from the captured log would amount to **silently hiding output codex itself produced** — that's the wrong default. Users who can read the log can read it accurately; future codex updates may make the warning useful diagnostic info (or remove it entirely).
+- It's not a functional failure. The agent's outputs (commits, signals, files) are unaffected. Filtering would risk masking a future REAL codex error of the same shape.
+- It's not consistent enough to fingerprint reliably — the exact wording could shift across codex versions, and we don't want to maintain a regex-based denylist.
+- We don't have a clean upstream report to file. "Codex's rollout ledger drops thread registrations under non-default sandbox modes sometimes" is hard to reproduce on demand + the agent works correctly anyway. We'd need a deterministic repro before filing.
+
+**What WOULD change our mind:**
+
+- If the warning ever co-occurs with actual cfcf-visible breakage (agent failures, signal-file corruption, missing commits, etc.) → we investigate as a real bug and likely file upstream.
+- If codex documents an opt-out config (e.g. `-c rollout_telemetry=off`) → we flip it for cfcf launches to keep the log clean.
+- If the warning's wording/shape stabilises across codex versions and we could reliably filter it without false-positive risk → we revisit the filter decision.
+
+**Lessons.**
+
+1. **"This warning is loud, but harmless" is a real category.** Don't assume every alarming string in a captured log is a bug. Trace where it came from + what it's about before acting. Codex's stderr ≠ cfcf's stderr.
+2. **Distinguish "agent's own logs" from "harness's diagnostics".** cfcf captures everything the agent CLI emits; some of it is the agent's internal noise, not domain output. Filtering should be opt-in by the user (a future `--quiet` or per-line filter), not unilateral.
+3. **PR descriptions are a good place to record "we considered X and dismissed it".** When a reviewer or future-you re-encounters the warning, the bug-fix PR's body explains why bug 2 wasn't addressed alongside bug 1. This decisions-log entry promotes that explanation to a more durable home.
+
+**Outcome.** No code change in cfcf. Future readers who hit this warning + grep the docs will land here.
+
+---
+
 ## 2026-04-29 — Embed the full cfcf docs into interactive role agents' system prompts
 
 **Context.** cfcf has two interactive roles: Help Assistant (HA, `cfcf help assistant`) and Product Architect (PA, `cfcf spec`). Both run the user's configured agent CLI (claude-code or codex) in interactive mode and ask the agent to behave as a domain expert in cfcf — answering "how does the loop work?" / drafting Problem Pack files / explaining Clio retrieval / etc. The conventional approaches for "make an agent expert in a domain" are: fine-tuning, RAG, or a custom agent built from scratch. None of those are appropriate for cfcf — fine-tuning needs training data + ongoing maintenance, RAG needs a retrieval index + chunking pipeline, custom agent abandons our adapter-agnostic promise.

@@ -353,6 +353,33 @@ export async function rebuildIterationHistoryFromLogs(
 }
 
 /**
+ * Rebuild `cfcf-docs/iteration-history.md` from the per-iteration log
+ * files on disk and write the result. Best-effort wrapper around
+ * `rebuildIterationHistoryFromLogs` + `writeFile` — silently no-ops
+ * when the rebuild returns null (no log files yet, e.g. fresh project).
+ *
+ * Use this anywhere you want history.md to reflect the current state
+ * of `cfcf-docs/iteration-logs/`. Called at the START of each
+ * iteration via `writeContextToRepo`, AND at the END of each
+ * iteration's dev phase (after the dev agent writes iteration-N.md
+ * to disk) so the final iteration of a loop is included — without
+ * this end-of-phase refresh, history.md is permanently one
+ * iteration behind whenever the loop terminates (the start-of-next-
+ * iteration rebuild never fires for the final iteration).
+ *
+ * Bug-fix for the off-by-one in iter-history rebuild placement
+ * surfaced by dogfood on the calc workspace: iter 4 completed +
+ * iteration-4.md was on disk, but iteration-history.md still
+ * stopped at iter 3.
+ */
+export async function refreshIterationHistory(repoPath: string): Promise<void> {
+  const rebuilt = await rebuildIterationHistoryFromLogs(repoPath);
+  if (rebuilt === null) return;
+  const dest = join(repoPath, "cfcf-docs", "iteration-history.md");
+  await writeFile(dest, rebuilt, "utf-8");
+}
+
+/**
  * Extract the short title from an iteration-log's `# Iteration N -- Title`
  * first heading. Returns null if the heading is missing or malformed.
  */

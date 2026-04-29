@@ -9,7 +9,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Bug fixes
+
+- **`iteration-history.md` now includes the final iteration of every loop run.** Previously the history rebuild only fired at the START of each iteration (inside `writeContextToRepo`), so iter-N's own log was never folded in unless iter-N+1 kicked off — meaning every loop's last iteration was permanently missing from history.md. The fix adds an end-of-dev-phase rebuild via a new `refreshIterationHistory` helper in `context-assembler.ts`, called from `iteration-loop.ts` right after `archiveHandoff`. Best-effort: a rebuild failure logs a warning but doesn't fail the iteration. Surfaced in dogfood by the Product Architect spotting that iter 4's log was on disk but history.md still stopped at iter 3.
 
 ## [0.16.0] -- 2026-04-29
 

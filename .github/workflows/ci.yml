@@ -30,11 +30,21 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # 5.4: the typecheck references packages/server/src/web-assets.generated.ts,
-      # which is produced by `bun run build:web`. The file is gitignored (regenerated
-      # per build), so CI must build the web bundle before typechecking.
+      # The typecheck references two gitignored generated modules:
+      #   * packages/server/src/web-assets.generated.ts (item 5.4) -- produced
+      #     by `bun run build:web`
+      #   * packages/core/src/help-content.generated.ts (item 5.8) -- produced
+      #     by `bun run scripts/embed-help-content.ts` (also called from
+      #     scripts/build-cli.sh during release builds)
+      # Both are regenerated per build, so CI must produce them before
+      # typechecking. This step was missing the help-bundle generator
+      # before -- CI had been silently failing on main since v0.15.0 because
+      # of the missing import target in packages/core/src/help.ts.
       - name: Build web bundle (generates web-assets.generated.ts)
         run: bun run build:web
+
+      - name: Embed help bundle (generates help-content.generated.ts)
+        run: bun run scripts/embed-help-content.ts
 
       - name: Type check
         run: bun run typecheck
