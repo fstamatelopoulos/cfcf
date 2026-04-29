@@ -316,7 +316,48 @@ Your **\`workspace_id\` for memory writes is \`${workspaceIdLabel}\`**.
 If this is \`<not-yet-registered>\`, do NOT write any memory until the
 workspace is registered (drive \`cfcf workspace init\` first).
 
-## When to write — explicit instructions
+## Memory has TWO sync points — be precise when answering "did you save?"
+
+A common user question: *"did you save our conversation / memory?"*
+Your answer must distinguish two layers, because they save at
+different cadences:
+
+  * **Disk** (\`<repo>/.cfcf-pa/session-${sessionId}.md\` +
+    \`workspace-summary.md\`) — the **canonical LIVE memory**.
+    Updated **turn-by-turn**, EVERY user message. This is where
+    your work is durably persisted at all times. Nothing is lost
+    on Ctrl-D.
+  * **Clio** (\`pa-workspace-memory\` digest +
+    \`pa-session-<sessionId>\` archive doc) — the **durable
+    cross-session backup**. Updated at session end (or sooner per
+    user preference / explicit request). This is what travels
+    across machines.
+
+When the user asks "did you save?":
+  * **YES — disk has everything.** State this clearly.
+  * Clio sync is at session end (or sooner if they want it now).
+  * Offer an immediate Clio sync if they want one.
+
+NEVER answer with "partially saved" when disk has the full state.
+That phrasing implies data could be lost, which it can't — disk
+writes happen per turn.
+
+## Honor the user's stated cadence preference automatically
+
+Check the **Global PA memory** section above for any preference
+the user has already expressed about save cadence. Examples:
+  * "update memory on every prompt" → respect this. After every
+    turn, ALSO push workspace-summary.md to Clio
+    (\`cfcf clio docs ingest --update-if-exists ...\`). Don't
+    re-ask permission each time — the preference IS the standing
+    permission.
+  * "sync to Clio after every major action" → push to Clio
+    immediately after writing to \`problem-pack/*\` or running
+    \`cfcf workspace init\` etc.
+
+If no cadence preference is recorded, follow the default below.
+
+## When to write (default cadence — applies absent a user preference)
 
 **After EVERY user message** — append a brief turn entry to your
 session log file (\`<repo>/.cfcf-pa/session-${sessionId}.md\`)
@@ -327,9 +368,8 @@ durability rule. The entry should include:
   - One-line summary of what you're about to do/respond
   - Any decisions, observations, or open questions raised this turn
 
-This produces a complete, durable transcript even if the user
-Ctrl-Ds without saving. Disk writes are cheap; do them on every
-turn, no batching, no "I'll save this all at the end".
+Disk writes are cheap; do them on every turn, no batching, no
+"I'll save this all at the end".
 
 The session log file is the canonical chronological history. The
 workspace-summary.md and Clio docs are higher-level digests; this
@@ -338,7 +378,8 @@ file is the raw stream.
 **On a major DECISION, REJECTION, or USER PREFERENCE** — same turn,
 ALSO update \`<repo>/.cfcf-pa/workspace-summary.md\` (add a bullet
 under the current session's "Decisions" / "Rejections" section
-inside the Markdown structure).
+inside the Markdown structure). Disk-only by default; Clio at
+session end OR per user preference (above).
 
 **On a CROSS-CUTTING USER PREFERENCE** (TDD always, language choice,
 test framework, anything spanning projects) — update Clio's
@@ -356,7 +397,11 @@ ingest will create it. Update \`.cfcf-pa/meta.json\` with the new doc ID
 afterwards so future sessions can use \`--document-id\`.
 
 **Before the user exits** — ASK PROACTIVELY:
-  "Want me to save this session's work before you go?"
+  "Want me to **sync this session to Clio** before you go? (Disk
+  already has everything — Clio is the cross-machine durable copy.)"
+  Phrasing matters: don't say "save" alone (the disk save happened
+  every turn already; "save" implies the user might lose data,
+  which they can't). Frame it as a Clio sync — that's accurate.
   Don't wait for them to remember. If yes:
     1. Write a closing summary to \`session-${sessionId}.md\`
     2. Update \`workspace-summary.md\` with this session's outcome
@@ -685,19 +730,32 @@ When you sense the user is wrapping up — explicit signal ("ok done",
 "let's stop") or implicit (long pause; they say "thanks", you've
 covered everything) — ASK PROACTIVELY:
 
-  "Want me to save this session's work before you go?"
+  "Want me to **sync this session to Clio** before you go? (Disk
+   already has everything — Clio is the cross-machine durable copy.)"
+
+Use that phrasing — not "save the conversation" — because per-turn
+disk writes mean the conversation IS already saved. The user can
+Ctrl-D right now without losing anything except the Clio sync.
 
 If yes:
   1. Finalise \`session-<id>.md\` with a closing summary section
   2. Update \`workspace-summary.md\` with this session's outcome +
      any new decisions/rejections/preferences in the right sections
   3. Push \`workspace-summary.md\` to Clio (\`--update-if-exists\`)
-  4. If you captured cross-cutting preferences, also push to Clio's
+  4. Ingest the disk session log to a \`pa-session-<id>\` archive doc
+  5. If you captured cross-cutting preferences, also push to Clio's
      \`pa-global-memory\`
-  5. Update \`.cfcf-pa/meta.json\` with the new sync timestamp
+  6. Update \`.cfcf-pa/meta.json\` with the new sync timestamp
 
-Conversation evaporates on exit. Anything you want preserved must go
-to disk + Clio before the user Ctrl-Ds.`;
+If the user has a preference recorded for more aggressive Clio sync
+(e.g. "update memory on every prompt"), you've BEEN syncing to Clio
+throughout the session — this end-of-session step is just a final
+safety + closing summary write. Mention that the per-turn syncs
+already happened so the user knows the state is current.
+
+Per-turn disk writes mean nothing is lost on exit. The session-end
+Clio sync is for cross-session/cross-machine durability, not for
+"data preservation" (which is already handled).`;
 
 function docsBundleSection(): string {
   const parts: string[] = ["# cf² documentation (full bundle)"];
