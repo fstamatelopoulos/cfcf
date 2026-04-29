@@ -42,6 +42,8 @@ import {
 } from "../workspace-history.js";
 import type { AssessedState } from "./state-assessor.js";
 import { listWorkspaces } from "../workspaces.js";
+import { ensurePaClioProjects } from "./memory.js";
+import { getClioBackend } from "../clio/index.js";
 
 export interface LaunchOptions {
   /** Resolved Product Architect agent config (already backfilled by validateConfig). */
@@ -65,6 +67,23 @@ export interface LaunchOptions {
    * the agent responds to it immediately, then yields to the TUI.
    */
   firstUserMessage: string;
+  /**
+   * When true, fall back to the agent CLI's per-command permission
+   * prompts (claude's default permission mode; codex's `untrusted`
+   * approval policy + workspace-write sandbox).
+   *
+   * Default behaviour (when false / unset): full permissions, mirroring
+   * the iteration-time agents (dev/judge/SA/reflection/documenter).
+   * The user accepted the trust contract at `cfcf init` (via the
+   * `permissionsAcknowledged` flag); PA inherits it. claude-code gets
+   * `--dangerously-skip-permissions`; codex gets `approval_policy=never`
+   * AND `sandbox_mode=danger-full-access` so localhost-targeting
+   * cfcf CLI commands work too.
+   *
+   * Pass `--safe` on the CLI (`cfcf spec --safe`) to opt back into
+   * prompts for a single session.
+   */
+  safe?: boolean;
 }
 
 export interface LaunchResult {
@@ -93,25 +112,31 @@ export function buildLaunchArgs(
   agent: AgentConfig,
   systemPrompt: string,
   firstUserMessage: string,
+  safe: boolean = false,
 ): LaunchArgs {
   switch (agent.adapter) {
     case "claude-code": {
       // Interactive mode (no `-p` / `--print`). `--append-system-prompt`
       // adds PA's briefing on top of Claude Code's default system prompt.
-      // No `--dangerously-skip-permissions`: the agent will prompt the
-      // user for tool/file/bash use, which is the v1 permission model.
       //
       // Default to **Sonnet** for PA. Spec iteration is multi-turn
       // reasoning + judgement calls — benefits from a stronger model
       // than HA's Q&A workload (where Haiku is fine).
       //
+      // **Permissions**: PA defaults to `--dangerously-skip-permissions`,
+      // mirroring the iteration-time agents (dev/judge/SA/reflection/
+      // documenter). The user accepted the trust contract at
+      // `cfcf init`; PA inherits it. Pass `--safe` to opt back into the
+      // default permission mode for a single session.
+      //
       // The positional argument at the end is the user's opening message
       // in interactive mode (per `claude --help`: "Arguments: prompt --
-      // Your prompt"). The TUI opens with this already submitted, so the
-      // agent responds immediately rather than waiting for the user to
-      // type something. Flavour A.
+      // Your prompt"). Flavour A.
       const args: string[] = ["--append-system-prompt", systemPrompt];
       args.push("--model", agent.model ?? "sonnet");
+      if (!safe) {
+        args.push("--dangerously-skip-permissions");
+      }
       args.push(firstUserMessage); // positional [prompt]
       return { command: "claude", args, tempPromptFile: null };
     }
@@ -120,9 +145,16 @@ export function buildLaunchArgs(
       // `model_instructions_file` key. We write the prompt to a tempfile,
       // pass the path, and clean up after exit.
       //
-      // codex defaults to `untrusted` approval policy interactively,
-      // which prompts before every tool use — matches PA's permission
-      // model (mutations are user-gated).
+      // **Permissions + sandbox** (default; pass `--safe` to opt back):
+      //   approval_policy=never  — skip per-command prompts
+      //   sandbox_mode=danger-full-access — full filesystem + network
+      //     access, mirroring the iteration agents AND fixing codex's
+      //     loopback-blocked sandbox issue (cfcf CLI commands that hit
+      //     localhost like `cfcf server status` will work).
+      //
+      // In safe mode we leave both keys at codex's defaults
+      // (`untrusted` approval + `workspace-write` sandbox) — friendly
+      // but means localhost-targeting commands may report wrong info.
       //
       // The positional [PROMPT] at the end is the user's opening message
       // (per `codex --help`: "Optional user prompt to start the
@@ -134,6 +166,10 @@ export function buildLaunchArgs(
       const args: string[] = [
         "-c", `model_instructions_file="${promptFile.replace(/"/g, '\\"')}"`,
       ];
+      if (!safe) {
+        args.push("-c", "approval_policy=\"never\"");
+        args.push("-c", "sandbox_mode=\"danger-full-access\"");
+      }
       if (agent.model) {
         args.push("--model", agent.model);
       }
@@ -168,6 +204,17 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
   // dir for its session scratchpad + workspace-summary cache + meta.json.
   const paCachePath = join(opts.state.repoPath, ".cfcf-pa");
   await mkdir(paCachePath, { recursive: true });
+
+  // Pre-create the PA + global Clio Projects so the agent's
+  // `cfcf clio docs ingest --project cfcf-memory-pa` command lands in
+  // the right place. Without this the auto-route-on-missing semantics
+  // would push the doc into the `default` Project, which produces the
+  // "Clio says no memory but disk has memory" discrepancy users hit
+  // in dogfood. Idempotent + best-effort.
+  try {
+    const backend = getClioBackend();
+    await ensurePaClioProjects(backend);
+  } catch { /* best-effort */ }
 
   // ── History: write the start entry (best-effort) ──────────────────
   // If the workspace is registered, log a "running" entry now so the
@@ -216,6 +263,7 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
     opts.agent,
     opts.systemPrompt,
     opts.firstUserMessage,
+    opts.safe ?? false,
   );
 
   let exitCode: number | null = null;

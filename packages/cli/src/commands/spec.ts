@@ -69,6 +69,13 @@ interface SpecOptions {
    * concrete first message.
    */
   initialTask?: string;
+  /**
+   * Opt back into the agent CLI's per-command permission prompts +
+   * default sandbox restrictions for THIS session. By default PA runs
+   * with full permissions (matches the iteration-time agents; user
+   * accepted the trust contract at `cfcf init`).
+   */
+  safe?: boolean;
 }
 
 async function runSpec(opts: SpecOptions): Promise<void> {
@@ -151,6 +158,11 @@ async function runSpec(opts: SpecOptions): Promise<void> {
   console.error(`[Product Architect (pa)] launching ${agent.adapter}${modelLabel}; session ${state.sessionId}.`);
   console.error(`[Product Architect (pa)] working dir: ${state.repoPath}`);
   console.error(`[Product Architect (pa)] cache: ${state.repoPath}/.cfcf-pa/ (memory + scratchpad)`);
+  if (opts.safe) {
+    console.error(`[Product Architect (pa)] permissions: SAFE mode — agent CLI will prompt before each tool call.`);
+  } else {
+    console.error(`[Product Architect (pa)] permissions: FULL — skipping prompts (mirrors iteration agents). Pass --safe to opt back into prompts.`);
+  }
   if (!state.git.isGitRepo) {
     console.error(`[Product Architect (pa)] note: this isn't a git repo yet — PA will offer to run \`git init\`.`);
   }
@@ -168,6 +180,7 @@ async function runSpec(opts: SpecOptions): Promise<void> {
       state,
       systemPrompt,
       firstUserMessage,
+      safe: opts.safe ?? false,
     });
     if (result.exitCode !== 0 && result.exitCode !== null) {
       console.error(`\n[pa] agent exited with code ${result.exitCode}`);
@@ -191,11 +204,17 @@ export function registerSpecCommand(program: Command): void {
     .option("--repo <path>", "Repo path to operate on (defaults to current working directory)")
     .option("--agent <name>", "Override config.productArchitectAgent (claude-code, codex)")
     .option("--print-prompt", "Print the assembled system prompt + exit; don't launch")
-    .action((task: string[], opts: { repo?: string; agent?: string; printPrompt?: boolean }) => {
+    .option(
+      "--safe",
+      "Opt into per-command permission prompts + default sandbox restrictions for this session " +
+      "(by default PA runs with full permissions, like the iteration-time agents)",
+    )
+    .action((task: string[], opts: { repo?: string; agent?: string; printPrompt?: boolean; safe?: boolean }) => {
       runSpec({
         repoPath: opts.repo,
         agent: opts.agent,
         printPrompt: opts.printPrompt,
+        safe: opts.safe,
         initialTask: task.length > 0 ? task.join(" ") : undefined,
       });
     });

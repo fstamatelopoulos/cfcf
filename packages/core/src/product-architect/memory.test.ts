@@ -72,6 +72,7 @@ function makeBackend(overrides: Partial<MemoryBackend> = {}): MemoryBackend {
     getDocumentContent: async () => null,
     getProject: async () => null,
     listProjects: async () => [],
+    resolveProject: async (name) => makeProject(`${name}-id`, name),
     ...overrides,
   };
   return stub as MemoryBackend;
@@ -85,7 +86,7 @@ describe("readWorkspaceMemory", () => {
     expect(out.content).toBeNull();
   });
 
-  it("queries metadataSearch with the right filter shape", async () => {
+  it("queries metadataSearch with the right filter shape AND no project scoping (v2.1 fix)", async () => {
     let receivedFilter: Record<string, unknown> | undefined;
     let receivedProject: string | undefined;
     const backend = makeBackend({
@@ -101,7 +102,9 @@ describe("readWorkspaceMemory", () => {
       artifact_type: "workspace-memory",
       workspace_id: "ws-uuid-1",
     });
-    expect(receivedProject).toBe(PA_PROJECT);
+    // No project filter — robust to docs that ended up in `default`
+    // because the agent's ingest auto-routed before pre-create.
+    expect(receivedProject).toBeUndefined();
   });
 
   it("returns the doc + content when found", async () => {
@@ -126,31 +129,63 @@ describe("readWorkspaceMemory", () => {
 });
 
 describe("readGlobalMemory", () => {
-  it("looks up the global memory by title in cfcf-memory-global", async () => {
-    let receivedTitle: string | undefined;
-    let receivedProjectId: string | undefined;
-    const project = makeProject("global-proj-id", GLOBAL_PROJECT);
+  it("looks up global memory by metadata (project-agnostic, v2.1)", async () => {
+    let receivedFilter: Record<string, unknown> | undefined;
+    let receivedProject: string | undefined;
     const doc = makeDoc("global-doc-1", PA_GLOBAL_MEMORY_TITLE, "# global");
     const backend = makeBackend({
-      getProject: async () => project,
-      findDocumentByTitle: async (projectId, title) => {
-        receivedProjectId = projectId;
-        receivedTitle = title;
-        return doc;
+      metadataSearch: async (req) => {
+        receivedFilter = req.metadataFilter as Record<string, unknown>;
+        receivedProject = req.project;
+        return { documents: [doc], metadataFilter: req.metadataFilter };
       },
       getDocumentContent: async () => makeContent(doc, "# global"),
     });
     const out = await readGlobalMemory(backend);
-    expect(receivedProjectId).toBe("global-proj-id");
-    expect(receivedTitle).toBe(PA_GLOBAL_MEMORY_TITLE);
+    expect(receivedFilter).toEqual({
+      role: "pa",
+      artifact_type: "global-memory",
+    });
+    // No project scoping — same robustness rationale as workspace memory.
+    expect(receivedProject).toBeUndefined();
     expect(out.documentId).toBe("global-doc-1");
     expect(out.content).toContain("global");
   });
 
-  it("returns empty snapshot when the project doesn't exist", async () => {
-    const backend = makeBackend({ getProject: async () => null });
+  it("returns empty snapshot when no matching doc exists", async () => {
+    const backend = makeBackend({
+      metadataSearch: async () => ({ documents: [], metadataFilter: {} }),
+    });
     const out = await readGlobalMemory(backend);
     expect(out.documentId).toBeNull();
+  });
+});
+
+describe("ensurePaClioProjects", () => {
+  it("calls resolveProject with createIfMissing for both PA Projects", async () => {
+    const calls: { name: string; createIfMissing?: boolean }[] = [];
+    const backend = makeBackend({
+      resolveProject: async (name, opts) => {
+        calls.push({ name, createIfMissing: opts?.createIfMissing });
+        return makeProject(`${name}-id`, name);
+      },
+    });
+    const { ensurePaClioProjects } = await import("./memory.js");
+    await ensurePaClioProjects(backend);
+    expect(calls).toHaveLength(2);
+    expect(calls[0].name).toBe("cfcf-memory-pa");
+    expect(calls[0].createIfMissing).toBe(true);
+    expect(calls[1].name).toBe("cfcf-memory-global");
+    expect(calls[1].createIfMissing).toBe(true);
+  });
+
+  it("doesn't throw when Clio is unreachable", async () => {
+    const backend = makeBackend({
+      resolveProject: async () => { throw new Error("clio down"); },
+    });
+    const { ensurePaClioProjects } = await import("./memory.js");
+    // Should not throw — best-effort.
+    await ensurePaClioProjects(backend);
   });
 });
 

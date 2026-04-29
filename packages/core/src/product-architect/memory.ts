@@ -92,10 +92,23 @@ export interface MemoryInventory {
 // ── Readers ──────────────────────────────────────────────────────────
 
 /**
- * Look up the per-workspace PA memory doc, scoped via metadata. The
- * doc title is fixed (`pa-workspace-memory`) — every workspace's PA
- * memory uses the same title in the same Project. Per-workspace
- * scoping is via metadata, NOT title.
+ * Look up the per-workspace PA memory doc by metadata only — NOT
+ * scoped to a specific Clio Project.
+ *
+ * Why metadata-only (not project-scoped): the metadata triple
+ * (`role`, `artifact_type`, `workspace_id`) uniquely identifies PA's
+ * per-workspace memory across the whole Clio DB. Pre-v2.1 the search
+ * was scoped to `cfcf-memory-pa`, but if the agent's ingest landed
+ * in a different project (e.g. `default` because cfcf-memory-pa
+ * didn't exist at write time), this scoped search missed the doc
+ * entirely — producing the "Clio says no memory" / "disk has memory"
+ * discrepancy users hit in dogfood. Metadata-only search is robust
+ * to that mismatch.
+ *
+ * The launcher pre-creates `cfcf-memory-pa` Project at every PA
+ * launch so future writes land in the right place; this dropped
+ * scope is mostly a backstop for already-misplaced docs (and any
+ * future schema drift).
  *
  * Returns an empty snapshot when:
  *   - workspaceId is null (workspace not registered yet — PA will
@@ -117,14 +130,12 @@ export async function readWorkspaceMemory(
         artifact_type: "workspace-memory",
         workspace_id: workspaceId,
       },
-      project: PA_PROJECT,
+      // No `project` filter — see header comment.
     });
     const matches = result.documents;
     if (matches.length === 0) {
       return { documentId: null, updatedAt: null, content: null };
     }
-    // Newest first; if there's somehow more than one, take the most
-    // recent. (There should never be more than one per workspace.)
     const doc = matches[0];
     const content = await backend.getDocumentContent(doc.id);
     return {
@@ -138,21 +149,27 @@ export async function readWorkspaceMemory(
 }
 
 /**
- * Look up the global cross-workspace PA memory doc by title. There's
- * exactly one of these per cf² install (no scoping by workspace_id).
+ * Look up the global cross-workspace PA memory doc by metadata. There's
+ * exactly one of these per cf² install. Same project-agnostic search
+ * pattern as `readWorkspaceMemory` — robust to docs landing in the
+ * "wrong" Clio Project before the launcher's pre-create runs.
  */
 export async function readGlobalMemory(
   backend: MemoryBackend,
 ): Promise<GlobalMemorySnapshot> {
   try {
-    const project = await backend.getProject(GLOBAL_PROJECT);
-    if (!project) {
+    const result = await backend.metadataSearch({
+      metadataFilter: {
+        role: "pa",
+        artifact_type: "global-memory",
+      },
+      // No `project` filter — see readWorkspaceMemory header comment.
+    });
+    const matches = result.documents;
+    if (matches.length === 0) {
       return { documentId: null, updatedAt: null, content: null };
     }
-    const doc = await backend.findDocumentByTitle(project.id, PA_GLOBAL_MEMORY_TITLE);
-    if (!doc) {
-      return { documentId: null, updatedAt: null, content: null };
-    }
+    const doc = matches[0];
     const content = await backend.getDocumentContent(doc.id);
     return {
       documentId: doc.id,
@@ -213,6 +230,37 @@ export async function readMemoryInventory(
     readOtherRoleMemory(backend, workspaceId),
   ]);
   return { workspace, global, otherRoles };
+}
+
+/**
+ * Ensure the two PA Clio Projects (`cfcf-memory-pa`, `cfcf-memory-global`)
+ * exist before the agent runs. Without this, the agent's ingest with
+ * `--project cfcf-memory-pa` may auto-route to the `default` Project
+ * (cfcf's auto-route-on-missing semantics), producing the discrepancy
+ * we hit in dogfood: doc-in-Clio-but-wrong-project.
+ *
+ * Idempotent: `resolveProject(name, { createIfMissing: true })` is a
+ * no-op when the project already exists.
+ *
+ * Best-effort: any failure (Clio unreachable, etc.) just logs to
+ * stderr; PA still launches.
+ */
+export async function ensurePaClioProjects(backend: MemoryBackend): Promise<void> {
+  try {
+    await backend.resolveProject(PA_PROJECT, {
+      createIfMissing: true,
+      description: "Product Architect per-workspace memory (pa-workspace-memory docs)",
+    });
+    await backend.resolveProject(GLOBAL_PROJECT, {
+      createIfMissing: true,
+      description: "Cross-role global memory (PA + HA user preferences)",
+    });
+  } catch (err) {
+    console.error(
+      `[pa] note: couldn't pre-create Clio Projects (${err instanceof Error ? err.message : String(err)}). ` +
+      `Agent ingests may auto-route to the 'default' project.`,
+    );
+  }
 }
 
 // ── Formatters (for the system prompt) ───────────────────────────────

@@ -91,6 +91,38 @@ describe("buildLaunchArgs (Pattern A)", () => {
     expect(out.args.length - 1).toBeGreaterThan(cIdx);
   });
 
+  it("claude-code: defaults to FULL permissions (matches iteration-time agents)", () => {
+    const out = buildLaunchArgs({ adapter: "claude-code" }, "system", "Hello");
+    expect(out.args).toContain("--dangerously-skip-permissions");
+  });
+
+  it("claude-code: --safe opts back into per-command permission prompts", () => {
+    const out = buildLaunchArgs({ adapter: "claude-code" }, "system", "Hello", true);
+    expect(out.args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("codex: defaults to approval_policy=never + sandbox_mode=danger-full-access", () => {
+    const out = buildLaunchArgs({ adapter: "codex" }, "system", "Hello");
+    cleanupPaths.push(out.tempPromptFile!);
+    // approval_policy=never override should be present
+    const approvalIdx = out.args.findIndex((a) => a.startsWith("approval_policy="));
+    expect(approvalIdx).toBeGreaterThanOrEqual(0);
+    expect(out.args[approvalIdx]).toMatch(/approval_policy="?never"?/);
+    // sandbox_mode=danger-full-access override should be present
+    const sandboxIdx = out.args.findIndex((a) => a.startsWith("sandbox_mode="));
+    expect(sandboxIdx).toBeGreaterThanOrEqual(0);
+    expect(out.args[sandboxIdx]).toMatch(/sandbox_mode="?danger-full-access"?/);
+  });
+
+  it("codex: --safe omits the approval/sandbox overrides (default codex behaviour)", () => {
+    const out = buildLaunchArgs({ adapter: "codex" }, "system", "Hello", true);
+    cleanupPaths.push(out.tempPromptFile!);
+    const hasApproval = out.args.some((a) => a.startsWith("approval_policy="));
+    const hasSandbox = out.args.some((a) => a.startsWith("sandbox_mode="));
+    expect(hasApproval).toBe(false);
+    expect(hasSandbox).toBe(false);
+  });
+
   it("does NOT use Pattern B mechanics (no auto-loaded AGENTS.md / CLAUDE.md briefing)", () => {
     // claude-code path: prompt is in the --append flag, not in a file.
     const cc = buildLaunchArgs({ adapter: "claude-code" }, "PA", "Hello");
