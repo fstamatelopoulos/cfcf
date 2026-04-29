@@ -15,10 +15,15 @@
  * Plan item 5.14 (v2).
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assessState, formatAssessedState, generateSessionId } from "./state-assessor.js";
+import {
+  createWorkspace,
+  deleteWorkspace,
+  listWorkspaces,
+} from "../workspaces.js";
 
 let repo: string;
 
@@ -213,5 +218,91 @@ describe("formatAssessedState", () => {
     const out = formatAssessedState(state);
     expect(out).toContain("Git repo present");
     expect(out).toContain("`problem.md`");
+  });
+});
+
+/**
+ * Regression: workspace-registration lookup must follow symlinks.
+ *
+ * macOS's `/tmp` is a symlink to `/private/tmp`. `process.cwd()`
+ * returns the realpath form (`/private/tmp/foo`) while
+ * `cfcf workspace init --repo /tmp/foo` stores the literal user
+ * path (`/tmp/foo`). A plain string compare misses the match and
+ * reports the workspace as unregistered. Real bug, hit by the user
+ * on a registered /tmp/cfcf-calc workspace.
+ *
+ * The fix uses `realpath` (with a graceful fallback to `resolve`)
+ * on both sides of the comparison.
+ */
+describe("workspace registration through symlinks (regression: macOS /tmp → /private/tmp)", () => {
+  let cfcfDir: string;
+  let realRepo: string;
+  let symlinkRepo: string;
+  let savedConfigDir: string | undefined;
+
+  beforeEach(async () => {
+    cfcfDir = await mkdtemp(join(tmpdir(), "cfcf-symlink-test-"));
+    savedConfigDir = process.env.CFCF_CONFIG_DIR;
+    process.env.CFCF_CONFIG_DIR = cfcfDir;
+
+    // Real directory + a symlink pointing at it.
+    realRepo = await mkdtemp(join(tmpdir(), "cfcf-pa-real-"));
+    symlinkRepo = join(cfcfDir, "via-symlink");
+    await symlink(realRepo, symlinkRepo, "dir");
+  });
+
+  afterEach(async () => {
+    if (savedConfigDir === undefined) delete process.env.CFCF_CONFIG_DIR;
+    else process.env.CFCF_CONFIG_DIR = savedConfigDir;
+    // Best-effort cleanup
+    try { await rm(realRepo, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { await rm(cfcfDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("finds the workspace when stored repoPath is the symlink form and lookup uses the realpath form (and vice versa)", async () => {
+    // Register the workspace using the SYMLINK path (what user typed)
+    const ws = await createWorkspace({
+      name: "via-symlink-ws",
+      repoPath: symlinkRepo,
+      devAgent: { adapter: "codex" },
+      judgeAgent: { adapter: "codex" },
+      architectAgent: { adapter: "codex" },
+      documenterAgent: { adapter: "codex" },
+      maxIterations: 10,
+      pauseEvery: 0,
+    });
+    try {
+      expect((await listWorkspaces()).map((w) => w.name)).toContain("via-symlink-ws");
+
+      // Launch PA via the REAL path (what process.cwd() would return on macOS).
+      const state = await assessState({ repoPath: realRepo });
+      expect(state.workspace.registered).toBe(true);
+      expect(state.workspace.workspaceId).toBe(ws.id);
+      expect(state.workspace.name).toBe("via-symlink-ws");
+    } finally {
+      await deleteWorkspace(ws.id);
+    }
+  });
+
+  it("finds the workspace when stored repoPath is the real form and lookup uses the symlink form", async () => {
+    const ws = await createWorkspace({
+      name: "via-real-ws",
+      repoPath: realRepo, // stored in real form
+      devAgent: { adapter: "codex" },
+      judgeAgent: { adapter: "codex" },
+      architectAgent: { adapter: "codex" },
+      documenterAgent: { adapter: "codex" },
+      maxIterations: 10,
+      pauseEvery: 0,
+    });
+    try {
+      // Launch via symlink (what `cd /tmp/...` then `cfcf spec` looks like
+      // before Node's process.cwd() normalises it — covers either order).
+      const state = await assessState({ repoPath: symlinkRepo });
+      expect(state.workspace.registered).toBe(true);
+      expect(state.workspace.workspaceId).toBe(ws.id);
+    } finally {
+      await deleteWorkspace(ws.id);
+    }
   });
 });

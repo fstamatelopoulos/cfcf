@@ -26,10 +26,31 @@
  * §"Pre-injection at launch".
  */
 import { readFile, readdir, stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { join, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { listWorkspaces } from "../workspaces.js";
 import { readPidFile, isProcessRunning } from "../pid-file.js";
+
+/**
+ * Resolve a path through any symlinks (`realpath`); fall back to a
+ * regular `resolve()` when the path doesn't exist or can't be
+ * traversed (e.g. permissions error). Used to compare repo paths
+ * for workspace-registration lookup, where macOS's symlinked
+ * `/tmp` → `/private/tmp` would otherwise cause false-negative
+ * matches (Node's `process.cwd()` returns the realpath form;
+ * `cfcf workspace init` stores whatever the user typed via
+ * `resolve()`, which doesn't follow symlinks). Without this,
+ * running `cfcf spec` from `/tmp/foo` on a workspace registered
+ * at `/tmp/foo` reports the workspace as unregistered.
+ */
+function realpathSafe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
 
 // ── State shapes ─────────────────────────────────────────────────────
 
@@ -160,7 +181,8 @@ async function readGitState(repoPath: string): Promise<GitState> {
 async function readWorkspaceRegistration(repoPath: string): Promise<WorkspaceRegistration> {
   try {
     const all = await listWorkspaces();
-    const match = all.find((w) => resolve(w.repoPath) === resolve(repoPath));
+    const target = realpathSafe(repoPath);
+    const match = all.find((w) => realpathSafe(w.repoPath) === target);
     if (!match) {
       return { registered: false, workspaceId: null, name: null, clioProject: null, currentIteration: null };
     }

@@ -352,12 +352,21 @@ async function finaliseHistoryEvent(opts: {
   // Try to read meta.json for agent-provided session outcome.
   const meta = await readMetaJsonLastSession(opts.paCachePath);
 
-  // Re-resolve workspace registration in case PA registered it mid-session.
+  // Re-resolve workspace registration in case PA registered it
+  // mid-session. Use realpath-aware comparison to handle macOS's
+  // symlinked /tmp → /private/tmp (process.cwd() returns the realpath
+  // form; cfcf workspace init stores what the user typed, which
+  // doesn't follow symlinks — a plain string compare misses).
   let workspaceId = opts.workspaceIdAtStart;
   if (workspaceId === null) {
     try {
+      const { realpathSync } = await import("node:fs");
+      const safeRealpath = (p: string): string => {
+        try { return realpathSync(p); } catch { return p; }
+      };
+      const target = safeRealpath(opts.repoPath);
       const all = await listWorkspaces();
-      const match = all.find((w) => w.repoPath === opts.repoPath);
+      const match = all.find((w) => safeRealpath(w.repoPath) === target);
       if (match) workspaceId = match.id;
     } catch { /* best-effort */ }
   }
