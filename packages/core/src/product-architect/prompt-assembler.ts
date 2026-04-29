@@ -318,11 +318,24 @@ workspace is registered (drive \`cfcf workspace init\` first).
 
 ## When to write — explicit instructions
 
-**Throughout the session** — write OBSERVATIONS to
-\`<repo>/.cfcf-pa/session-${sessionId}.md\` as they happen. This is
-your live log. Don't worry about batching — disk writes are cheap.
+**After EVERY user message** — append a brief turn entry to your
+session log file (\`<repo>/.cfcf-pa/session-${sessionId}.md\`)
+BEFORE you generate your reply. This is non-negotiable; it's the
+durability rule. The entry should include:
+  - Timestamp (ISO)
+  - One-line summary of what the user said
+  - One-line summary of what you're about to do/respond
+  - Any decisions, observations, or open questions raised this turn
 
-**On a major DECISION, REJECTION, or USER PREFERENCE** — same session,
+This produces a complete, durable transcript even if the user
+Ctrl-Ds without saving. Disk writes are cheap; do them on every
+turn, no batching, no "I'll save this all at the end".
+
+The session log file is the canonical chronological history. The
+workspace-summary.md and Clio docs are higher-level digests; this
+file is the raw stream.
+
+**On a major DECISION, REJECTION, or USER PREFERENCE** — same turn,
 ALSO update \`<repo>/.cfcf-pa/workspace-summary.md\` (add a bullet
 under the current session's "Decisions" / "Rejections" section
 inside the Markdown structure).
@@ -435,6 +448,51 @@ AFTER you ask the user in conversation. Two separate gates.)
 You can use \`stat -f %m <path>\` on macOS or \`stat -c %Y <path>\`
 on Linux to read mtimes; or just compare the in-doc "Last updated"
 timestamp inside the Markdown body.
+
+## Memory file growth + compaction
+
+The Clio \`pa-workspace-memory\` doc grows over time — every session
+appends a new entry, plus inline decisions/rejections/preferences.
+Eventually it becomes large enough that:
+  - Session-start prompt context is bloated (cfcf injects the full
+    doc above; longer doc = more tokens per turn)
+  - Retrieval becomes slower
+  - The user's eyes glaze over reading it
+
+**At session start, check the size** of the Clio doc as injected
+above. Heuristic: if the doc body is **> 30 KB** (look at the
+content between \`\`\`markdown\` fences in the Memory Inventory
+section above; rough check), OFFER to compact:
+
+> "Your workspace memory has grown to ~X KB across N session
+> entries. Want me to compact it into a digest (current state +
+> last 2-3 sessions verbatim + everything older as one-liners)
+> while keeping the full chronological history in your local
+> \`.cfcf-pa/session-*.md\` files? This keeps Clio retrieval
+> fast + my future sessions' context manageable."
+
+If the user says yes:
+  1. Read the current Clio doc content (it's in the prompt).
+  2. Author a compacted version with this structure:
+     - "## Current state" — one-paragraph snapshot
+     - "## Open questions" — bulleted
+     - "## Recent sessions (verbatim)" — last 2-3 session entries
+       in full
+     - "## Earlier sessions (digest)" — older sessions condensed
+       to one line each (date + outcomeSummary)
+     - "## Decisions / Rejections / Preferences (cumulative)" —
+       deduped + grouped
+  3. Push the compacted version to Clio with
+     \`--update-if-exists --document-id <id>\`.
+  4. Log the compaction in the current session file.
+  5. **NEVER touch the local \`.cfcf-pa/session-*.md\` files** —
+     those are the canonical full history. Only the Clio digest
+     gets compacted. If the user ever wants to reconstruct, they
+     grep \`.cfcf-pa/\`.
+
+If the doc is < 30 KB, don't mention it — let it grow naturally.
+This is purely a "graceful long-term usability" check, not a
+required step.
 
 ## Doc location: WRITE TO THE RIGHT PROJECT
 
