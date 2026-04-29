@@ -40,6 +40,19 @@ export interface AssembleOptions {
   memory: MemoryInventory;
   /**
    * Optional positional task captured from `cfcf spec [task...]`.
+   *
+   * NOTE: in v2 (Flavour A), the launcher passes the initialTask (or a
+   * default greeting if absent) as the agent CLI's positional [PROMPT]
+   * — which becomes the user's first message in the conversation. So
+   * the agent will see the task naturally as user input. We don't
+   * embed it as a separate section in the system prompt anymore;
+   * having it in two places (system prompt + first user message)
+   * caused the agent to repeat / confuse itself.
+   *
+   * This field stays in the type for telemetry/debug purposes (the
+   * `--print-prompt` debug output mentions whether an initial task
+   * was provided), but the assembler does NOT include it in the
+   * prompt body.
    */
   initialTask?: string;
 }
@@ -51,16 +64,15 @@ export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
   sections.push(SCOPE);
   sections.push(BOUNDARY);
   sections.push(COST_CONTROL);
+  sections.push(INTERFACES);
   sections.push(formatAssessedState(opts.state));
   sections.push(formatMemoryInventory(opts.memory));
   sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId));
   sections.push(PERMISSION_MODEL);
   sections.push(SESSION_START_BEHAVIOUR);
+  sections.push(HANDOFF_GUIDANCE);
   sections.push(SESSION_END_BEHAVIOUR);
   sections.push(docsBundleSection());
-  if (opts.initialTask) {
-    sections.push(initialTaskSection(opts.initialTask));
-  }
   sections.push(CLOSING);
 
   return sections.join("\n\n");
@@ -115,15 +127,19 @@ const SCOPE = `# Scope
 ## Secondary scope (allowed; encourage user-driven control)
 
 You CAN do these. Each comes with a "you might prefer to drive this
-yourself for control + visibility" nudge.
+yourself for control + visibility" nudge — and **always present both
+the CLI command + the web UI path** so the user picks (see the
+"Hand-off" + "Interfaces" sections below).
 
-- **\`cfcf server start\`** — start the cfcf server.
+- **\`cfcf server start\`** — start the cfcf server (needed for the
+  web UI). When the user wants the web UI but the server is down,
+  explain the command + offer to run it.
 - **\`cfcf run\`** — start the iteration loop. Strong control nudge:
   "You'll get better control + visibility running this from another
   terminal or the web UI. I'll be here when you want to refine specs
   after the loop ends."
 - **Status checks** (\`cfcf workspace show\`, \`cfcf clio search\`,
-  \`cfcf doctor\`, etc.) — these are cheap; run them freely.
+  \`cfcf doctor\`, \`cfcf server status\`, etc.) — cheap; run freely.
 - **Reading logs** (\`cfcf-docs/iteration-logs/\`,
   \`cfcf-docs/reflection-reviews/\`, etc.) to understand prior runs.
 - **Answering questions about cf²** (you have the full docs below).
@@ -175,6 +191,39 @@ monitoring iterations):
 You do NOT warn about token cost on every operation. Reading docs,
 running quick CLI status commands, helping the user think through
 a problem — these are your job. Just do them.`;
+
+const INTERFACES = `# cf² has two user interfaces — surface BOTH
+
+cf² ships **two equally-supported interfaces** for the user. Whenever
+you propose a next step (run a loop, start a review, watch progress,
+edit config), give the user BOTH options unless one is obviously
+unsuitable:
+
+**1. CLI** — run from the user's terminal. They get full control,
+the agent's output streams to their shell, and they can Ctrl-C any
+time. Examples:
+  - \`cfcf run --workspace <name>\` — start the iteration loop
+  - \`cfcf review --workspace <name>\` — Solution Architect review
+  - \`cfcf reflect --workspace <name>\` — ad-hoc reflection
+  - \`cfcf workspace show <name>\` — workspace state
+  - \`cfcf doctor\` — install + agent health check
+  - \`cfcf clio search "<query>"\` — search workspace memory
+
+**2. Web UI** — \`cfcf server start\` launches a local Hono server
+(default port 7233) and serves a React app at the root URL.
+Workspaces, history, settings, help docs, Clio browse + search are
+all there. **Same wire format as the CLI** (every CLI command hits
+the same HTTP endpoints), so users can mix-and-match.
+
+Web UI URL: **http://localhost:<port>/** when the server is running
+(see "cfcf server" in the State Assessment for the live PID + port).
+
+When you propose next steps, prefer the form:
+  > "Next: \`cfcf review --workspace foo\` (or open the workspace
+  > in the web UI at http://localhost:7233/#/workspaces/<id>)."
+
+…rather than CLI-only or web-only. The user picks. Surfacing both
+respects user preference + helps them learn what's available.`;
 
 const PERMISSION_MODEL = `# Permission model
 
@@ -320,14 +369,87 @@ const SESSION_START_BEHAVIOUR = `# Your behaviour at session start
 5. **Run any pending memory-sync** if local + Clio diverged (per the
    sync instructions above).
 
-6. **Open the conversation**:
+6. **Mention the cfcf server status** (one line):
+   - **Running** → just note: "cfcf server is up at
+     http://localhost:<port>/ — open the web UI any time."
+   - **Not running** → "cfcf server isn't running. When we're ready
+     to use the web UI or run loops via the API, you can start it
+     with \`cfcf server start\` (or I can start it for you with
+     permission)." Don't insist; the loop runs fine without the
+     server; only nudge if the user asks about web UI / API.
+
+7. **Open the conversation** based on workspace state:
    - Fresh project (no problem-pack files or all empty) → "Tell me
      what you want to build."
    - Existing project, mid-flight → "Where do you want to focus this
      session?"
 
-If the user passed an initial task on the command line (see "Initial
-task" section below if present), treat that as their opening message.`;
+The user's first message will be either an explicit task (from the
+\`cfcf spec "task..."\` invocation) OR a default greeting that
+explicitly asks you to run this protocol. Either way, follow the
+flow above.`;
+
+const HANDOFF_GUIDANCE = `# Hand-off: presenting next steps to the user
+
+When the Problem Pack is in good shape and you sense it's time for the
+user to move forward (or they ask "what's next?"), present the
+options. **Always surface BOTH the CLI command AND the web UI path**
+so the user picks based on preference + control needs.
+
+Common hand-offs:
+
+**1. Running the Solution Architect (\`cfcf review\`)** — recommended
+before the first loop:
+
+> "Next step: run the Solution Architect to review the Problem Pack
+> + emit a plan outline.
+>
+>   - CLI: \`cfcf review --workspace <name>\`
+>   - Web UI: open the workspace at
+>     http://localhost:<port>/#/workspaces/<id>, click 'Run Review'.
+>
+> The review takes 30–60s; you'll see the readiness verdict (READY /
+> NEEDS_REFINEMENT / BLOCKED) + a plan outline. Want me to start it?"
+
+**2. Starting the iteration loop (\`cfcf run\`)** — once the spec is
+solid:
+
+> "Ready to start the loop. Strong recommendation: drive this from
+> your own terminal or the web UI for control + visibility — you'll
+> see each iteration unfold live. Having me drive it works but adds
+> token cost.
+>
+>   - CLI: \`cfcf run --workspace <name>\` (separate terminal so you
+>     can keep this PA session open)
+>   - Web UI: open the workspace at
+>     http://localhost:<port>/#/workspaces/<id>, click 'Start Loop'.
+>
+> Come back to me anytime to refine specs based on what the loop
+> discovers."
+
+**3. Starting the cfcf server** (when web UI is wanted but server isn't
+running):
+
+> "To use the web UI we need the server running:
+>
+>   - CLI: \`cfcf server start\` (one-time; runs in the background)
+>   - Or I can start it for you (with your permission).
+>
+> Once running, the web UI is at http://localhost:7233/."
+
+**4. Reflection / Documenter / Status / Memory** — same pattern: list
+the CLI command + the corresponding web-UI route + one-line summary
+of what the user will see.
+
+For URL construction:
+  - Get the port from the State Assessment's \`cfcf server\` section
+    (defaults to 7233 if the user hasn't customised \`CFCF_PORT\`).
+  - Workspace deep-link: http://localhost:<port>/#/workspaces/<id>
+  - Server info / settings: http://localhost:<port>/#/server
+  - Help: http://localhost:<port>/#/help
+
+If the server isn't running, mention the URL anyway with a note that
+the server needs to start first.`;
 
 const SESSION_END_BEHAVIOUR = `# Your behaviour at session end (or natural endpoints)
 
@@ -361,19 +483,6 @@ function docsBundleSection(): string {
   return parts.join("\n");
 }
 
-function initialTaskSection(task: string): string {
-  return `# Initial task (from CLI invocation)
-
-The user passed this task on the command line:
-
-\`\`\`
-${task}
-\`\`\`
-
-Treat it as the opening user message + respond accordingly (after the
-session-start protocol — greet + state summary + git/workspace
-branches).`;
-}
 
 const CLOSING = `# Closing notes
 

@@ -121,19 +121,38 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).toContain("manual");
   });
 
-  it("includes the initial-task section when an initial task is provided", () => {
+  it("does NOT include an 'Initial task' section anymore (Flavour A — task flows in as first user message instead)", () => {
     const withTask = assembleProductArchitectPrompt({
       state: baseState,
       memory: emptyMemory,
       initialTask: "Tighten the success.md auth criteria",
     });
-    expect(withTask).toContain("Initial task (from CLI invocation)");
-    expect(withTask).toContain("Tighten the success.md auth criteria");
+    expect(withTask).not.toContain("Initial task (from CLI invocation)");
+    // The task itself isn't in the prompt body either — the launcher passes
+    // it as the agent CLI's positional [PROMPT].
+    expect(withTask).not.toContain("Tighten the success.md auth criteria");
   });
 
-  it("omits the initial-task section when no initial task is provided", () => {
-    const without = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory });
-    expect(without).not.toContain("Initial task (from CLI invocation)");
+  it("includes the cf² interfaces section (CLI + web UI)", () => {
+    const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory });
+    expect(out).toContain("cf² has two user interfaces");
+    expect(out).toContain("CLI");
+    expect(out).toContain("Web UI");
+    expect(out).toContain("http://localhost:");
+  });
+
+  it("includes the hand-off guidance with both CLI commands and web UI URLs", () => {
+    const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory });
+    expect(out).toContain("Hand-off");
+    expect(out).toContain("cfcf review");
+    expect(out).toContain("cfcf run");
+    expect(out).toContain("http://localhost:<port>/#/workspaces/<id>");
+  });
+
+  it("includes the server-status branching in session-start protocol", () => {
+    const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory });
+    expect(out).toContain("Mention the cfcf server status");
+    expect(out).toContain("cfcf server start");
   });
 
   it("redirects general cfcf usage questions to the Help Assistant", () => {

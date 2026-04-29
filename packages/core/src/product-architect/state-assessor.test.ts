@@ -157,6 +157,40 @@ describe("assessState — iteration history", () => {
   });
 });
 
+describe("formatAssessedState — server section", () => {
+  it("renders the web UI URL when the server is running", async () => {
+    const state = await assessState({ repoPath: repo });
+    // Inject a fake-running-server state for this test.
+    state.server = { running: true, pid: 12345, port: 7233 };
+    const out = formatAssessedState(state);
+    expect(out).toContain("**Running**");
+    expect(out).toContain("http://localhost:7233/");
+  });
+
+  it("renders the workspace deep-link when server running + workspace registered", async () => {
+    const state = await assessState({ repoPath: repo });
+    state.server = { running: true, pid: 12345, port: 7233 };
+    state.workspace = {
+      registered: true,
+      workspaceId: "ws-uuid-1",
+      name: "my-project",
+      clioProject: null,
+      currentIteration: 0,
+    };
+    const out = formatAssessedState(state);
+    expect(out).toContain("http://localhost:7233/#/workspaces/ws-uuid-1");
+  });
+
+  it("explains how to start the server when not running", async () => {
+    const state = await assessState({ repoPath: repo });
+    state.server = { running: false, pid: null, port: null };
+    const out = formatAssessedState(state);
+    expect(out).toContain("Not running");
+    expect(out).toContain("cfcf server start");
+    expect(out).toContain("port 7233");
+  });
+});
+
 describe("formatAssessedState", () => {
   it("renders the fresh-repo assessment with actionable hints", async () => {
     const state = await assessState({ repoPath: repo });

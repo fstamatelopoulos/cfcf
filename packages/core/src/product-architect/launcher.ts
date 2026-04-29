@@ -48,6 +48,26 @@ export interface LaunchOptions {
    * Full assembled system prompt. Composed by `assembleProductArchitectPrompt()`.
    */
   systemPrompt: string;
+  /**
+   * First user message to send to the agent on launch (Flavour A).
+   *
+   * Both `claude` and `codex` accept a positional `[PROMPT]` argument
+   * that becomes the user's opening message in interactive mode --
+   * the agent responds to it immediately, then yields to the TUI.
+   *
+   * spec.ts always provides this:
+   *   - If the user invoked `cfcf spec "task..."`, it's the task
+   *     verbatim
+   *   - If the user invoked `cfcf spec` with no task, it's a default
+   *     "run your session-start protocol" greeting that triggers PA's
+   *     scripted introduction (greet + state summary + git/workspace
+   *     branches + open the conversation)
+   *
+   * Without this, the agent's TUI opens to an empty prompt and waits
+   * for the user to type something before it does anything -- which
+   * defeats the value of the embedded session-start instructions.
+   */
+  firstUserMessage: string;
 }
 
 export interface LaunchResult {
@@ -72,10 +92,14 @@ export interface LaunchArgs {
   tempPromptFile: string | null;
 }
 
-export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): LaunchArgs {
+export function buildLaunchArgs(
+  agent: AgentConfig,
+  systemPrompt: string,
+  firstUserMessage: string,
+): LaunchArgs {
   switch (agent.adapter) {
     case "claude-code": {
-      // Interactive mode (no `-p` / `--prompt`). `--append-system-prompt`
+      // Interactive mode (no `-p` / `--print`). `--append-system-prompt`
       // adds PA's briefing on top of Claude Code's default system prompt.
       // No `--dangerously-skip-permissions`: the agent will prompt the
       // user for tool/file/bash use, which is the v1 permission model.
@@ -83,8 +107,15 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       // Default to **Sonnet** for PA. Spec iteration is multi-turn
       // reasoning + judgement calls — benefits from a stronger model
       // than HA's Q&A workload (where Haiku is fine).
+      //
+      // The positional argument at the end is the user's opening message
+      // in interactive mode (per `claude --help`: "Arguments: prompt --
+      // Your prompt"). The TUI opens with this already submitted, so the
+      // agent responds immediately rather than waiting for the user to
+      // type something. Flavour A.
       const args: string[] = ["--append-system-prompt", systemPrompt];
       args.push("--model", agent.model ?? "sonnet");
+      args.push(firstUserMessage); // positional [prompt]
       return { command: "claude", args, tempPromptFile: null };
     }
     case "codex": {
@@ -95,6 +126,10 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       // codex defaults to `untrusted` approval policy interactively,
       // which prompts before every tool use — matches PA's permission
       // model (mutations are user-gated).
+      //
+      // The positional [PROMPT] at the end is the user's opening message
+      // (per `codex --help`: "Optional user prompt to start the
+      // session"). Flavour A.
       const dir = mkdtempSync(join(tmpdir(), "cfcf-pa-"));
       const promptFile = join(dir, "pa-instructions.md");
       writeFileSync(promptFile, systemPrompt, "utf-8");
@@ -105,6 +140,7 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       if (agent.model) {
         args.push("--model", agent.model);
       }
+      args.push(firstUserMessage); // positional [PROMPT]
       return { command: "codex", args, tempPromptFile: promptFile };
     }
     default:
@@ -136,7 +172,11 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
   const paCachePath = join(opts.repoPath, ".cfcf-pa");
   await mkdir(paCachePath, { recursive: true });
 
-  const { command, args, tempPromptFile } = buildLaunchArgs(opts.agent, opts.systemPrompt);
+  const { command, args, tempPromptFile } = buildLaunchArgs(
+    opts.agent,
+    opts.systemPrompt,
+    opts.firstUserMessage,
+  );
 
   try {
     // Bun.spawn with inherit stdio: the agent's TUI takes over the

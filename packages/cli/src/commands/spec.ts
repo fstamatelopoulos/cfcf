@@ -40,6 +40,22 @@ import {
   type AgentConfig,
 } from "@cfcf/core";
 
+/**
+ * Default first user message when the user runs `cfcf spec` without a
+ * positional task. Triggers PA's session-start protocol immediately
+ * (greet + state summary + git/workspace branches + open the
+ * conversation) so the TUI never opens to an empty prompt.
+ *
+ * Phrased as a user request because both claude-code and codex treat
+ * the positional [PROMPT] as the user's first message in conversation.
+ */
+const DEFAULT_GREETING_PROMPT =
+  "Please run your session-start protocol now: introduce yourself briefly, " +
+  "summarise what you found in the state assessment (git status, workspace " +
+  "registration, problem-pack state, server status, prior memory), branch " +
+  "appropriately on git/workspace registration, and ask me how I'd like to " +
+  "proceed.";
+
 interface SpecOptions {
   /** Repo path to operate on. Defaults to process.cwd(). */
   repoPath?: string;
@@ -105,6 +121,14 @@ async function runSpec(opts: SpecOptions): Promise<void> {
     initialTask: opts.initialTask,
   });
 
+  // 4b. Compute the first user message (Flavour A — agent self-introduces
+  // on launch, no need for the user to type "hello" first). Both claude
+  // and codex accept a positional [PROMPT] that becomes the user's
+  // opening message in interactive mode.
+  const firstUserMessage = opts.initialTask
+    ? opts.initialTask
+    : DEFAULT_GREETING_PROMPT;
+
   // 5. --print-prompt escape hatch: emit the prompt + exit.
   if (opts.printPrompt) {
     process.stdout.write(systemPrompt);
@@ -143,6 +167,7 @@ async function runSpec(opts: SpecOptions): Promise<void> {
       agent,
       repoPath: state.repoPath,
       systemPrompt,
+      firstUserMessage,
     });
     if (result.exitCode !== 0 && result.exitCode !== null) {
       console.error(`\n[pa] agent exited with code ${result.exitCode}`);

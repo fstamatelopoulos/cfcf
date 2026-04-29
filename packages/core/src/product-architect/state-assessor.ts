@@ -376,9 +376,17 @@ export function formatAssessedState(s: AssessedState): string {
   // Server
   out.push("## cfcf server");
   if (s.server.running) {
-    out.push(`- Running (pid ${s.server.pid}, port ${s.server.port}).`);
+    out.push(`- **Running** (pid ${s.server.pid}, port ${s.server.port}).`);
+    out.push(`- Web UI: **http://localhost:${s.server.port}/**`);
+    out.push(`- The web UI surfaces every workspace, history, settings, help docs, Clio browse + search. Same wire format as the CLI.`);
+    if (s.workspace.registered) {
+      out.push(`- Direct workspace link: http://localhost:${s.server.port}/#/workspaces/${s.workspace.workspaceId}`);
+    }
   } else {
-    out.push("- Not running. If we need it later, run `cfcf server start`.");
+    out.push("- **Not running.**");
+    out.push("- The loop runs fine without the server (CLI-only). Start the server only when the user wants the web UI or HTTP API.");
+    out.push("- To start it: \`cfcf server start\` (one-time; runs in the background). Default port 7233 → web UI at http://localhost:7233/.");
+    out.push("- You can offer to run \`cfcf server start\` for the user with their permission, OR they can run it themselves in another terminal.");
   }
   out.push("");
 

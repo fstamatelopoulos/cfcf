@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe("buildLaunchArgs (Pattern A)", () => {
   it("dispatches claude-code with --append-system-prompt + sonnet default + no tempfile", () => {
-    const out = buildLaunchArgs({ adapter: "claude-code" }, "PA system prompt body");
+    const out = buildLaunchArgs({ adapter: "claude-code" }, "PA system prompt body", "Hello");
     expect(out.command).toBe("claude");
     expect(out.tempPromptFile).toBeNull();
     expect(out.args).toContain("--append-system-prompt");
@@ -35,13 +35,13 @@ describe("buildLaunchArgs (Pattern A)", () => {
   });
 
   it("respects the configured model override for claude-code", () => {
-    const out = buildLaunchArgs({ adapter: "claude-code", model: "opus" }, "x");
+    const out = buildLaunchArgs({ adapter: "claude-code", model: "opus" }, "x", "Hello");
     const modelIdx = out.args.indexOf("--model");
     expect(out.args[modelIdx + 1]).toBe("opus");
   });
 
   it("dispatches codex with model_instructions_file tempfile + no inline model when none configured", () => {
-    const out = buildLaunchArgs({ adapter: "codex" }, "PA prompt for codex");
+    const out = buildLaunchArgs({ adapter: "codex" }, "PA prompt for codex", "Hello");
     expect(out.command).toBe("codex");
     expect(out.tempPromptFile).not.toBeNull();
     cleanupPaths.push(out.tempPromptFile!);
@@ -56,7 +56,7 @@ describe("buildLaunchArgs (Pattern A)", () => {
   });
 
   it("respects the configured model for codex when set", () => {
-    const out = buildLaunchArgs({ adapter: "codex", model: "gpt-5" }, "x");
+    const out = buildLaunchArgs({ adapter: "codex", model: "gpt-5" }, "x", "Hello");
     cleanupPaths.push(out.tempPromptFile!);
     const modelIdx = out.args.indexOf("--model");
     expect(modelIdx).toBeGreaterThanOrEqual(0);
@@ -64,22 +64,41 @@ describe("buildLaunchArgs (Pattern A)", () => {
   });
 
   it("throws on unknown adapters with a config-edit hint", () => {
-    expect(() => buildLaunchArgs({ adapter: "aider" }, "x")).toThrow(
+    expect(() => buildLaunchArgs({ adapter: "aider" }, "x", "Hello")).toThrow(
       /Product Architect doesn't support adapter "aider"/,
     );
-    expect(() => buildLaunchArgs({ adapter: "aider" }, "x")).toThrow(
+    expect(() => buildLaunchArgs({ adapter: "aider" }, "x", "Hello")).toThrow(
       /productArchitectAgent/,
     );
   });
 
+  it("appends the firstUserMessage as the LAST positional argv entry (Flavour A) for claude-code", () => {
+    const out = buildLaunchArgs({ adapter: "claude-code" }, "system", "Please introduce yourself");
+    expect(out.args[out.args.length - 1]).toBe("Please introduce yourself");
+    // It must come AFTER --append-system-prompt + --model — i.e. as a true positional.
+    const appendIdx = out.args.indexOf("--append-system-prompt");
+    const modelIdx = out.args.indexOf("--model");
+    expect(out.args.length - 1).toBeGreaterThan(appendIdx);
+    expect(out.args.length - 1).toBeGreaterThan(modelIdx);
+  });
+
+  it("appends the firstUserMessage as the LAST positional argv entry (Flavour A) for codex", () => {
+    const out = buildLaunchArgs({ adapter: "codex" }, "system", "Please introduce yourself");
+    cleanupPaths.push(out.tempPromptFile!);
+    expect(out.args[out.args.length - 1]).toBe("Please introduce yourself");
+    // It must come AFTER -c <model_instructions_file=...>
+    const cIdx = out.args.indexOf("-c");
+    expect(out.args.length - 1).toBeGreaterThan(cIdx);
+  });
+
   it("does NOT use Pattern B mechanics (no auto-loaded AGENTS.md / CLAUDE.md briefing)", () => {
     // claude-code path: prompt is in the --append flag, not in a file.
-    const cc = buildLaunchArgs({ adapter: "claude-code" }, "PA");
+    const cc = buildLaunchArgs({ adapter: "claude-code" }, "PA", "Hello");
     expect(cc.tempPromptFile).toBeNull();
 
     // codex path: prompt is in the tempfile (which is per-session,
     // ephemeral, not in the user's repo).
-    const cx = buildLaunchArgs({ adapter: "codex" }, "PA");
+    const cx = buildLaunchArgs({ adapter: "codex" }, "PA", "Hello");
     cleanupPaths.push(cx.tempPromptFile!);
     expect(cx.tempPromptFile).toContain("/cfcf-pa-");
     // NOT a path inside the user's repo (Pattern B v1 wrote to
