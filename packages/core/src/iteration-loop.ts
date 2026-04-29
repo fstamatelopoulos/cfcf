@@ -979,8 +979,27 @@ async function runLoop(
     // this same iteration reads the same handoff, and so the next
     // iteration's dev agent sees it as starting context until they
     // replace it. (item 5.x polish, v0.7.6)
-    const { archiveHandoff } = await import("./context-assembler.js");
+    const { archiveHandoff, refreshIterationHistory } = await import("./context-assembler.js");
     await archiveHandoff(workspace.repoPath, iterationNum);
+
+    // Fold iter-N's just-written iteration-log into iteration-history.md.
+    //
+    // Without this, history.md stays permanently one iteration behind
+    // whenever the loop terminates: writeContextToRepo (which rebuilds
+    // history.md) only runs at the START of each iteration, so iter-N's
+    // own log is never picked up unless iter-N+1 starts. End-of-loop
+    // iterations (SUCCESS → documenter → exit; STALLED → exit) leave
+    // their final log out of history.md indefinitely.
+    //
+    // Best-effort: a rebuild failure shouldn't fail the iteration.
+    try {
+      await refreshIterationHistory(workspace.repoPath);
+    } catch (err) {
+      console.warn(
+        `[loop] couldn't refresh iteration-history.md after iter ${iterationNum}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;

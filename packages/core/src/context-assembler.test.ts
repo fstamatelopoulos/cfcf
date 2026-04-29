@@ -9,6 +9,7 @@ import {
   parseSignalFile,
   generateIterationSummary,
   rebuildIterationHistoryFromLogs,
+  refreshIterationHistory,
   mergeInstructionFile,
   writeInstructionFile,
   archiveHandoff,
@@ -587,6 +588,82 @@ describe("context-assembler", () => {
       const b = mergeInstructionFile(a, "iter 2 body\n");
       const c = mergeInstructionFile(b, "iter 2 body\n");
       expect(b).toBe(c);
+    });
+  });
+
+  describe("refreshIterationHistory", () => {
+    it("writes a fresh iteration-history.md that includes the LATEST iteration log", async () => {
+      // Regression for the off-by-one: when called after iter-N's
+      // dev agent has just written iteration-N.md, the rebuilt
+      // history.md must include iter-N. Without this end-of-iter
+      // refresh the loop would leave iter-N out of history.md
+      // permanently (the start-of-next-iter rebuild never fires
+      // for the final iteration of a loop run).
+      const { mkdir, writeFile, readFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(
+        join(logsDir, "iteration-1.md"),
+        "# Iteration 1 -- Foundation\n\n## Summary\nScaffolded.\n",
+        "utf-8",
+      );
+      await writeFile(
+        join(logsDir, "iteration-2.md"),
+        "# Iteration 2 -- Core\n\n## Summary\nFeatures.\n",
+        "utf-8",
+      );
+
+      // Caller sets up history.md with only iter-1 (simulates the
+      // state right after writeContextToRepo at the start of iter-2,
+      // BEFORE the dev agent writes iteration-2.md).
+      const historyPath = join(tempDir, "cfcf-docs", "iteration-history.md");
+      await writeFile(historyPath, "# Iteration History\n\n## Iteration 1 -- Foundation\n\nScaffolded.\n", "utf-8");
+
+      // After iter-2's dev phase writes iteration-2.md (already
+      // done above), refreshIterationHistory should fold it in.
+      await refreshIterationHistory(tempDir);
+
+      const content = await readFile(historyPath, "utf-8");
+      expect(content).toContain("Iteration 2 -- Core");
+      expect(content).toContain("Features.");
+      expect(content).toContain("Iteration 1");
+      // Newest first
+      expect(content.indexOf("Iteration 2")).toBeLessThan(content.indexOf("Iteration 1"));
+    });
+
+    it("is a no-op when iteration-logs/ has no entries", async () => {
+      const { stat } = await import("fs/promises");
+      // Setup: no logs dir, no history.md
+      await refreshIterationHistory(tempDir);
+      // Should NOT have created an empty history.md (the rebuild
+      // returns null for "no logs"; the helper short-circuits).
+      let historyExists = false;
+      try {
+        await stat(join(tempDir, "cfcf-docs", "iteration-history.md"));
+        historyExists = true;
+      } catch { /* expected */ }
+      expect(historyExists).toBe(false);
+    });
+
+    it("overwrites a stale history.md with the rebuilt content", async () => {
+      const { mkdir, writeFile, readFile } = await import("fs/promises");
+      const logsDir = join(tempDir, "cfcf-docs", "iteration-logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(
+        join(logsDir, "iteration-7.md"),
+        "# Iteration 7 -- Latest Work\n\n## Summary\nFresh content.\n",
+        "utf-8",
+      );
+
+      // A truly stale history.md from some prior version with wrong content.
+      const historyPath = join(tempDir, "cfcf-docs", "iteration-history.md");
+      await writeFile(historyPath, "# Iteration History\n\nOld stale content that should be replaced.\n", "utf-8");
+
+      await refreshIterationHistory(tempDir);
+      const content = await readFile(historyPath, "utf-8");
+      expect(content).toContain("Iteration 7 -- Latest Work");
+      expect(content).toContain("Fresh content.");
+      expect(content).not.toContain("Old stale content");
     });
   });
 
