@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.16.0] -- 2026-04-29
+
 ### Product Architect role (5.14)
 
 A new top-level SDLC role: **`cfcf spec`** launches the Product Architect (PA), an interactive cf²-expert agent that owns the front of the SDLC — repo setup, workspace registration, Problem Pack authoring + iteration. PA is a peer to dev / judge / Solution Architect / reflection / documenter; unlike them, it runs **interactively** (your shell, agent's TUI). It has the entire cfcf documentation bundle in its system prompt, so it understands the SDLC end-to-end and can guide spec authoring with full context.
