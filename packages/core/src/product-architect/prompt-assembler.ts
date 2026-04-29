@@ -307,7 +307,10 @@ afterwards so future sessions can use \`--document-id\`.
   Don't wait for them to remember. If yes:
     1. Write a closing summary to \`session-${sessionId}.md\`
     2. Update \`workspace-summary.md\` with this session's outcome
-    3. Push \`workspace-summary.md\` to Clio:
+    3. **Update \`.cfcf-pa/meta.json\`** with a \`lastSession\` block
+       (cfcf reads this on exit to enrich the workspace-history entry —
+       see "meta.json schema" below).
+    4. Push \`workspace-summary.md\` to Clio:
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
@@ -315,7 +318,46 @@ cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
     --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' --stdin
 \`\`\`
 
-    4. Update \`.cfcf-pa/meta.json\` with new sync timestamp.
+    5. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the
+       \`lastSession\` block (see schema below).
+
+## \`.cfcf-pa/meta.json\` schema
+
+cfcf reads this file on PA exit to enrich the workspace-history
+entry it writes to \`history.json\`. Standard structure:
+
+\`\`\`json
+{
+  "currentSessionId": "${sessionId}",
+  "lastSyncAt": "<ISO timestamp of the most recent Clio sync>",
+  "paWorkspaceMemoryDocId": "<Clio doc UUID for pa-workspace-memory>",
+  "paGlobalMemoryDocId": "<Clio doc UUID for pa-global-memory>",
+  "lastSession": {
+    "sessionId": "${sessionId}",
+    "endedAt": "<ISO timestamp when this session wrapped up>",
+    "outcomeSummary": "<one-line: 'Drafted problem.md + success.md' / 'Refined success criteria for auth flow'>",
+    "decisionsCount": <integer count of decisions/rejections/preferences captured this session>,
+    "clioWorkspaceMemoryDocId": "<Clio doc UUID, if you pushed to Clio this session>"
+  }
+}
+\`\`\`
+
+**Read existing meta.json first**, merge, then write back. Never
+clobber other top-level keys (preferredEmbedder, future settings,
+etc.). Use \`cat .cfcf-pa/meta.json | jq ...\` or read + parse +
+mutate + write the whole object.
+
+When you save a session, write the \`lastSession\` block BEFORE the
+user exits. cfcf reads it after the agent process terminates and
+links the workspace-history entry to your session file +
+outcomeSummary + Clio doc.
+
+If you don't write \`lastSession\`, the workspace-history entry will
+still be created (with the bracket info: start time, end time, exit
+code, agent), but it won't have a summary or decisionsCount or Clio
+link — meaning the user has to open the session file to learn what
+happened. So writing \`lastSession\` is a courtesy to "future-you"
+and to the user browsing the History tab.
 
 **On natural endpoints mid-session** ("ok, let's stop for today" /
 "I think we're done with success.md") — same as session end. ASK

@@ -165,7 +165,7 @@ async function runSpec(opts: SpecOptions): Promise<void> {
   try {
     const result = await launchProductArchitect({
       agent,
-      repoPath: state.repoPath,
+      state,
       systemPrompt,
       firstUserMessage,
     });

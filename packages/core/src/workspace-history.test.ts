@@ -16,6 +16,7 @@ import {
   cleanupStaleRunningEvents,
   type ReviewHistoryEvent,
   type IterationHistoryEvent,
+  type PaSessionHistoryEvent,
 } from "./workspace-history.js";
 import type { ArchitectSignals } from "./types.js";
 
@@ -177,5 +178,65 @@ describe("ReviewHistoryEvent.signals persistence", () => {
     const e = events[0] as IterationHistoryEvent;
     expect(e.judgeDetermination).toBe("PROGRESS");
     expect((e as unknown as { signals?: unknown }).signals).toBeUndefined();
+  });
+});
+
+describe("project-history PA-session events (5.14 v2)", () => {
+  function makePaSessionEvent(
+    overrides: Partial<PaSessionHistoryEvent> = {},
+  ): PaSessionHistoryEvent {
+    return {
+      id: "pa-session-1",
+      type: "pa-session",
+      status: "running",
+      startedAt: "2026-04-29T10:00:00Z",
+      logFile: ".cfcf-pa/session-pa-2026-04-29-abc.md",
+      agent: "claude-code",
+      sessionId: "pa-2026-04-29-abc",
+      sessionFilePath: ".cfcf-pa/session-pa-2026-04-29-abc.md",
+      workspaceRegisteredAtStart: true,
+      gitInitializedAtStart: true,
+      problemPackFilesAtStart: 0,
+      ...overrides,
+    };
+  }
+
+  test("appendHistoryEvent + readHistory roundtrip a PA-session event", async () => {
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    const events = await readHistory(PROJECT_ID);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("pa-session");
+    const pa = events[0] as PaSessionHistoryEvent;
+    expect(pa.sessionId).toBe("pa-2026-04-29-abc");
+    expect(pa.workspaceRegisteredAtStart).toBe(true);
+    expect(pa.problemPackFilesAtStart).toBe(0);
+  });
+
+  test("updateHistoryEvent enriches a running PA-session with completion data", async () => {
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    await updateHistoryEvent(PROJECT_ID, "pa-session-1", {
+      status: "completed",
+      completedAt: "2026-04-29T10:25:00Z",
+      exitCode: 0,
+      outcomeSummary: "Drafted problem.md and success.md.",
+      decisionsCount: 3,
+      clioWorkspaceMemoryDocId: "doc-uuid-1",
+    } as Partial<PaSessionHistoryEvent>);
+
+    const events = await readHistory(PROJECT_ID);
+    const pa = events[0] as PaSessionHistoryEvent;
+    expect(pa.status).toBe("completed");
+    expect(pa.outcomeSummary).toContain("Drafted");
+    expect(pa.decisionsCount).toBe(3);
+    expect(pa.clioWorkspaceMemoryDocId).toBe("doc-uuid-1");
+    expect(pa.exitCode).toBe(0);
+  });
+
+  test("cleanupStaleRunningEvents marks running PA sessions failed (server restart recovery)", async () => {
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBeGreaterThanOrEqual(1);
+    const events = await readHistory(PROJECT_ID);
+    expect(events[0].status).toBe("failed");
   });
 });

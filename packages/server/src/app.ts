@@ -754,6 +754,61 @@ export function createApp() {
     return c.json(events);
   });
 
+  // --- Product Architect session detail (5.14 v2) ---
+  //
+  // Serves a snapshot of a PA session's files: the session scratchpad
+  // (`<repo>/.cfcf-pa/session-<sessionId>.md`), the workspace memory
+  // summary the agent maintains across sessions
+  // (`<repo>/.cfcf-pa/workspace-summary.md`), and the meta.json. The
+  // web UI's PaSessionDetail component renders these in one request.
+  //
+  // Security: validates `sessionId` against `pa-[A-Za-z0-9-]+` to
+  // prevent path traversal. Files are read from the workspace's
+  // repoPath/.cfcf-pa/ — no symlink-following beyond what the
+  // filesystem allows.
+  app.get("/api/workspaces/:id/pa-sessions/:sessionId/file", async (c) => {
+    const workspace =
+      (await getWorkspace(c.req.param("id"))) ??
+      (await findWorkspaceByName(c.req.param("id")));
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
+    }
+    const sessionId = c.req.param("sessionId");
+    if (!/^pa-[A-Za-z0-9-]+$/.test(sessionId)) {
+      return c.json({ error: "Invalid sessionId" }, 400);
+    }
+
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const cacheDir = join(workspace.repoPath, ".cfcf-pa");
+
+    let sessionContent: string | null = null;
+    try {
+      sessionContent = await readFile(join(cacheDir, `session-${sessionId}.md`), "utf-8");
+    } catch { /* may not exist if the agent never wrote one */ }
+
+    let workspaceSummary: string | null = null;
+    try {
+      workspaceSummary = await readFile(join(cacheDir, "workspace-summary.md"), "utf-8");
+    } catch { /* may not exist */ }
+
+    let meta: Record<string, unknown> | null = null;
+    try {
+      const raw = await readFile(join(cacheDir, "meta.json"), "utf-8");
+      meta = JSON.parse(raw);
+    } catch { /* may not exist */ }
+
+    return c.json({
+      sessionId,
+      cachePath: cacheDir,
+      sessionFile: sessionContent,
+      sessionFilePath: `.cfcf-pa/session-${sessionId}.md`,
+      workspaceSummary,
+      workspaceSummaryPath: ".cfcf-pa/workspace-summary.md",
+      meta,
+    });
+  });
+
   // --- Generic log streaming (by filename) ---
 
   app.get("/api/workspaces/:id/logs/:filename", async (c) => {

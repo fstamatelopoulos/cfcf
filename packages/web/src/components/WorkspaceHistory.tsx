@@ -5,12 +5,14 @@ import type {
   ReviewHistoryEvent,
   DocumentHistoryEvent,
   ReflectionHistoryEvent,
+  PaSessionHistoryEvent,
   IterationHealth,
 } from "../types";
 import type { LogTarget } from "./LogViewer";
 import { ArchitectReview } from "./ArchitectReview";
 import { JudgeDetail } from "./JudgeDetail";
 import { ReflectionDetail } from "./ReflectionDetail";
+import { PaSessionDetail } from "./PaSessionDetail";
 import { formatDurationOrRunning } from "../utils/time";
 
 const determinationColor: Record<string, string> = {
@@ -119,6 +121,8 @@ function HistoryRow({
         : "Review"
       : event.type === "reflection"
       ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
+      : event.type === "pa-session"
+      ? "PA spec session"
       : "Document";
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
@@ -126,11 +130,13 @@ function HistoryRow({
   const reviewEvent = event.type === "review" ? (event as ReviewHistoryEvent) : null;
   const iterationEvent = event.type === "iteration" ? (event as IterationHistoryEvent) : null;
   const reflectionEvent = event.type === "reflection" ? (event as ReflectionHistoryEvent) : null;
+  const paSessionEvent = event.type === "pa-session" ? (event as PaSessionHistoryEvent) : null;
 
   const hasReviewDetail = !!reviewEvent?.signals;
   const hasIterationDetail = !!(iterationEvent?.judgeSignals || iterationEvent?.devSignals);
   const hasReflectionDetail = !!reflectionEvent; // always expandable once it exists
-  const canExpand = hasReviewDetail || hasIterationDetail || hasReflectionDetail;
+  const hasPaSessionDetail = !!paSessionEvent; // always expandable
+  const canExpand = hasReviewDetail || hasIterationDetail || hasReflectionDetail || hasPaSessionDetail;
 
   const [expanded, setExpanded] = useState(false);
   const toggle = () => setExpanded((v) => !v);
@@ -223,6 +229,18 @@ function HistoryRow({
               <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
             </button>
           )}
+          {paSessionEvent && (
+            <button
+              type="button"
+              className="project-history__readiness-pill"
+              onClick={toggle}
+              title="Click to view PA session details (scratchpad / workspace summary / meta)"
+              style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+            >
+              <PaSessionResult event={paSessionEvent} />
+              <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
+            </button>
+          )}
         </td>
         <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
         <td className="project-history__actions">
@@ -253,6 +271,17 @@ function HistoryRow({
                 judge
               </button>
             </>
+          ) : event.type === "pa-session" ? (
+            // PA sessions don't have a streamable agent log -- the
+            // session scratchpad is part of the detail panel below.
+            <button
+              type="button"
+              className="btn btn--small btn--secondary"
+              onClick={toggle}
+              title="Toggle PA session detail (scratchpad / summary / meta)"
+            >
+              {expanded ? "hide" : "view"}
+            </button>
           ) : (
             <button
               className="btn btn--small btn--secondary"
@@ -291,6 +320,9 @@ function HistoryRow({
             )}
             {hasReflectionDetail && reflectionEvent && (
               <ReflectionDetail event={reflectionEvent} />
+            )}
+            {hasPaSessionDetail && paSessionEvent && (
+              <PaSessionDetail event={paSessionEvent} workspaceId={workspaceId} />
             )}
           </td>
         </tr>
@@ -370,6 +402,44 @@ function ReflectionResult({ event }: { event: ReflectionHistoryEvent }) {
           {event.signals.key_observation}
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * Summary cell content for a PA-session row in the History tab.
+ * Shows the agent-written outcomeSummary inline (if present) plus
+ * a small decisions-count badge. Falls back to a neutral status mark
+ * when the agent didn't save any structured outcome.
+ */
+function PaSessionResult({ event }: { event: PaSessionHistoryEvent }) {
+  const decisionsBadge =
+    typeof event.decisionsCount === "number" && event.decisionsCount > 0 ? (
+      <span style={{ color: "var(--color-info)", marginLeft: "0.5rem" }}>
+        ✎ {event.decisionsCount} decision{event.decisionsCount === 1 ? "" : "s"}
+      </span>
+    ) : null;
+
+  const outcomeBlurb = event.outcomeSummary?.trim();
+
+  if (!outcomeBlurb && !decisionsBadge) {
+    return (
+      <span style={{ color: "var(--color-text-muted)" }}>
+        {event.status === "completed"
+          ? "session ended (no save)"
+          : event.status === "running"
+            ? "live"
+            : "—"}
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <span style={{ color: "var(--color-text)" }}>
+        {outcomeBlurb || (event.status === "running" ? "live" : "session saved")}
+      </span>
+      {decisionsBadge}
     </>
   );
 }

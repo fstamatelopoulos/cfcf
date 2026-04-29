@@ -30,20 +30,29 @@
  * §"System-prompt injection: Pattern A".
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { getAdapter } from "../adapters/index.js";
 import type { AgentConfig } from "../types.js";
+import {
+  appendHistoryEvent,
+  updateHistoryEvent,
+  type PaSessionHistoryEvent,
+} from "../workspace-history.js";
+import type { AssessedState } from "./state-assessor.js";
+import { listWorkspaces } from "../workspaces.js";
 
 export interface LaunchOptions {
   /** Resolved Product Architect agent config (already backfilled by validateConfig). */
   agent: AgentConfig;
   /**
-   * Repo path to operate on. PA's agent runs cd'd here; PA's local
-   * cache lives at `<repoPath>/.cfcf-pa/`.
+   * The state assessment computed by `assessState()`. Provides
+   * repoPath, sessionId, workspace registration, git status, etc.
+   * The launcher uses this to write the workspace-history start +
+   * completion entries.
    */
-  repoPath: string;
+  state: AssessedState;
   /**
    * Full assembled system prompt. Composed by `assembleProductArchitectPrompt()`.
    */
@@ -54,18 +63,6 @@ export interface LaunchOptions {
    * Both `claude` and `codex` accept a positional `[PROMPT]` argument
    * that becomes the user's opening message in interactive mode --
    * the agent responds to it immediately, then yields to the TUI.
-   *
-   * spec.ts always provides this:
-   *   - If the user invoked `cfcf spec "task..."`, it's the task
-   *     verbatim
-   *   - If the user invoked `cfcf spec` with no task, it's a default
-   *     "run your session-start protocol" greeting that triggers PA's
-   *     scripted introduction (greet + state summary + git/workspace
-   *     branches + open the conversation)
-   *
-   * Without this, the agent's TUI opens to an empty prompt and waits
-   * for the user to type something before it does anything -- which
-   * defeats the value of the embedded session-start instructions.
    */
   firstUserMessage: string;
 }
@@ -169,8 +166,51 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
 
   // Ensure <repoPath>/.cfcf-pa/ exists. Idempotent. The agent uses this
   // dir for its session scratchpad + workspace-summary cache + meta.json.
-  const paCachePath = join(opts.repoPath, ".cfcf-pa");
+  const paCachePath = join(opts.state.repoPath, ".cfcf-pa");
   await mkdir(paCachePath, { recursive: true });
+
+  // ── History: write the start entry (best-effort) ──────────────────
+  // If the workspace is registered, log a "running" entry now so the
+  // web UI can show the live session in the History tab. If not, we'll
+  // try to log a single completed entry post-spawn (in case PA drove
+  // `cfcf workspace init` mid-session).
+  const startedAt = new Date().toISOString();
+  const sessionFileRel = join(".cfcf-pa", `session-${opts.state.sessionId}.md`);
+  const problemPackFilesAtStart = opts.state.problemPack.exists
+    ? opts.state.problemPack.files.filter((f) => f.exists).length
+    : 0;
+  const eventBase: Omit<PaSessionHistoryEvent, "id" | "status"> = {
+    type: "pa-session",
+    startedAt,
+    logFile: sessionFileRel, // points at the session scratchpad
+    agent: opts.agent.adapter,
+    model: opts.agent.model,
+    sessionId: opts.state.sessionId,
+    sessionFilePath: sessionFileRel,
+    workspaceRegisteredAtStart: opts.state.workspace.registered,
+    gitInitializedAtStart: opts.state.git.isGitRepo,
+    problemPackFilesAtStart,
+  };
+
+  let historyEventId: string | null = null;
+  let historyWorkspaceId: string | null = opts.state.workspace.workspaceId;
+  if (historyWorkspaceId !== null) {
+    historyEventId = `pa-${opts.state.sessionId}`;
+    try {
+      await appendHistoryEvent(historyWorkspaceId, {
+        ...eventBase,
+        id: historyEventId,
+        status: "running",
+      });
+    } catch (err) {
+      // Best-effort: don't block the launch on history-write failures.
+      console.error(
+        `[pa] note: couldn't write history start event (${err instanceof Error ? err.message : String(err)}). ` +
+        `Session will still run; completion entry may also fail.`,
+      );
+      historyEventId = null;
+    }
+  }
 
   const { command, args, tempPromptFile } = buildLaunchArgs(
     opts.agent,
@@ -178,6 +218,8 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
     opts.firstUserMessage,
   );
 
+  let exitCode: number | null = null;
+  let argsRedacted: string[] = [];
   try {
     // Bun.spawn with inherit stdio: the agent's TUI takes over the
     // current shell until the user exits.
@@ -186,16 +228,16 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
     // operates relative to the repo so `problem-pack/` edits, `cfcf`
     // commands, etc. work with simple relative paths.
     const proc = Bun.spawn([command, ...args], {
-      cwd: opts.repoPath,
+      cwd: opts.state.repoPath,
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
     });
-    const exitCode = await proc.exited;
+    const code = await proc.exited;
+    exitCode = code ?? null;
 
-    // Redact the system prompt + tempfile path in logged args (could
-    // be surfaced to telemetry / `--print-prompt` debug output).
-    const argsRedacted = args.map((a, i) => {
+    // Redact the system prompt + tempfile path in logged args.
+    argsRedacted = args.map((a, i) => {
       const flag = i > 0 ? args[i - 1] : "";
       if (flag === "--append-system-prompt") {
         return `<${a.length}-char system prompt redacted>`;
@@ -205,21 +247,144 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
       }
       return a;
     });
-
-    return {
-      command,
-      argsRedacted,
-      exitCode: exitCode ?? null,
-      paCachePath,
-    };
   } finally {
-    // Best-effort tempfile cleanup. Done in finally so a Ctrl-C, spawn
-    // error, or non-zero exit code doesn't leave state in /tmp.
+    // Best-effort tempfile cleanup.
     if (tempPromptFile) {
       try {
         const dir = tempPromptFile.replace(/\/[^/]+$/, "");
         rmSync(dir, { recursive: true, force: true });
       } catch { /* best-effort */ }
     }
+
+    // ── History: write/update the completion entry ─────────────────
+    await finaliseHistoryEvent({
+      workspaceIdAtStart: opts.state.workspace.workspaceId,
+      historyEventId,
+      paCachePath,
+      eventBase,
+      repoPath: opts.state.repoPath,
+      exitCode,
+    });
+  }
+
+  return {
+    command,
+    argsRedacted,
+    exitCode,
+    paCachePath,
+  };
+}
+
+/**
+ * After PA exits, finalise the workspace-history entry. Three cases:
+ *   1. Workspace was registered at start AND we logged a `running`
+ *      entry → update it with completion data.
+ *   2. Workspace was NOT registered at start, but PA drove
+ *      `cfcf workspace init` mid-session → look up the workspace
+ *      now (post-hoc) + write a single completed entry.
+ *   3. Still no workspace → skip (nothing to do; the .cfcf-pa/ files
+ *      are preserved on disk for next time).
+ *
+ * Reads `<repo>/.cfcf-pa/meta.json` for the agent-provided
+ * `lastSession` block (outcomeSummary, decisionsCount,
+ * clioWorkspaceMemoryDocId). Best-effort: missing/malformed JSON is
+ * silently skipped.
+ */
+async function finaliseHistoryEvent(opts: {
+  workspaceIdAtStart: string | null;
+  historyEventId: string | null;
+  paCachePath: string;
+  eventBase: Omit<PaSessionHistoryEvent, "id" | "status">;
+  repoPath: string;
+  exitCode: number | null;
+}): Promise<void> {
+  const completedAt = new Date().toISOString();
+  const status = opts.exitCode === 0 ? "completed" : "failed";
+
+  // Try to read meta.json for agent-provided session outcome.
+  const meta = await readMetaJsonLastSession(opts.paCachePath);
+
+  // Re-resolve workspace registration in case PA registered it mid-session.
+  let workspaceId = opts.workspaceIdAtStart;
+  if (workspaceId === null) {
+    try {
+      const all = await listWorkspaces();
+      const match = all.find((w) => w.repoPath === opts.repoPath);
+      if (match) workspaceId = match.id;
+    } catch { /* best-effort */ }
+  }
+
+  if (workspaceId === null) {
+    // Nothing to log against. The .cfcf-pa/ files are still preserved.
+    return;
+  }
+
+  const completionPatch: Partial<PaSessionHistoryEvent> = {
+    status,
+    completedAt,
+    exitCode: opts.exitCode ?? undefined,
+    outcomeSummary: meta?.outcomeSummary,
+    decisionsCount: meta?.decisionsCount,
+    clioWorkspaceMemoryDocId: meta?.clioWorkspaceMemoryDocId,
+  };
+
+  if (opts.historyEventId !== null) {
+    // Update the existing `running` entry → `completed` / `failed`.
+    try {
+      await updateHistoryEvent(workspaceId, opts.historyEventId, completionPatch);
+    } catch (err) {
+      console.error(
+        `[pa] note: couldn't update history completion entry (${err instanceof Error ? err.message : String(err)}).`,
+      );
+    }
+    return;
+  }
+
+  // Workspace registered mid-session — append a single completed entry.
+  const eventId = `pa-${opts.eventBase.sessionId}`;
+  try {
+    await appendHistoryEvent(workspaceId, {
+      ...opts.eventBase,
+      id: eventId,
+      status,
+      ...completionPatch,
+      // Update workspaceRegisteredAtStart=false stays accurate; this
+      // entry just has both bracket info + completion in one shot.
+    } as PaSessionHistoryEvent);
+  } catch (err) {
+    console.error(
+      `[pa] note: couldn't append post-hoc history entry (${err instanceof Error ? err.message : String(err)}).`,
+    );
   }
 }
+
+/**
+ * Schema of the `lastSession` block PA writes to `.cfcf-pa/meta.json`
+ * on session save. cfcf reads this on exit to enrich the
+ * workspace-history entry. All fields optional — the agent may not
+ * have saved (Ctrl-D without a "save before you go?" yes).
+ */
+interface MetaJsonLastSession {
+  sessionId?: string;
+  endedAt?: string;
+  outcomeSummary?: string;
+  decisionsCount?: number;
+  clioWorkspaceMemoryDocId?: string;
+}
+
+async function readMetaJsonLastSession(paCachePath: string): Promise<MetaJsonLastSession | null> {
+  try {
+    const raw = await readFile(join(paCachePath, "meta.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && "lastSession" in parsed) {
+      const ls = (parsed as { lastSession?: unknown }).lastSession;
+      if (ls && typeof ls === "object") return ls as MetaJsonLastSession;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// `relative` is unused in this file but kept exported elsewhere; suppress lint.
+void relative;
