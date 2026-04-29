@@ -54,6 +54,7 @@ const baseState: AssessedState = {
 const emptyMemory: MemoryInventory = {
   workspace: { documentId: null, updatedAt: null, content: null },
   global: { documentId: null, updatedAt: null, content: null },
+  sessionArchives: [],
   otherRoles: [],
 };
 
@@ -107,7 +108,8 @@ describe("assembleProductArchitectPrompt", () => {
         content: "# PA workspace memory\n\nLast session we drafted problem.md.",
       },
       global: { documentId: null, updatedAt: null, content: null },
-      otherRoles: [],
+      sessionArchives: [],
+  otherRoles: [],
     };
     const out = assembleProductArchitectPrompt({ state: baseState, memory });
     expect(out).toContain("doc-uuid-1");

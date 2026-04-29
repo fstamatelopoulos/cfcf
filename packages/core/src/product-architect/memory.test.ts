@@ -234,6 +234,7 @@ describe("formatMemoryInventory", () => {
     const out = formatMemoryInventory({
       workspace: { documentId: null, updatedAt: null, content: null },
       global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [],
       otherRoles: [
         { project: "cfcf-memory-reflection", docs: [] },
         { project: "cfcf-memory-architect", docs: [] },
@@ -253,6 +254,7 @@ describe("formatMemoryInventory", () => {
         content: "# memory body\n\nsession 1",
       },
       global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [],
       otherRoles: [],
     });
     expect(out).toContain("doc-uuid-1");
@@ -263,6 +265,7 @@ describe("formatMemoryInventory", () => {
     const out = formatMemoryInventory({
       workspace: { documentId: null, updatedAt: null, content: null },
       global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [],
       otherRoles: [
         {
           project: "cfcf-memory-reflection",
@@ -272,5 +275,93 @@ describe("formatMemoryInventory", () => {
     });
     expect(out).toContain("Iteration 3 reflection");
     expect(out).toContain("`ref-1`");
+  });
+
+  it("renders session-archive list when present (titles + outcomeSummary, not full content)", () => {
+    const out = formatMemoryInventory({
+      workspace: { documentId: null, updatedAt: null, content: null },
+      global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [
+        {
+          documentId: "arch-1",
+          sessionId: "pa-2026-04-29-foo",
+          title: "pa-session-pa-2026-04-29-foo",
+          updatedAt: "2026-04-29T10:00:00Z",
+          outcomeSummary: "Drafted problem.md and success.md.",
+        },
+      ],
+      otherRoles: [],
+    });
+    expect(out).toContain("Per-session archives");
+    expect(out).toContain("pa-session-pa-2026-04-29-foo");
+    expect(out).toContain("`arch-1`");
+    expect(out).toContain("Drafted problem.md and success.md");
+  });
+
+  it("renders empty-archives state with first-save explainer", () => {
+    const out = formatMemoryInventory({
+      workspace: { documentId: null, updatedAt: null, content: null },
+      global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [],
+      otherRoles: [],
+    });
+    expect(out).toContain("no archives yet");
+  });
+});
+
+describe("readSessionArchives", () => {
+  it("returns empty when workspaceId is null", async () => {
+    const { readSessionArchives } = await import("./memory.js");
+    const backend = makeBackend();
+    const out = await readSessionArchives(backend, null);
+    expect(out).toEqual([]);
+  });
+
+  it("queries metadataSearch with role+artifact_type+workspace_id filter", async () => {
+    const { readSessionArchives } = await import("./memory.js");
+    let receivedFilter: Record<string, unknown> | undefined;
+    const backend = makeBackend({
+      metadataSearch: async (req) => {
+        receivedFilter = req.metadataFilter as Record<string, unknown>;
+        return { documents: [], metadataFilter: req.metadataFilter };
+      },
+    });
+    await readSessionArchives(backend, "ws-uuid-1");
+    expect(receivedFilter).toEqual({
+      role: "pa",
+      artifact_type: "session-archive",
+      workspace_id: "ws-uuid-1",
+    });
+  });
+
+  it("maps doc title + metadata.outcome_summary into a SessionArchiveSummary", async () => {
+    const { readSessionArchives } = await import("./memory.js");
+    const doc = makeDoc("arch-1", "pa-session-pa-2026-04-29-foo", "transcript");
+    doc.metadata = {
+      role: "pa",
+      artifact_type: "session-archive",
+      workspace_id: "ws-uuid-1",
+      session_id: "pa-2026-04-29-foo",
+      outcome_summary: "Drafted specs.",
+    };
+    const backend = makeBackend({
+      metadataSearch: async () => ({ documents: [doc], metadataFilter: {} }),
+    });
+    const out = await readSessionArchives(backend, "ws-uuid-1");
+    expect(out).toHaveLength(1);
+    expect(out[0].documentId).toBe("arch-1");
+    expect(out[0].sessionId).toBe("pa-2026-04-29-foo");
+    expect(out[0].outcomeSummary).toBe("Drafted specs.");
+  });
+
+  it("falls back to title prefix when metadata.session_id is missing", async () => {
+    const { readSessionArchives } = await import("./memory.js");
+    const doc = makeDoc("arch-2", "pa-session-pa-2026-04-29-bar", "transcript");
+    doc.metadata = {}; // no session_id in metadata
+    const backend = makeBackend({
+      metadataSearch: async () => ({ documents: [doc], metadataFilter: {} }),
+    });
+    const out = await readSessionArchives(backend, "ws-uuid-1");
+    expect(out[0].sessionId).toBe("pa-2026-04-29-bar");
   });
 });

@@ -40,6 +40,17 @@ export const PA_WORKSPACE_MEMORY_TITLE = "pa-workspace-memory";
 /** Cross-workspace PA memory doc. Lives in cfcf-memory-global Project. */
 export const PA_GLOBAL_MEMORY_TITLE = "pa-global-memory";
 
+/**
+ * Per-session archive doc title pattern. PA writes one of these per
+ * session at save time, containing the full transcript. Naming
+ * convention: `pa-session-<sessionId>` (matches the disk file
+ * `.cfcf-pa/session-<sessionId>.md`). These are NEVER compacted —
+ * they're the canonical immutable history. The launcher reads the
+ * list (titles + outcomeSummary) at session start so the agent can
+ * see what's archived without hitting Clio per query.
+ */
+export const PA_SESSION_ARCHIVE_TITLE_PREFIX = "pa-session-";
+
 // ── Standardised Project names ───────────────────────────────────────
 
 export const PA_PROJECT = "cfcf-memory-pa";
@@ -82,9 +93,28 @@ export interface OtherRoleMemoryEntry {
   docs: ClioDocument[];
 }
 
+/**
+ * One per-session archive doc summary (title + dates +
+ * agent-supplied outcomeSummary from metadata). Surfaced in the
+ * memory inventory so the agent can see what archives exist
+ * without retrieving each. Title follows
+ * `pa-session-<sessionId>`.
+ */
+export interface SessionArchiveSummary {
+  documentId: string;
+  sessionId: string;
+  title: string;
+  /** Clio's updatedAt for this archive doc (immutable, so == createdAt typically). */
+  updatedAt: string;
+  /** Agent-supplied one-line summary; pulled from metadata.outcomeSummary if present. */
+  outcomeSummary: string | null;
+}
+
 export interface MemoryInventory {
   workspace: WorkspaceMemorySnapshot;
   global: GlobalMemorySnapshot;
+  /** Per-session archive docs for this workspace (title + summary; no full content). */
+  sessionArchives: SessionArchiveSummary[];
   /** Read-only context: other roles' recent memory for this workspace. */
   otherRoles: OtherRoleMemoryEntry[];
 }
@@ -218,18 +248,69 @@ export async function readOtherRoleMemory(
 }
 
 /**
+ * List per-session archive docs for this workspace. Each session
+ * archive is a separate Clio doc with title `pa-session-<sessionId>`
+ * and metadata `{role:"pa", artifact_type:"session-archive",
+ * workspace_id:<id>, session_id:<id>, outcome_summary:"..."?}`.
+ *
+ * Returns a list of summaries (title + dates + outcomeSummary), NOT
+ * full content. The agent retrieves full content on demand via
+ * `cfcf clio docs get <id>` or `cfcf clio search`.
+ *
+ * Project-agnostic search (same robustness rationale as
+ * readWorkspaceMemory). Cap at 50 archives to keep the prompt
+ * manageable; older archives still exist + are searchable, just
+ * not pre-listed.
+ */
+export async function readSessionArchives(
+  backend: MemoryBackend,
+  workspaceId: string | null,
+): Promise<SessionArchiveSummary[]> {
+  if (workspaceId === null) return [];
+  try {
+    const result = await backend.metadataSearch({
+      metadataFilter: {
+        role: "pa",
+        artifact_type: "session-archive",
+        workspace_id: workspaceId,
+      },
+    });
+    const docs = result.documents.slice(0, 50);
+    return docs.map((doc) => {
+      const md = (doc.metadata ?? {}) as Record<string, unknown>;
+      const sessionIdFromMetadata = typeof md.session_id === "string" ? md.session_id : "";
+      // Title is `pa-session-<sessionId>`; strip prefix as a fallback.
+      const sessionId = sessionIdFromMetadata
+        || (doc.title.startsWith(PA_SESSION_ARCHIVE_TITLE_PREFIX)
+            ? doc.title.slice(PA_SESSION_ARCHIVE_TITLE_PREFIX.length)
+            : doc.title);
+      return {
+        documentId: doc.id,
+        sessionId,
+        title: doc.title,
+        updatedAt: doc.updatedAt,
+        outcomeSummary: typeof md.outcome_summary === "string" ? md.outcome_summary : null,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Compose the full memory inventory in one call.
  */
 export async function readMemoryInventory(
   backend: MemoryBackend,
   workspaceId: string | null,
 ): Promise<MemoryInventory> {
-  const [workspace, global, otherRoles] = await Promise.all([
+  const [workspace, global, sessionArchives, otherRoles] = await Promise.all([
     readWorkspaceMemory(backend, workspaceId),
     readGlobalMemory(backend),
+    readSessionArchives(backend, workspaceId),
     readOtherRoleMemory(backend, workspaceId),
   ]);
-  return { workspace, global, otherRoles };
+  return { workspace, global, sessionArchives, otherRoles };
 }
 
 /**
@@ -302,6 +383,23 @@ export function formatMemoryInventory(inv: MemoryInventory): string {
     sections.push("```markdown");
     sections.push(inv.global.content);
     sections.push("```");
+  }
+  sections.push("");
+
+  sections.push("## Per-session archives (`pa-session-<sessionId>` docs in `cfcf-memory-pa`)");
+  sections.push("");
+  if (inv.sessionArchives.length === 0) {
+    sections.push("_(no archives yet — the first session save creates the first archive)_");
+  } else {
+    sections.push(
+      `${inv.sessionArchives.length} archived session${inv.sessionArchives.length === 1 ? "" : "s"} (full transcripts; immutable; never compacted). ` +
+      `Use \`cfcf clio docs get <id>\` to retrieve any in full, or \`cfcf clio search "<query>" --project cfcf-memory-pa\` to grep across archives:`,
+    );
+    sections.push("");
+    for (const a of inv.sessionArchives) {
+      const summary = a.outcomeSummary ? ` — ${a.outcomeSummary}` : "";
+      sections.push(`- **${a.title}** \`${a.documentId}\` (${a.updatedAt})${summary}`);
+    }
   }
   sections.push("");
 

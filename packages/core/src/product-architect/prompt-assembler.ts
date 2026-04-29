@@ -363,7 +363,17 @@ afterwards so future sessions can use \`--document-id\`.
     3. **Update \`.cfcf-pa/meta.json\`** with a \`lastSession\` block
        (cfcf reads this on exit to enrich the workspace-history entry —
        see "meta.json schema" below).
-    4. Push \`workspace-summary.md\` to Clio:
+    4. **Ingest \`session-${sessionId}.md\` to Clio as a per-session
+       archive doc** (mandatory; this is the canonical multi-device
+       full history):
+
+\`\`\`
+cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
+    --title pa-session-${sessionId} --project cfcf-memory-pa \\
+    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}'
+\`\`\`
+
+    5. Push \`workspace-summary.md\` to Clio:
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
@@ -371,7 +381,7 @@ cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
     --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' --stdin
 \`\`\`
 
-    5. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the
+    6. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the
        \`lastSession\` block (see schema below).
 
 ## \`.cfcf-pa/meta.json\` schema
@@ -449,50 +459,98 @@ You can use \`stat -f %m <path>\` on macOS or \`stat -c %Y <path>\`
 on Linux to read mtimes; or just compare the in-doc "Last updated"
 timestamp inside the Markdown body.
 
-## Memory file growth + compaction
+## Memory architecture — what's compactable, what's not
 
-The Clio \`pa-workspace-memory\` doc grows over time — every session
-appends a new entry, plus inline decisions/rejections/preferences.
-Eventually it becomes large enough that:
-  - Session-start prompt context is bloated (cfcf injects the full
-    doc above; longer doc = more tokens per turn)
-  - Retrieval becomes slower
-  - The user's eyes glaze over reading it
+**Two kinds of Clio docs** for PA per-workspace memory; understand
+the distinction before doing any memory ops:
 
-**At session start, check the size** of the Clio doc as injected
-above. Heuristic: if the doc body is **> 30 KB** (look at the
-content between \`\`\`markdown\` fences in the Memory Inventory
-section above; rough check), OFFER to compact:
+  - \`pa-workspace-memory\` (one per workspace, fixed title) — the
+    **rolling DIGEST**. Current state + recent sessions verbatim +
+    older sessions as one-liners + cumulative decisions. cfcf
+    injects this in full into your prompt (see Memory Inventory
+    above). **THIS doc gets compacted in place** when too large.
+
+  - \`pa-session-<sessionId>\` (one per session, immutable) — a
+    per-session **ARCHIVE**. Full transcript captured at save
+    time. **NEVER compacted, never updated, never deleted.**
+    These are the canonical full history. The Memory Inventory
+    above lists titles + outcomeSummaries; retrieve full content
+    via \`cfcf clio docs get <id>\` or
+    \`cfcf clio search "<query>" --project cfcf-memory-pa\`.
+
+The disk \`.cfcf-pa/session-*.md\` files are the LOCAL copy of
+those same archives, written turn-by-turn during the session.
+Disk + Clio archive both persist the full transcript; either is
+sufficient for recovery.
+
+## When to compact \`pa-workspace-memory\`
+
+The digest grows session-by-session. Eventually it becomes large
+enough that the per-turn token cost is noticeable + the user's
+eyes glaze over. **At session start, check the size** of the Clio
+doc as injected above. Heuristic: if the doc body is **> 30 KB**
+(look at the content between \`\`\`markdown\` fences in the
+Memory Inventory section above; rough check), OFFER to compact:
 
 > "Your workspace memory has grown to ~X KB across N session
 > entries. Want me to compact it into a digest (current state +
-> last 2-3 sessions verbatim + everything older as one-liners)
-> while keeping the full chronological history in your local
-> \`.cfcf-pa/session-*.md\` files? This keeps Clio retrieval
-> fast + my future sessions' context manageable."
+> last 2-3 sessions verbatim + everything older as one-liners)?
+> Per-session archive docs + local \`.cfcf-pa/session-*.md\`
+> files keep the full history; this just shrinks the digest cfcf
+> injects each session."
 
 If the user says yes:
-  1. Read the current Clio doc content (it's in the prompt).
-  2. Author a compacted version with this structure:
+  1. **Verify each session being collapsed has a corresponding
+     \`pa-session-<sessionId>\` archive doc** in the inventory
+     above. If any session's archive is missing, refuse to
+     compact that session — back-create the archive first by
+     reading the local \`.cfcf-pa/session-<sessionId>.md\` and
+     ingesting it (per the save-time format above). Only after
+     EVERY collapsed session has an archive should you proceed.
+     This is the "no data loss" precondition.
+  2. Read the current Clio digest (it's in the prompt).
+  3. Author a compacted version with this structure:
      - "## Current state" — one-paragraph snapshot
      - "## Open questions" — bulleted
      - "## Recent sessions (verbatim)" — last 2-3 session entries
        in full
      - "## Earlier sessions (digest)" — older sessions condensed
-       to one line each (date + outcomeSummary)
+       to one line each (date + outcomeSummary + Clio archive ID
+       so the agent or user can dig in)
      - "## Decisions / Rejections / Preferences (cumulative)" —
        deduped + grouped
-  3. Push the compacted version to Clio with
-     \`--update-if-exists --document-id <id>\`.
-  4. Log the compaction in the current session file.
-  5. **NEVER touch the local \`.cfcf-pa/session-*.md\` files** —
-     those are the canonical full history. Only the Clio digest
-     gets compacted. If the user ever wants to reconstruct, they
-     grep \`.cfcf-pa/\`.
+  4. Push the compacted version to Clio with
+     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cfcf-memory-pa\`.
+  5. Log the compaction in the current session file.
+  6. **NEVER touch \`pa-session-*\` archives or
+     \`.cfcf-pa/session-*.md\` disk files.** Those are the full
+     history. Only the digest gets compacted.
 
-If the doc is < 30 KB, don't mention it — let it grow naturally.
-This is purely a "graceful long-term usability" check, not a
+If the digest is < 30 KB, don't mention it — let it grow.
+Compaction is a "graceful long-term usability" check, not a
 required step.
+
+## Where to find detail (when the digest isn't enough)
+
+If the user asks about something the digest only summarises
+("what did we decide about auth in iter 3?", "show me the full
+session from last Tuesday"), retrieve full detail from one of:
+
+  - **Clio archive doc** (multi-device durable):
+      \`cfcf clio docs get <pa-session-...id>\` — the inventory
+      above lists IDs.
+      \`cfcf clio search "<query>" --project cfcf-memory-pa\` —
+      FTS + semantic search across all archives + the digest.
+  - **Local disk file** (immediate, no network):
+      \`cat .cfcf-pa/session-<sessionId>.md\` — the working
+      copy that's written turn-by-turn.
+      \`ls .cfcf-pa/session-*.md\` to list all local sessions.
+      \`grep -l "<phrase>" .cfcf-pa/session-*.md\` to find which
+      session mentioned something.
+
+Prefer disk files for fast iteration during the current session;
+prefer Clio search when you need cross-session matching or the
+disk file isn't present (e.g. user moved to a different machine).
 
 ## Doc location: WRITE TO THE RIGHT PROJECT
 

@@ -117,6 +117,7 @@ async function runSpec(opts: SpecOptions): Promise<void> {
     memory = {
       workspace: { documentId: null, updatedAt: null, content: null },
       global: { documentId: null, updatedAt: null, content: null },
+      sessionArchives: [],
       otherRoles: [],
     };
   }
