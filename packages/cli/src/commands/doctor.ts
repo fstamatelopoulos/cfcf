@@ -419,15 +419,11 @@ function checkHelpAssistant(): CheckResult {
 
 /**
  * Check whether the Product Architect prerequisites are met. PA
- * (`cfcf help architect`) launches the user's configured agent CLI in
- * interactive mode against `<repo>/cfcf-docs/`. Two things matter:
- *   1. At least one supported agent CLI is reachable on PATH (same
- *      check as the HA -- PA shares the launcher seam).
- *   2. The current working directory has a `cfcf-docs/` (otherwise PA
- *      would error at launch with a `cfcf workspace init` hint).
- *      Surfaced as INFO via the detail string -- a missing cfcf-docs/
- *      isn't a doctor failure (the user might be running doctor from
- *      an unrelated dir), so we just note it.
+ * (`cfcf spec`) launches the user's configured agent CLI in
+ * interactive mode against the user's repo. The agent itself drives
+ * `git init` / `cfcf workspace init` / Problem Pack authoring during
+ * the session, so the doctor's job is just to verify a supported
+ * agent CLI is reachable.
  *
  * Best-effort: `warn` worst case (PA isn't critical for cf² to work).
  */
@@ -447,21 +443,13 @@ function checkProductArchitect(): CheckResult {
       name,
       status: "warn",
       detail: "no supported agent CLI on PATH (claude-code or codex). " +
-              "Install one to use `cfcf help architect`. (Other cf² flows still work.)",
+              "Install one to use `cfcf spec`. (Other cf² flows still work.)",
     };
   }
-  // Optional informational nudge: if cfcf-docs/ doesn't exist in the
-  // current dir, tell the user PA will need it before it can launch.
-  // Don't downgrade status -- doctor often runs outside any repo.
-  const cfcfDocs = join(process.cwd(), "cfcf-docs");
-  const hasCfcfDocs = existsSync(cfcfDocs);
-  const cfcfDocsNote = hasCfcfDocs
-    ? ` cfcf-docs/ found in cwd.`
-    : ` cfcf-docs/ NOT found in ${process.cwd()} -- run \`cfcf workspace init\` here before launching PA.`;
   return {
     name,
     status: "ok",
-    detail: `${reachable.length} agent${reachable.length === 1 ? "" : "s"} reachable: ${reachable.join(", ")}.${cfcfDocsNote}`,
+    detail: `${reachable.length} agent${reachable.length === 1 ? "" : "s"} reachable: ${reachable.join(", ")}.`,
   };
 }
 

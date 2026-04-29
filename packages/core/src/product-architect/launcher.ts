@@ -1,69 +1,53 @@
 /**
- * Product-Architect launcher (Pattern B).
+ * Product-Architect launcher (v2; Pattern A).
  *
  * Spawns the configured agent CLI (claude-code / codex) in interactive
- * mode in the user's current shell. Where HA uses Pattern A (system
- * prompt as ephemeral CLI flag / tempfile), PA uses Pattern B:
+ * mode in the user's current shell. The agent's TUI takes over until
+ * the user exits.
  *
- *   1. Resolve `<repo>/cfcf-docs/` (PA requires it to exist; if not,
- *      the caller should either run `cfcf workspace init` first or
- *      pass through `--bootstrap` -- v1 just errors with a hint).
- *   2. Write/refresh sentinel-marked `cfcf-docs/AGENTS.md` (codex)
- *      + `cfcf-docs/CLAUDE.md` (claude-code) carrying the PA briefing.
- *   3. Spawn the agent with `--cd <repo>/cfcf-docs/` so each CLI
- *      auto-loads its respective briefing as the deepest-scope file.
+ * **Pattern A** (same as the Help Assistant):
+ *   - claude-code: `--append-system-prompt "<text>"` + `--model <name>`
+ *   - codex:       `-c model_instructions_file="<tempfile-path>"` (tempfile
+ *                  cleaned up after the agent exits)
  *
- * Why Pattern B for PA?
- *   - PA writes to the user's repo (the four Problem Pack files), so
- *     it can't be permission-gated like HA. Mutation is its job.
- *   - PA's context is durable across sessions (multi-day spec
- *     iteration). Pattern A's tempfile would lose continuity.
- *   - Both agent CLIs auto-load AGENTS.md/CLAUDE.md from cwd, so
- *     `--cd cfcf-docs/` is the natural seam.
+ * v2 abandoned Pattern B (which v1 used: durable
+ * `<repo>/cfcf-docs/{AGENTS,CLAUDE}.md` written via sentinel-merge +
+ * `--cd cfcf-docs/`). Durability is now provided by the disk + Clio
+ * memory model (see `<repo>/.cfcf-pa/`); the system prompt itself can
+ * be ephemeral. Pattern A keeps PA aligned with HA's launcher seam.
  *
- * Plan item 5.14. See `docs/research/product-architect.md`
- * §"Architecture".
+ * The launcher's responsibilities:
+ *   1. Resolve the agent CLI binary
+ *   2. Ensure `<repo>/.cfcf-pa/` exists (mkdir -p; idempotent)
+ *      (the agent will write its scratchpad + memory cache there)
+ *   3. Build per-adapter argv (Pattern A)
+ *   4. Spawn with `--cd <repo>` (cwd is the user's repo root, NOT
+ *      `.cfcf-pa/`, so the agent's bash tool operates relative to the
+ *      repo for `problem-pack/` edits, `cfcf` commands, etc.)
+ *   5. Wait for exit; clean up tempfile (codex only)
+ *
+ * Plan item 5.14 (v2). Design: docs/research/product-architect-design.md
+ * §"System-prompt injection: Pattern A".
  */
-import { rmSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { getAdapter } from "../adapters/index.js";
 import type { AgentConfig } from "../types.js";
-import { writeBriefingFiles } from "./briefing-files.js";
 
 export interface LaunchOptions {
-  /**
-   * Resolved Product Architect agent config (already backfilled by
-   * validateConfig).
-   */
+  /** Resolved Product Architect agent config (already backfilled by validateConfig). */
   agent: AgentConfig;
   /**
-   * Repo path to operate on. PA writes its briefing to
-   * `<repoPath>/cfcf-docs/{AGENTS,CLAUDE}.md` and cd's the agent into
-   * that subdir so the auto-load picks the briefing up.
+   * Repo path to operate on. PA's agent runs cd'd here; PA's local
+   * cache lives at `<repoPath>/.cfcf-pa/`.
    */
   repoPath: string;
   /**
-   * Full assembled system prompt (output of
-   * assembleProductArchitectPrompt). Becomes the cf²-owned body of the
-   * AGENTS.md/CLAUDE.md briefing files.
+   * Full assembled system prompt. Composed by `assembleProductArchitectPrompt()`.
    */
   systemPrompt: string;
-  /**
-   * Optional positional task hint -- if the user invoked
-   * `cfcf help architect "Refactor the success criteria for the auth
-   * flow"`, that string flows here. Some agents accept a positional
-   * `[PROMPT]` arg as the opening message; for v1 we surface it INSIDE
-   * the system prompt (assembled before this launcher runs) rather than
-   * relying on adapter-specific positional plumbing.
-   */
-  initialTask?: string;
-  /**
-   * Version stamp recorded in the briefing files (visible to humans
-   * inspecting the cf²-owned block). Defaults to a UTC ISO string at
-   * launch time.
-   */
-  versionStamp?: string;
 }
 
 export interface LaunchResult {
@@ -73,111 +57,70 @@ export interface LaunchResult {
   argsRedacted: string[];
   /** Process exit code, or null if the process was signalled. */
   exitCode: number | null;
-  /** Briefing files written this launch. */
-  briefingFilesWritten: string[];
+  /** Path to `<repoPath>/.cfcf-pa/` (created by the launcher if missing). */
+  paCachePath: string;
 }
 
 /**
- * Result of preparing argv for the configured adapter (no spawn, no
- * tempfile cleanup -- just the bytes that go to Bun.spawn).
- *
- * Pattern B doesn't need a tempfile (the briefing lives in the repo's
- * cfcf-docs/, not in /tmp), so this is simpler than HA's LaunchArgs.
+ * Per-adapter argv builder. Pattern A: prompt is ephemeral (inline
+ * flag for claude-code; tempfile for codex).
  */
 export interface LaunchArgs {
   command: string;
   args: string[];
-  /** Working directory for the spawn -- always `<repo>/cfcf-docs/`. */
-  cwd: string;
+  /** Tempfile path the launcher must rm after the agent exits. Null when not used. */
+  tempPromptFile: string | null;
 }
 
-/**
- * Build argv that runs the configured agent CLI in PA mode:
- * interactive, cd'd to `<repo>/cfcf-docs/` so the auto-loaded
- * AGENTS.md/CLAUDE.md is the PA briefing, and with per-command
- * permission prompts enabled (no auto-approval).
- */
-export function buildLaunchArgs(agent: AgentConfig, repoPath: string): LaunchArgs {
-  const cwd = join(repoPath, "cfcf-docs");
+export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): LaunchArgs {
   switch (agent.adapter) {
     case "claude-code": {
-      // No --append-system-prompt this time: the briefing comes from
-      // CLAUDE.md auto-load. NO --dangerously-skip-permissions: PA
-      // mutates the user's repo, so per-command permission prompts
-      // are the v1 safety story.
+      // Interactive mode (no `-p` / `--prompt`). `--append-system-prompt`
+      // adds PA's briefing on top of Claude Code's default system prompt.
+      // No `--dangerously-skip-permissions`: the agent will prompt the
+      // user for tool/file/bash use, which is the v1 permission model.
       //
-      // Default to Sonnet for PA. Spec iteration is multi-turn
-      // reasoning + judgement calls -- benefits from a stronger model
-      // than HA's Q&A workload (where Haiku is fine). Codex is
-      // account-tied so we don't force a model on it; users can
-      // switch mid-session via /fast or /full.
-      const args: string[] = [];
+      // Default to **Sonnet** for PA. Spec iteration is multi-turn
+      // reasoning + judgement calls — benefits from a stronger model
+      // than HA's Q&A workload (where Haiku is fine).
+      const args: string[] = ["--append-system-prompt", systemPrompt];
       args.push("--model", agent.model ?? "sonnet");
-      return { command: "claude", args, cwd };
+      return { command: "claude", args, tempPromptFile: null };
     }
     case "codex": {
-      // Codex reads AGENTS.md from cwd at session start. Default
-      // approval mode is `untrusted`, which prompts before every tool
-      // use -- the v1 PA permission story.
-      const args: string[] = [];
+      // codex uses the `-c <key>=<value>` config override accepting the
+      // `model_instructions_file` key. We write the prompt to a tempfile,
+      // pass the path, and clean up after exit.
+      //
+      // codex defaults to `untrusted` approval policy interactively,
+      // which prompts before every tool use — matches PA's permission
+      // model (mutations are user-gated).
+      const dir = mkdtempSync(join(tmpdir(), "cfcf-pa-"));
+      const promptFile = join(dir, "pa-instructions.md");
+      writeFileSync(promptFile, systemPrompt, "utf-8");
+
+      const args: string[] = [
+        "-c", `model_instructions_file="${promptFile.replace(/"/g, '\\"')}"`,
+      ];
       if (agent.model) {
         args.push("--model", agent.model);
       }
-      return { command: "codex", args, cwd };
+      return { command: "codex", args, tempPromptFile: promptFile };
     }
     default:
       throw new Error(
         `Product Architect doesn't support adapter "${agent.adapter}" yet. ` +
         `Supported: claude-code, codex. ` +
-        `Set helpArchitectAgent in your config (cfcf config edit) to one of those.`,
+        `Set productArchitectAgent in your config (cfcf config edit) to one of those.`,
       );
   }
 }
 
 /**
- * Verify that `<repoPath>/cfcf-docs/` exists. If not, throw with a
- * hint pointing at `cfcf workspace init`. v1 doesn't ship --bootstrap
- * mode, so the error nudges the user to run init themselves.
- *
- * Future iteration: --bootstrap can branch here to Pattern A (no
- * cfcf-docs/ yet, fall back to a tempfile briefing) until the user
- * agrees to create the workspace.
- */
-async function ensureCfcfDocsExists(repoPath: string): Promise<string> {
-  const cfcfDocsPath = join(repoPath, "cfcf-docs");
-  try {
-    const s = await stat(cfcfDocsPath);
-    if (!s.isDirectory()) {
-      throw new Error(
-        `${cfcfDocsPath} exists but is not a directory. ` +
-        `Move it aside, then run \`cfcf workspace init\` to bootstrap a clean cfcf-docs/.`,
-      );
-    }
-    return cfcfDocsPath;
-  } catch (err) {
-    if (err instanceof Error && /exists but is not a directory/.test(err.message)) {
-      throw err;
-    }
-    throw new Error(
-      `${cfcfDocsPath} doesn't exist yet. The Product Architect needs cfcf-docs/ ` +
-      `to anchor its briefing files (Pattern B). To bootstrap a fresh project, run ` +
-      `\`cfcf workspace init\` first, then re-run \`cfcf help architect\`. ` +
-      `(--bootstrap mode that lets PA do this for you is on the v2 roadmap.)`,
-    );
-  }
-}
-
-/**
- * Launch the PA. Verifies cfcf-docs/ exists, writes the briefing
- * files, builds argv, spawns the agent CLI with inherit stdio, and
- * waits for exit.
- *
- * The briefing files are NOT cleaned up after the session -- they're
- * durable per the Pattern B design. Re-running PA refreshes them
- * inside the sentinel block; user content outside the markers is
- * preserved.
- *
- * Throws if the agent adapter is unknown or cfcf-docs/ doesn't exist.
+ * Launch PA. Resolves the agent CLI, ensures `<repoPath>/.cfcf-pa/`
+ * exists, builds argv, spawns the agent (inherit stdio so the TUI
+ * takes over the current shell), waits for exit, cleans up the
+ * tempfile (codex only).
  */
 export async function launchProductArchitect(opts: LaunchOptions): Promise<LaunchResult> {
   const adapter = getAdapter(opts.agent.adapter);
@@ -188,51 +131,55 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
     );
   }
 
-  const cfcfDocsPath = await ensureCfcfDocsExists(opts.repoPath);
+  // Ensure <repoPath>/.cfcf-pa/ exists. Idempotent. The agent uses this
+  // dir for its session scratchpad + workspace-summary cache + meta.json.
+  const paCachePath = join(opts.repoPath, ".cfcf-pa");
+  await mkdir(paCachePath, { recursive: true });
 
-  // Write/refresh the briefing files BEFORE spawning so the auto-load
-  // picks up the latest. The merge logic preserves user content outside
-  // the cf² sentinel block.
-  const briefingFilesWritten = await writeBriefingFiles(cfcfDocsPath, {
-    systemPrompt: opts.systemPrompt,
-    versionStamp: opts.versionStamp ?? new Date().toISOString(),
-  });
+  const { command, args, tempPromptFile } = buildLaunchArgs(opts.agent, opts.systemPrompt);
 
-  const { command, args, cwd } = buildLaunchArgs(opts.agent, opts.repoPath);
+  try {
+    // Bun.spawn with inherit stdio: the agent's TUI takes over the
+    // current shell until the user exits.
+    //
+    // cwd is the REPO ROOT — NOT `.cfcf-pa/`. The agent's bash tool
+    // operates relative to the repo so `problem-pack/` edits, `cfcf`
+    // commands, etc. work with simple relative paths.
+    const proc = Bun.spawn([command, ...args], {
+      cwd: opts.repoPath,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await proc.exited;
 
-  // Bun.spawn with inherit stdio: the agent's TUI takes over the
-  // current shell until the user exits. We don't wrap with a try/
-  // finally to clean up briefing files -- they're durable.
-  const proc = Bun.spawn([command, ...args], {
-    cwd,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  const exitCode = await proc.exited;
+    // Redact the system prompt + tempfile path in logged args (could
+    // be surfaced to telemetry / `--print-prompt` debug output).
+    const argsRedacted = args.map((a, i) => {
+      const flag = i > 0 ? args[i - 1] : "";
+      if (flag === "--append-system-prompt") {
+        return `<${a.length}-char system prompt redacted>`;
+      }
+      if (flag === "-c" && a.startsWith("model_instructions_file=")) {
+        return `model_instructions_file=<tempfile redacted>`;
+      }
+      return a;
+    });
 
-  // No sensitive args in PA's argv (no system prompt inline, no
-  // tempfile path). Pass through verbatim so debug/telemetry can show
-  // exactly what was run.
-  const argsRedacted = [...args];
-
-  return {
-    command,
-    argsRedacted,
-    exitCode: exitCode ?? null,
-    briefingFilesWritten,
-  };
-}
-
-/**
- * Internal helper: tests use this to remove briefing files between
- * runs. NOT exported from the package index -- production code should
- * not delete briefing files (they're durable by design).
- */
-export function _removeBriefingFilesForTests(cfcfDocsPath: string): void {
-  for (const filename of ["AGENTS.md", "CLAUDE.md"]) {
-    try {
-      rmSync(join(cfcfDocsPath, filename), { force: true });
-    } catch { /* best-effort */ }
+    return {
+      command,
+      argsRedacted,
+      exitCode: exitCode ?? null,
+      paCachePath,
+    };
+  } finally {
+    // Best-effort tempfile cleanup. Done in finally so a Ctrl-C, spawn
+    // error, or non-zero exit code doesn't leave state in /tmp.
+    if (tempPromptFile) {
+      try {
+        const dir = tempPromptFile.replace(/\/[^/]+$/, "");
+        rmSync(dir, { recursive: true, force: true });
+      } catch { /* best-effort */ }
+    }
   }
 }

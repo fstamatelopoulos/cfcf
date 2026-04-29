@@ -1,63 +1,89 @@
 /**
- * Tests for the Product Architect launcher (Pattern B argv builder).
+ * Tests for the Product Architect launcher (v2; Pattern A argv builder).
  *
- * The actual spawn isn't covered (the launcher inherits stdio + waits
- * for an interactive agent CLI -- not testable in unit form). These
- * tests cover argv construction + cwd selection + adapter dispatch.
+ * The actual spawn isn't covered (interactive agent CLI; not testable
+ * in unit form). These tests cover argv construction + adapter
+ * dispatch + that we no longer use Pattern B.
  *
- * Plan item 5.14.
+ * Plan item 5.14 (v2).
  */
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { buildLaunchArgs } from "./launcher.js";
 
-describe("buildLaunchArgs", () => {
-  it("dispatches claude-code with --cd <repo>/cfcf-docs/ + sonnet default", () => {
-    const out = buildLaunchArgs({ adapter: "claude-code" }, "/repo");
+// Track tempfiles created by codex-path tests so we can clean them up.
+const cleanupPaths: string[] = [];
+
+afterEach(() => {
+  while (cleanupPaths.length > 0) {
+    const p = cleanupPaths.pop()!;
+    try { rmSync(dirname(p), { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+});
+
+describe("buildLaunchArgs (Pattern A)", () => {
+  it("dispatches claude-code with --append-system-prompt + sonnet default + no tempfile", () => {
+    const out = buildLaunchArgs({ adapter: "claude-code" }, "PA system prompt body");
     expect(out.command).toBe("claude");
-    expect(out.cwd).toBe("/repo/cfcf-docs");
-    expect(out.args).toContain("--model");
-    const idx = out.args.indexOf("--model");
-    expect(out.args[idx + 1]).toBe("sonnet");
+    expect(out.tempPromptFile).toBeNull();
+    expect(out.args).toContain("--append-system-prompt");
+    const flagIdx = out.args.indexOf("--append-system-prompt");
+    expect(out.args[flagIdx + 1]).toBe("PA system prompt body");
+    const modelIdx = out.args.indexOf("--model");
+    expect(out.args[modelIdx + 1]).toBe("sonnet");
   });
 
   it("respects the configured model override for claude-code", () => {
-    const out = buildLaunchArgs({ adapter: "claude-code", model: "opus" }, "/repo");
-    const idx = out.args.indexOf("--model");
-    expect(out.args[idx + 1]).toBe("opus");
+    const out = buildLaunchArgs({ adapter: "claude-code", model: "opus" }, "x");
+    const modelIdx = out.args.indexOf("--model");
+    expect(out.args[modelIdx + 1]).toBe("opus");
   });
 
-  it("dispatches codex with no --model when none configured (account-tied)", () => {
-    const out = buildLaunchArgs({ adapter: "codex" }, "/repo");
+  it("dispatches codex with model_instructions_file tempfile + no inline model when none configured", () => {
+    const out = buildLaunchArgs({ adapter: "codex" }, "PA prompt for codex");
     expect(out.command).toBe("codex");
-    expect(out.cwd).toBe("/repo/cfcf-docs");
+    expect(out.tempPromptFile).not.toBeNull();
+    cleanupPaths.push(out.tempPromptFile!);
+
+    // -c arg must reference the tempfile
+    const cIdx = out.args.indexOf("-c");
+    expect(cIdx).toBeGreaterThanOrEqual(0);
+    expect(out.args[cIdx + 1]).toMatch(/^model_instructions_file=".+\/pa-instructions\.md"$/);
+
+    // No --model when not configured (codex is account-tied)
     expect(out.args).not.toContain("--model");
   });
 
   it("respects the configured model for codex when set", () => {
-    const out = buildLaunchArgs({ adapter: "codex", model: "gpt-5" }, "/repo");
-    const idx = out.args.indexOf("--model");
-    expect(idx).toBeGreaterThanOrEqual(0);
-    expect(out.args[idx + 1]).toBe("gpt-5");
+    const out = buildLaunchArgs({ adapter: "codex", model: "gpt-5" }, "x");
+    cleanupPaths.push(out.tempPromptFile!);
+    const modelIdx = out.args.indexOf("--model");
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(out.args[modelIdx + 1]).toBe("gpt-5");
   });
 
   it("throws on unknown adapters with a config-edit hint", () => {
-    expect(() => buildLaunchArgs({ adapter: "aider" }, "/repo")).toThrow(
+    expect(() => buildLaunchArgs({ adapter: "aider" }, "x")).toThrow(
       /Product Architect doesn't support adapter "aider"/,
     );
-    expect(() => buildLaunchArgs({ adapter: "aider" }, "/repo")).toThrow(
-      /helpArchitectAgent/,
+    expect(() => buildLaunchArgs({ adapter: "aider" }, "x")).toThrow(
+      /productArchitectAgent/,
     );
   });
 
-  it("does NOT pass --append-system-prompt -- Pattern B uses CLAUDE.md auto-load", () => {
-    const out = buildLaunchArgs({ adapter: "claude-code" }, "/repo");
-    expect(out.args).not.toContain("--append-system-prompt");
-  });
+  it("does NOT use Pattern B mechanics (no auto-loaded AGENTS.md / CLAUDE.md briefing)", () => {
+    // claude-code path: prompt is in the --append flag, not in a file.
+    const cc = buildLaunchArgs({ adapter: "claude-code" }, "PA");
+    expect(cc.tempPromptFile).toBeNull();
 
-  it("does NOT pass model_instructions_file -- Pattern B uses AGENTS.md auto-load", () => {
-    const out = buildLaunchArgs({ adapter: "codex" }, "/repo");
-    for (const arg of out.args) {
-      expect(arg).not.toContain("model_instructions_file");
-    }
+    // codex path: prompt is in the tempfile (which is per-session,
+    // ephemeral, not in the user's repo).
+    const cx = buildLaunchArgs({ adapter: "codex" }, "PA");
+    cleanupPaths.push(cx.tempPromptFile!);
+    expect(cx.tempPromptFile).toContain("/cfcf-pa-");
+    // NOT a path inside the user's repo (Pattern B v1 wrote to
+    // <repo>/cfcf-docs/AGENTS.md).
+    expect(cx.tempPromptFile).not.toContain("cfcf-docs");
   });
 });
