@@ -9,69 +9,101 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-### Product Architect role v2 (5.14)
+### Product Architect role (5.14)
 
-Plan item **5.14**: the **Product Architect (PA)** is the cf² **Product Architect / Owner / Manager** role — interactive, user-facing, owns everything before the Solution Architect picks up. Peer to dev / judge / Solution Architect / reflection / documenter; sits at the START of the development flow:
-
-```
-cfcf workspace init   →   cfcf spec   →   cfcf review   →   cfcf run   →   cfcf reflect / cfcf document
-                          ↑
-                          PA: interactive Problem Pack authoring
-```
+A new top-level SDLC role: **`cfcf spec`** launches the Product Architect (PA), an interactive cf²-expert agent that owns the front of the SDLC — repo setup, workspace registration, Problem Pack authoring + iteration. PA is a peer to dev / judge / Solution Architect / reflection / documenter; unlike them, it runs **interactively** (your shell, agent's TUI). It has the entire cfcf documentation bundle in its system prompt, so it understands the SDLC end-to-end and can guide spec authoring with full context.
 
 ```
 cfcf workspace init   →   cfcf spec   →   cfcf review   →   cfcf run   →   cfcf reflect / cfcf document
                           ↑
-                          PA: interactive Problem Pack authoring + setup
+                          NEW: interactive Problem Pack authoring + iteration
 ```
 
-**Verb**: `cfcf spec [task...]` (top-level, peer to `cfcf review` / `cfcf reflect` / `cfcf document`).
-
-**Interactive by design.** PA's agent CLI takes over the user's shell until exit — same operational pattern as `cfcf help assistant`. Live spec iteration is inherent to PA's job.
-
-**Scope** (per the v2 design):
-- **Primary** (focused): repo setup (offers `git init`), workspace registration (drives `cfcf workspace init` non-interactively after collecting a name in conversation), Problem Pack authoring + iteration + review (`<repo>/problem-pack/{problem,success,constraints,hints,style-guide}.md` + `context/`), spec brainstorming.
-- **Secondary** (allowed; control nudges, not cost panic): `cfcf server start`, `cfcf run` ("you'll get better control + visibility running this yourself"), reading logs, status checks, answering cf² questions.
-- **Out of scope** (hard refuse, redirect): playing dev / judge / Solution Architect / reflection / documenter; writing `plan.md`.
-
-**Cost framing**: control + visibility primary; cost a dimension; one mention not a refrain.
-
-Architecture:
-
-- **Pattern A injection** (same as HA). System prompt is regenerated fresh each session by cfcf at launch; passed via `--append-system-prompt` (claude-code) or `model_instructions_file` tempfile (codex). v2 abandoned v1's Pattern B (durable `cfcf-docs/{AGENTS,CLAUDE}.md`) because durability is now provided by the disk + Clio memory model.
-- **Memory model — disk + Clio hybrid**:
-  - **Tier 1 (disk, low latency)** — `<repo>/.cfcf-pa/`: `session-<id>.md` (live scratchpad), `workspace-summary.md` (local mirror of Clio doc), `meta.json` (sync metadata). Created by the launcher (mkdir -p); written by the agent during the session.
-  - **Tier 2 (Clio, canonical)**: `pa-workspace-memory` (per-workspace, in `cfcf-memory-pa` Project) + `pa-global-memory` (cross-workspace, lives ONLY in Clio, in `cfcf-memory-global`).
-  - **Sync**: timestamp reconciliation at session start; PA proactively asks "save before you go?" at session end; recovery path if user Ctrl-Ds.
-  - **session_id**: timestamp-based UUID generated at launch (e.g. `pa-2026-04-28T15-49-10-abc123`); tagged into every memory write.
-  - **Read-only access** to `cfcf-memory-reflection` / `cfcf-memory-architect` / `cfcf-memory-ha` for cross-role context (filtered by `workspace_id`).
-- **State pre-injection at launch**: cfcf computes + injects git status, workspace registration lookup, server status, iteration history, problem-pack file states, `.cfcf-pa/` cache state, full memory inventory, session_id.
-- **Full cfcf docs in PA's prompt** (~160 KB; same as HA). PA needs to UNDERSTAND cfcf to help the user shape specs that downstream agents can act on.
-- **No pre-flight gate**: PA always launches given a folder. The system prompt instructs PA to drive `git init` / `cfcf workspace init` itself when those are missing.
-- **Defaults**: `productArchitectAgent` backfills to `architectAgent`'s adapter. For claude-code the default model is **Sonnet** (HA defaults to Haiku). Codex stays account-tied.
-
-CLI surface:
+#### CLI
 
 ```
-cfcf spec [task...]                       # interactive PA session on cwd
-cfcf spec --repo <path>                   # explicit repo path
-cfcf spec --agent claude-code             # override config.productArchitectAgent
-cfcf spec --print-prompt                  # debug: emit prompt + exit
-cfcf spec "Tighten the success.md auth criteria"   # opens with this task
+cfcf spec [task...]                                  # interactive PA session on cwd
+cfcf spec --repo <path>                              # explicit repo path
+cfcf spec --agent claude-code                        # override config.productArchitectAgent
+cfcf spec --print-prompt                             # debug: emit prompt + exit
+cfcf spec --safe                                     # opt back into per-command permission prompts
+cfcf spec "Tighten the success.md auth criteria"     # opens with this task
 ```
 
-Plumbing:
+#### Behaviour
 
-- `productArchitectAgent: AgentConfig` on `CfcfGlobalConfig`, backfilled to `architectAgent` (or dev when architect isn't set).
-- `cfcf init` 7th picker (Product Architect alongside the existing six roles); `cfcf config show` prints the row.
-- Web UI: `productArchitectAgent` listed in the Server Info page's agent-roles section.
-- `cfcf doctor` "Product Architect prerequisites" check verifies a supported agent CLI is reachable.
-- `packages/core/src/product-architect/` module: 4 source files (`prompt-assembler.ts`, `state-assessor.ts`, `memory.ts`, `launcher.ts`) + index. **47 unit tests**.
-- `packages/cli/src/commands/spec.ts`: wires the top-level `cfcf spec` command.
+- **Self-introduces on launch** (Flavour A). Both claude-code and codex accept a positional `[PROMPT]` argument that becomes the user's opening message in interactive mode — the agent responds immediately rather than waiting for the user to type. Default greeting triggers PA's session-start protocol; an explicit `[task...]` argument flows in as the task verbatim.
+- **State assessment at launch**. cfcf computes + injects: repo path, git status, workspace registration (symlink-aware), cfcf server status, iteration history (if any), Problem Pack file states under `<repo>/problem-pack/`, `.cfcf-pa/` cache contents, memory inventory, session_id. PA's first response branches on this snapshot.
+- **Drives setup itself**. On a fresh repo PA insists on `git init` + `cfcf workspace init` first (collects workspace name in conversation, then runs the command non-interactively). No `--bootstrap` flag needed.
+- **Full permissions by default**, mirroring the iteration-time agents (the user accepted this trust contract at `cfcf init`):
+  - claude-code: `--dangerously-skip-permissions`
+  - codex: `-c approval_policy=never` + `-c sandbox_mode=danger-full-access` (the latter lifts codex's loopback restriction so cfcf CLI commands that hit `localhost` work from inside the agent's sandbox)
+- **`--safe` opt-out** for cautious sessions: claude reverts to default permission mode; codex reverts to `untrusted` + `workspace-write` sandbox.
+- **Hard "no implementation drift" boundary** in the prompt — PA refuses to play dev / judge / SA / reflection / documenter and redirects to the right role.
+- **Cost + control framing**: when PA could plausibly run something the user might prefer to drive themselves (`cfcf run`, watching a long process), PA nudges toward user-driven control. Token cost is mentioned as a dimension, not a refrain.
 
-The v1 Pattern-B implementation (commit `0f154a9` on `iteration-5/product-architect-spec`) was superseded by the v2 refactor (commit `<v2>`). v1 used `cfcf-docs/` for both PA's briefing files AND the Problem Pack files — both wrong: Problem Pack files belong in `<repo>/problem-pack/` (cfcf's actual convention), and PA's persistent state belongs in `<repo>/.cfcf-pa/` (PA's own dedicated cache). v2 also drops the pre-flight gate that refused to launch on fresh repos — PA now handles bootstrap from any folder.
+#### Memory architecture (disk + Clio hybrid)
 
-Design baseline: [`docs/research/product-architect-design.md`](docs/research/product-architect-design.md). See the design doc's "Implementation delta — v1 → v2" section for the full list of changes.
+A **three-tier** memory model for per-workspace continuity:
+
+| Tier | Where | Naming | Purpose | Compactable? |
+|---|---|---|---|---|
+| A — Digest | Clio | `pa-workspace-memory` (one per workspace, fixed title; Project: `cfcf-memory-pa`) | Rolling summary: current state + recent sessions verbatim + older sessions one-line + cumulative decisions/preferences. Injected into every PA prompt. | YES — gets shrunk in place when > 30 KB |
+| B — Archive | Clio | `pa-session-<sessionId>` (one per session; Project: `cfcf-memory-pa`) | Full session transcript captured at save time. Listed (titles + outcomeSummary) in the prompt's Memory Inventory; full content fetched on demand. | NEVER — immutable canonical history |
+| C — Disk log | `<repo>/.cfcf-pa/session-<sessionId>.md` | one per session | Live scratchpad written turn-by-turn during the session. Identical to Tier B but local + immediate. | NEVER |
+
+Plus a single cross-workspace doc: **`pa-global-memory`** (Project: `cfcf-memory-global`, shared with HA). User preferences spanning all workspaces (TDD, language, test framework). Lives only in Clio.
+
+**Disk + Clio asymmetry**:
+- Disk = canonical LIVE memory; updated **turn-by-turn** (every user message). Nothing is lost on Ctrl-D.
+- Clio = durable cross-machine backup; updated at session end (or sooner per user preference / explicit request).
+- The prompt explicitly tells PA to answer "did you save?" by acknowledging both layers and never to say "partially saved" when disk is up to date.
+- If `pa-global-memory` records a cadence preference (e.g. "update memory on every prompt"), PA honours it as standing permission — no per-turn re-asking.
+
+**Project-agnostic reads** in cfcf: at launch, cfcf reads `pa-workspace-memory` + `pa-global-memory` by metadata triple (role + artifact_type + workspace_id), NOT scoped by Clio Project. This is robust to docs that historically auto-routed to `default` before the launcher's pre-create step landed. The launcher pre-creates `cfcf-memory-pa` + `cfcf-memory-global` Projects on every launch so future writes land correctly.
+
+#### Workspace history + web UI
+
+- **`pa-session` event type** added to the workspace History tab. Each PA session appears as a `Product Architect · session` row with status / agent / outcome columns (the row label is consistent with the broader `<Role> · <task>` rename: `Dev + Judge · iter N`, `Solution Architect · review`, etc.).
+- **Rich detail panel** (`PaSessionDetail.tsx`): expands to show session bracket info, pre-state pills (git? workspace registered? problem-pack file count), outcome summary, Clio doc UUID (when synced), tabbed body (Session log / Workspace summary / meta.json) with full Markdown rendering.
+- **New API endpoint** `GET /api/workspaces/:id/pa-sessions/:sessionId/file` serves the session scratchpad + workspace summary + meta.json in one request.
+- **Status tab broadens** to track PA activity — when one or more PA sessions are running, the Status tab shows them with live duration; when the workspace's most recent activity was a PA session, it shows up as "Last Product Architect session" with outcome summary. The empty-state message ("nothing has run yet") only fires on a truly empty workspace + now mentions `cfcf spec` alongside Review + Start Loop.
+
+#### Plumbing
+
+- **`productArchitectAgent: AgentConfig`** on `CfcfGlobalConfig`, backfilled to `architectAgent`'s adapter (broad-context profile; closer to PA's spec-iteration workload than dev's). For claude-code the default model is **Sonnet** (HA defaults to Haiku). Codex stays account-tied.
+- **`cfcf init`** gains a 7th role picker (Product Architect alongside the existing six). `cfcf config show` prints the row.
+- **Web UI**: Server Info page's agent-roles section lists PA. Role label for the Solution Architect updated to "Solution Architect" (was "Architect") to disambiguate from PA at a glance.
+- **`cfcf doctor`** "Product Architect prerequisites" check verifies a supported agent CLI is reachable.
+- **Race-condition fix**: `cleanupStaleRunningEvents` (called on server startup to recover from crashed iteration agents) now skips `pa-session` events. PA agents run in the user's terminal — server restart doesn't affect them — so marking them failed at cleanup time would corrupt an actually-running session.
+- **macOS symlink fix**: workspace registration lookup uses `realpath` (with safe fallback). Prior bug: `process.cwd()` returns `/private/tmp/...` while `cfcf workspace init --repo /tmp/...` stored the literal `/tmp/...`; plain string compare missed the match and PA reported the workspace as unregistered.
+
+#### Module shape
+
+- `packages/core/src/product-architect/` — 4 source files (`prompt-assembler.ts`, `state-assessor.ts`, `memory.ts`, `launcher.ts`) + index. **68 unit tests**.
+- `packages/cli/src/commands/spec.ts` — wires the top-level `cfcf spec`.
+- `packages/web/src/components/PaSessionDetail.tsx` — the rich detail panel.
+- `packages/web/src/utils/markdown.tsx` — Markdown renderer extracted from the Help tab so PA + Help share it.
+
+### Help Assistant — self-introduction (5.8 follow-up)
+
+`cfcf help assistant` now self-introduces on launch via the same Flavour A pattern as PA. Mirrors HA's role briefing: the agent introduces itself + asks what you'd like help with, instead of opening to an empty prompt. Default greeting in `cli/src/commands/help.ts`; argv builder appends the positional `[PROMPT]` last.
+
+### Documentation
+
+- **NEW** `docs/guides/product-architect.md` — dedicated PA reference (~13 KB, 8th help topic; aliases `pa`, `product-architect`).
+- **Updated**: `manual.md` (5 → 7 agent roles framing), `workflow.md` (Step 4 leads with `cfcf spec` over manual editing), `cli-usage.md` (full PA section), `clio-quickstart.md` (role-specific Clio Projects table), `troubleshooting.md` (5 PA-specific scenarios), `api/server-api.md` (history `pa-session` row + new endpoint).
+- **NEW** decisions-log entry (2026-04-29): "Embed the full cfcf docs into interactive role agents' system prompts" — captures the breakthrough validated in dogfood.
+- **Design baseline**: `docs/research/product-architect-design.md` (the canonical design reference; supersedes the deleted v1 doc).
+
+### Glossary changes worth highlighting
+
+- `<repo>/problem-pack/*` — the user-owned Problem Pack files. cfcf-managed artifacts live separately under `<repo>/cfcf-docs/`.
+- `<repo>/.cfcf-pa/*` — Product Architect's working memory cache (gitignore-friendly).
+- `pa-workspace-memory`, `pa-session-<id>`, `pa-global-memory` — standardised Clio doc titles + naming convention.
+- `session_id` — timestamp-based UUID PA generates at every launch; tagged into all memory writes; surfaced in the workspace history.
+
+---
 
 _Other iter-6 backlog: web UI integration research for HA + PA roles (5.15), CLI verb-rename audit for the remaining cfcf top-level verbs, Clio FTS title boost (6.24)._
 
