@@ -44,6 +44,7 @@ const TOPIC_SUMMARIES: Record<string, string> = {
   workflow:        "Run a loop end-to-end: setup, Problem Pack, review, run, reflect",
   cli:             "Verb-by-verb CLI reference (server, workspace, run, clio, …)",
   clio:            "Cross-workspace memory: search, ingest, embedders, projects",
+  spec:            "Product Architect (cfcf spec): interactive Problem Pack authoring",
   installing:      "Install, upgrade, uninstall (curl, bun install -g, self-update)",
   troubleshooting: "Common issues + fixes; first stop after `cfcf doctor`",
   api:             "HTTP API reference (every server endpoint)",

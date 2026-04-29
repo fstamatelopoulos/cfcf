@@ -24,11 +24,17 @@ cfcf server start
 # 4. Register your first workspace
 cfcf workspace init --repo /path/to/your/repo --name my-project
 
-# 5. Define the problem (edit the four files cf² creates in your repo)
+# 5. Define the problem -- two paths:
+#    a. Interactive (recommended): the Product Architect drafts + iterates with you
 cd /path/to/your/repo
-$EDITOR cfcf-docs/problem.md cfcf-docs/success.md cfcf-docs/process.md cfcf-docs/constraints.md
+cfcf spec
+#    b. Manual: edit the four files yourself
+$EDITOR problem-pack/problem.md problem-pack/success.md problem-pack/constraints.md
 
-# 6. Run the loop
+# 6. (Optional) Solution Architect review before the loop
+cfcf review --workspace my-project
+
+# 7. Run the loop
 cfcf run --workspace my-project
 ```
 
@@ -59,7 +65,7 @@ A cfcf-managed project. Each workspace points at one git repo and has its own it
 
 ### Problem Pack
 
-Four Markdown files in your repo (`cfcf-docs/problem.md` / `success.md` / `process.md` / `constraints.md`) that define what you want the agents to build. cfcf treats these as **read-only** — agents read them but never write them. You own the Problem Pack; cfcf owns everything else under `cfcf-docs/`.
+Markdown files in `<repo>/problem-pack/` that define what you want the agents to build. The four canonical files are `problem.md`, `success.md`, `process.md`, `constraints.md`; plus optional `hints.md`, `style-guide.md`, `context/*.md`. The dev / judge / Solution Architect / reflection / documenter agents treat these as **read-only inputs**. You own them — author manually OR via `cfcf spec` (the interactive [Product Architect](product-architect.md)). cfcf-generated artifacts live separately under `<repo>/cfcf-docs/` (iteration logs, plan, decision log, etc.) — those cfcf manages on your behalf.
 
 ### Iteration
 
@@ -69,17 +75,26 @@ One round of dev-agent work + judge-agent assessment. Three commits per iteratio
 2. `cfcf iteration N judge (...)` — the judge agent's verdict
 3. `cfcf iteration N reflect (<health>): <observation>` — the reflection agent's strategic note (only when triggered)
 
-### Five agent roles
+### Seven agent roles (five non-interactive + two interactive)
+
+The five non-interactive roles run inside the iteration loop or on `cfcf <verb>` invocations — fire-and-forget, signal-file workflow:
 
 | Role | When | What it does |
 |---|---|---|
 | **dev** | Every iteration | Reads the Problem Pack + recent history, produces one phase of the implementation, commits |
 | **judge** | Every iteration | Assesses the dev's work against success criteria; emits a verdict + signal file |
-| **architect** | On demand (`cfcf review`) | Reviews the Problem Pack + workspace state; either flags it READY for the loop or lists gaps |
+| **architect** (Solution Architect) | On demand (`cfcf review`) | Reviews the Problem Pack + workspace state; either flags it READY for the loop or lists gaps |
 | **reflection** | Triggered (`cfcf reflect` or auto on judge stalls) | Cross-iteration strategic review; can recommend stopping or refining the plan |
 | **documenter** | Post-success (`cfcf document`) | Writes the final user-facing docs once SUCCESS is signalled |
 
-Each role is independently configurable (adapter + model). The defaults are set in `cfcf init`.
+The two interactive roles take over your shell — TUI on, agent CLI handles input until you exit:
+
+| Role | When | What it does |
+|---|---|---|
+| **Product Architect** | `cfcf spec` | Interactive Problem Pack authoring + iteration; drives `git init` / `cfcf workspace init` if needed; helps refine specs before/after loops. See [`product-architect.md`](product-architect.md). |
+| **Help Assistant** | `cfcf help assistant` | Interactive cf² support — answers "how does X work?", reads your Clio memory, runs diagnostics. Read-only by default unless you ask. |
+
+Each role is independently configurable (adapter + model). The defaults are set in `cfcf init`. PA's prompt embeds the full cfcf docs (~190 KB) so it's a domain expert on cf² out of the box; HA does the same. See [`docs/decisions-log.md`](../decisions-log.md) → "2026-04-29 — Embed the full cfcf docs into interactive role agents' system prompts" for the rationale.
 
 ### Clio Project
 
@@ -97,6 +112,7 @@ A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory 
 |---|---|
 | **Install or upgrade cf²** | [`installing.md`](installing.md) |
 | **Run your first loop end-to-end** | [`workflow.md`](workflow.md) — the canonical user guide |
+| **Author or refine your Problem Pack interactively** | [`product-architect.md`](product-architect.md) — the `cfcf spec` reference |
 | **Look up a specific CLI command** | [`cli-usage.md`](cli-usage.md) — verb-by-verb reference |
 | **Get started with Clio (cross-workspace memory)** | [`clio-quickstart.md`](clio-quickstart.md) |
 | **Wire cf² into your own automation** | [`../api/server-api.md`](../api/server-api.md) — HTTP API |
@@ -190,11 +206,15 @@ When in doubt, run `cfcf doctor` first. It checks your install across 13+ dimens
 ## Glossary
 
 - **Adapter** — the cfcf-side wrapper that knows how to launch a specific agent (e.g. `claude-code`, `codex`). Adapters live in `packages/core/src/adapters/`. New ones can be added without touching the core loop.
-- **`cfcf-docs/`** — directory inside your repo containing the Problem Pack (user-owned: `problem.md` / `success.md` / `process.md` / `constraints.md`) plus per-iteration artifacts cfcf writes (`iteration-logs/`, `iteration-handoffs/`, `iteration-reviews/`, `reflection-reviews/`, `clio-relevant.md`, `clio-guide.md`).
+- **`<repo>/problem-pack/`** — directory inside your repo holding the user-owned Problem Pack files (`problem.md` / `success.md` / `constraints.md`, optional `hints.md` / `style-guide.md` / `context/*.md`). You author these manually or via `cfcf spec` (the [Product Architect](product-architect.md)).
+- **`<repo>/cfcf-docs/`** — directory inside your repo where cfcf writes its own per-iteration artifacts (`iteration-logs/`, `iteration-handoffs/`, `iteration-reviews/`, `reflection-reviews/`, `plan.md`, `decision-log.md`, `iteration-history.md`, `clio-relevant.md`, `clio-guide.md`). cfcf manages these; you don't edit them.
+- **`<repo>/.cfcf-pa/`** — Product Architect's working cache (per session log + workspace summary + meta.json). PA writes here turn-by-turn during sessions. Gitignore-friendly.
 - **Clio** — cf²'s persistent memory layer at `~/.cfcf/clio.db`. SQLite-backed, FTS5 + ONNX embedder hybrid search, scoped by named Clio Project. Independent of any specific workspace.
 - **Dark factory loop** — the unattended mode where `cfcf run` cycles iterations until SUCCESS, FAILURE, or `recommend_stop`. Distinguished from "manual mode" where the user advances one iteration at a time.
 - **Iteration history** — `cfcf-docs/iteration-history.md`. Rebuilt from per-iteration log files on every iteration so it survives server restarts.
-- **Problem Pack** — the four user-owned Markdown files (`problem.md` / `success.md` / `process.md` / `constraints.md`) that define the work the dev agent does. Read by every agent on every iteration.
+- **Problem Pack** — the user-owned Markdown files in `<repo>/problem-pack/` (`problem.md` / `success.md` / `constraints.md`, plus optional `hints.md` / `style-guide.md` / `context/*.md`) that define the work the dev agent does. Read by every agent on every iteration. Author manually OR via `cfcf spec`.
+- **Product Architect (PA)** — the interactive `cfcf spec` role: an LLM agent that helps you author + iterate the Problem Pack. Has the full cf² docs in its prompt, runs in your shell, owns the front of the SDLC. Peer to dev/judge/SA/reflection/documenter; runs interactively rather than fire-and-forget. See [`product-architect.md`](product-architect.md).
+- **Help Assistant (HA)** — the interactive `cfcf help assistant` role: a cf²-expert support agent. Same architecture as PA but scoped to "help me operate cf²" rather than "help me define a project". See `cfcf help assistant` after install.
 - **Readiness gate** — an optional step before `cfcf run` enters the loop, where the Solution Architect must say READY. Gated by the `readinessGate` config flag.
 - **Sentinel block** — a `>>> ... <<<` (or `<!-- begin --> ... <!-- end -->`) marked region in a user-owned file (`CLAUDE.md`, `~/.zshrc`, etc.) that cf² manages. cf² writes only between the sentinels; everything else is preserved.
 - **Workspace** — a cf²-registered project (one git repo per workspace). Per-workspace state lives at `<cfcf-config-dir>/workspaces/<id>/`.

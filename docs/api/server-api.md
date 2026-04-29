@@ -525,6 +525,68 @@ Events are returned in insertion order (chronological). Clients should sort if a
 | `iteration` | Iteration loop | `iteration`, `branch`, `devLogFile`, `judgeLogFile`, `devExitCode`, `judgeExitCode`, `judgeDetermination`, `judgeQuality`, `merged`, `devSignals`, `judgeSignals` |
 | `reflection` | Reflection runner (loop or ad-hoc) | `iteration`, `trigger` (`"loop"` or `"manual"`), `signals`, `iterationHealth`, `planModified`, `planRejectionReason` (when applicable) |
 | `document` | Documenter run | `docsFileCount`, `committed`, `exitCode` |
+| `pa-session` | Product Architect (`cfcf spec`) | `sessionId`, `sessionFilePath`, `outcomeSummary`, `decisionsCount`, `clioWorkspaceMemoryDocId`, `exitCode`, `workspaceRegisteredAtStart`, `gitInitializedAtStart`, `problemPackFilesAtStart` |
+
+A `pa-session` event example:
+
+```json
+{
+  "id": "pa-pa-2026-04-29T08-15-30-abc123",
+  "type": "pa-session",
+  "status": "completed",
+  "startedAt": "2026-04-29T08:15:30.000Z",
+  "completedAt": "2026-04-29T08:42:14.000Z",
+  "logFile": ".cfcf-pa/session-pa-2026-04-29T08-15-30-abc123.md",
+  "agent": "codex",
+  "sessionId": "pa-2026-04-29T08-15-30-abc123",
+  "sessionFilePath": ".cfcf-pa/session-pa-2026-04-29T08-15-30-abc123.md",
+  "exitCode": 0,
+  "outcomeSummary": "Drafted problem.md and success.md; user wants to refine constraints next session.",
+  "decisionsCount": 3,
+  "clioWorkspaceMemoryDocId": "f4a8c5e2-...-...",
+  "workspaceRegisteredAtStart": true,
+  "gitInitializedAtStart": true,
+  "problemPackFilesAtStart": 2
+}
+```
+
+---
+
+### GET /api/workspaces/:id/pa-sessions/:sessionId/file
+
+Return the on-disk artefacts for a specific Product Architect session. Powers the web UI's expandable PA-session detail panel. Reads from `<workspace.repoPath>/.cfcf-pa/`; any of the three files may be absent (returns `null` for missing).
+
+The `sessionId` parameter is validated against `^pa-[A-Za-z0-9-]+$` to prevent path traversal.
+
+**Response:** `200 OK`
+
+```json
+{
+  "sessionId": "pa-2026-04-29T08-15-30-abc123",
+  "cachePath": "/abs/path/to/repo/.cfcf-pa",
+  "sessionFile": "# PA session log\n\n... full Markdown body ...",
+  "sessionFilePath": ".cfcf-pa/session-pa-2026-04-29T08-15-30-abc123.md",
+  "workspaceSummary": "# PA workspace memory\n\n... full Markdown body ...",
+  "workspaceSummaryPath": ".cfcf-pa/workspace-summary.md",
+  "meta": {
+    "currentSessionId": "pa-2026-04-29T08-15-30-abc123",
+    "lastSyncAt": "2026-04-29T08:42:14.000Z",
+    "paWorkspaceMemoryDocId": "f4a8c5e2-...",
+    "paGlobalMemoryDocId": null,
+    "lastSession": {
+      "sessionId": "pa-2026-04-29T08-15-30-abc123",
+      "endedAt": "2026-04-29T08:42:14.000Z",
+      "outcomeSummary": "Drafted problem.md and success.md; user wants to refine constraints next session.",
+      "decisionsCount": 3,
+      "clioWorkspaceMemoryDocId": "f4a8c5e2-..."
+    }
+  }
+}
+```
+
+**Errors:**
+- `400` — `sessionId` doesn't match the expected pattern
+- `404` — workspace not found
 
 ---
 

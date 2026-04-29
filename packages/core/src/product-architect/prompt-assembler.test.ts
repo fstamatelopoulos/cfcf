@@ -124,15 +124,18 @@ describe("assembleProductArchitectPrompt", () => {
   });
 
   it("does NOT include an 'Initial task' section anymore (Flavour A — task flows in as first user message instead)", () => {
+    // Use a unique nonsense phrase that won't accidentally appear in
+    // the embedded help bundle.
+    const uniqueMarker = "ZZ-PA-ASSEMBLER-TEST-MARKER-7Q3";
     const withTask = assembleProductArchitectPrompt({
       state: baseState,
       memory: emptyMemory,
-      initialTask: "Tighten the success.md auth criteria",
+      initialTask: uniqueMarker,
     });
     expect(withTask).not.toContain("Initial task (from CLI invocation)");
     // The task itself isn't in the prompt body either — the launcher passes
     // it as the agent CLI's positional [PROMPT].
-    expect(withTask).not.toContain("Tighten the success.md auth criteria");
+    expect(withTask).not.toContain(uniqueMarker);
   });
 
   it("includes the cf² interfaces section (CLI + web UI)", () => {

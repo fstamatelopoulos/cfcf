@@ -47,9 +47,9 @@ cfcf can be driven from either the **CLI** or the **web GUI** (served by the sam
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Five Agent Roles
+### Seven Agent Roles (five non-interactive + two interactive)
 
-cf² uses five independently configurable agent roles:
+cf² has seven independently configurable agent roles. Five are **non-interactive** (fire-and-forget, signal-file workflow):
 
 | Role | Purpose | When it runs |
 |------|---------|-------------|
@@ -59,7 +59,14 @@ cf² uses five independently configurable agent roles:
 | **Reflection agent** | Reads the full cross-iteration history, classifies iteration health, may rewrite pending plan items non-destructively | After the judge on every iteration, unless the judge explicitly opts out |
 | **Documenter** | Produces polished final documentation | Auto post-SUCCESS, or `cfcf document` on demand |
 
-Each role can use a different agent and model. Reflection is the strongest-context role -- the project's full history is its input -- so the recommended default is the most capable model available (Claude Opus, GPT-5, etc.). You can configure each role separately in `cfcf init` or via `cfcf config edit`.
+Two are **interactive** — the agent CLI's TUI takes over your shell until you exit:
+
+| Role | Purpose | When it runs |
+|------|---------|-------------|
+| **Product Architect** | Helps you author + iterate the Problem Pack interactively; drives `git init` / `cfcf workspace init` if needed; refines specs before/after loops. Has the full cf² docs in its system prompt. | `cfcf spec`; see [`product-architect.md`](product-architect.md) |
+| **Help Assistant** | Interactive cf² support: answers "how does X work?", reads your Clio memory, runs diagnostics. | `cfcf help assistant` |
+
+Each role can use a different agent and model. Reflection is the strongest-context role -- the project's full history is its input -- so the recommended default is the most capable model available (Claude Opus, GPT-5, etc.). The Product Architect defaults to Sonnet for claude-code (Help Assistant defaults to Haiku for its Q&A workload). You can configure each role separately in `cfcf init` or via `cfcf config edit`.
 
 ### Three Tiers of Evaluation
 
@@ -173,6 +180,23 @@ cfcf prepends a comment banner to every generated copy under `cfcf-docs/` so thi
 ## Step 4: Populate the Problem Pack (User's Most Important Step)
 
 **This is where the user defines what the AI agent should build.** cf² scaffolds templates, but the user MUST replace the template content with real problem definitions. Without this, the agent has no direction.
+
+There are two ways to do this:
+
+**A. Interactive (recommended): the Product Architect.**
+
+```bash
+cd /path/to/your/repo
+cfcf spec
+```
+
+`cfcf spec` launches the Product Architect — an interactive agent that helps you draft + iterate each Problem Pack file. It has the full cf² docs in its system prompt, so it understands what each file is for + how downstream agents will use them. It asks clarifying questions, surfaces edge cases, and drafts content with you. Disk + Clio memory ensure your spec history persists across sessions. See [`product-architect.md`](product-architect.md) for the full reference.
+
+PA also handles the prerequisites: it'll offer to run `git init` (if needed) + `cfcf workspace init` (if no workspace is registered yet) before drafting the Problem Pack. So this step CAN be run before Step 3 — you'd run `cfcf spec` on a fresh repo, and PA drives the rest.
+
+**B. Manual: edit the files directly.**
+
+Below are the canonical Problem Pack files + recommended structures. Either author them yourself, or use them as a guide for what PA should help you produce.
 
 ### Required files:
 
