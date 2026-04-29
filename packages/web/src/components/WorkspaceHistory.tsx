@@ -112,18 +112,33 @@ function HistoryRow({
       ? "var(--color-success)"
       : "var(--color-error)";
 
-  const typeLabel =
-    event.type === "iteration"
-      ? `Iteration ${(event as IterationHistoryEvent).iteration}`
-      : event.type === "review"
-      ? (event as ReviewHistoryEvent).trigger === "loop"
-        ? "Pre-loop review"
-        : "Review"
-      : event.type === "reflection"
-      ? `Reflection${(event as ReflectionHistoryEvent).iteration ? ` · iter ${(event as ReflectionHistoryEvent).iteration}` : ""}`
-      : event.type === "pa-session"
-      ? "Product Architect"
-      : "Document";
+  // Type-column labels follow a consistent "<Role> · <task>" shape
+  // (state is in its own column). When there's no per-event task
+  // detail, just the role name is shown.
+  const typeLabel = (() => {
+    switch (event.type) {
+      case "iteration": {
+        const e = event as IterationHistoryEvent;
+        return `Dev + Judge · iter ${e.iteration}`;
+      }
+      case "review": {
+        const e = event as ReviewHistoryEvent;
+        return e.trigger === "loop"
+          ? "Solution Architect · pre-loop review"
+          : "Solution Architect · review";
+      }
+      case "reflection": {
+        const e = event as ReflectionHistoryEvent;
+        return e.iteration
+          ? `Reflection · iter ${e.iteration}`
+          : "Reflection (manual)";
+      }
+      case "document":
+        return "Documenter";
+      case "pa-session":
+        return "Product Architect";
+    }
+  })();
 
   const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
 
