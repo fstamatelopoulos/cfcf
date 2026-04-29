@@ -14,6 +14,7 @@ describe("buildLaunchArgs", () => {
     const { command, args, tempPromptFile } = buildLaunchArgs(
       { adapter: "claude-code" },
       "FAKE_SYSTEM_PROMPT",
+      "Hi",
     );
     expect(command).toBe("claude");
     expect(args).toContain("--append-system-prompt");
@@ -33,6 +34,7 @@ describe("buildLaunchArgs", () => {
     const { args } = buildLaunchArgs(
       { adapter: "claude-code" },
       "x",
+      "Hi",
     );
     const idx = args.indexOf("--model");
     expect(idx).toBeGreaterThanOrEqual(0);
@@ -43,16 +45,29 @@ describe("buildLaunchArgs", () => {
     const { args } = buildLaunchArgs(
       { adapter: "claude-code", model: "sonnet-4.5" },
       "x",
+      "Hi",
     );
     const idx = args.indexOf("--model");
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe("sonnet-4.5");
   });
 
+  it("claude-code: appends firstUserMessage as the LAST positional argv entry (Flavour A)", () => {
+    const { args } = buildLaunchArgs(
+      { adapter: "claude-code" },
+      "system",
+      "Please introduce yourself",
+    );
+    expect(args[args.length - 1]).toBe("Please introduce yourself");
+    const modelIdx = args.indexOf("--model");
+    expect(args.length - 1).toBeGreaterThan(modelIdx);
+  });
+
   it("codex: invokes `codex -c model_instructions_file=<tempfile>` interactively", () => {
     const { command, args, tempPromptFile } = buildLaunchArgs(
       { adapter: "codex" },
       "FAKE_SYSTEM_PROMPT",
+      "Hi",
     );
     expect(command).toBe("codex");
 
@@ -82,6 +97,7 @@ describe("buildLaunchArgs", () => {
     const { args, tempPromptFile } = buildLaunchArgs(
       { adapter: "codex", model: "gpt-5" },
       "x",
+      "Hi",
     );
     const idx = args.indexOf("--model");
     expect(idx).toBeGreaterThanOrEqual(0);
@@ -90,9 +106,19 @@ describe("buildLaunchArgs", () => {
     if (tempPromptFile) rmSync(tempPromptFile.replace(/\/[^/]+$/, ""), { recursive: true, force: true });
   });
 
+  it("codex: appends firstUserMessage as the LAST positional argv entry (Flavour A)", () => {
+    const { args, tempPromptFile } = buildLaunchArgs(
+      { adapter: "codex" },
+      "system",
+      "Please introduce yourself",
+    );
+    expect(args[args.length - 1]).toBe("Please introduce yourself");
+    if (tempPromptFile) rmSync(tempPromptFile.replace(/\/[^/]+$/, ""), { recursive: true, force: true });
+  });
+
   it("rejects unknown adapters with an actionable error", () => {
     expect(() =>
-      buildLaunchArgs({ adapter: "fake-agent" as "claude-code" }, "x"),
+      buildLaunchArgs({ adapter: "fake-agent" as "claude-code" }, "x", "Hi"),
     ).toThrow(/Help Assistant doesn't support adapter "fake-agent"/);
   });
 });

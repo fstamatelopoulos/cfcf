@@ -67,6 +67,7 @@ export interface GlobalConfig {
   documenterAgent: { adapter: string; model?: string };
   reflectionAgent?: { adapter: string; model?: string };
   helpAssistantAgent?: { adapter: string; model?: string };
+  productArchitectAgent?: { adapter: string; model?: string };
   reflectSafeguardAfter?: number;
   maxIterations: number;
   pauseEvery: number;
@@ -207,6 +208,31 @@ export function fetchActivity(): Promise<{ active: ActivityItem[] }> {
 
 export function fetchHistory(workspaceId: string): Promise<HistoryEvent[]> {
   return request<HistoryEvent[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/history`);
+}
+
+// --- Product Architect session detail (5.14 v2) ---
+
+export interface PaSessionFileSnapshot {
+  sessionId: string;
+  cachePath: string;
+  /** Markdown body of `<repo>/.cfcf-pa/session-<sessionId>.md`, or null if absent. */
+  sessionFile: string | null;
+  /** Relative path for display. */
+  sessionFilePath: string;
+  /** Markdown body of `<repo>/.cfcf-pa/workspace-summary.md`, or null if absent. */
+  workspaceSummary: string | null;
+  workspaceSummaryPath: string;
+  /** Parsed `<repo>/.cfcf-pa/meta.json`, or null if absent. */
+  meta: Record<string, unknown> | null;
+}
+
+export function fetchPaSessionFile(
+  workspaceId: string,
+  sessionId: string,
+): Promise<PaSessionFileSnapshot> {
+  return request<PaSessionFileSnapshot>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/pa-sessions/${encodeURIComponent(sessionId)}/file`,
+  );
 }
 
 // --- Help (5.8 PR2/PR3) ---

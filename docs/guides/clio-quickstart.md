@@ -145,6 +145,40 @@ cfcf clio docs get <id>
 cfcf clio docs ingest modified.md --project <p> --title "<same title>" --document-id <id> --author "<your name>"
 ```
 
+## Role-specific Clio Projects
+
+Beyond your own workspaces' Clio Projects, cf² uses a few **standardised Projects** for agent memory. You don't manage these directly — the agents do — but it's useful to know they exist for searching/inspection:
+
+| Project | Used by | Purpose |
+|---|---|---|
+| `cfcf-memory-pa` | [Product Architect](product-architect.md) (`cfcf spec`) | Per-workspace digest (`pa-workspace-memory`) + per-session archives (`pa-session-<sessionId>`) |
+| `cfcf-memory-global` | Product Architect + Help Assistant | Cross-workspace user preferences (single `pa-global-memory` doc) |
+| `cfcf-memory-ha` | Help Assistant (`cfcf help assistant`) | HA-specific session memory |
+| `cfcf-memory-reflection` | Reflection role | Iteration-loop reflection analyses (auto-ingested) |
+| `cfcf-memory-architect` | Solution Architect | Review notes (auto-ingested) |
+
+The launcher pre-creates `cfcf-memory-pa` + `cfcf-memory-global` at every PA launch so the agent's `cfcf clio docs ingest --project cfcf-memory-pa` lands correctly. cfcf's readers search by metadata project-agnostic (so docs that landed elsewhere historically still get picked up).
+
+To inspect what's in PA's per-workspace memory:
+
+```bash
+# Find the digest doc(s):
+cfcf clio metadata search --filter '{"role":"pa","artifact_type":"workspace-memory"}'
+
+# List per-session archives for a specific workspace:
+cfcf clio metadata search --filter '{"role":"pa","artifact_type":"session-archive","workspace_id":"<workspace-uuid>"}'
+
+# Read full content of any doc:
+cfcf clio docs get <id>
+
+# Search across all PA archives:
+cfcf clio search "<query>" --project cfcf-memory-pa
+```
+
+PA writes to these projects automatically; you don't need to manage them. But if you want to back up an entire PA history, the per-session archives + the digest are all there — just dump the project.
+
+---
+
 ## Where things live
 
 - **Clio DB**: `~/.cfcf/clio.db` (override via `CFCF_CLIO_DB`). Cross-workspace state, same tier as `~/.cfcf/logs/`.

@@ -43,6 +43,21 @@ export interface LaunchOptions {
   /** Full assembled system prompt (output of assembleHelpAssistantPrompt). */
   systemPrompt: string;
   /**
+   * First user message sent to the agent on launch (Flavour A —
+   * mirrors PA's design). Both `claude` and `codex` accept a
+   * positional `[PROMPT]` that becomes the user's opening message
+   * in interactive mode, so the agent self-introduces immediately
+   * rather than waiting for the user to type "hello" first.
+   *
+   * help.ts always provides this:
+   *   - If the user invoked `cfcf help assistant "question..."`, it's
+   *     the question verbatim (NOT supported in v1; reserved for a
+   *     future enhancement)
+   *   - Otherwise it's a default greeting that asks HA to introduce
+   *     itself + ask what kind of help the user needs.
+   */
+  firstUserMessage: string;
+  /**
    * Working directory for the agent. Defaults to process.cwd() so the
    * agent sees whichever repo the user invoked from. Override only for
    * tests / alternate launch contexts.
@@ -80,7 +95,11 @@ export interface LaunchArgs {
   tempPromptFile: string | null;
 }
 
-export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): LaunchArgs {
+export function buildLaunchArgs(
+  agent: AgentConfig,
+  systemPrompt: string,
+  firstUserMessage: string,
+): LaunchArgs {
   switch (agent.adapter) {
     case "claude-code": {
       // Interactive mode (no `-p` / `--prompt`); --append-system-prompt
@@ -95,8 +114,14 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       // Sonnet. Power users can override via config.helpAssistantAgent
       // or `--agent`-flow tweaks. (Codex has a similar concept via
       // its in-session `/fast` command; see codex case below.)
+      //
+      // The positional argument at the end is the user's opening
+      // message — interactive TUI opens with it pre-submitted so the
+      // agent responds immediately rather than waiting for "hello"
+      // (Flavour A).
       const args: string[] = ["--append-system-prompt", systemPrompt];
       args.push("--model", agent.model ?? "haiku");
+      args.push(firstUserMessage); // positional [prompt]
       return { command: "claude", args, tempPromptFile: null };
     }
     case "codex": {
@@ -106,11 +131,6 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       // `experimental_instructions_file`; still works but warns). We
       // write the prompt to a tempfile and pass the path. The launcher
       // cleans up the tempfile after the agent exits.
-      //
-      // Why not use ~/.codex/AGENTS.md or cwd-AGENTS.md instead? Both
-      // would either pollute the user's repo or require running the
-      // agent from a tempdir (losing the user's cwd context for
-      // diagnostics). Path-via-config-override is the cleanest.
       const dir = mkdtempSync(join(tmpdir(), "cfcf-ha-"));
       const promptFile = join(dir, "ha-instructions.md");
       writeFileSync(promptFile, systemPrompt, "utf-8");
@@ -124,6 +144,7 @@ export function buildLaunchArgs(agent: AgentConfig, systemPrompt: string): Launc
       if (agent.model) {
         args.push("--model", agent.model);
       }
+      args.push(firstUserMessage); // positional [PROMPT] (Flavour A)
       return { command: "codex", args, tempPromptFile: promptFile };
     }
     default:
@@ -157,7 +178,11 @@ export async function launchHelpAssistant(opts: LaunchOptions): Promise<LaunchRe
     );
   }
 
-  const { command, args, tempPromptFile } = buildLaunchArgs(opts.agent, opts.systemPrompt);
+  const { command, args, tempPromptFile } = buildLaunchArgs(
+    opts.agent,
+    opts.systemPrompt,
+    opts.firstUserMessage,
+  );
 
   try {
     // Bun.spawn with inherit stdio: the agent's TUI takes over the

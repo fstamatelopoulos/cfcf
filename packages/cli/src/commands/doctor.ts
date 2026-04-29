@@ -418,6 +418,42 @@ function checkHelpAssistant(): CheckResult {
 }
 
 /**
+ * Check whether the Product Architect prerequisites are met. PA
+ * (`cfcf spec`) launches the user's configured agent CLI in
+ * interactive mode against the user's repo. The agent itself drives
+ * `git init` / `cfcf workspace init` / Problem Pack authoring during
+ * the session, so the doctor's job is just to verify a supported
+ * agent CLI is reachable.
+ *
+ * Best-effort: `warn` worst case (PA isn't critical for cf² to work).
+ */
+function checkProductArchitect(): CheckResult {
+  const name = "Product Architect prerequisites";
+  const probes = [
+    { name: "claude-code", cmd: ["claude", "--version"] },
+    { name: "codex",       cmd: ["codex", "--version"] },
+  ];
+  const reachable: string[] = [];
+  for (const { name: adapterName, cmd } of probes) {
+    const r = spawnSync(cmd[0]!, cmd.slice(1), { encoding: "utf8" });
+    if (r.status === 0) reachable.push(adapterName);
+  }
+  if (reachable.length === 0) {
+    return {
+      name,
+      status: "warn",
+      detail: "no supported agent CLI on PATH (claude-code or codex). " +
+              "Install one to use `cfcf spec`. (Other cf² flows still work.)",
+    };
+  }
+  return {
+    name,
+    status: "ok",
+    detail: `${reachable.length} agent${reachable.length === 1 ? "" : "s"} reachable: ${reachable.join(", ")}.`,
+  };
+}
+
+/**
  * Check whether shell tab-completion is wired up. We're best-effort
  * here: this is a quality-of-life feature, not a correctness one, so
  * the worst-case status is `warn` (never `fail`).
@@ -509,6 +545,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkClioDb());
       results.push(checkHelpContent());
       results.push(checkHelpAssistant());
+      results.push(checkProductArchitect());
       results.push(checkShellCompletion());
       results.push(checkBunGlobalPkgDups());
 

@@ -44,6 +44,7 @@ const TOPIC_SUMMARIES: Record<string, string> = {
   workflow:        "Run a loop end-to-end: setup, Problem Pack, review, run, reflect",
   cli:             "Verb-by-verb CLI reference (server, workspace, run, clio, …)",
   clio:            "Cross-workspace memory: search, ingest, embedders, projects",
+  spec:            "Product Architect (cfcf spec): interactive Problem Pack authoring",
   installing:      "Install, upgrade, uninstall (curl, bun install -g, self-update)",
   troubleshooting: "Common issues + fixes; first stop after `cfcf doctor`",
   api:             "HTTP API reference (every server endpoint)",
@@ -75,6 +76,13 @@ function fmtHub(): string {
   rows.push("                         -- runs your configured dev agent (claude-code/codex) with");
   rows.push("                         the full cf² docs + your Clio memory in its system prompt.");
   rows.push("                         Permission-gated: it asks before every mutation.");
+  rows.push("");
+  rows.push("SDLC roles (top-level verbs; see `cfcf --help` for the full list):");
+  rows.push("  cfcf spec              Product Architect (interactive Problem Pack authoring)");
+  rows.push("  cfcf review            Solution Architect (review Problem Pack + emit plan)");
+  rows.push("  cfcf run               Start the dev/judge/reflect loop");
+  rows.push("  cfcf reflect           Ad-hoc strategic reflection");
+  rows.push("  cfcf document          Final docs (auto on SUCCESS)");
   rows.push("");
   rows.push("Other entry points:");
   rows.push("  cfcf --help            List every cfcf command + top-level flags");
@@ -153,6 +161,18 @@ function printTopic(slug: string): void {
   // / contribute. Goes to stderr so it doesn't pollute pipes.
   process.stderr.write(`\n--- source: ${topic.source} -- contribute via the cfcf repo\n`);
 }
+
+/**
+ * Default first user message when the user runs `cfcf help assistant`
+ * without an explicit question. Triggers HA's introduction immediately
+ * so the TUI never opens to an empty prompt (Flavour A — same pattern
+ * as PA's `cfcf spec` self-introduction).
+ */
+const DEFAULT_HA_GREETING_PROMPT =
+  "Please introduce yourself briefly (you're the cf² Help Assistant), " +
+  "mention what you can help with — you have the full cf² docs in your prompt " +
+  "plus access to my Clio memory and the cfcf CLI for diagnostics — and ask " +
+  "what I'd like help with.";
 
 interface AssistantOptions {
   workspace?: string;
@@ -270,7 +290,11 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   console.error("");
 
   try {
-    const result = await launchHelpAssistant({ agent, systemPrompt });
+    const result = await launchHelpAssistant({
+      agent,
+      systemPrompt,
+      firstUserMessage: DEFAULT_HA_GREETING_PROMPT,
+    });
     if (result.exitCode !== 0 && result.exitCode !== null) {
       // The agent itself exited non-zero. Surface for visibility.
       console.error(`\n[ha] agent exited with code ${result.exitCode}`);
@@ -283,6 +307,7 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
     process.exit(1);
   }
 }
+
 
 export function registerHelpCommand(program: Command): void {
   // Parent command: `cfcf help [topic]`. Default action (no arg) is the
@@ -334,4 +359,5 @@ export function registerHelpCommand(program: Command): void {
         printPrompt: opts.printPrompt,
       });
     });
+
 }

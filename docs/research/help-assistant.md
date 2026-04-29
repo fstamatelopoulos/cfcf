@@ -16,7 +16,7 @@
 - Allows mutations only through the agent's per-command permission prompt (no silent state changes)
 - Reads from + writes to a Clio "memory" namespace so cf² adapts to the user's preferences over time
 
-The HA is the **first** of two roles using this architecture. The **Product Architect (PA)** in iter-6 reuses the same machine with a narrower scope (problem-pack creation + iteration on specs/test-cases/success-criteria). Designing for both at once means iter-5's HA already establishes the patterns iter-6 inherits. Full PA design baseline: [`product-architect.md`](product-architect.md).
+The HA is the **first** role using this architecture. The **Product Architect (PA)** is the second role — invoked via top-level `cfcf spec` (NOT under `cfcf help`). PA originally reused HA's Pattern B injection, but the v2 design switched PA to Pattern A (same as HA) once it became clear that durability could be handled separately by a disk + Clio memory model. Full PA design baseline: [`product-architect-design.md`](product-architect-design.md).
 
 ## Why this design
 
@@ -342,7 +342,7 @@ When PA lands, the launcher should support **both patterns** and pick per-role:
 
 The launcher's per-adapter argv-builder is the right seam to extend. claude-code's analog of pattern B is `CLAUDE.md` auto-loading from cwd — same shape, different filename.
 
-**Full PA design baseline**: [`product-architect.md`](product-architect.md). It captures the role's specific scope (Problem Pack authoring + iteration), the discovery → bootstrap → spec-iteration → hand-off flow, the hard "no implementation drift" boundary, the `cfcf-memory-pa` schema, the `helpArchitectAgent` config field, and seven open questions tagged for iter-6 kickoff (verb shape, agent default, model default, bootstrap mode, sentinels in `cfcf-docs/AGENTS.md`, hand-off mechanics, cross-role memory merging).
+**Full PA design baseline**: [`product-architect-design.md`](product-architect-design.md). It captures the role's scope (Product Architect/Owner — primary = setup + specs; secondary = oversight; refuses other SDLC roles), the verb decision (`cfcf spec` — top-level, peer to `cfcf review` / `cfcf reflect` / `cfcf document`), the directory model (`<repo>/problem-pack/` for user specs; `<repo>/.cfcf-pa/` for PA's working memory cache), the disk + Clio memory protocol, and the switch from Pattern B (v1) to Pattern A (v2).
 
 ## v1 implementation scope
 
@@ -357,7 +357,7 @@ The launcher's per-adapter argv-builder is the right seam to extend. claude-code
 
 ### What's deferred to iter-6
 
-- **Product Architect role** — same machine, different system prompt, write access to Problem Pack files. Will be invoked as `cfcf help architect` (TBD; could be `cfcf workspace plan` to match the workspace-creation use case better).
+- **Product Architect role** — different system prompt, write access to Problem Pack files in `<repo>/problem-pack/`. Decided to ship as item 5.14, invoked via top-level `cfcf spec`. See `docs/research/product-architect-design.md`. Note: PA originally inherited HA's Pattern B (v1) but v2 switched to Pattern A (same as HA) — durability handled by disk + Clio memory model instead of durable system-prompt files.
 - **Web UI Help Assistant button** — once the CLI flow is dogfooded.
 - **Multi-turn session persistence** — resume conversations across cf² restarts. v1 sessions are ephemeral.
 - **Smarter memory retrieval** — currently dumps the whole memory project; iter-6 retrieves selectively based on query.

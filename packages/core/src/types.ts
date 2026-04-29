@@ -78,6 +78,35 @@ export interface CfcfGlobalConfig {
    */
   helpAssistantAgent?: AgentConfig;
   /**
+   * Default Product Architect (PA) agent configuration. PA is the
+   * cf² SDLC role responsible for **authoring + iterating the
+   * Problem Pack** (problem.md / success.md / process.md /
+   * constraints.md) -- the spec the dev/judge/reflect loop will
+   * satisfy. Peer to dev / judge / Solution Architect / reflection /
+   * documenter; sits at the START of the development flow (between
+   * `cfcf workspace init` and `cfcf review`).
+   *
+   * **Invocation**: `cfcf spec [task...]`. Unlike the other SDLC
+   * roles -- which run non-interactively (fire-and-forget agent
+   * process; structured signal files) -- PA runs **interactively**:
+   * the configured agent CLI's TUI takes over the user's current
+   * shell until exit, like the Help Assistant. Live spec iteration
+   * is inherent to PA's job; this is the one operational trait PA
+   * inherits from HA's launcher seam.
+   *
+   * **Hard "no implementation drift" boundary**: PA declines
+   * requests to write code, design architecture, or implement
+   * features and redirects to the appropriate role (dev /
+   * Solution Architect / Help Assistant).
+   *
+   * Backfilled to match `architectAgent` when missing (PA's spec-
+   * iteration workload is closer to the architect's "review + plan"
+   * profile than dev's "implement + test" one).
+   *
+   * Plan item 5.14. See `docs/research/product-architect-design.md`.
+   */
+  productArchitectAgent?: AgentConfig;
+  /**
    * Ceiling on the number of consecutive iterations the judge may skip
    * reflection via `reflection_needed: false`. On the (N+1)th consecutive
    * skip, cfcf forces reflection regardless. Default 3. (item 5.6 U1)

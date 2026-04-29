@@ -16,6 +16,7 @@ import {
   cleanupStaleRunningEvents,
   type ReviewHistoryEvent,
   type IterationHistoryEvent,
+  type PaSessionHistoryEvent,
 } from "./workspace-history.js";
 import type { ArchitectSignals } from "./types.js";
 
@@ -177,5 +178,100 @@ describe("ReviewHistoryEvent.signals persistence", () => {
     const e = events[0] as IterationHistoryEvent;
     expect(e.judgeDetermination).toBe("PROGRESS");
     expect((e as unknown as { signals?: unknown }).signals).toBeUndefined();
+  });
+});
+
+describe("project-history PA-session events (5.14 v2)", () => {
+  function makePaSessionEvent(
+    overrides: Partial<PaSessionHistoryEvent> = {},
+  ): PaSessionHistoryEvent {
+    return {
+      id: "pa-session-1",
+      type: "pa-session",
+      status: "running",
+      startedAt: "2026-04-29T10:00:00Z",
+      logFile: ".cfcf-pa/session-pa-2026-04-29-abc.md",
+      agent: "claude-code",
+      sessionId: "pa-2026-04-29-abc",
+      sessionFilePath: ".cfcf-pa/session-pa-2026-04-29-abc.md",
+      workspaceRegisteredAtStart: true,
+      gitInitializedAtStart: true,
+      problemPackFilesAtStart: 0,
+      ...overrides,
+    };
+  }
+
+  test("appendHistoryEvent + readHistory roundtrip a PA-session event", async () => {
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    const events = await readHistory(PROJECT_ID);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("pa-session");
+    const pa = events[0] as PaSessionHistoryEvent;
+    expect(pa.sessionId).toBe("pa-2026-04-29-abc");
+    expect(pa.workspaceRegisteredAtStart).toBe(true);
+    expect(pa.problemPackFilesAtStart).toBe(0);
+  });
+
+  test("updateHistoryEvent enriches a running PA-session with completion data", async () => {
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    await updateHistoryEvent(PROJECT_ID, "pa-session-1", {
+      status: "completed",
+      completedAt: "2026-04-29T10:25:00Z",
+      exitCode: 0,
+      outcomeSummary: "Drafted problem.md and success.md.",
+      decisionsCount: 3,
+      clioWorkspaceMemoryDocId: "doc-uuid-1",
+    } as Partial<PaSessionHistoryEvent>);
+
+    const events = await readHistory(PROJECT_ID);
+    const pa = events[0] as PaSessionHistoryEvent;
+    expect(pa.status).toBe("completed");
+    expect(pa.outcomeSummary).toContain("Drafted");
+    expect(pa.decisionsCount).toBe(3);
+    expect(pa.clioWorkspaceMemoryDocId).toBe("doc-uuid-1");
+    expect(pa.exitCode).toBe(0);
+  });
+
+  test("cleanupStaleRunningEvents does NOT touch running PA sessions (decoupled from server lifecycle)", async () => {
+    // PA's agent + launcher run in the user's terminal, not as
+    // server children. Server restart is irrelevant to their status.
+    // Cleanup must skip them, otherwise an actually-still-running
+    // session shows up in the History tab as "failed" until the user
+    // closes their PA shell (which is wrong + confusing).
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent());
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(0);
+    const events = await readHistory(PROJECT_ID);
+    expect(events[0].status).toBe("running");
+    expect((events[0] as PaSessionHistoryEvent).error).toBeUndefined();
+  });
+
+  test("cleanupStaleRunningEvents still cleans up other event types (iteration/review/document/reflection)", async () => {
+    // Mixed: a running iteration + a running PA session. Iteration
+    // gets cleaned up; PA session is left alone.
+    await appendHistoryEvent(PROJECT_ID, {
+      id: "iter-99",
+      type: "iteration",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      logFile: "iteration-099-dev.log",
+      agent: "codex",
+      iteration: 99,
+      branch: "cfcf/iteration-99",
+      devLogFile: "iteration-099-dev.log",
+      judgeLogFile: "iteration-099-judge.log",
+      devAgent: "codex",
+      judgeAgent: "codex",
+    } as IterationHistoryEvent);
+    await appendHistoryEvent(PROJECT_ID, makePaSessionEvent({ id: "pa-99" }));
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(1); // only the iteration
+
+    const events = await readHistory(PROJECT_ID);
+    const iter = events.find((e) => e.id === "iter-99");
+    const pa = events.find((e) => e.id === "pa-99");
+    expect(iter?.status).toBe("failed");
+    expect(pa?.status).toBe("running");
   });
 });

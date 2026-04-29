@@ -344,6 +344,7 @@ function rewriteLink(url: string): string {
     "workflow.md": "workflow",
     "cli-usage.md": "cli",
     "clio-quickstart.md": "clio",
+    "product-architect.md": "spec",
     "installing.md": "installing",
     "troubleshooting.md": "troubleshooting",
     "server-api.md": "api",

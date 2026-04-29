@@ -20,7 +20,7 @@ const HISTORY_FILENAME = "history.json";
 
 // --- Event types ---
 
-export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
+export type HistoryEventType = "review" | "iteration" | "document" | "reflection" | "pa-session";
 
 export type HistoryEventStatus = "running" | "completed" | "failed";
 
@@ -121,11 +121,70 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   exitCode?: number;
 }
 
+/**
+ * Product Architect (PA) interactive session. Unlike the other event
+ * types -- which are fire-and-forget agent runs with structured signal
+ * outputs -- a PA session is interactive: the user chats with PA via
+ * the agent CLI's TUI, and the "outcome" is a Markdown session log +
+ * (optionally) a Clio doc update. cfcf writes the bracket info
+ * (start/end/exit code/agent config); the agent itself optionally
+ * writes a `lastSession` block to `<repo>/.cfcf-pa/meta.json` that
+ * cfcf reads on exit to enrich the entry.
+ *
+ * Plan item 5.14 v2 follow-up. Design:
+ * `docs/research/product-architect-design.md` §"History tracking".
+ */
+export interface PaSessionHistoryEvent extends BaseHistoryEvent {
+  type: "pa-session";
+  /** PA's session_id (e.g. `pa-2026-04-29T06-07-13-abc123`). */
+  sessionId: string;
+  /**
+   * Path to the session scratchpad relative to the workspace's repo,
+   * e.g. `.cfcf-pa/session-pa-2026-04-29T06-07-13-abc123.md`. The web
+   * UI fetches this through `/api/workspaces/:id/pa-sessions/:sessionId/file`.
+   */
+  sessionFilePath: string;
+  /**
+   * One-line summary of what was accomplished in this session.
+   * Written by the PA agent into `<repo>/.cfcf-pa/meta.json` under
+   * `lastSession.outcomeSummary`; cfcf reads it post-spawn. Absent
+   * when the agent didn't save (Ctrl-D without a "save before you
+   * go?" yes).
+   */
+  outcomeSummary?: string;
+  /**
+   * Number of decisions/rejections/preferences the agent captured in
+   * this session. Read from `lastSession.decisionsCount` in
+   * `meta.json`. Absent when the agent didn't save.
+   */
+  decisionsCount?: number;
+  /**
+   * Clio doc ID for the per-workspace `pa-workspace-memory` doc that
+   * was updated at session end. Surfaced in the web UI as a deep link
+   * to the Clio browser. Absent when no Clio sync happened.
+   */
+  clioWorkspaceMemoryDocId?: string;
+  /** Exit code of the agent process. */
+  exitCode?: number;
+  /** Whether the workspace was registered when PA launched. */
+  workspaceRegisteredAtStart: boolean;
+  /** Whether the repo was a git repo when PA launched. */
+  gitInitializedAtStart: boolean;
+  /**
+   * Snapshot of how many of the 5 canonical Problem Pack files
+   * (problem.md, success.md, constraints.md, hints.md, style-guide.md)
+   * existed when PA launched. Helps the history reader understand
+   * what state PA started from.
+   */
+  problemPackFilesAtStart: number;
+}
+
 export type HistoryEvent =
   | ReviewHistoryEvent
   | IterationHistoryEvent
   | DocumentHistoryEvent
-  | ReflectionHistoryEvent;
+  | ReflectionHistoryEvent
+  | PaSessionHistoryEvent;
 
 // --- Storage ---
 
@@ -199,12 +258,20 @@ export async function cleanupStaleRunningEvents(
   let changed = 0;
   const now = new Date().toISOString();
   for (const event of events) {
-    if (event.status === "running") {
-      event.status = "failed";
-      event.error = reason;
-      event.completedAt = now;
-      changed++;
-    }
+    if (event.status !== "running") continue;
+    // Skip event types that aren't tied to the server's lifecycle.
+    // Product Architect (`pa-session`) sessions run in the USER's
+    // terminal — both the agent CLI + the launcher that writes the
+    // history entry are in the user's process, not the server's.
+    // Server restart doesn't affect them; their completion entry
+    // arrives whenever the user exits PA. Marking them failed at
+    // cleanup time would corrupt an actually-still-running session
+    // (and the launcher's eventual update would have to undo it).
+    if (event.type === "pa-session") continue;
+    event.status = "failed";
+    event.error = reason;
+    event.completedAt = now;
+    changed++;
   }
   if (changed > 0) {
     await writeHistory(workspaceId, events);

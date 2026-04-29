@@ -22,6 +22,7 @@ import type {
   LoopState,
   HistoryEvent,
   IterationHistoryEvent,
+  PaSessionHistoryEvent,
   ReviewState,
   DocumentState,
 } from "../types";
@@ -104,6 +105,28 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const isLoopActive = !!loopState && LOOP_ACTIVE_PHASES.includes(loopState.phase);
   const isReviewActive = !!reviewState && REVIEW_ACTIVE_STATUSES.includes(reviewState.status);
   const isDocumentActive = !!documentState && DOCUMENT_ACTIVE_STATUSES.includes(documentState.status);
+
+  // PA sessions are interactive — they live in the user's terminal,
+  // not as server children. The Status tab learns about them through
+  // the History event log, where the launcher writes a `running`
+  // entry at session start + a completion entry at session end.
+  // (The server-restart cleanup correctly leaves these alone — see
+  // packages/core/src/workspace-history.ts.)
+  const activePaSessions = history
+    .filter((e): e is PaSessionHistoryEvent => e.type === "pa-session" && e.status === "running")
+    // Newest first by startedAt so the most recently launched is shown first
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+
+  const lastCompletedPaSession = history
+    .filter((e): e is PaSessionHistoryEvent => e.type === "pa-session" && e.status !== "running")
+    .sort((a, b) => ((a.completedAt ?? a.startedAt) < (b.completedAt ?? b.startedAt) ? 1 : -1))[0];
+
+  // True "nothing's ever happened here" guard: the workspace has zero
+  // history events AND no pending review/document/loop state. Until
+  // now this only checked the three non-interactive states; PA sessions
+  // counted as "nothing has run" because they only show up in History.
+  const trulyEmpty =
+    !loopState && !reviewState && !documentState && history.length === 0;
   const activeAgent: ActiveAgent = isLoopActive
     ? "loop"
     : isReviewActive
@@ -342,9 +365,79 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                 </div>
               </div>
             )}
-            {!loopState && !reviewState && !documentState && (
+            {activePaSessions.length > 0 && (
+              <div className="status-panel__section">
+                <h3>
+                  Product Architect session{activePaSessions.length === 1 ? "" : "s"} active
+                  <span
+                    className="status-panel__timestamp"
+                    style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem", color: "var(--color-info)" }}
+                  >
+                    (interactive — runs in the user's terminal)
+                  </span>
+                </h3>
+                <ul className="status-panel__info" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {activePaSessions.map((s) => (
+                    <li key={s.id} style={{ marginBottom: "0.4rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("history")}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          color: "var(--color-primary-hover)",
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          fontSize: "inherit",
+                          textDecoration: "underline",
+                        }}
+                        title="Click to jump to the History tab"
+                      >
+                        Session <code>{s.sessionId}</code>
+                      </button>
+                      {" — agent "}{s.agent}{s.model ? `:${s.model}` : ""}
+                      {" — started "}{new Date(s.startedAt).toLocaleString()}
+                      {" — running for "}{formatDurationSinceStart(s.startedAt)}
+                    </li>
+                  ))}
+                </ul>
+                <p style={{ fontSize: "0.85rem", color: "var(--color-text-muted)", marginTop: "0.6rem" }}>
+                  PA sessions write turn-by-turn to the user's local <code>.cfcf-pa/</code>; they're
+                  unaffected by server restarts. To view full session detail (scratchpad, workspace
+                  summary, meta.json), open the row in the History tab.
+                </p>
+              </div>
+            )}
+            {activePaSessions.length === 0 && lastCompletedPaSession && !loopState && !reviewState && !documentState && (
+              <div className="status-panel__section">
+                <h3>
+                  Last Product Architect session
+                  {lastCompletedPaSession.completedAt && (
+                    <span
+                      className="status-panel__timestamp"
+                      style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                    >
+                      ({new Date(lastCompletedPaSession.completedAt).toLocaleString()})
+                    </span>
+                  )}
+                </h3>
+                <div className="status-panel__info">
+                  <span>Status: {lastCompletedPaSession.status}</span>
+                  {lastCompletedPaSession.outcomeSummary && (
+                    <span>Outcome: {lastCompletedPaSession.outcomeSummary}</span>
+                  )}
+                  {typeof lastCompletedPaSession.decisionsCount === "number" && lastCompletedPaSession.decisionsCount > 0 && (
+                    <span>Decisions captured: {lastCompletedPaSession.decisionsCount}</span>
+                  )}
+                </div>
+              </div>
+            )}
+            {trulyEmpty && (
               <div className="status-panel__empty">
-                Nothing has run yet. Click Review to start, or Start Loop to begin iterating.
+                Nothing has run yet. Click <strong>Review</strong> or <strong>Start Loop</strong> to
+                begin, or run <code>cfcf spec</code> in this workspace's repo to launch the Product
+                Architect for interactive Problem Pack authoring.
               </div>
             )}
           </div>
@@ -371,4 +464,25 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Compact "running for Xm Ys" summary for a PA session whose endedAt
+ * is unknown (still running). Updates each render — the parent
+ * polls history every few seconds, which is enough granularity for
+ * an interactive session.
+ */
+function formatDurationSinceStart(startedAt: string): string {
+  try {
+    const ms = Date.now() - new Date(startedAt).getTime();
+    if (Number.isNaN(ms) || ms < 0) return "—";
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    return `${hr}h ${min % 60}m`;
+  } catch {
+    return "—";
+  }
 }

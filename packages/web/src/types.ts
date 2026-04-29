@@ -160,7 +160,7 @@ export interface HealthResponse {
 
 // --- Workspace history ---
 
-export type HistoryEventType = "review" | "iteration" | "document" | "reflection";
+export type HistoryEventType = "review" | "iteration" | "document" | "reflection" | "pa-session";
 
 export type IterationHealth =
   | "converging"
@@ -280,8 +280,31 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   exitCode?: number;
 }
 
+/**
+ * Product Architect interactive session. Plan item 5.14 v2.
+ * Mirrors PaSessionHistoryEvent in @cfcf/core's workspace-history.ts.
+ */
+export interface PaSessionHistoryEvent extends BaseHistoryEvent {
+  type: "pa-session";
+  /** PA's session_id (e.g. `pa-2026-04-29T06-07-13-abc123`). */
+  sessionId: string;
+  /** Path to the session scratchpad relative to the workspace's repo. */
+  sessionFilePath: string;
+  /** One-line summary written by PA on session save. */
+  outcomeSummary?: string;
+  /** Decisions/rejections/preferences captured this session. */
+  decisionsCount?: number;
+  /** Clio doc ID for `pa-workspace-memory` (link to the canonical store). */
+  clioWorkspaceMemoryDocId?: string;
+  exitCode?: number;
+  workspaceRegisteredAtStart: boolean;
+  gitInitializedAtStart: boolean;
+  problemPackFilesAtStart: number;
+}
+
 export type HistoryEvent =
   | ReviewHistoryEvent
   | IterationHistoryEvent
   | DocumentHistoryEvent
-  | ReflectionHistoryEvent;
+  | ReflectionHistoryEvent
+  | PaSessionHistoryEvent;

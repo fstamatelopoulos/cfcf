@@ -190,6 +190,43 @@ cfcf workspace delete my-project
 
 ---
 
+## Product Architect (interactive Problem Pack authoring)
+
+### `cfcf spec [task...]`
+
+Launch the **Product Architect** — an interactive cf² agent that helps you author + iterate the Problem Pack files (`problem-pack/problem.md` / `success.md` / `constraints.md` / `hints.md` / `style-guide.md` / `context/*.md`). The agent CLI's TUI takes over your shell until you exit. PA has the full cf² docs in its system prompt, so it knows what each file is for + how downstream agents will use them.
+
+```bash
+cfcf spec                                          # interactive on cwd
+cfcf spec "Tighten the success.md auth criteria"   # opens with this task
+cfcf spec --repo /path/to/elsewhere                # explicit repo path
+cfcf spec --agent claude-code                      # override config.productArchitectAgent
+cfcf spec --print-prompt                           # debug: print prompt + exit
+cfcf spec --safe                                   # opt back into per-command permission prompts
+```
+
+**What PA does:**
+- Greets + summarises the State Assessment cf² injects at launch (git status, workspace registration, Problem Pack files, server, prior memory)
+- Insists on `git init` + `cfcf workspace init` first if missing (drives both itself, with permission)
+- Drafts the Problem Pack files with you, asking clarifying questions
+- Reviews existing Problem Pack content + suggests refinements (before/after loops)
+- Persists session memory in Clio + locally on disk
+
+**PA hard-refuses to:** write code (→ dev role), design architecture or write `plan.md` (→ Solution Architect), review iteration quality (→ judge), do reflection (→ `cfcf reflect`), write final docs (→ `cfcf document`). It redirects you to the right role.
+
+**Permissions.** By default PA runs with **full permissions** — same as the iteration-time agents. The user accepted this trust contract at `cfcf init`; PA inherits it. `--safe` opts back into per-command permission prompts + the default codex sandbox for one session.
+
+**Memory.** PA maintains a three-tier memory:
+- `pa-workspace-memory` (Clio, one per workspace) — the rolling **digest** that gets injected into every PA prompt
+- `pa-session-<sessionId>` (Clio, one per session) — full transcript **archive**, immutable
+- `<repo>/.cfcf-pa/session-<id>.md` (disk, one per session) — live scratchpad written turn-by-turn
+
+Plus `pa-global-memory` (Clio, one cross-workspace doc) for user preferences spanning all workspaces.
+
+See [`product-architect.md`](product-architect.md) for the full reference (memory protocol, sandbox details, web UI integration).
+
+---
+
 ## Solution Architect Review
 
 ### `cfcf review`
@@ -809,11 +846,18 @@ override the global default.
 cfcf init                                          # Configure agents and defaults
 cfcf server start                                  # Start the server
 
-# Per-workspace setup
-cfcf workspace init --repo /path/to/repo --name my-app
+# Per-workspace setup + Problem Pack -- two paths:
 
-# Define the problem
-# Edit problem-pack/problem.md and success.md with your problem definition
+# Path A (recommended): interactive Product Architect drives both
+cd /path/to/repo
+cfcf spec
+# PA introduces itself, offers to run `git init` if needed, drives
+# `cfcf workspace init` (eliciting workspace name in conversation),
+# then helps draft + iterate problem-pack/* with you.
+
+# Path B: do it manually
+cfcf workspace init --repo /path/to/repo --name my-app
+# Edit problem-pack/problem.md, problem-pack/success.md, etc. yourself
 
 # Architect review (recommended before unattended development)
 cfcf review --workspace my-app                       # Architect identifies gaps

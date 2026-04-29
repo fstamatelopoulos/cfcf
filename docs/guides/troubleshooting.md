@@ -220,6 +220,61 @@ To prevent: always pass `--reindex` to `embedder set` (the prompt reminds you).
 
 ---
 
+## Product Architect (`cfcf spec`) issues
+
+### PA reports "cfcf server is not running" but it IS running
+
+Symptom: in the PA session the agent reports the server is down, but `cfcf server status` from another terminal shows it running.
+
+Cause: you're in `--safe` mode AND you're using codex. Codex's default sandbox (`workspace-write`) blocks loopback/`127.0.0.1` in many configurations, so `cfcf server status` from inside the agent's bash tool can't reach the server.
+
+Fix:
+- Drop `--safe` for normal sessions. PA's default mode (no flag) uses `sandbox_mode=danger-full-access`, which lifts the loopback restriction. Localhost-targeting cfcf CLI commands work from inside the agent.
+- Or trust the State Assessment in PA's prompt — cfcf computed it from outside any sandbox before launching the agent, so it's authoritative. PA should defer to that when there's a conflict.
+
+### PA's Memory Inventory says "no workspace memory" but I had a session yesterday
+
+Symptom: you ran PA before, decisions were made, but the new session's prompt shows the per-workspace memory section as empty.
+
+Cause: pre-fix, the agent's `cfcf clio docs ingest` may have auto-routed to the `default` Clio Project (because `cfcf-memory-pa` didn't exist). cfcf's reader was project-scoped to `cfcf-memory-pa`, so it missed the orphaned doc.
+
+Fix: this should resolve on its own with cfcf v0.x.x and later — the launcher pre-creates `cfcf-memory-pa` + `cfcf-memory-global` Clio Projects, and the reader now searches by metadata (project-agnostic). If you have an old orphaned doc, find it:
+
+```bash
+cfcf clio metadata search --filter '{"role":"pa","artifact_type":"workspace-memory"}'
+```
+
+If a doc shows up under `project: default`, the next PA session will find it via metadata search regardless of project, and you can ask PA to resync it to the right project. Or migrate it manually:
+
+```bash
+cfcf clio docs edit <id> --project cfcf-memory-pa
+```
+
+### Session ended without saving (Ctrl-D)
+
+Symptom: PA was helpful but you closed the terminal without responding to the "save before you go?" prompt.
+
+Don't worry — disk session log at `<repo>/.cfcf-pa/session-<id>.md` is preserved (PA writes turn-by-turn, not just on save). On the next `cfcf spec` launch:
+
+- The State Assessment will detect the unsaved disk file
+- PA will offer to push it to Clio as a `pa-session-<id>` archive doc + update the digest
+- No data loss
+
+If you want to manually inspect what's there: `cat <repo>/.cfcf-pa/session-<id>.md`.
+
+### PA opens to an empty TUI / doesn't introduce itself
+
+Expected behavior is for PA to greet you immediately on launch (Flavour A: agent CLI's positional `[PROMPT]` is set to a self-introduce message). If you instead see a blank prompt waiting for input:
+
+- Make sure you're on the latest cfcf — `cfcf --version`
+- Some agent CLI versions may not honour positional prompts in interactive mode. Type "Please run your session-start protocol" or just "hello" — PA will pick up from there.
+
+### "I see local PA memory not synced to Clio — want me to push it now?"
+
+This is intentional behavior, not a bug. PA detected a discrepancy between the Clio digest and your local `.cfcf-pa/workspace-summary.md`. Most often it's the Ctrl-D recovery path (last session wrote disk but didn't push to Clio). Just say yes — PA will sync them and you're caught up.
+
+---
+
 ## `bun install -g` warnings
 
 ### "warn: Duplicate key '@cerefox/cfcf-cli' in object literal"
