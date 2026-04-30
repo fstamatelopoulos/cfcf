@@ -9,7 +9,19 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+In flight on `iteration-5/npm-publish-5.5b`. Steps 1-6 of an 8-step plan are complete; steps 7 (pre-flight test) and 8 (real publish) are pending. Versions land here once 5.5b ships.
+
+### npm publish pipeline (5.5b, in progress)
+
+- **Package renamed to `@cerefox/codefactory`** (was `@cerefox/cfcf-cli`). The CLI binary stays `cfcf` — only the npm package name changes. Native packages renamed to `@cerefox/codefactory-native-<platform>`. Rationale + decision log: [`docs/research/npm-publish-5.5b-audit.md`](docs/research/npm-publish-5.5b-audit.md).
+- **License switched from `UNLICENSED` to `Apache-2.0`** to match the rest of the Cerefox ecosystem. `LICENSE` file added at the repo root.
+- **`os` + `cpu` declared on the main package itself** (`darwin`/`linux` × `arm64`/`x64`) so `bun install -g @cerefox/codefactory` on Windows-native or FreeBSD fails fast at install time with `EBADPLATFORM` instead of silently succeeding without the matching native package and crashing at first run.
+- **Legacy `@cerefox/cfcf-*` resolution fallback removed** from `constants.ts` / `clio/db.ts` / `doctor.ts` for security: the legacy name can never silently take effect at runtime.
+- **`release.yml` rewritten** with three new pieces: a `publish_to_npm` workflow_dispatch input (default OFF — the GitHub Release leg keeps working unchanged); an `npm publish --dry-run` canary job that runs unconditionally on every release run; a gated real `npm publish` job (native packages first, CLI second, `--access public`) that runs only when `publish_to_npm=true` AND the dry-run passed.
+- **`scripts/build-cli.sh`** version resolution: positional arg → `CFCF_VERSION` env var → root `package.json` (was hardcoded to `v0.0.0-dev`). Build banner reports the source so debugging is trivial. Published `package.json` carries proper npm metadata (`repository`, `homepage`, `bugs`, `keywords`, `description`).
+- **`scripts/install.sh`** defaults to npm; tarball mode auto-engages when `CFCF_BASE_URL` is set or with `CFCF_INSTALL_SOURCE=tarball`. Bun bootstrap + bun-global dedup workaround preserved in both paths.
+- **`cfcf self-update`** rewritten to mirror `install.sh`'s install-source resolution. Default: `bun install -g @cerefox/codefactory@latest`. Latest-version detection via `https://registry.npmjs.org/@cerefox/codefactory/latest` (no npm CLI dependency). Tarball fallback preserved with `--source tarball` / `--base-url`. 17 unit tests cover the source/version resolver. Replaces dead-code MANIFEST detection that had been silently failing since 5.5.
+- **Post-install banner extended** with a third item ("First time? Run `cfcf doctor && cfcf init`") so direct `bun install -g @cerefox/codefactory` users get the same first-run nudge that `scripts/install.sh` users have always had. Items 1 + 2 unchanged.
 
 ## [0.16.1] -- 2026-04-29
 
