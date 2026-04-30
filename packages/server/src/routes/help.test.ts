@@ -48,7 +48,7 @@ describe("Help routes", () => {
     const body = await res.json();
     expect(body.slug).toBe("manual");
     expect(typeof body.content).toBe("string");
-    expect(body.content).toContain("# cfcf User Manual");
+    expect(body.content).toContain("# cf² User Manual");
   });
 
   it("GET /api/help/topics/:slug resolves aliases to the canonical entry", async () => {
