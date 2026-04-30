@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish_to_npm:
+        description: 'Also publish @cerefox/codefactory + @cerefox/codefactory-native-* to npmjs.com. Irreversible -- npm version numbers are reserved forever once published. Default OFF: GitHub Release only.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write      # gh release create
@@ -64,7 +69,7 @@ jobs:
 
   # ── per-platform native package build ──────────────────────────────
   # Compiles the pinned libsqlite3 + downloads the matching sqlite-vec
-  # asset, packs them into @cerefox/cfcf-native-<platform>-X.Y.Z.tgz.
+  # asset, packs them into @cerefox/codefactory-native-<platform>-X.Y.Z.tgz.
   # Each leg runs on a runner of the matching arch so libsqlite3 ends
   # up native-binary-correct without cross-compilation.
   build-native:
@@ -97,8 +102,8 @@ jobs:
           name: cfcf-native-${{ matrix.platform }}
           retention-days: 1
           path: |
-            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz
-            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz.sha256
+            dist/cerefox-codefactory-native-${{ matrix.platform }}-*.tgz
+            dist/cerefox-codefactory-native-${{ matrix.platform }}-*.tgz.sha256
 
   # ── single CLI build ────────────────────────────────────────────────
   # The bundled JS is platform-independent (the heavy native deps are
@@ -179,7 +184,148 @@ jobs:
             --verify-tag \
             $flag \
             dist/cfcf-*.tgz \
-            dist/cerefox-cfcf-native-*.tgz \
+            dist/cerefox-codefactory-native-*.tgz \
             dist/SHA256SUMS \
             dist/MANIFEST.txt \
             dist/install.sh
+
+  # ── npm publish dry-run (always runs; canary) ──────────────────────
+  # Validates each tarball's shape against the npm registry without
+  # actually publishing. Catches problems that would only otherwise
+  # surface during the real publish: malformed package.json, version
+  # already taken, name not under our scope, files missing from the
+  # tarball, etc. ~5s of cheap signal that runs on every release run
+  # regardless of whether the user opted into the real publish leg.
+  #
+  # No auth needed: dry-run doesn't push anything, so NPM_TOKEN is not
+  # consumed here. (If a future npm change ever required auth for
+  # dry-run, this job would surface that loudly before the real-publish
+  # leg ever runs.)
+  npm-dryrun:
+    needs: [build-native, build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: npm publish --dry-run (native packages)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(dist/cerefox-codefactory-native-*.tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "::error::no native tarballs found in dist/"
+            exit 1
+          fi
+          for tgz in "${tarballs[@]}"; do
+            echo "::group::dry-run $tgz"
+            npm publish --dry-run "$tgz"
+            echo "::endgroup::"
+          done
+
+      - name: npm publish --dry-run (CLI)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(dist/cfcf-*.tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "::error::no CLI tarballs found in dist/"
+            exit 1
+          fi
+          for tgz in "${tarballs[@]}"; do
+            echo "::group::dry-run $tgz"
+            npm publish --dry-run "$tgz"
+            echo "::endgroup::"
+          done
+
+  # ── npm publish (real; gated + irreversible) ───────────────────────
+  # Only runs when the user explicitly checks `publish_to_npm` in the
+  # workflow_dispatch UI. Order matters: native packages first (so the
+  # CLI's optionalDependencies entries already exist on the registry
+  # by the time the CLI manifest lands), CLI second.
+  #
+  # `--access public` is required on first publish under a scoped name
+  # (`@cerefox/...`); npm remembers the setting after that. Set on every
+  # call so a fresh package's first publish is always public-by-default.
+  #
+  # Auth: NODE_AUTH_TOKEN is the standard env var actions/setup-node
+  # configures npm CLI to read. It must be a granular access token
+  # scoped to `@cerefox/codefactory` + `@cerefox/codefactory-native-*`
+  # (decided 2026-04-29; see docs/research/npm-publish-5.5b-audit.md
+  # R3). Stored as `secrets.NPM_TOKEN` on the repo. Until the user adds
+  # it (step 8 of the 8-step plan), this job will fail with a clear
+  # auth error -- which is the correct behaviour: irreversible publish
+  # should NOT silently succeed without credentials, but more
+  # importantly should NOT happen by accident before the user is ready.
+  #
+  # Recommended: bind this job to a GitHub Environment (`npm-publish`)
+  # with a required-reviewers approval rule. Configured outside the
+  # workflow file (Settings → Environments) so the YAML stays clean.
+  npm-publish:
+    needs: [build-native, build-cli, npm-dryrun]
+    if: ${{ inputs.publish_to_npm }}
+    runs-on: ubuntu-latest
+    # environment: npm-publish    # uncomment after creating the env
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: npm publish (native packages, first)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(dist/cerefox-codefactory-native-*.tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "::error::no native tarballs found in dist/"
+            exit 1
+          fi
+          for tgz in "${tarballs[@]}"; do
+            echo "::group::publish $tgz"
+            npm publish --access public "$tgz"
+            echo "::endgroup::"
+          done
+
+      - name: npm publish (CLI, last)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(dist/cfcf-*.tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "::error::no CLI tarballs found in dist/"
+            exit 1
+          fi
+          for tgz in "${tarballs[@]}"; do
+            echo "::group::publish $tgz"
+            npm publish --access public "$tgz"
+            echo "::endgroup::"
+          done
+
+      - name: Print install hint
+        run: |
+          echo "::notice::Published to npmjs.com. Install with: bun install -g @cerefox/codefactory"

@@ -277,7 +277,7 @@ This is intentional behavior, not a bug. PA detected a discrepancy between the C
 
 ## `bun install -g` warnings
 
-### "warn: Duplicate key '@cerefox/cfcf-cli' in object literal"
+### "warn: Duplicate key '@cerefox/codefactory' in object literal"
 
 Known Bun bug: `bun install -g <local-tarball>` appends duplicate keys to `~/.bun/install/global/{package.json,bun.lock}` instead of overwriting. Functionally harmless (last-occurrence wins on parse) but produces screens of warnings.
 
@@ -330,8 +330,8 @@ cfcf server stop
 cfcf completion uninstall
 
 # 3. Remove the global package
-bun remove -g @cerefox/cfcf-cli
-bun remove -g @cerefox/cfcf-native-darwin-arm64    # or your platform
+bun remove -g @cerefox/codefactory
+bun remove -g @cerefox/codefactory-native-darwin-arm64    # or your platform
 
 # 4. (optional) wipe the install state -- leaves your data alone
 rm -rf ~/.bun/install/global/{package.json,bun.lock,node_modules}

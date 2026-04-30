@@ -3,6 +3,12 @@
   "private": true,
   "version": "0.16.1",
   "description": "Cerefox Code Factory (cf²) -- deterministic orchestration harness for AI coding agents",
+  "homepage": "https://github.com/fstamatelopoulos/cfcf",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fstamatelopoulos/cfcf.git"
+  },
+  "license": "Apache-2.0",
   "workspaces": [
     "packages/core",
     "packages/server",
@@ -20,7 +26,7 @@
     "dev:cli": "bun run packages/cli/src/index.ts",
     "typecheck": "tsc --noEmit",
     "build:web": "cd packages/web && bun run build && cd ../.. && bun run scripts/embed-web-dist.ts",
-    "build": "scripts/build-cli.sh v0.0.0-dev"
+    "build": "scripts/build-cli.sh"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

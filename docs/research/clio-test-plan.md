@@ -57,7 +57,7 @@ Three PRs shipped as one branch. Pipeline is end-to-end: Clio DB is created on d
 - **Hybrid search** in `LocalClio.search`: mode=`"fts"` (default), `"semantic"` (pure vector), `"hybrid"` (RRF fusion k=60 over FTS top-N + vector top-N). Brute-force cosine over candidate set (no sqlite-vec extension yet; design doc §4.1 says it's fine at our scale).
 - **Small-to-big expansion**: each hit's `content` is expanded inline with its ±N siblings using the active embedder's recommended radius.
 - **Embedder CLI**: `cfcf clio embedder {list,active,install,set}` (+ `--force` + `--json`). HTTP: `GET /api/clio/embedders`, `POST /api/clio/embedders/install`, `POST /api/clio/embedders/set`.
-- **Build** (during the Clio iteration; superseded in v0.10.0): originally `bun build --compile` with `--external @huggingface/transformers --external onnxruntime-node --external sharp` so the native-binding packages didn't blow up the compiler. Binary stayed lean (~64 MB); transformers was installed via node_modules on the host. Item 5.5 (v0.10.0) replaced this with the npm-format `bun build` (no `--compile`); same external set carries over but the bundled JS now ships as `@cerefox/cfcf-cli`.
+- **Build** (during the Clio iteration; superseded in v0.10.0): originally `bun build --compile` with `--external @huggingface/transformers --external onnxruntime-node --external sharp` so the native-binding packages didn't blow up the compiler. Binary stayed lean (~64 MB); transformers was installed via node_modules on the host. Item 5.5 (v0.10.0) replaced this with the npm-format `bun build` (no `--compile`); same external set carries over but the bundled JS now ships as `@cerefox/codefactory` (5.5b naming; pre-rename: `@cerefox/cfcf-cli`).
 
 ### Tests
 

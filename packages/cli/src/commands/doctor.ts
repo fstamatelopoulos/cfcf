@@ -51,19 +51,20 @@ function checkCfcfPackage(): CheckResult {
   // Read the cfcf CLI package's own package.json — gives us the
   // installed cfcf version. The path is relative to this file's URL,
   // which works in both dev (TS source in repo) and installed
-  // (bundled JS in <bun-global>/node_modules/cfcf/).
+  // (bundled JS in <bun-global>/node_modules/@cerefox/codefactory/).
+  //
+  // The pre-5.5b legacy name (@cerefox/cfcf-cli) is intentionally NOT
+  // a fallback (decided 2026-04-29 alongside the package rename) so
+  // the legacy name can never silently take effect at runtime.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createRequire } = require("node:module") as typeof import("node:module");
     const req = createRequire(import.meta.url);
-    // Climb out from packages/cli/src to find the cli package.json,
-    // OR find the installed cfcf/package.json. Both shapes work because
-    // the published package.json declares the same name.
     let pkgJsonPath: string;
     try {
-      pkgJsonPath = req.resolve("@cerefox/cfcf-cli/package.json");
+      pkgJsonPath = req.resolve("@cerefox/codefactory/package.json");
     } catch {
-      // Dev mode: the workspace package isn't named @cerefox/cfcf-cli yet,
+      // Dev mode: the workspace package isn't named @cerefox/codefactory,
       // it's @cfcf/cli. Try the workspace one.
       pkgJsonPath = req.resolve("@cfcf/cli/package.json");
     }
@@ -82,83 +83,99 @@ function checkCfcfPackage(): CheckResult {
   }
 }
 
-function checkCustomSqlite(): CheckResult {
-  // Resolve the per-platform native package via the same require.resolve
-  // path applyCustomSqlite() uses, then check libsqlite3.<ext> exists.
+/**
+ * Probe the per-platform native package by its published name. The
+ * pre-5.5b legacy name `@cerefox/cfcf-native-*` is intentionally NOT
+ * a fallback (decided 2026-04-29) so the legacy name can never
+ * silently take effect at runtime.
+ *
+ * Returns the resolved package.json path + the resolved package name on
+ * success, or null if it didn't resolve (dev mode, or install glitch).
+ */
+function resolveNativePackage(
+  tag: string,
+): { pkgJson: string; name: string } | null {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createRequire } = require("node:module") as typeof import("node:module");
+  const req = createRequire(import.meta.url);
+  const name = `@cerefox/codefactory-native-${tag}`;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require("node:module") as typeof import("node:module");
-    const req = createRequire(import.meta.url);
-    const tag = platformTag();
-    if (!tag) {
-      return {
-        name: "Custom libsqlite3 (per-platform native package)",
-        status: "warn",
-        detail: `unsupported platform ${process.platform}/${process.arch}; skipped`,
-      };
-    }
-    const pkgJson = req.resolve(`@cerefox/cfcf-native-${tag}/package.json`);
-    const dir = join(pkgJson, "..");
-    const lib = join(dir, `libsqlite3${dlExt()}`);
-    if (!existsSync(lib)) {
-      return {
-        name: "Custom libsqlite3 (per-platform native package)",
-        status: "fail",
-        detail: `package found at ${dir} but libsqlite3${dlExt()} missing`,
-      };
-    }
-    return { name: "Custom libsqlite3 (per-platform native package)", status: "ok", detail: lib };
-  } catch (err) {
-    return {
-      name: "Custom libsqlite3 (per-platform native package)",
-      status: "warn",
-      detail: `@cerefox/cfcf-native-${platformTag() ?? "?"} not installed; falling back to system SQLite (dev mode is fine)`,
-    };
+    const pkgJson = req.resolve(`${name}/package.json`);
+    return { pkgJson, name };
+  } catch {
+    return null;
   }
 }
 
+function checkCustomSqlite(): CheckResult {
+  // Resolve the per-platform native package via the same require.resolve
+  // path applyCustomSqlite() uses, then check libsqlite3.<ext> exists.
+  const tag = platformTag();
+  if (!tag) {
+    return {
+      name: "Custom libsqlite3 (per-platform native package)",
+      status: "warn",
+      detail: `unsupported platform ${process.platform}/${process.arch}; skipped`,
+    };
+  }
+  const resolved = resolveNativePackage(tag);
+  if (!resolved) {
+    return {
+      name: "Custom libsqlite3 (per-platform native package)",
+      status: "warn",
+      detail: `@cerefox/codefactory-native-${tag} not installed; falling back to system SQLite (dev mode is fine)`,
+    };
+  }
+  const dir = join(resolved.pkgJson, "..");
+  const lib = join(dir, `libsqlite3${dlExt()}`);
+  if (!existsSync(lib)) {
+    return {
+      name: "Custom libsqlite3 (per-platform native package)",
+      status: "fail",
+      detail: `${resolved.name} found at ${dir} but libsqlite3${dlExt()} missing`,
+    };
+  }
+  return { name: "Custom libsqlite3 (per-platform native package)", status: "ok", detail: lib };
+}
+
 function checkSqliteVec(): CheckResult {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require("node:module") as typeof import("node:module");
-    const req = createRequire(import.meta.url);
-    const tag = platformTag();
-    if (!tag) {
-      return { name: "sqlite-vec extension", status: "warn", detail: "unsupported platform; skipped" };
-    }
-    const pkgJson = req.resolve(`@cerefox/cfcf-native-${tag}/package.json`);
-    const dir = join(pkgJson, "..");
-    const path = join(dir, `sqlite-vec${dlExt()}`);
-    if (!existsSync(path)) {
-      return {
-        name: "sqlite-vec extension",
-        status: "fail",
-        detail: `package found at ${dir} but sqlite-vec${dlExt()} missing`,
-      };
-    }
-    return { name: "sqlite-vec extension", status: "ok", detail: path };
-  } catch {
+  const tag = platformTag();
+  if (!tag) {
+    return { name: "sqlite-vec extension", status: "warn", detail: "unsupported platform; skipped" };
+  }
+  const resolved = resolveNativePackage(tag);
+  if (!resolved) {
     return {
       name: "sqlite-vec extension",
       status: "warn",
       detail: "skipped (native package not installed; 6.15 sqlite-vec features unavailable)",
     };
   }
+  const dir = join(resolved.pkgJson, "..");
+  const path = join(dir, `sqlite-vec${dlExt()}`);
+  if (!existsSync(path)) {
+    return {
+      name: "sqlite-vec extension",
+      status: "fail",
+      detail: `${resolved.name} found at ${dir} but sqlite-vec${dlExt()} missing`,
+    };
+  }
+  return { name: "sqlite-vec extension", status: "ok", detail: path };
 }
 
 function checkCustomSqliteLoadable(): CheckResult {
   // Try setCustomSQLite + open a trivial DB + read sqlite_version.
   // Pinned-version assertion is the proof the custom lib is the one in use.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require("node:module") as typeof import("node:module");
-    const req = createRequire(import.meta.url);
     const tag = platformTag();
     if (!tag) {
       return { name: "Custom libsqlite3 loads", status: "warn", detail: "unsupported platform; skipped" };
     }
-    const pkgJson = req.resolve(`@cerefox/cfcf-native-${tag}/package.json`);
-    const dir = join(pkgJson, "..");
+    const resolved = resolveNativePackage(tag);
+    if (!resolved) {
+      return { name: "Custom libsqlite3 loads", status: "warn", detail: "skipped — native package not installed" };
+    }
+    const dir = join(resolved.pkgJson, "..");
     const lib = join(dir, `libsqlite3${dlExt()}`);
     if (!existsSync(lib)) {
       return { name: "Custom libsqlite3 loads", status: "warn", detail: "skipped — libsqlite3 not present" };
@@ -297,8 +314,8 @@ function checkBunGlobalPkgDups(): CheckResult {
   const dir = join(homedir(), ".bun", "install", "global");
   const targets = [join(dir, "package.json"), join(dir, "bun.lock")];
 
-  // Cheap heuristic: count "@cerefox/cfcf-cli" occurrences in the raw
-  // text. If a single file has more than ~2 (one in deps, one in
+  // Cheap heuristic: count "@cerefox/codefactory" occurrences in the
+  // raw text. If a single file has more than ~2 (one in deps, one in
   // lockfile-bookkeeping), dups exist. We don't enumerate them
   // precisely; we just want to flag the user.
   const dups: string[] = [];
@@ -310,14 +327,14 @@ function checkBunGlobalPkgDups(): CheckResult {
     } catch {
       return { name, status: "warn", detail: `could not read ${path}` };
     }
-    // Heuristic: count `"@cerefox/cfcf-cli":` occurrences. Both files
-    // legitimately mention it a few times in different contexts:
+    // Heuristic: count `"@cerefox/codefactory":` occurrences. Both
+    // files legitimately mention the package in different contexts:
     //   - package.json: once (top-level deps)
     //   - bun.lock: 2-3 times (workspaces deps + packages section)
     // Anything notably above baseline = bun-bug accumulation.
     // We don't JSON.parse because bun.lock is JSON5-shaped (trailing
     // commas, etc.) and would fail strict parse.
-    const hits = (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
+    const hits = (raw.match(/"@cerefox\/codefactory"\s*:/g) ?? []).length;
     const baseline = path.endsWith("bun.lock") ? 3 : 1;
     if (hits > baseline) {
       dups.push(`${path} (${hits} occurrences)`);

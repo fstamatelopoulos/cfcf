@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Build the publishable @cerefox/cfcf-cli npm tarball.
+# Build the publishable @cerefox/codefactory npm tarball.
 #
-# Per docs/research/installer-design.md §3.1 + §3.3. Output: a single
-# npm-format tarball (`cfcf-X.Y.Z.tgz`) ready for `bun install -g`.
+# Per docs/research/installer-design.md §3.1 + §3.3 and 5.5b decisions
+# (see docs/research/npm-publish-5.5b-audit.md, 2026-04-29). Output: a
+# single npm-format tarball (`cfcf-X.Y.Z.tgz`) ready for `bun install -g`.
 #
 # Strategy:
 #   1. Bundle packages/cli/src/index.ts via `bun build` (no --compile;
@@ -14,25 +15,51 @@
 #      resolves them via the standard npm resolver after install. This is
 #      the same pattern Vercel CLI, Yarn, etc. use.
 #   3. Stage a publish-shaped package directory (package.json renamed to
-#      @cerefox/cfcf-cli, tiny bin/cfcf.js entry, dist/cfcf.js bundle,
+#      @cerefox/codefactory, tiny bin/cfcf.js entry, dist/cfcf.js bundle,
 #      README.md). Run `bun pm pack` to produce the tarball.
 #
-# Usage:  build-cli.sh <version>
-#         e.g. build-cli.sh v0.10.0  →  dist/cfcf-0.10.0.tgz
+# Usage:  build-cli.sh [version]
+#         build-cli.sh                          →  package.json default
+#         build-cli.sh v0.16.1                  →  dist/cfcf-0.16.1.tgz
+#         build-cli.sh 0.16.1                   →  same (leading 'v' optional)
+#         CFCF_VERSION=v0.16.2 build-cli.sh     →  env-var override
 #
-# The version argument may include the leading 'v'; we strip it when
-# stamping into package.json (npm versions are unprefixed).
+# Resolution order (first non-empty wins):
+#   1. Positional arg     -- explicit; release.yml + stage-dist.sh use this.
+#   2. CFCF_VERSION env   -- mirrors install.sh's convention; useful for
+#                            scripted callers + cron-style version pins.
+#   3. Root package.json's `version` field -- the local-dev default so
+#                            `bun run build` produces a tarball whose
+#                            internal version matches the source tree.
+#
+# The leading 'v' in either form is optional; we strip it when stamping
+# into package.json (npm versions are unprefixed).
 
 set -euo pipefail
-
-VERSION_INPUT="${1:?version argument required (e.g. v0.10.0)}"
-VERSION="${VERSION_INPUT#v}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/dist}"
 
-# The runtime deps that transformers+ORT need installed on the user's
+# Resolve the version. Bun ships with us so we use it unconditionally
+# to parse the JSON for the package.json fallback.
+if [[ $# -ge 1 && -n "${1:-}" ]]; then
+  VERSION_INPUT="$1"
+  VERSION_SOURCE="positional arg"
+elif [[ -n "${CFCF_VERSION:-}" ]]; then
+  VERSION_INPUT="$CFCF_VERSION"
+  VERSION_SOURCE="\$CFCF_VERSION"
+else
+  VERSION_INPUT="$(cd "$REPO_ROOT" && bun -e 'console.log(require("./package.json").version)' 2>/dev/null || echo "")"
+  VERSION_SOURCE="package.json"
+  if [[ -z "$VERSION_INPUT" ]]; then
+    echo "[build-cli] could not read version from $REPO_ROOT/package.json" >&2
+    exit 1
+  fi
+fi
+VERSION="${VERSION_INPUT#v}"
+
+# Pinned runtime deps that transformers+ORT need installed on the user's
 # machine. Pinned to the exact versions verified to work together
 # (decision in docs/decisions-log.md 2026-02-13).
 TRANSFORMERS_VERSION="3.8.1"
@@ -43,7 +70,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$stage/dist"
 
-echo "[build-cli] target version: $VERSION"
+echo "[build-cli] target version: $VERSION  (from $VERSION_SOURCE)"
 echo "[build-cli] stage:          $stage"
 echo "[build-cli] output:         $OUT_DIR/cfcf-$VERSION.tgz"
 echo
@@ -78,7 +105,7 @@ echo "[build-cli] 3/4  stage publish-shaped package"
 # this file, so it has to be self-contained — just import the bundle.
 cat > "$stage/bin/cfcf.js" <<'EOF'
 #!/usr/bin/env bun
-// @cerefox/cfcf-cli entry stub. The real CLI lives in ../dist/cfcf.js
+// @cerefox/codefactory entry stub. The real CLI lives in ../dist/cfcf.js
 // (a pre-bundled single file produced by `bun build` at release time).
 import "../dist/cfcf.js";
 EOF
@@ -88,11 +115,40 @@ chmod +x "$stage/bin/cfcf.js"
 # package.json (which is named @cfcf/cli and isn't publishable). Heavy
 # native deps go in optionalDependencies for the per-platform native
 # package; transformers + commander + hono are required runtime deps.
+#
+# Platform declarations: the cartesian product os×cpu = {darwin,linux} ×
+# {arm64,x64} catches the common cases that should fail-fast at install
+# time (Windows-native, FreeBSD, illumos). linux-arm64 still slips
+# through — we don't ship a native package for it, so `cfcf doctor`
+# reports the missing libsqlite3 as a second line of defense. See
+# docs/research/npm-publish-5.5b-audit.md R4 follow-up (2026-04-29) for
+# the full rationale (including why postinstall scripts were rejected).
 cat > "$stage/package.json" <<EOF
 {
-  "name": "@cerefox/cfcf-cli",
+  "name": "@cerefox/codefactory",
   "version": "$VERSION",
   "description": "Cerefox Code Factory (cf²) -- deterministic orchestration harness for AI coding agents",
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "claude",
+    "codex",
+    "coding-agent",
+    "cli",
+    "cfcf",
+    "code-factory",
+    "cerefox"
+  ],
+  "homepage": "https://github.com/fstamatelopoulos/cfcf",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fstamatelopoulos/cfcf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fstamatelopoulos/cfcf/issues"
+  },
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "cfcf": "./bin/cfcf.js"
@@ -108,22 +164,22 @@ cat > "$stage/package.json" <<EOF
   "engines": {
     "bun": ">=1.3.0"
   },
+  "os": ["darwin", "linux"],
+  "cpu": ["arm64", "x64"],
   "dependencies": {
     "@huggingface/transformers": "$TRANSFORMERS_VERSION",
     "commander": "$COMMANDER_VERSION",
     "hono": "$HONO_VERSION"
   },
   "optionalDependencies": {
-    "@cerefox/cfcf-native-darwin-arm64": "$VERSION",
-    "@cerefox/cfcf-native-darwin-x64":   "$VERSION",
-    "@cerefox/cfcf-native-linux-x64":    "$VERSION"
+    "@cerefox/codefactory-native-darwin-arm64": "$VERSION",
+    "@cerefox/codefactory-native-darwin-x64":   "$VERSION",
+    "@cerefox/codefactory-native-linux-x64":    "$VERSION"
   },
   "trustedDependencies": [
     "onnxruntime-node",
     "sharp"
-  ],
-  "license": "UNLICENSED",
-  "homepage": "https://github.com/fstamatelopoulos/cfcf"
+  ]
 }
 EOF
 
@@ -137,8 +193,11 @@ Deterministic orchestration harness for AI coding agents.
 ## Install
 
 \`\`\`bash
-bun install -g @cerefox/cfcf-cli
+bun install -g @cerefox/codefactory
 \`\`\`
+
+The CLI is named \`cfcf\` (typing-friendly; users invoke it many times a day);
+the npm package is \`@cerefox/codefactory\`.
 
 Requires Bun ≥ 1.3. See https://bun.sh/install.
 
@@ -160,12 +219,12 @@ mkdir -p "$OUT_DIR"
   cd "$stage"
   # `bun pm pack` writes the tarball to the current dir; we move it into
   # OUT_DIR. The default name is "<scope>-<name>-<version>.tgz" --
-  # @cerefox-cfcf-cli-X.Y.Z.tgz here. We rename it to match the simpler
-  # cfcf-X.Y.Z.tgz convention release.yml uses.
+  # cerefox-codefactory-X.Y.Z.tgz here. We rename it to match the
+  # simpler cfcf-X.Y.Z.tgz convention release.yml uses.
   bun pm pack >/dev/null
-  src_tgz="$(ls -t cerefox-cfcf-cli-*.tgz 2>/dev/null | head -1)"
+  src_tgz="$(ls -t cerefox-codefactory-*.tgz 2>/dev/null | head -1)"
   if [[ -z "$src_tgz" ]]; then
-    src_tgz="$(ls -t @cerefox-cfcf-cli-*.tgz 2>/dev/null | head -1)"
+    src_tgz="$(ls -t @cerefox-codefactory-*.tgz 2>/dev/null | head -1)"
   fi
   if [[ -z "$src_tgz" ]]; then
     src_tgz="$(ls -t *.tgz | head -1)"

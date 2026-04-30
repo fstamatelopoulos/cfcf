@@ -15,9 +15,9 @@ describe("constants", () => {
 
   it("has a version string resolved from a real package.json", () => {
     // Was previously a hardcoded "0.10.0" constant. Since 2026-04-27,
-    // VERSION reads from @cerefox/cfcf-cli/package.json (installed) or
-    // @cfcf/core/package.json suffixed with `-dev` (workspace mode --
-    // what the test runner sees). Either is a valid semver-shaped
+    // VERSION reads from @cerefox/codefactory/package.json (installed)
+    // or @cfcf/core/package.json suffixed with `-dev` (workspace mode
+    // -- what the test runner sees). Either is a valid semver-shaped
     // string.
     expect(typeof VERSION).toBe("string");
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$/);

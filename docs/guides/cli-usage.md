@@ -709,7 +709,7 @@ cfcf completion zsh  > ~/.zsh/completions/_cfcf
 |---|---|
 | `scripts/install.sh` (curl-based) | ✓ explicit call after `bun install -g` |
 | `cfcf self-update` | ✓ spawns the new binary post-upgrade |
-| `bun install -g @cerefox/cfcf-cli` (npmjs path) | ✓ `postinstall` hook in the published `package.json` |
+| `bun install -g @cerefox/codefactory` (npmjs path) | ✓ `postinstall` hook in the published `package.json` |
 
 ### Supported shells + platforms
 

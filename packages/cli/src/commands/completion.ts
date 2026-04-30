@@ -655,6 +655,10 @@ export function printPostInstallBanner(shell: "bash" | "zsh" | null): void {
     `${BOLD}2. Restart cfcf server if it was running${RESET}:`,
     "   cfcf server stop && cfcf server start",
     "   (skip if you weren't running it)",
+    "",
+    `${BOLD}3. First time?${RESET} Verify + interactive first-run setup:`,
+    "   cfcf doctor && cfcf init",
+    "   (skip if you've already run init on this machine)",
   ];
 
   // Visible-length aware padding: ANSI codes don't count toward width.

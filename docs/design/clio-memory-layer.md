@@ -505,8 +505,8 @@ The generated `CLAUDE.md` / `AGENTS.md` lists this as a Tier-2 read.
 
 > ⚠️ **Superseded.** The original plan was to embed ~150 MB of native libs + the ONNX model into a `cfcf-binary` produced by `bun build --compile`. Item 5.5 (shipped v0.10.0) replaced that with the npm-format distribution model — see [`docs/research/installer-design.md`](../research/installer-design.md). Current shape:
 >
-> - **CLI bundle**: `bun build` (no `--compile`) produces a ~1 MB JS file shipped as `@cerefox/cfcf-cli`. Heavy native deps are externalised.
-> - **Native libs (libsqlite3, sqlite-vec)**: ship as a per-platform `@cerefox/cfcf-native-<platform>` npm package, declared as an `optionalDependencies` entry in `@cerefox/cfcf-cli`. Resolved via `require.resolve` at runtime — no `~/.cfcf/native/` extraction step.
+> - **CLI bundle**: `bun build` (no `--compile`) produces a ~1 MB JS file shipped as `@cerefox/codefactory` (5.5b naming; pre-rename: `@cerefox/cfcf-cli`). Heavy native deps are externalised.
+> - **Native libs (libsqlite3, sqlite-vec)**: ship as a per-platform `@cerefox/codefactory-native-<platform>` npm package, declared as an `optionalDependencies` entry in `@cerefox/codefactory`. Resolved via `require.resolve` at runtime — no `~/.cfcf/native/` extraction step.
 > - **`onnxruntime-node` + `sharp`**: standard transitive deps fetched from npmjs.com by `bun install -g`.
 > - **Embedder model**: downloaded lazily by `@huggingface/transformers` to `~/.cfcf/models/` on first Clio use.
 >

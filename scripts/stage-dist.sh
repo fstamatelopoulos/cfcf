@@ -8,10 +8,10 @@
 #   4. write a minimal MANIFEST.txt into dist/
 #
 # After it runs, dist/ contains everything the installer needs:
-#   cfcf-X.Y.Z.tgz                                 (cli)
-#   cerefox-cfcf-native-<platform>-X.Y.Z.tgz       (native, host platform)
-#   install.sh                                      (the curl-bash wrapper)
-#   MANIFEST.txt                                    (resolves "latest" mode)
+#   cfcf-X.Y.Z.tgz                                          (cli)
+#   cerefox-codefactory-native-<platform>-X.Y.Z.tgz         (native, host platform)
+#   install.sh                                              (the curl-bash wrapper)
+#   MANIFEST.txt                                            (resolves "latest" mode)
 #
 # Then dogfood the install with:
 #   CFCF_BASE_URL="file://$(pwd)/dist" CFCF_VERSION=v0.0.0-dev bash dist/install.sh
@@ -86,7 +86,7 @@ echo "[stage-dist] 4/4  write MANIFEST.txt"
 cat > "$OUT_DIR/MANIFEST.txt" <<EOF
 cfcf: $VERSION_INPUT
 cli-tarball: cfcf-$VERSION.tgz
-native-tarball: cerefox-cfcf-native-$PLATFORM-$VERSION.tgz
+native-tarball: cerefox-codefactory-native-$PLATFORM-$VERSION.tgz
 built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 host-platform: $PLATFORM
 EOF

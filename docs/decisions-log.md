@@ -150,7 +150,7 @@ Specifically:
 | Prose ("cf² is", "cf² does") | `cf²` | "cf² only modifies content between sentinels" |
 | CLI command literals | `cfcf` | `cfcf help`, `cfcf init`, `cfcf clio search` |
 | File paths | `cfcf` | `~/.cfcf/clio.db`, `cfcf-docs/problem.md` |
-| Package names | `cfcf` | `@cerefox/cfcf-cli`, `@cfcf/core` |
+| Package names | `cfcf` (historical) | `@cfcf/core` (workspace), `@cerefox/codefactory` since 5.5b |
 | Sentinel comments | `cfcf` | `# >>> cfcf shell completion >>>` |
 | Source-code identifiers | `cfcf` | `cfcf-config-dir`, `CFCF_PORT` |
 | Conversation / headlines | `cf²` | "cf² is a deterministic harness" |

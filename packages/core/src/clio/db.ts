@@ -55,9 +55,9 @@ export function getClioDbPath(): string {
 
 /**
  * Map process.platform + process.arch → the cfcf platform tag used in
- * the per-platform native package name (`@cerefox/cfcf-native-<tag>`).
- * Returns null on unsupported platforms (handled gracefully — falls
- * back to system SQLite).
+ * the per-platform native package name
+ * (`@cerefox/codefactory-native-<tag>`). Returns null on unsupported
+ * platforms (handled gracefully — falls back to system SQLite).
  */
 function getPlatformTag(): string | null {
   if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64";
@@ -83,10 +83,14 @@ function dlExt(): string {
  * Resolve the directory where the per-platform native package lives.
  * In production, the package was installed as a transitive dep of the
  * cfcf CLI package and lives at
- *   <bun-global-prefix>/node_modules/@cerefox/cfcf-native-<platform>/
+ *   <bun-global-prefix>/node_modules/@cerefox/codefactory-native-<platform>/
  * `require.resolve` is the canonical npm-ecosystem way to find a
  * dep's directory. CFCF_NATIVE_DIR env override stays for tests +
  * advanced users.
+ *
+ * The pre-5.5b legacy name `@cerefox/cfcf-native-*` is intentionally
+ * NOT a fallback (decided 2026-04-29 alongside the package rename) so
+ * the legacy name can never silently take effect at runtime.
  */
 export function getCfcfNativeDir(): string | null {
   if (process.env.CFCF_NATIVE_DIR) return process.env.CFCF_NATIVE_DIR;
@@ -100,7 +104,7 @@ export function getCfcfNativeDir(): string | null {
   try {
     const { createRequire } = require("node:module") as typeof import("node:module");
     const requireFromHere = createRequire(import.meta.url);
-    const pkgJson = requireFromHere.resolve(`@cerefox/cfcf-native-${tag}/package.json`);
+    const pkgJson = requireFromHere.resolve(`@cerefox/codefactory-native-${tag}/package.json`);
     return join(pkgJson, ".."); // dirname of package.json
   } catch {
     return null;
@@ -127,7 +131,7 @@ let customSqliteApplied = false;
 
 /**
  * Point bun:sqlite at the pinned `libsqlite3` shipped by
- * `@cerefox/cfcf-native-<platform>`. Required on macOS for
+ * `@cerefox/codefactory-native-<platform>`. Required on macOS for
  * `db.loadExtension(...)` to work (Apple's system SQLite has
  * SQLITE_OMIT_LOAD_EXTENSION compiled in). Also gives every platform
  * the same SQLite version so behavioural differences (FTS5 tokeniser
