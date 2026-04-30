@@ -78,7 +78,7 @@ Full install guide (file:// installs, upgrade, uninstall, troubleshooting): [`do
 
 ```bash
 # Clone the repo
-git clone https://github.com/user/cfcf.git
+git clone https://github.com/fstamatelopoulos/cfcf.git
 cd cfcf
 
 # Install dependencies
@@ -210,8 +210,8 @@ Override with `CFCF_CONFIG_DIR` environment variable.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE) — same license used by the rest of the [Cerefox](https://github.com/user/cerefox) ecosystem. You may use, modify, and redistribute the code under the terms of that license.
+Licensed under the [Apache License, Version 2.0](LICENSE) — same license used by the rest of the [Cerefox](https://github.com/fstamatelopoulos/cerefox) ecosystem. You may use, modify, and redistribute the code under the terms of that license.
 
 ---
 
-*cfcf is part of the [Cerefox](https://github.com/user/cerefox) ecosystem.*
+*cfcf is part of the [Cerefox](https://github.com/fstamatelopoulos/cerefox) ecosystem.*
