@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/cfcf-logo.png" alt="cfcf — Cerefox Code Factory" width="160">
+  <img src="docs/assets/cfcf-logo.png" alt="cfcf — Cerefox Code Factory" width="360">
 </p>
 
 # cfcf -- Cerefox Code Factory (cf²)
