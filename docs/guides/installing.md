@@ -105,15 +105,21 @@ Run `cfcf doctor` after install to verify all health checks pass (the count grow
 The simplest path is `cfcf self-update`:
 
 ```bash
-cfcf self-update                        # check + interactive upgrade
-cfcf self-update --check                # check only; print latest vs current
-cfcf self-update --yes                  # non-interactive
-cfcf self-update --version v0.11.0      # install a specific tag
+cfcf self-update                              # check + interactive upgrade (npm)
+cfcf self-update --check                      # check only; print latest vs current
+cfcf self-update --yes                        # non-interactive
+cfcf self-update --version v0.16.1            # install a specific tag
+
+# Tarball mode for offline / pinned-mirror setups:
+cfcf self-update --source tarball             # GitHub Releases (default mirror)
+cfcf self-update --base-url file:///tmp/dist  # any HTTP / file:// mirror
 ```
 
-Internally this runs `bun install -g <new-tarball-URL>`. Bun's package manager handles the swap atomically — if the install fails, the previous version stays intact.
+Source resolution mirrors `install.sh`: `--source` flag wins; otherwise `--base-url` (or `CFCF_BASE_URL`) implies tarball; otherwise the default is **npm**. The same `CFCF_INSTALL_SOURCE` / `CFCF_VERSION` / `CFCF_BASE_URL` / `CFCF_RELEASES_REPO` env vars work for both.
 
-User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is **never touched** by the install/upgrade flow. Only the npm package contents change.
+Internally this runs `bun install -g @cerefox/codefactory@<version>` (npm) or `bun install -g <tarball-URL>` (tarball). Bun's package manager handles the swap atomically — if the install fails, the previous version stays intact.
+
+User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is **never touched** by the install/upgrade flow. Only the global node_modules entry changes.
 
 ## Uninstalling
 
