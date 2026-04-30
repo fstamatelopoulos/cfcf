@@ -19,17 +19,21 @@
 #      README.md). Run `bun pm pack` to produce the tarball.
 #
 # Usage:  build-cli.sh [version]
-#         build-cli.sh                 →  reads version from root package.json
-#         build-cli.sh v0.16.1         →  dist/cfcf-0.16.1.tgz
-#         build-cli.sh 0.16.1          →  same (leading 'v' is optional)
+#         build-cli.sh                          →  package.json default
+#         build-cli.sh v0.16.1                  →  dist/cfcf-0.16.1.tgz
+#         build-cli.sh 0.16.1                   →  same (leading 'v' optional)
+#         CFCF_VERSION=v0.16.2 build-cli.sh     →  env-var override
 #
-# The version argument may include the leading 'v'; we strip it when
-# stamping into package.json (npm versions are unprefixed). When no
-# argument is provided we fall back to the version field in the
-# repository's root package.json — the same versioning convention the
-# release CI uses, just resolved locally so `bun run build` produces a
-# tarball whose internal version matches the one a user will see after
-# `bun install -g <tarball>`.
+# Resolution order (first non-empty wins):
+#   1. Positional arg     -- explicit; release.yml + stage-dist.sh use this.
+#   2. CFCF_VERSION env   -- mirrors install.sh's convention; useful for
+#                            scripted callers + cron-style version pins.
+#   3. Root package.json's `version` field -- the local-dev default so
+#                            `bun run build` produces a tarball whose
+#                            internal version matches the source tree.
+#
+# The leading 'v' in either form is optional; we strip it when stamping
+# into package.json (npm versions are unprefixed).
 
 set -euo pipefail
 
@@ -37,13 +41,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/dist}"
 
-# Resolve the version: explicit arg wins; otherwise read from
-# package.json so `bun run build` produces a sensible default. Bun ships
-# with us so we use it unconditionally to parse the JSON.
+# Resolve the version. Bun ships with us so we use it unconditionally
+# to parse the JSON for the package.json fallback.
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
   VERSION_INPUT="$1"
+  VERSION_SOURCE="positional arg"
+elif [[ -n "${CFCF_VERSION:-}" ]]; then
+  VERSION_INPUT="$CFCF_VERSION"
+  VERSION_SOURCE="\$CFCF_VERSION"
 else
-  VERSION_INPUT="$(bun -e 'console.log(require("./package.json").version)' 2>/dev/null || echo "")"
+  VERSION_INPUT="$(cd "$REPO_ROOT" && bun -e 'console.log(require("./package.json").version)' 2>/dev/null || echo "")"
+  VERSION_SOURCE="package.json"
   if [[ -z "$VERSION_INPUT" ]]; then
     echo "[build-cli] could not read version from $REPO_ROOT/package.json" >&2
     exit 1
@@ -62,7 +70,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$stage/dist"
 
-echo "[build-cli] target version: $VERSION"
+echo "[build-cli] target version: $VERSION  (from $VERSION_SOURCE)"
 echo "[build-cli] stage:          $stage"
 echo "[build-cli] output:         $OUT_DIR/cfcf-$VERSION.tgz"
 echo

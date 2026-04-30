@@ -6,7 +6,7 @@ Development and release utility scripts.
 
 | Script | Role |
 |---|---|
-| `build-cli.sh [version]` | Bundles `packages/cli/src/index.ts` (no `--compile`), stages the publish-shaped package, runs `bun pm pack` → `dist/cfcf-X.Y.Z.tgz`. The npm tarball users `bun install -g`. The published name is `@cerefox/codefactory`; the CLI binary is `cfcf`. Version arg is optional — defaults to the version field in the root `package.json`. |
+| `build-cli.sh [version]` | Bundles `packages/cli/src/index.ts` (no `--compile`), stages the publish-shaped package, runs `bun pm pack` → `dist/cfcf-X.Y.Z.tgz`. The npm tarball users `bun install -g`. The published name is `@cerefox/codefactory`; the CLI binary is `cfcf`. **Version resolution** (first non-empty wins): positional arg → `CFCF_VERSION` env → root `package.json`'s `version` field. Leading `v` is optional in either form. |
 | `build-native-package.sh <platform> <version>` | Builds the per-platform `@cerefox/codefactory-native-<platform>` tarball: pinned libsqlite3 + sqlite-vec + a small `package.json` with matching `os`/`cpu` fields. |
 | `build-sqlite.sh <platform> <out-dir>` | Compiles libsqlite3 from the pinned amalgamation with `SQLITE_ENABLE_LOAD_EXTENSION=1`. Called by `build-native-package.sh`. |
 | `fetch-sqlite-vec.sh <platform> <out-dir>` | Downloads the pinned sqlite-vec loadable extension. Called by `build-native-package.sh`. |
