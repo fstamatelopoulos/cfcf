@@ -52,27 +52,21 @@ function checkCfcfPackage(): CheckResult {
   // installed cfcf version. The path is relative to this file's URL,
   // which works in both dev (TS source in repo) and installed
   // (bundled JS in <bun-global>/node_modules/@cerefox/codefactory/).
+  //
+  // The pre-5.5b legacy name (@cerefox/cfcf-cli) is intentionally NOT
+  // a fallback (decided 2026-04-29 alongside the package rename) so
+  // the legacy name can never silently take effect at runtime.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createRequire } = require("node:module") as typeof import("node:module");
     const req = createRequire(import.meta.url);
-    // Probe the published name first (5.5b: @cerefox/codefactory), then
-    // the legacy name (@cerefox/cfcf-cli, pre-5.5b), then the workspace
-    // package for dev-mode runs. The first match wins.
-    const candidates = [
-      "@cerefox/codefactory/package.json",
-      "@cerefox/cfcf-cli/package.json",
-      "@cfcf/cli/package.json",
-    ];
-    let pkgJsonPath: string | null = null;
-    for (const name of candidates) {
-      try {
-        pkgJsonPath = req.resolve(name);
-        break;
-      } catch { /* try next candidate */ }
-    }
-    if (!pkgJsonPath) {
-      throw new Error("none of the candidate package names resolved");
+    let pkgJsonPath: string;
+    try {
+      pkgJsonPath = req.resolve("@cerefox/codefactory/package.json");
+    } catch {
+      // Dev mode: the workspace package isn't named @cerefox/codefactory,
+      // it's @cfcf/cli. Try the workspace one.
+      pkgJsonPath = req.resolve("@cfcf/cli/package.json");
     }
     const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
     return {
@@ -90,13 +84,13 @@ function checkCfcfPackage(): CheckResult {
 }
 
 /**
- * Probe the per-platform native package across new + legacy names. The
- * 5.5b rename (2026-04-29) renamed `@cerefox/cfcf-native-*` to
- * `@cerefox/codefactory-native-*`; old installs may still have the
- * legacy name on disk, so we try both.
+ * Probe the per-platform native package by its published name. The
+ * pre-5.5b legacy name `@cerefox/cfcf-native-*` is intentionally NOT
+ * a fallback (decided 2026-04-29) so the legacy name can never
+ * silently take effect at runtime.
  *
  * Returns the resolved package.json path + the resolved package name on
- * success, or null if neither candidate resolved.
+ * success, or null if it didn't resolve (dev mode, or install glitch).
  */
 function resolveNativePackage(
   tag: string,
@@ -104,17 +98,13 @@ function resolveNativePackage(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { createRequire } = require("node:module") as typeof import("node:module");
   const req = createRequire(import.meta.url);
-  const candidates = [
-    `@cerefox/codefactory-native-${tag}`,
-    `@cerefox/cfcf-native-${tag}`, // legacy pre-5.5b
-  ];
-  for (const name of candidates) {
-    try {
-      const pkgJson = req.resolve(`${name}/package.json`);
-      return { pkgJson, name };
-    } catch { /* try next candidate */ }
+  const name = `@cerefox/codefactory-native-${tag}`;
+  try {
+    const pkgJson = req.resolve(`${name}/package.json`);
+    return { pkgJson, name };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function checkCustomSqlite(): CheckResult {
@@ -324,11 +314,10 @@ function checkBunGlobalPkgDups(): CheckResult {
   const dir = join(homedir(), ".bun", "install", "global");
   const targets = [join(dir, "package.json"), join(dir, "bun.lock")];
 
-  // Cheap heuristic: count "@cerefox/codefactory" (or the legacy
-  // "@cerefox/cfcf-cli", pre-5.5b) occurrences in the raw text. If a
-  // single file has more than ~2 (one in deps, one in lockfile-
-  // bookkeeping), dups exist. We don't enumerate them precisely; we
-  // just want to flag the user.
+  // Cheap heuristic: count "@cerefox/codefactory" occurrences in the
+  // raw text. If a single file has more than ~2 (one in deps, one in
+  // lockfile-bookkeeping), dups exist. We don't enumerate them
+  // precisely; we just want to flag the user.
   const dups: string[] = [];
   for (const path of targets) {
     if (!existsSync(path)) continue;
@@ -338,18 +327,14 @@ function checkBunGlobalPkgDups(): CheckResult {
     } catch {
       return { name, status: "warn", detail: `could not read ${path}` };
     }
-    // Heuristic: count `"@cerefox/codefactory":` occurrences (or the
-    // legacy `"@cerefox/cfcf-cli":` for pre-5.5b installs that haven't
-    // re-installed yet). Both files legitimately mention the package
-    // in different contexts:
+    // Heuristic: count `"@cerefox/codefactory":` occurrences. Both
+    // files legitimately mention the package in different contexts:
     //   - package.json: once (top-level deps)
     //   - bun.lock: 2-3 times (workspaces deps + packages section)
     // Anything notably above baseline = bun-bug accumulation.
     // We don't JSON.parse because bun.lock is JSON5-shaped (trailing
     // commas, etc.) and would fail strict parse.
-    const hits =
-      (raw.match(/"@cerefox\/codefactory"\s*:/g) ?? []).length +
-      (raw.match(/"@cerefox\/cfcf-cli"\s*:/g) ?? []).length;
+    const hits = (raw.match(/"@cerefox\/codefactory"\s*:/g) ?? []).length;
     const baseline = path.endsWith("bun.lock") ? 3 : 1;
     if (hits > baseline) {
       dups.push(`${path} (${hits} occurrences)`);

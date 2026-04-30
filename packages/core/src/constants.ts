@@ -33,11 +33,12 @@ export const DEFAULT_PORT = 7233;
  *   4. **Last resort**: `"0.0.0-unknown"` -- the bundler somehow stripped
  *      every package.json (shouldn't happen in practice).
  *
- * Pre-5.5b the installed name was `@cerefox/cfcf-cli`. Renamed to
- * `@cerefox/codefactory` 2026-04-29 (see
- * docs/research/npm-publish-5.5b-audit.md). The legacy name is kept as
- * a transitional fallback so a binary built against pre-rename source
- * trees still resolves cleanly.
+ * Pre-5.5b the package was named `@cerefox/cfcf-cli`. The rename to
+ * `@cerefox/codefactory` (2026-04-29; see
+ * docs/research/npm-publish-5.5b-audit.md) is a hard cut: the old name
+ * is NOT a fallback. Reasoning: keeping the legacy name as an
+ * additional resolve target would leave a permanent attack surface if
+ * the legacy name ever ended up published by someone else.
  *
  * Previous behaviour was a hardcoded `"0.10.0"` constant that drifted
  * from the actual installed version (caught 2026-04-27: `cfcf
@@ -52,33 +53,25 @@ function resolveVersion(): string {
   // 1. Installed mode: the published name is reachable via the named
   //    import. Bun workspaces don't materialise `@cfcf/*` in
   //    node_modules so this branch only fires post-`bun install -g`.
-  //    Try the new name first, then the legacy name (transitional
-  //    fallback for any binaries still built against the pre-5.5b
-  //    package layout).
-  for (const pkgName of ["@cerefox/codefactory", "@cerefox/cfcf-cli"]) {
-    try {
-      const pkgPath = req.resolve(`${pkgName}/package.json`);
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      if (typeof pkg.version === "string") return pkg.version;
-    } catch { /* fall through to next candidate */ }
-  }
+  try {
+    const pkgPath = req.resolve("@cerefox/codefactory/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    if (typeof pkg.version === "string") return pkg.version;
+  } catch { /* fall through */ }
 
   // 2. Walk up from `import.meta.url` looking for the nearest
   //    package.json. The relative path differs between bundled (dist/)
   //    and unbundled (src/) layouts -- we try a few candidates.
-  //    Discriminate by the `name` field: `@cerefox/codefactory` (or the
-  //    legacy `@cerefox/cfcf-cli`) = installed; `@cfcf/*` = dev
-  //    workspace (suffix `-dev`). This catches odd installs where the
-  //    named-import path didn't resolve, and gives `bun run dev:cli` a
-  //    clean dev-mode label.
+  //    Discriminate by the `name` field: `@cerefox/codefactory` =
+  //    installed; `@cfcf/*` = dev workspace (suffix `-dev`). This
+  //    catches odd installs where the named-import path didn't
+  //    resolve, and gives `bun run dev:cli` a clean dev-mode label.
   for (const candidate of ["../package.json", "../../package.json", "../../../package.json"]) {
     try {
       const url = new URL(candidate, import.meta.url).pathname;
       const pkg = JSON.parse(readFileSync(url, "utf8"));
       if (typeof pkg.version !== "string") continue;
-      if (pkg.name === "@cerefox/codefactory" || pkg.name === "@cerefox/cfcf-cli") {
-        return pkg.version;
-      }
+      if (pkg.name === "@cerefox/codefactory") return pkg.version;
       if (typeof pkg.name === "string" && pkg.name.startsWith("@cfcf/")) {
         return `${pkg.version}-dev`;
       }

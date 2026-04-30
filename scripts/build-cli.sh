@@ -140,7 +140,7 @@ cat > "$stage/package.json" <<EOF
   "bugs": {
     "url": "https://github.com/fstamatelopoulos/cfcf/issues"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "cfcf": "./bin/cfcf.js"

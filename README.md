@@ -209,7 +209,7 @@ Override with `CFCF_CONFIG_DIR` environment variable.
 
 ## License
 
-TBD
+Licensed under the [Apache License, Version 2.0](LICENSE) — same license used by the rest of the [Cerefox](https://github.com/user/cerefox) ecosystem. You may use, modify, and redistribute the code under the terms of that license.
 
 ---
 

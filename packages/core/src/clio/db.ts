@@ -56,8 +56,7 @@ export function getClioDbPath(): string {
 /**
  * Map process.platform + process.arch → the cfcf platform tag used in
  * the per-platform native package name
- * (`@cerefox/codefactory-native-<tag>`; legacy
- * `@cerefox/cfcf-native-<tag>` pre-5.5b). Returns null on unsupported
+ * (`@cerefox/codefactory-native-<tag>`). Returns null on unsupported
  * platforms (handled gracefully — falls back to system SQLite).
  */
 function getPlatformTag(): string | null {
@@ -89,9 +88,9 @@ function dlExt(): string {
  * dep's directory. CFCF_NATIVE_DIR env override stays for tests +
  * advanced users.
  *
- * Probes the new name first, then the legacy `@cerefox/cfcf-native-*`
- * (pre-5.5b) so binaries built against pre-rename source still find
- * their native peer if it's already installed.
+ * The pre-5.5b legacy name `@cerefox/cfcf-native-*` is intentionally
+ * NOT a fallback (decided 2026-04-29 alongside the package rename) so
+ * the legacy name can never silently take effect at runtime.
  */
 export function getCfcfNativeDir(): string | null {
   if (process.env.CFCF_NATIVE_DIR) return process.env.CFCF_NATIVE_DIR;
@@ -102,21 +101,14 @@ export function getCfcfNativeDir(): string | null {
   // mode it finds the colocated peer under the global node_modules
   // prefix. In dev mode (running via `bun run dev:cli`) the package
   // isn't installed; we return null and the caller falls back gracefully.
-  const candidates = [
-    `@cerefox/codefactory-native-${tag}`,
-    `@cerefox/cfcf-native-${tag}`, // legacy pre-5.5b
-  ];
-  for (const name of candidates) {
-    try {
-      const { createRequire } = require("node:module") as typeof import("node:module");
-      const requireFromHere = createRequire(import.meta.url);
-      const pkgJson = requireFromHere.resolve(`${name}/package.json`);
-      return join(pkgJson, ".."); // dirname of package.json
-    } catch {
-      // try next candidate
-    }
+  try {
+    const { createRequire } = require("node:module") as typeof import("node:module");
+    const requireFromHere = createRequire(import.meta.url);
+    const pkgJson = requireFromHere.resolve(`@cerefox/codefactory-native-${tag}/package.json`);
+    return join(pkgJson, ".."); // dirname of package.json
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**
