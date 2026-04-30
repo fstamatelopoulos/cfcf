@@ -292,3 +292,57 @@ This audit (you're reading it). Plus:
 5. **Native-deps `postinstall` doctor nudge** (R4): do you want the published package to print a "run cfcf doctor" hint after install, or stay quiet? My lean: stay quiet for now; the existing post-install banner already mentions doctor.
 
 Once these are confirmed, step 2 is straightforward: update `package.json` files + start touching `release.yml`.
+
+---
+
+## Confirmed decisions + clarifications (2026-04-29 sign-off)
+
+### Decisions
+
+1. ✅ **Native package naming: rename to `@cerefox/codefactory-native-*`** — confirmed by user.
+2. ✅ **`npm publish --dry-run` always, even when `publish_to_npm=false`** — go with the audit's lean.
+3. ✅ **Tag input stays `v0.X.Y`** — git keeps the `v` prefix; `build-cli.sh` strips it for npm. Standard convention; matches Node.js, React, Vue, Bun, etc.
+4. ✅ **2FA on @cerefox npm account** — already enabled when the account was created.
+5. ✅ **`npm publish` not `bun publish`** in CI.
+
+### R4 follow-up: install-time warning for unsupported platforms
+
+Beyond the `optionalDependencies` mechanism (which silently selects the right native package), we'll add **`os` + `cpu` declarations on `@cerefox/codefactory` itself**:
+
+```json
+{
+  "name": "@cerefox/codefactory",
+  "os": ["darwin", "linux"],
+  "cpu": ["arm64", "x64"]
+}
+```
+
+Effect: a user on Windows native or FreeBSD trying to `bun install -g @cerefox/codefactory` gets a fast, loud `EBADPLATFORM` error at install time. Loud-and-immediate failure beats silent-then-runtime-crash. `cfcf doctor`'s existing Custom-libsqlite3 check stays as a second line of defense for the rare "supported platform, install glitched" case.
+
+Postinstall scripts (`"postinstall": "node check-native.js"`) considered + rejected: they're disable-able (`--ignore-scripts`), some package managers handle them differently, and they're a supply-chain attack surface. `os`/`cpu` declaration is cleaner.
+
+### R2 follow-up: pre-flip-to-public checklist (step 7 deliverable)
+
+Before flipping the cfcf repo to public, run a comprehensive scan against full git history. Required-pass before continuing to step 8 (real npm publish):
+
+1. **Secret scanner** — `gitleaks detect --source . --report-path /tmp/gitleaks.json` against full history. Investigate every hit.
+2. **Personal info sweep**:
+   - Personal email addresses, phone numbers, full physical addresses
+   - AI-agent transcripts (`cfcf-docs/iteration-logs/*.md`, `.cfcf-pa/session-*.md`) for accidental personal context
+   - Internal-only Cerefox URLs / project codenames
+3. **`.env` family** — `git log --all --diff-filter=A -- '**/.env*'` verifies no env files in history
+4. **Private keys / tokens** — grep history for `BEGIN RSA`, `BEGIN OPENSSH`, `ssh-rsa`, GitHub PATs (`ghp_...`), npm tokens (`npm_...`), AWS keys (`AKIA...`)
+5. **Internal hostnames** — Cerefox-internal URLs that weren't intended public
+
+Deliverable: a write-up of what was scanned, what was found, what was redacted/cleaned. If anything sensitive surfaces, we deal with it via `git filter-repo` (rewrite history) BEFORE the flip.
+
+### Confirmed scope of step 2 (immediate next)
+
+With the decisions above:
+
+- Update `package.json` files (root + cli + server + web + core) — new package name `@cerefox/codefactory`, `os`/`cpu` declarations, `repository`/`homepage`/`description`/`keywords`/`license` fields npm requires for nice rendering
+- Update `scripts/build-native-package.sh` — output filename + staged package.json's `name` field switch from `@cerefox/cfcf-native-*` to `@cerefox/codefactory-native-*`
+- Update `scripts/build-cli.sh` — `optionalDependencies` block references the new native package names; published-as `@cerefox/codefactory`
+- Update `install.sh` + `cfcf doctor` references that mention `@cerefox/cfcf-native-*` (mechanical sweep)
+- Update `installer-design.md` research doc — old name → new name (low priority but worth doing for consistency)
+- Bug-fix: root `package.json`'s `"build"` script reads version from package.json instead of hardcoding `v0.0.0-dev`
