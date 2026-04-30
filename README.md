@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/cfcf-logo.png" alt="cfcf — Cerefox Code Factory" width="160">
+</p>
+
 # cfcf -- Cerefox Code Factory (cf²)
 
 *cfcf and cf² are used interchangeably throughout this project. Both are pronounced "cf square." `cfcf` is used in code, package names, and CLI commands; cf² is used in documentation and conversation.*
