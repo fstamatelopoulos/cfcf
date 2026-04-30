@@ -27,6 +27,7 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
 - At least one supported AI coding agent (cfcf detects what's installed during `cfcf init`):
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
   - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
+  - More will be supported in the future, I just started with the dev agents I actively use
 
 cfcf is distributed as a standard npm package (`@cerefox/codefactory`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/codefactory-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
 
