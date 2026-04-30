@@ -6,12 +6,12 @@ Development and release utility scripts.
 
 | Script | Role |
 |---|---|
-| `build-cli.sh <version>` | Bundles `packages/cli/src/index.ts` (no `--compile`), stages the publish-shaped package, runs `bun pm pack` → `dist/cfcf-X.Y.Z.tgz`. The npm tarball users `bun install -g`. |
-| `build-native-package.sh <platform> <version>` | Builds the per-platform `@cerefox/cfcf-native-<platform>` tarball: pinned libsqlite3 + sqlite-vec + a small `package.json` with matching `os`/`cpu` fields. |
+| `build-cli.sh [version]` | Bundles `packages/cli/src/index.ts` (no `--compile`), stages the publish-shaped package, runs `bun pm pack` → `dist/cfcf-X.Y.Z.tgz`. The npm tarball users `bun install -g`. The published name is `@cerefox/codefactory`; the CLI binary is `cfcf`. Version arg is optional — defaults to the version field in the root `package.json`. |
+| `build-native-package.sh <platform> <version>` | Builds the per-platform `@cerefox/codefactory-native-<platform>` tarball: pinned libsqlite3 + sqlite-vec + a small `package.json` with matching `os`/`cpu` fields. |
 | `build-sqlite.sh <platform> <out-dir>` | Compiles libsqlite3 from the pinned amalgamation with `SQLITE_ENABLE_LOAD_EXTENSION=1`. Called by `build-native-package.sh`. |
 | `fetch-sqlite-vec.sh <platform> <out-dir>` | Downloads the pinned sqlite-vec loadable extension. Called by `build-native-package.sh`. |
 | `install.sh` | The curl-bash installer. Bootstraps Bun if missing, then `bun install -g <tarball>`, then hands off to `cfcf init`. |
-| `uninstall.sh` | One-liner wrapper around `bun remove -g @cerefox/cfcf-cli`. |
+| `uninstall.sh` | One-liner wrapper around `bun remove -g @cerefox/codefactory`. |
 | `smoke-tarball.sh <cli-tarball> [native-tarball]` | Installs a freshly-built tarball into an isolated sandbox and runs `cfcf --version` + `cfcf doctor`. |
 | `stage-dist.sh [version]` | Convenience wrapper: wipes `dist/`, builds the cli + host-platform native tarballs, copies `install.sh`, writes `MANIFEST.txt`. After it runs, `dist/` is ready for a `file://` dogfood install via the printed one-liner. **Caches** compiled libsqlite3 + downloaded sqlite-vec under `~/.cache/cfcf-build/` (override via `CFCF_BUILD_CACHE_DIR`); subsequent runs skip the network + compile. CI (`release.yml`) does NOT set the env var, so release builds always do a clean download + compile. |
 | `serve-dist.ts` | Phase-0 dev helper: serves `dist/` over HTTP so `install.sh` can hit `http://localhost:8080/...`. |

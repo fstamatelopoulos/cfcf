@@ -8,11 +8,11 @@
 #   2. Resolves the cfcf tarball URL (from CFCF_BASE_URL + CFCF_VERSION).
 #   3. Runs `bun install -g <tarball-URL>`. Bun's package manager handles
 #      the rest -- including the postinstall step for the per-platform
-#      @cerefox/cfcf-native-<platform> package.
+#      @cerefox/codefactory-native-<platform> package.
 #   4. Hands off to `cfcf init` (interactive) unless CFCF_SKIP_INIT is set.
 #
 # Phase 1 (cfcf private):  curl -fsSL <url>/install.sh | bash
-# Phase 2 (cfcf public):   bun install -g @cerefox/cfcf-cli  -- direct,
+# Phase 2 (cfcf public):   bun install -g @cerefox/codefactory   -- direct;
 #                          this script becomes optional.
 #
 # Env vars (all optional):
@@ -33,11 +33,11 @@ if [[ -z "${CFCF_BASE_URL:-}" ]]; then
 fi
 
 # ── Platform detection ────────────────────────────────────────────────
-# Used to fetch the matching @cerefox/cfcf-native-<platform> tarball.
-# During the cfcf-private phase the native packages are GitHub Release
-# artefacts (not on npmjs.com), so the CLI's optionalDependencies entry
-# can't resolve them automatically -- we install the right one explicitly
-# before the CLI itself.
+# Used to fetch the matching @cerefox/codefactory-native-<platform>
+# tarball. During the cfcf-private phase the native packages are GitHub
+# Release artefacts (not on npmjs.com), so the CLI's
+# optionalDependencies entry can't resolve them automatically -- we
+# install the right one explicitly before the CLI itself.
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
 case "$os-$arch" in
@@ -91,7 +91,7 @@ fi
 # tarball name (build-cli.sh does the same).
 v_no_prefix="${version#v}"
 cli_url="$CFCF_BASE_URL/cfcf-${v_no_prefix}.tgz"
-native_url="$CFCF_BASE_URL/cerefox-cfcf-native-${platform}-${v_no_prefix}.tgz"
+native_url="$CFCF_BASE_URL/cerefox-codefactory-native-${platform}-${v_no_prefix}.tgz"
 
 # ── 3. Install ────────────────────────────────────────────────────────
 # Native package first, CLI second. Order matters: when bun installs the
@@ -167,10 +167,10 @@ dedup_bun_global() {
 }
 
 dedup_bun_global    # clean any accumulated mess from prior installs
-echo "[cfcf] Installing @cerefox/cfcf-native-$platform from $native_url"
+echo "[cfcf] Installing @cerefox/codefactory-native-$platform from $native_url"
 bun install -g "$native_url"
 dedup_bun_global    # bun re-introduced a dup during its install
-echo "[cfcf] Installing @cerefox/cfcf-cli from $cli_url"
+echo "[cfcf] Installing @cerefox/codefactory from $cli_url"
 bun install -g "$cli_url"
 dedup_bun_global    # again
 

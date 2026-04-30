@@ -28,7 +28,7 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
   - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
 
-cfcf is distributed as a standard npm package (`@cerefox/cfcf-cli`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/cfcf-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
+cfcf is distributed as a standard npm package (`@cerefox/codefactory`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/codefactory-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
 
 ### For developers (building from source)
 
@@ -57,7 +57,7 @@ npm install -g @openai/codex
 
 ## Install (end users)
 
-cfcf is distributed as the `@cerefox/cfcf-cli` npm package. The curl-bash installer detects Bun, installs it if missing, then `bun install -g <tarball-URL>`:
+cfcf is distributed as the `@cerefox/codefactory` npm package. The curl-bash installer detects Bun, installs it if missing, then `bun install -g <tarball-URL>`:
 
 ```bash
 curl -fsSL https://<host>/install.sh | bash
@@ -68,7 +68,7 @@ If Bun is already on your machine, skip the wrapper:
 ```bash
 bun install -g <tarball-URL>            # GitHub Releases (cfcf-private phase)
 # or, once cfcf is on npmjs.com:
-bun install -g @cerefox/cfcf-cli
+bun install -g @cerefox/codefactory
 ```
 
 Full install guide (file:// installs, upgrade, uninstall, troubleshooting): [`docs/guides/installing.md`](docs/guides/installing.md). After install, run `cfcf doctor` to verify and `cfcf init` for first-run setup.

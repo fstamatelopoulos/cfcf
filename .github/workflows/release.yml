@@ -64,7 +64,7 @@ jobs:
 
   # ── per-platform native package build ──────────────────────────────
   # Compiles the pinned libsqlite3 + downloads the matching sqlite-vec
-  # asset, packs them into @cerefox/cfcf-native-<platform>-X.Y.Z.tgz.
+  # asset, packs them into @cerefox/codefactory-native-<platform>-X.Y.Z.tgz.
   # Each leg runs on a runner of the matching arch so libsqlite3 ends
   # up native-binary-correct without cross-compilation.
   build-native:
@@ -97,8 +97,8 @@ jobs:
           name: cfcf-native-${{ matrix.platform }}
           retention-days: 1
           path: |
-            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz
-            dist/cerefox-cfcf-native-${{ matrix.platform }}-*.tgz.sha256
+            dist/cerefox-codefactory-native-${{ matrix.platform }}-*.tgz
+            dist/cerefox-codefactory-native-${{ matrix.platform }}-*.tgz.sha256
 
   # ── single CLI build ────────────────────────────────────────────────
   # The bundled JS is platform-independent (the heavy native deps are
@@ -179,7 +179,7 @@ jobs:
             --verify-tag \
             $flag \
             dist/cfcf-*.tgz \
-            dist/cerefox-cfcf-native-*.tgz \
+            dist/cerefox-codefactory-native-*.tgz \
             dist/SHA256SUMS \
             dist/MANIFEST.txt \
             dist/install.sh

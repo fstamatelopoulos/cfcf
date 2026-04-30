@@ -10,7 +10,7 @@ cfcf (Cerefox Code Factory, also written cf² and pronounced "cf square") is a d
 
 - **Vendor agnostic**: No LLM vendor or AI dev agent is a first-class citizen. Claude Code, Codex, OpenCode, Cline, Goose, OpenHands, Cursor Agent, and others are all pluggable via a common abstraction layer.
 - **Deterministic orchestration**: LLMs and agents serve as utility evaluators and executors, not decision-makers. Control flow is deterministic and defined by cfcf.
-- **Minimal prerequisites for end users**: Distributed as a standard npm-format CLI package (`@cerefox/cfcf-cli`). The only runtime requirement is Bun ≥ 1.3, which the curl-bash installer bootstraps automatically when missing. No Node or other runtime install required.
+- **Minimal prerequisites for end users**: Distributed as a standard npm-format CLI package (`@cerefox/codefactory`). The only runtime requirement is Bun ≥ 1.3, which the curl-bash installer bootstraps automatically when missing. No Node or other runtime install required.
 - **Progressive complexity**: Starts with a single-agent sequential flow. Multi-agent and hierarchical flows are supported by design but not required upfront.
 - **Human on the loop**: Iterations run uninterrupted and headless by design. The human user may configure cfcf to pause every N iterations to review results, the plan, or the code, and optionally provide corrective direction or refined requirements before the next iteration begins.
 
@@ -32,7 +32,7 @@ TypeScript is the primary language for all cfcf components: CLI, server, and web
 Bun is the runtime and toolchain. It is fully compatible with Node.js APIs and npm packages, and provides:
 
 - **Bun-specific APIs cfcf depends on**: `bun:sqlite` (the Clio memory layer), `Bun.spawn` (agent process management), `Bun.serve` (Hono server), `Bun.file`, asset embedding via `with { type: "text" }`. These are why Bun is a hard runtime requirement at install time, not just a build-time tool.
-- **JS bundling for distribution**: `bun build` (without `--compile`) produces a single bundled JS file shipped as the `@cerefox/cfcf-cli` npm package. Standard Node-ecosystem distribution; users install with `bun install -g`. The `--compile` self-contained-binary path was attempted in v0.5.0–v0.9.0 and abandoned in v0.10.0 — see [`docs/decisions-log.md`](../decisions-log.md) 2026-04-26.
+- **JS bundling for distribution**: `bun build` (without `--compile`) produces a single bundled JS file shipped as the `@cerefox/codefactory` npm package. Standard Node-ecosystem distribution; users install with `bun install -g`. The `--compile` self-contained-binary path was attempted in v0.5.0–v0.9.0 and abandoned in v0.10.0 — see [`docs/decisions-log.md`](../decisions-log.md) 2026-04-26.
 - **Performance**: Faster startup and execution than Node for CLI-heavy workloads; Bun-native APIs avoid Node-shim overhead.
 - **Unified toolchain**: Package manager, test runner, bundler, and runtime in one tool. Reduces CI complexity.
 
@@ -42,26 +42,26 @@ Bun is the runtime and toolchain. It is fully compatible with Node.js APIs and n
 
 ### Approach: npm-format CLI package
 
-cfcf is distributed as the `@cerefox/cfcf-cli` npm package. End users install with one command:
+cfcf is distributed as the `@cerefox/codefactory` npm package. End users install with one command:
 
 ```bash
 curl -fsSL https://<host>/install.sh | bash
 # or, once cfcf is on npmjs.com:
-bun install -g @cerefox/cfcf-cli
+bun install -g @cerefox/codefactory
 ```
 
 The curl-bash installer:
 
 1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
 2. Detects the host platform (darwin-arm64 / darwin-x64 / linux-x64).
-3. Runs `bun install -g <tarball-URL>` against the cfcf release. Bun's package manager fetches the matching `@cerefox/cfcf-native-<platform>` package (pinned libsqlite3 + sqlite-vec, restricted via npm `os`/`cpu` fields) and the runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`).
+3. Runs `bun install -g <tarball-URL>` against the cfcf release. Bun's package manager fetches the matching `@cerefox/codefactory-native-<platform>` package (pinned libsqlite3 + sqlite-vec, restricted via npm `os`/`cpu` fields) and the runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`).
 4. Hands off to `cfcf init` interactively.
 
 This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ecosystem CLIs use. The earlier `bun --compile` self-contained-binary approach was abandoned because Bun's compile-mode resolver doesn't support the heavy native deps cfcf relies on (full post-mortem in [`docs/decisions-log.md`](../decisions-log.md) 2026-04-26).
 
 ### Release Pipeline
 
-`.github/workflows/release.yml` (`workflow_dispatch` only) runs three jobs on tag input: per-platform `build-native` (compiles libsqlite3, fetches sqlite-vec, packs `@cerefox/cfcf-native-<platform>` tarballs), `build-cli` (single Linux runner, runs `bun build` and packs the `@cerefox/cfcf-cli` tarball), and `release` (assembles SHA256SUMS + MANIFEST.txt + install.sh, uploads everything as GitHub Release assets). See [`docs/research/installer-design.md`](../research/installer-design.md) for the full design.
+`.github/workflows/release.yml` (`workflow_dispatch` only) runs three jobs on tag input: per-platform `build-native` (compiles libsqlite3, fetches sqlite-vec, packs `@cerefox/codefactory-native-<platform>` tarballs), `build-cli` (single Linux runner, runs `bun build` and packs the `@cerefox/codefactory` tarball), and `release` (assembles SHA256SUMS + MANIFEST.txt + install.sh, uploads everything as GitHub Release assets). See [`docs/research/installer-design.md`](../research/installer-design.md) for the full design.
 
 ---
 
@@ -71,7 +71,7 @@ This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ec
 
 - **Framework**: Commander.js for command and subcommand routing.
 - **Terminal UI**: Ink (React-based terminal rendering). Used for interactive iteration display, agent status, open question prompts, and progress indicators.
-- **Entry point**: The `cfcf` command (installed by `bun install -g @cerefox/cfcf-cli` to `~/.bun/bin/cfcf`) routes to subcommands (`cfcf iterate`, `cfcf init`, `cfcf status`, `cfcf logs`, etc.).
+- **Entry point**: The `cfcf` command (installed by `bun install -g @cerefox/codefactory` to `~/.bun/bin/cfcf`) routes to subcommands (`cfcf iterate`, `cfcf init`, `cfcf status`, `cfcf logs`, etc.).
 
 ### Server Layer
 
@@ -185,13 +185,13 @@ Role-to-agent assignment is user-configurable. A user might assign the planning 
 ```
 cfcf/
   packages/
-    cli/          # Commander, bundled via bun build → @cerefox/cfcf-cli npm package
+    cli/          # Commander, bundled via bun build → @cerefox/codefactory npm package
     server/       # Hono server, session and process management
     core/         # Shared types, agent abstraction layer, orchestration logic
     web/          # React GUI (embedded into the CLI bundle at build time)
   scripts/
-    build-cli.sh             # Bundle + pack @cerefox/cfcf-cli tarball
-    build-native-package.sh  # Pack @cerefox/cfcf-native-<platform> tarballs
+    build-cli.sh             # Bundle + pack @cerefox/codefactory tarball
+    build-native-package.sh  # Pack @cerefox/codefactory-native-<platform> tarballs
     install.sh               # Curl-bash install wrapper (bootstraps Bun)
   .github/
     workflows/

@@ -55,7 +55,7 @@ jobs:
   build:
     needs: test
     # Single Linux runner: the CLI tarball is platform-independent (the
-    # heavy native deps live in per-platform @cerefox/cfcf-native-<platform>
+    # heavy native deps live in per-platform @cerefox/codefactory-native-<platform>
     # packages, built only at release time -- see release.yml). This job
     # smokes the build pipeline on every PR so a broken build-cli.sh
     # surfaces here instead of mid-release.

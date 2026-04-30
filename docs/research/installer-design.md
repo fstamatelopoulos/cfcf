@@ -15,7 +15,7 @@ cfcf is a Node-ecosystem CLI distributed as a standard npm-format tarball. The t
 Phasing:
 
 - **Now (cfcf private)**: distribute the tarball via GitHub Releases on a `cfcf-releases` repo. User installs via `bun install -g <release-asset-URL>` or via our wrapper.
-- **Later (cfcf goes OSS)**: publish to npmjs.com under `@cerefox/cfcf-cli`. User installs via `bun install -g @cerefox/cfcf-cli`. Tarball-via-Releases stays as a fallback for offline / pinned-version installs.
+- **Later (cfcf goes OSS)**: publish to npmjs.com under `@cerefox/codefactory`. User installs via `bun install -g @cerefox/codefactory`. Tarball-via-Releases stays as a fallback for offline / pinned-version installs.
 
 Same package shape works for both phases — only the install URL changes.
 
@@ -63,21 +63,21 @@ The pinned SQLite + sqlite-vec story stays. They become **per-platform optional 
 ```jsonc
 {
   "optionalDependencies": {
-    "@cerefox/cfcf-native-darwin-arm64": "X.Y.Z",
-    "@cerefox/cfcf-native-darwin-x64":   "X.Y.Z",
-    "@cerefox/cfcf-native-linux-x64":    "X.Y.Z"
+    "@cerefox/codefactory-native-darwin-arm64": "X.Y.Z",
+    "@cerefox/codefactory-native-darwin-x64":   "X.Y.Z",
+    "@cerefox/codefactory-native-linux-x64":    "X.Y.Z"
   }
 }
 ```
 
-Each `@cerefox/cfcf-native-<platform>` package contains:
+Each `@cerefox/codefactory-native-<platform>` package contains:
 
 - `libsqlite3.<dylib|so|dll>` — built from the SQLite amalgamation with `SQLITE_ENABLE_LOAD_EXTENSION=1`
 - `sqlite-vec.<dylib|so|dll>` — vendored from the upstream sqlite-vec GH release
 
 `os` + `cpu` fields in each package's `package.json` make npm install only the right one for the user's platform. Pattern is identical to what Claude Code, sharp, swc, and esbuild use.
 
-`applyCustomSqlite()` in `packages/core/src/clio/db.ts` looks up the platform package via `require.resolve('@cerefox/cfcf-native-<platform>/...')` and points `Database.setCustomSQLite()` at the right path. No `~/.cfcf/native/` directory; everything lives in the standard `node_modules/` tree.
+`applyCustomSqlite()` in `packages/core/src/clio/db.ts` looks up the platform package via `require.resolve('@cerefox/codefactory-native-<platform>/...')` and points `Database.setCustomSQLite()` at the right path. No `~/.cfcf/native/` directory; everything lives in the standard `node_modules/` tree.
 
 ### 3.3 Build scripts
 
@@ -85,7 +85,7 @@ Each `@cerefox/cfcf-native-<platform>` package contains:
 |---|---|
 | `scripts/build-sqlite.sh` | Compiles libsqlite3 from the pinned amalgamation (still needed) |
 | `scripts/fetch-sqlite-vec.sh` | Downloads the pinned sqlite-vec release asset (still needed) |
-| `scripts/build-native-package.sh` | NEW: Wraps the two above, copies the libs into `packages/native-<platform>/`, runs `bun pm pack` to produce `@cerefox/cfcf-native-<platform>-X.Y.Z.tgz` |
+| `scripts/build-native-package.sh` | NEW: Wraps the two above, copies the libs into `packages/native-<platform>/`, runs `bun pm pack` to produce `@cerefox/codefactory-native-<platform>-X.Y.Z.tgz` |
 | `scripts/build-cli.sh` | NEW: Runs `bun build` (no `--compile`) to bundle `packages/cli/src/index.ts` → `dist/cfcf.js`, copies `package.json`/`bin/`/etc., runs `bun pm pack` → produces `cfcf-X.Y.Z.tgz` |
 | `scripts/install.sh` | Slimmed: ~30 lines. Detects Bun; installs via `https://bun.sh/install` if missing; then `bun install -g <tarball>` |
 | `scripts/uninstall.sh` | `bun uninstall -g cfcf` (one line) |
@@ -146,7 +146,7 @@ For users who prefer an explicit install: `bun install -g <tarball-url>` works d
 Phases:
 
 1. **verify**: tag exists + reachable from main.
-2. **build-native**: per-platform matrix (darwin-arm64, darwin-x64, linux-x64). Each leg runs `scripts/build-native-package.sh` → produces `@cerefox/cfcf-native-<platform>-X.Y.Z.tgz`.
+2. **build-native**: per-platform matrix (darwin-arm64, darwin-x64, linux-x64). Each leg runs `scripts/build-native-package.sh` → produces `@cerefox/codefactory-native-<platform>-X.Y.Z.tgz`.
 3. **build-cli**: single job. Runs `scripts/build-cli.sh` → produces `cfcf-X.Y.Z.tgz`.
 4. **release**: assembles `SHA256SUMS`, uploads all 4 tarballs (1 cli + 3 native) + `install.sh` + `SHA256SUMS` as GitHub Release assets via `gh release create`.
 
@@ -160,9 +160,9 @@ Skipped phases vs the old design: no smoke-tarball-end-to-end (the build itself 
 |---|---|---|
 | 0 (dev) | Local | `CFCF_BASE_URL=file://$(pwd)/dist bash install.sh` or `bun install -g ./dist/cfcf-X.Y.Z.tgz` |
 | 1 (cfcf private) | After 5.5 ships | `curl -fsSL https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download/install.sh \| bash` or `bun install -g <tarball-URL>` |
-| 2 (cfcf public) | After cfcf-the-repo is open-sourced + `bun publish` runs | `bun install -g @cerefox/cfcf-cli` |
+| 2 (cfcf public) | After cfcf-the-repo is open-sourced + `bun publish` runs | `bun install -g @cerefox/codefactory` |
 
-The `install.sh` wrapper is the **same shell script** in phases 1 and 2 — only `CFCF_BASE_URL` defaults change. Or we deprecate `install.sh` entirely in phase 2 since `bun install -g @cerefox/cfcf-cli` is already a one-liner.
+The `install.sh` wrapper is the **same shell script** in phases 1 and 2 — only `CFCF_BASE_URL` defaults change. Or we deprecate `install.sh` entirely in phase 2 since `bun install -g @cerefox/codefactory` is already a one-liner.
 
 ---
 
@@ -188,7 +188,7 @@ The `install.sh` wrapper is the **same shell script** in phases 1 and 2 — only
 
 ## 9. Open questions / future work
 
-- **Going public**: when cfcf opens up, register `@cerefox` org on npmjs.com, run `bun publish`. Update `install.sh` default `CFCF_BASE_URL` to point at npmjs.com via `bun install -g @cerefox/cfcf-cli`. (Plan item 5.5b — minor follow-up.)
+- **Going public**: when cfcf opens up, register `@cerefox` org on npmjs.com, run `bun publish`. Update `install.sh` default `CFCF_BASE_URL` to point at npmjs.com via `bun install -g @cerefox/codefactory`. (Plan item 5.5b — minor follow-up.)
 - **Offline installs**: if a user can't reach npmjs.com, the current model breaks (transformers + ORT have to be fetched). Workaround: a "fat tarball" build that includes `bundleDependencies`. Track as future plan item if requested.
 - **Windows**: same as before — v1 is Mac + Linux. Windows users use WSL or wait for a Phase 4 PowerShell installer.
 - **Auto-update polling**: web-UI banner that surfaces "new version available" — plan item 6.20.
@@ -203,7 +203,7 @@ The `install.sh` wrapper is the **same shell script** in phases 1 and 2 — only
 - [x] Decision: distribute via GitHub Releases tarball now → npmjs.com when cfcf goes public (2026-04-26)
 - [ ] Refactor `packages/cli/src/index.ts` shebang + drop `bun build --compile` from build scripts
 - [ ] `scripts/build-cli.sh` — new build script that produces `cfcf-X.Y.Z.tgz`
-- [ ] `scripts/build-native-package.sh` — produces per-platform `@cerefox/cfcf-native-<platform>-X.Y.Z.tgz`
+- [ ] `scripts/build-native-package.sh` — produces per-platform `@cerefox/codefactory-native-<platform>-X.Y.Z.tgz`
 - [ ] `packages/core/src/clio/db.ts` — `applyCustomSqlite()` via `require.resolve` of the platform package
 - [ ] Replace `scripts/install.sh` with the slim ~30-line wrapper
 - [ ] Replace `scripts/uninstall.sh` with `bun uninstall -g cfcf` (one-liner)

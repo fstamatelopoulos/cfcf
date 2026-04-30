@@ -6,14 +6,15 @@
 # never reaches users.
 #
 # Usage:  smoke-tarball.sh <cfcf-tarball> [native-tarball]
-#         e.g. smoke-tarball.sh dist/cfcf-0.10.0.tgz \
-#                              dist/cerefox-cfcf-native-darwin-arm64-0.10.0.tgz
+#         e.g. smoke-tarball.sh dist/cfcf-0.16.1.tgz \
+#                              dist/cerefox-codefactory-native-darwin-arm64-0.16.1.tgz
 #
 # Per docs/research/installer-design.md §5. The install bun does here
 # fetches transformers + ORT + sharp from npmjs.com, so this test
 # requires network. The native-tarball arg is optional -- if omitted,
-# the user's already-installed @cerefox/cfcf-native-<platform> (if any)
-# is used; if neither is present, sqlite-vec checks degrade to warnings.
+# the user's already-installed @cerefox/codefactory-native-<platform>
+# (if any) is used; if neither is present, sqlite-vec checks degrade
+# to warnings.
 
 set -euo pipefail
 

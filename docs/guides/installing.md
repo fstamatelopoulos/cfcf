@@ -1,6 +1,6 @@
 # Installing cf²
 
-cf² ships as a standard npm-format package: `@cerefox/cfcf-cli`. The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/cfcf-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs.
+cf² ships as a standard npm-format package: `@cerefox/codefactory`. The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/codefactory-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs.
 
 **Prerequisites** — `git` + `bun` ≥ 1.3 (the curl-bash installer below installs Bun for you if it's missing).
 
@@ -10,13 +10,13 @@ cf² ships as a standard npm-format package: `@cerefox/cfcf-cli`. The runtime is
 curl -fsSL https://<host>/install.sh | bash
 ```
 
-Replace `<host>` with the hosting URL the project announces. Today (cf² private), this is the `cfcf-releases` GitHub repo's [Release page]; once cf² goes public, it becomes `bun install -g @cerefox/cfcf-cli` (no curl-bash needed).
+Replace `<host>` with the hosting URL the project announces. Today (cf² private), this is the `cfcf-releases` GitHub repo's [Release page]; once cf² goes public, it becomes `bun install -g @cerefox/codefactory` (no curl-bash needed).
 
 The script:
 
 1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
 2. Resolves the requested version (`CFCF_VERSION=latest` follows GitHub's release-redirect; an explicit tag is honoured verbatim).
-3. Runs `bun install -g <tarball-URL>`. Bun fetches the cf² tarball + the platform-specific `@cerefox/cfcf-native-<platform>` package + the runtime deps (transformers, ORT-node, sharp).
+3. Runs `bun install -g <tarball-URL>`. Bun fetches the cf² tarball + the platform-specific `@cerefox/codefactory-native-<platform>` package + the runtime deps (transformers, ORT-node, sharp).
 4. Auto-installs **shell tab completion** for your `$SHELL` (writes the completion script + appends a sentinel-marked block to `~/.zshrc` or `~/.bashrc`). See the [Shell completion section in `manual.md`](manual.md#shell-completion) for what gets added.
 5. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
 
@@ -29,7 +29,7 @@ If Bun is already on your machine, you can skip `install.sh` entirely and let Bu
 ```bash
 bun install -g <tarball-URL>           # e.g. https://github.com/.../cfcf-0.10.0.tgz
 # or, once cf² is on npmjs.com:
-bun install -g @cerefox/cfcf-cli
+bun install -g @cerefox/codefactory
 ```
 
 This is identical to what `install.sh` does after the Bun bootstrap.
@@ -42,7 +42,7 @@ The install script accepts any HTTP server or `file://` URL via `CFCF_BASE_URL`.
 # 1. Drop the cf² + native tarballs + install.sh into a directory.
 ls dist/
 # cfcf-0.10.0.tgz
-# cerefox-cfcf-native-darwin-arm64-0.10.0.tgz
+# cerefox-codefactory-native-darwin-arm64-0.10.0.tgz
 # install.sh
 
 # 2a. Local server option:
@@ -63,11 +63,11 @@ For the file:// path, `CFCF_VERSION` must be set explicitly (no "latest" symlink
 
 ```
 $HOME/.bun/install/global/node_modules/
-├── @cerefox/cfcf-cli/                   # the CLI package
+├── @cerefox/codefactory/                   # the CLI package
 │   ├── package.json
 │   ├── bin/cfcf.js                      # shebang stub
 │   └── dist/cfcf.js                     # bundled JS (~1 MB)
-├── @cerefox/cfcf-native-<platform>/     # only the matching one is installed
+├── @cerefox/codefactory-native-<platform>/     # only the matching one is installed
 │   ├── libsqlite3.<dylib|so|dll>
 │   └── sqlite-vec.<dylib|so|dll>
 ├── @huggingface/transformers/           # runtime deps, fetched from npmjs.com
@@ -104,7 +104,7 @@ User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is **never tou
 ## Uninstalling
 
 ```bash
-bun remove -g @cerefox/cfcf-cli         # one-liner
+bun remove -g @cerefox/codefactory         # one-liner
 
 # Or via the wrapper (interactive, prints what gets preserved):
 ~/.cfcf/uninstall.sh                    # if you have it locally; otherwise just run the bun command
@@ -131,12 +131,12 @@ exec $SHELL
 
 90% of the time the fix is `rm ~/.zcompdump*; exec zsh` (force a clean compinit reload). See [troubleshooting.md → Tab completion doesn't work](troubleshooting.md#tab-completion-doesnt-work) for the full diagnosis.
 
-### `cfcf doctor` reports "@cerefox/cfcf-native-<platform>: not installed"
+### `cfcf doctor` reports "@cerefox/codefactory-native-<platform>: not installed"
 
 `bun install -g` skipped the platform package because the npm registry didn't have it (private-distribution path during the cfcf-private phase: only the GitHub Release artefact has it). Install it manually:
 
 ```bash
-bun install -g <tarball-URL>/cerefox-cfcf-native-<platform>-<version>.tgz
+bun install -g <tarball-URL>/cerefox-codefactory-native-<platform>-<version>.tgz
 ```
 
 Or re-run `install.sh` against the Release URL — it pulls the right one for your platform.
@@ -146,12 +146,12 @@ Or re-run `install.sh` against the Release URL — it pulls the right one for yo
 A network blip during install. Reinstall:
 
 ```bash
-bun install -g @cerefox/cfcf-cli       # or the tarball URL
+bun install -g @cerefox/codefactory       # or the tarball URL
 ```
 
 ### sqlite-vec / hybrid search doesn't work
 
-`cfcf doctor` will flag the issue. The most common cause is a missing `@cerefox/cfcf-native-<platform>` package — see two items up.
+`cfcf doctor` will flag the issue. The most common cause is a missing `@cerefox/codefactory-native-<platform>` package — see two items up.
 
 ### Bun warns about duplicate keys
 
