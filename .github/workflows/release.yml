@@ -70,17 +70,23 @@ jobs:
   # ── per-platform native package build ──────────────────────────────
   # Compiles the pinned libsqlite3 + downloads the matching sqlite-vec
   # asset, packs them into @cerefox/codefactory-native-<platform>-X.Y.Z.tgz.
-  # Each leg runs on a runner of the matching arch so libsqlite3 ends
-  # up native-binary-correct without cross-compilation.
+  #
+  # Both Mac legs run on macos-14 (arm64). darwin-arm64 builds natively;
+  # darwin-x64 cross-compiles via clang's `-arch x86_64` flag, plumbed
+  # through scripts/build-sqlite.sh's existing per-platform arch_flag
+  # handling. macos-13 (Intel) runners are being phased out by GitHub +
+  # have multi-hour queue times on free-tier; cross-compilation from
+  # macos-14 is reliable, ~3x faster, and uses one less concurrent
+  # runner slot. Decision: 2026-04-30.
   build-native:
     needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14          # arm64 runner
+          - os: macos-14          # arm64 runner; native build
             platform: darwin-arm64
-          - os: macos-13          # x64 runner (Intel)
+          - os: macos-14          # arm64 runner; cross-compiles -arch x86_64
             platform: darwin-x64
           - os: ubuntu-latest
             platform: linux-x64
