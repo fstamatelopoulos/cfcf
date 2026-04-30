@@ -42,3 +42,6 @@ cfcf
 
 # cfcf runtime (agent logs, not part of repo)
 .cfcf/
+
+# Claude Code local state (sessions, settings, lock files)
+.claude/
