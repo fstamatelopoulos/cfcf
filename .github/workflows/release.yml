@@ -226,6 +226,13 @@ jobs:
           merge-multiple: true
 
       - name: npm publish --dry-run (native packages)
+        # `./` prefix on the tarball path is required: without it, npm
+        # parses `dist/foo.tgz` as a github shorthand spec (user `dist`,
+        # repo `foo.tgz`) and tries `git ls-remote ssh://git@github.com/
+        # dist/foo.tgz.git`, which fails with "Permission denied (publickey)".
+        # The leading `./` forces npm to treat the argument as a local
+        # tarball file. (npm-package-arg parses package specs ambiguously
+        # when the path contains a `/` but doesn't start with `./` or `/`.)
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -236,7 +243,7 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::dry-run $tgz"
-            npm publish --dry-run "$tgz"
+            npm publish --dry-run "./$tgz"
             echo "::endgroup::"
           done
 
@@ -251,7 +258,7 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::dry-run $tgz"
-            npm publish --dry-run "$tgz"
+            npm publish --dry-run "./$tgz"
             echo "::endgroup::"
           done
 
@@ -299,6 +306,8 @@ jobs:
           merge-multiple: true
 
       - name: npm publish (native packages, first)
+        # `./` prefix required on the tarball path -- see npm-dryrun job
+        # for the full rationale. Same bug would have bitten step 8.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -311,7 +320,7 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::publish $tgz"
-            npm publish --access public "$tgz"
+            npm publish --access public "./$tgz"
             echo "::endgroup::"
           done
 
@@ -328,7 +337,7 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::publish $tgz"
-            npm publish --access public "$tgz"
+            npm publish --access public "./$tgz"
             echo "::endgroup::"
           done
 
