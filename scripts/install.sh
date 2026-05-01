@@ -237,11 +237,17 @@ cfcf doctor || echo "[cfcf] (cfcf doctor reported issues -- review above)"
 echo ""
 
 # Hand off to cfcf init (interactive). Skip in CI / non-interactive runs.
+#
+# IMPORTANT: explicitly redirect stdin from /dev/tty when exec'ing cfcf
+# init. When install.sh runs via `curl ... | bash`, our stdin is the
+# (already-consumed) curl pipe, not the terminal. Without `</dev/tty`,
+# cfcf init's prompt would read EOF and exit immediately. Bun's
+# installer handles this the same way; classic curl-bash gotcha.
 if [[ -z "${CFCF_SKIP_INIT:-}" ]] && [[ -t 0 || -e /dev/tty ]]; then
   echo "[cfcf] Press Enter to run 'cfcf init' now, or Ctrl-C to exit and run it later."
   read -r _ </dev/tty 2>/dev/null || true
   echo "[cfcf] Launching cfcf init..."
-  exec cfcf init
+  exec cfcf init </dev/tty
 else
   echo "[cfcf] Next steps:"
   echo "[cfcf]   cfcf init     (interactive first-run setup)"
