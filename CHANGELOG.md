@@ -66,6 +66,18 @@ A bun-only design with auto-trust was implemented + tested. It works but the vis
 - **`docs/guides/manual.md`** "In one minute" install snippet uses the curl-bash one-liner.
 - **`docs/guides/troubleshooting.md`** new section: "`cfcf` not found after running `install.sh`" (the source-rc / open-new-terminal one-time step for first-time Bun users), plus the EACCES section for users who do `npm install -g` without `--prefix ~/.bun`, plus the existing bun-trust workaround.
 
+### Doc sweep (post-validation)
+
+After the install.sh design landed and was validated on Apple Silicon + Intel Macs, a thorough sweep across all docs caught references to the older `bun install -g` install path + the `~/.bun/install/global/` layout that no longer match the shipped behaviour:
+
+- **`docs/decisions-log.md`** new entry (2026-05-01) capturing the four-option journey + the four lessons learned (the Unix process model is a hard constraint; bin-prefix re-use beats new-PATH-entry; the wrapper carries the cleverness so the manual command stays trivial; clean-machine first-run testing surfaces issues nothing else does).
+- **`docs/guides/installing.md`** "What gets installed" tree now reflects the `~/.bun/lib/node_modules/` layout that npm-with-prefix produces (with a note that the bun-only alternative still uses `~/.bun/install/global/`). The "Uninstalling" section uses `npm remove -g --prefix ~/.bun` to match the recommended install path; the bun-only alternative is documented separately.
+- **`docs/design/cfcf-stack.md`** "Distribution and Installation" section rewritten: curl-bash one-liner is the lead, `npm install -g --prefix ~/.bun` is the manual alternative, with a paragraph explaining why the prefix re-uses Bun's directory.
+- **`docs/research/installer-design.md`** banner at the top marks the doc as historical/superseded and points to the v0.16.4 decisions-log entry + `installing.md` for current install info.
+- **`docs/guides/cli-usage.md`** completion auto-install table updated to differentiate the recommended (`npm install -g --prefix ~/.bun`) path from the Bun-only alternative.
+- **`docs/guides/troubleshooting.md`** "Reset to a known-clean state" steps now use `npm remove -g --prefix ~/.bun` for the recommended install path, with the bun-only commands kept as a comment for users on the alternative.
+- **`docs/plan.md`** rows 5.5b + 5.14 marked ✅ — both shipped via the v0.16.x line + PR #22 respectively.
+
 ## [0.16.3] -- 2026-05-01
 
 ### npm publish pipeline polish (post-first-publish)

@@ -707,9 +707,10 @@ cfcf completion zsh  > ~/.zsh/completions/_cfcf
 
 | Install path | Auto-runs `cfcf completion install`? |
 |---|---|
-| `scripts/install.sh` (curl-based) | ✓ explicit call after `bun install -g` |
+| `scripts/install.sh` (curl-based) | ✓ explicit call after `npm install -g --prefix ~/.bun` |
 | `cfcf self-update` | ✓ spawns the new binary post-upgrade |
-| `bun install -g @cerefox/codefactory` (npmjs path) | ✓ `postinstall` hook in the published `package.json` |
+| `npm install -g --prefix ~/.bun @cerefox/codefactory` (manual npm path) | ✓ `postinstall` hook in the published `package.json` |
+| `bun install -g @cerefox/codefactory` (Bun-only alternative) | ✗ Bun blocks postinstalls by default — run `cfcf completion install` manually after `bun pm -g trust …` |
 
 ### Supported shells + platforms
 

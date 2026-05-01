@@ -388,15 +388,20 @@ cfcf server stop
 # 2. Uninstall completion (optional)
 cfcf completion uninstall
 
-# 3. Remove the global package
-bun remove -g @cerefox/codefactory
-bun remove -g @cerefox/codefactory-native-darwin-arm64    # or your platform
+# 3. Remove the global package (use the tool that installed it)
+#    Recommended install path (install.sh / npm-with-prefix):
+npm remove -g --prefix ~/.bun @cerefox/codefactory @cerefox/codefactory-native-darwin-arm64
+#    Or, if you used the Bun-only alternative install:
+# bun remove -g @cerefox/codefactory @cerefox/codefactory-native-darwin-arm64
+# Adjust the -native- suffix to match your platform (darwin-arm64 / darwin-x64 / linux-x64).
 
 # 4. (optional) wipe the install state -- leaves your data alone
-rm -rf ~/.bun/install/global/{package.json,bun.lock,node_modules}
+#    Recommended install path: nothing to wipe (npm tracks state under ~/.bun/lib/node_modules/
+#    and removes cleanly above). The lockfile workaround below is bun-install only:
+# rm -rf ~/.bun/install/global/{package.json,bun.lock,node_modules}
 
-# 5. Reinstall
-bun install -g @cerefox/codefactory
+# 5. Reinstall (recommended path)
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
 Your data stays:

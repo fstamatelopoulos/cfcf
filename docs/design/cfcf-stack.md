@@ -42,20 +42,22 @@ Bun is the runtime and toolchain. It is fully compatible with Node.js APIs and n
 
 ### Approach: npm-format CLI package
 
-cfcf is distributed as the `@cerefox/codefactory` npm package. End users install with one command:
+cfcf is distributed as the `@cerefox/codefactory` npm package on npmjs.com. End users install with one command:
 
 ```bash
-curl -fsSL https://<host>/install.sh | bash
-# or, once cfcf is on npmjs.com:
-bun install -g @cerefox/codefactory
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
+# or, manually (if you already have Bun + npm):
+npm install -g --prefix ~/.bun @cerefox/codefactory
 ```
 
 The curl-bash installer:
 
 1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
-2. Detects the host platform (darwin-arm64 / darwin-x64 / linux-x64).
-3. Runs `bun install -g <tarball-URL>` against the cfcf release. Bun's package manager fetches the matching `@cerefox/codefactory-native-<platform>` package (pinned libsqlite3 + sqlite-vec, restricted via npm `os`/`cpu` fields) and the runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`).
-4. Hands off to `cfcf init` interactively.
+2. Detects whether `npm` is available; runs `bun install -g npm` if not.
+3. Runs `npm install -g --prefix ~/.bun @cerefox/codefactory`. npm's optional-deps resolver (gated by the package's `os`/`cpu` fields) installs the matching `@cerefox/codefactory-native-<platform>` package (pinned libsqlite3 + sqlite-vec) and the runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`).
+4. Prints a banner pointing the user at `cfcf init` to start interactive first-run setup.
+
+Why the `--prefix ~/.bun`? cfcf requires Bun at runtime (it uses `bun:sqlite`, `Bun.spawn`, etc. directly), so every cfcf user already has `~/.bun/bin` on their PATH (added by Bun's installer). Pointing npm at `~/.bun` lands cfcf at `~/.bun/bin/cfcf` — immediately reachable, with no second PATH entry, no shell-rc edit by cfcf, and no `EACCES` from npm's default root-owned `/usr/local` prefix on stock-installer Node. Full rationale + the four-design journey in [`docs/decisions-log.md`](../decisions-log.md) (2026-05-01 entry). Why npm and not `bun install -g`? Bun blocks transitive postinstall scripts by default ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)), which would break `onnxruntime-node` + `protobufjs`; npm runs them by default with no trust prompt.
 
 This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ecosystem CLIs use. The earlier `bun --compile` self-contained-binary approach was abandoned because Bun's compile-mode resolver doesn't support the heavy native deps cfcf relies on (full post-mortem in [`docs/decisions-log.md`](../decisions-log.md) 2026-04-26).
 
@@ -71,7 +73,7 @@ This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ec
 
 - **Framework**: Commander.js for command and subcommand routing.
 - **Terminal UI**: Ink (React-based terminal rendering). Used for interactive iteration display, agent status, open question prompts, and progress indicators.
-- **Entry point**: The `cfcf` command (installed by `bun install -g @cerefox/codefactory` to `~/.bun/bin/cfcf`) routes to subcommands (`cfcf iterate`, `cfcf init`, `cfcf status`, `cfcf logs`, etc.).
+- **Entry point**: The `cfcf` command (installed by `npm install -g --prefix ~/.bun @cerefox/codefactory` to `~/.bun/bin/cfcf`) routes to subcommands (`cfcf iterate`, `cfcf init`, `cfcf status`, `cfcf logs`, etc.).
 
 ### Server Layer
 

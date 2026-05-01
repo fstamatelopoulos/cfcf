@@ -1,5 +1,7 @@
 # Installer design — plan item 5.5
 
+> **⚠️ Historical / superseded.** This document captures the original 5.5 design. The shipped installer (v0.16.4, plan item 5.5b) **switched from `bun install -g` to `npm install -g --prefix ~/.bun`** to dodge bun's transitive-postinstall blocking ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)) without forcing a `bun pm trust` UX on first-time users. Final design + the four-option decision journey are in [`docs/decisions-log.md`](../decisions-log.md) (2026-05-01 entry); user-facing install instructions are in [`docs/guides/installing.md`](../guides/installing.md). Read this doc for context on **why npm-format distribution** + the platform-native split — the install **mechanism** described below (`bun install -g <tarball>`) is now only one of two supported paths (the bun-only alternative).
+
 **Status:** design, implementation-ready. Feeds plan item 5.5.
 **Author:** rewritten 2026-04-26 after the failed `bun --compile` attempt — see `docs/decisions-log.md` for the path that led here.
 **Cross-refs:** [`docs/plan.md`](../plan.md) row 5.5, [`docs/design/clio-memory-layer.md`](../design/clio-memory-layer.md) §4 (Clio SQLite stack), plan items 6.15 (sqlite-vec HNSW), 6.20 (web-UI new-version notification), 6.21 (cfcf init defaults from existing config).

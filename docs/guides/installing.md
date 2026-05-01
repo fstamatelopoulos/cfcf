@@ -103,21 +103,25 @@ Notes:
 
 ## What gets installed
 
-`bun install -g` lays everything out under your Bun global prefix (default: `~/.bun/install/global/`). The tree:
+`npm install -g --prefix ~/.bun` lays everything out under `~/.bun/lib/node_modules/`, with the `cfcf` binary symlinked into `~/.bun/bin/`. The tree:
 
 ```
-$HOME/.bun/install/global/node_modules/
-├── @cerefox/codefactory/                   # the CLI package
-│   ├── package.json
-│   ├── bin/cfcf.js                      # shebang stub
-│   └── dist/cfcf.js                     # bundled JS (~1 MB)
-├── @cerefox/codefactory-native-<platform>/     # only the matching one is installed
-│   ├── libsqlite3.<dylib|so|dll>
-│   └── sqlite-vec.<dylib|so|dll>
-├── @huggingface/transformers/           # runtime deps, fetched from npmjs.com
-├── onnxruntime-node/
-└── sharp/
+$HOME/.bun/
+├── bin/cfcf                              # symlink → ../lib/node_modules/@cerefox/codefactory/bin/cfcf.js
+└── lib/node_modules/
+    ├── @cerefox/codefactory/             # the CLI package
+    │   ├── package.json
+    │   ├── bin/cfcf.js                   # shebang stub
+    │   └── dist/cfcf.js                  # bundled JS (~1 MB)
+    ├── @cerefox/codefactory-native-<platform>/   # only the matching one is installed
+    │   ├── libsqlite3.<dylib|so|dll>
+    │   └── sqlite-vec.<dylib|so|dll>
+    ├── @huggingface/transformers/        # runtime deps, fetched from npmjs.com
+    ├── onnxruntime-node/
+    └── sharp/
 ```
+
+(If you used the Bun-only alternative below, the layout is slightly different: packages live under `~/.bun/install/global/node_modules/` instead. Functionally equivalent.)
 
 User data lives separately under `~/.cfcf/`:
 
@@ -147,20 +151,27 @@ cfcf self-update --base-url file:///tmp/dist  # any HTTP / file:// mirror
 
 Source resolution mirrors `install.sh`: `--source` flag wins; otherwise `--base-url` (or `CFCF_BASE_URL`) implies tarball; otherwise the default is **npm**. The same `CFCF_INSTALL_SOURCE` / `CFCF_VERSION` / `CFCF_BASE_URL` / `CFCF_RELEASES_REPO` env vars work for both.
 
-Internally this runs `bun install -g @cerefox/codefactory@<version>` (npm) or `bun install -g <tarball-URL>` (tarball). Bun's package manager handles the swap atomically — if the install fails, the previous version stays intact.
+Internally this runs `npm install -g --prefix ~/.bun @cerefox/codefactory@<version>` (npm) or `npm install -g --prefix ~/.bun <tarball-URL>` (tarball). npm handles the swap atomically — if the install fails, the previous version stays intact.
 
 User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, `~/.cfcf/models/`) is **never touched** by the install/upgrade flow. Only the global node_modules entry changes.
 
 ## Uninstalling
 
 ```bash
-bun remove -g @cerefox/codefactory         # one-liner
+# Standard uninstall (matches the recommended install path):
+npm remove -g --prefix ~/.bun @cerefox/codefactory @cerefox/codefactory-native-darwin-arm64
+# Adjust the -native- suffix to match your platform (darwin-arm64 / darwin-x64 / linux-x64).
 
-# Or via the wrapper (interactive, prints what gets preserved):
-~/.cfcf/uninstall.sh                    # if you have it locally; otherwise just run the bun command
+# Or via the wrapper (interactive, detects ALL historical install locations
+# — ~/.bun/lib/node_modules, ~/.npm-global, npm system prefix, ~/.bun/install/global —
+# and uses the right tool for each):
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/uninstall.sh | bash
+
+# If you used the Bun-only alternative install:
+bun remove -g @cerefox/codefactory @cerefox/codefactory-native-darwin-arm64
 ```
 
-`bun remove -g` cleans up the cf² package + the platform-native package + the runtime deps. Your `~/.cfcf/` data dir is preserved on purpose; delete it manually with `rm -rf ~/.cfcf` if you want a clean wipe.
+The uninstall removes the cf² package + the platform-native package. Runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`) are removed automatically as orphaned dependencies. Your `~/.cfcf/` data dir is preserved on purpose; delete it manually with `rm -rf ~/.cfcf` if you want a clean wipe.
 
 The platform-specific config dir (`~/Library/Application Support/cfcf/` on macOS; `$XDG_CONFIG_HOME/cfcf/` on Linux) is also preserved. Find it with `cfcf config show --path` *before* uninstalling.
 

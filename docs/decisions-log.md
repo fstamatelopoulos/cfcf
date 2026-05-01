@@ -13,6 +13,63 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-01 — Install cfcf into `~/.bun` via `npm install -g --prefix ~/.bun` (zero-friction install)
+
+**Context.** v0.16.2 shipped cfcf to npmjs.com. The next obvious task: a curl-bash one-liner so a random user lands on the GitHub repo, pastes one line, and gets a working cfcf. Multiple iterations between 2026-04-30 and 2026-05-01 tested four distinct install-tool strategies on two real Macs (Intel + Apple Silicon, both with prior cfcf in various states). Each design that "looked right on paper" surfaced a real-world UX problem that ruled it out. Capturing the full journey here so we don't re-litigate.
+
+**The hard constraint.** `install.sh` runs as a child process of the user's shell (`curl ... | bash` spawns `bash` as a child). **A child process cannot modify its parent's environment** — Unix process model. Any `export PATH=...` in install.sh affects only install.sh's subshell; when install.sh exits, the parent shell's PATH is unchanged. Any rc-file edit only takes effect on next shell startup or `source ~/.zshrc`. Every modern shell-based installer hits this wall (Bun's official installer, rustup, nvm, Volta, Homebrew); they all print "open a new terminal" when they have to add new PATH entries.
+
+The corollary: the BEST install.sh can do is **install cfcf into a directory that's already on the user's PATH**, so no new PATH entry is needed. If we have to add a new entry, we MUST tell the user to source-rc / open new terminal once.
+
+**Options considered (chronological, with what each tested + ruled out).**
+
+1. **`bun install -g @cerefox/codefactory`** (the v0.16.3 baseline). Single tool. ~/.bun/bin always user-writable; PATH already set up by Bun's installer. Worked structurally **but** Bun blocks postinstall scripts of transitive deps by default ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). cfcf depends on `onnxruntime-node` (downloads platform-specific .node binaries) + `protobufjs` (codegen) — without those running, Clio's embedder breaks at runtime. cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, but bun's transitive-trust handling for `-g` installs is incomplete. User-facing fix: manual `bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs`. **Ruled out for new users**: the trust-prompt UX is exactly the "click yes to a security alert" pattern that erodes first-impression trust on an unknown CLI.
+
+2. **`bun install -g` + scripted auto-trust in install.sh**. install.sh runs the trust grant for the user, named (not `--all`), with verbose output. Implemented + tested. Worked end-to-end. **Ruled out**: even with named packages + auditable output, the visible `bun pm -g trust` line in the install output raised "what is this approving?" concerns. "I want to avoid asking a user that is a miracle that they showed interest to an unknown app to just 'trust' something." Engineering simplicity (single tool, ~120 line install.sh) didn't justify the new-user-UX cost.
+
+3. **`npm install -g @cerefox/codefactory`** (npm runs postinstalls by default — no trust step needed). Implemented + tested on the Apple Silicon Mac. **Hit the EACCES gotcha**: stock-installer Node (the official `.pkg` from nodejs.org) sets npm's global prefix to `/usr/local/`, root-owned. `npm install -g` fails without sudo. The npm-documented fix is `npm config set prefix ~/.npm-global` + `export PATH="$HOME/.npm-global/bin:$PATH"` in shell rc — what `nvm`/`fnm`/`asdf` do automatically. **Worked but added complexity**: install.sh needs to detect the EACCES condition, set up `~/.npm-global`, write to shell rc; ~280 lines instead of ~120; user gets "IMPORTANT: open new terminal" friction every fresh install (parent shell can't see the new ~/.npm-global/bin until rc is re-sourced).
+
+4. **`npm install -g --prefix ~/.bun @cerefox/codefactory`** — the winning design. cfcf installs to `~/.bun/bin/cfcf`. Since cfcf REQUIRES Bun (uses `bun:sqlite`, `Bun.spawn`, etc. directly at runtime), every cfcf user has Bun. Bun's installer adds `~/.bun/bin` to the shell rc when bun is installed. So `~/.bun/bin` is on the user's PATH, and cfcf is reachable immediately — **no new PATH entry, no rc edit by cfcf, no source-rc step**.
+
+**Decided** — option 4. Specifically:
+
+- `scripts/install.sh`: bootstrap Bun if missing; bootstrap npm if missing (`bun install -g npm`); run `npm install -g --prefix ~/.bun @cerefox/codefactory`; print "Installation complete!" banner.
+- `scripts/uninstall.sh`: detect cfcf at any of the historical install locations (~/.bun/lib/node_modules, ~/.npm-global/lib/node_modules, npm system prefix /lib/node_modules, ~/.bun/install/global/node_modules) and clean each up via the right tool.
+- `packages/cli/src/commands/self-update.ts`: same `npm install -g --prefix ~/.bun` for upgrades.
+- The `--prefix ~/.bun` flag is per-command; doesn't touch user's npm config (their other `npm install -g` operations keep using their default prefix).
+- Bun is cfcf's RUNTIME (via the runtime APIs); npm is cfcf's INSTALL TOOL (because of bun#4959). Two tools, clean separation. install.sh handles both bootstraps transparently.
+
+**Friction cases under option 4:**
+
+| User profile | Friction |
+|---|---|
+| Already has Bun installed (the realistic cfcf user) | **None.** cfcf at ~/.bun/bin/cfcf, immediately on PATH. `cfcf init` works in same terminal. |
+| Doesn't have Bun yet | One-time "open new terminal" or `source ~/.zshrc` after install.sh — same step `curl bun.sh/install \| bash` requires regardless of cfcf. install.sh detects this state via `ORIGINAL_PATH` and prints an "IMPORTANT" banner block. |
+
+**Trade-offs accepted:**
+
+- cfcf lives in `~/.bun/lib/node_modules/` alongside Bun's own globals. Cosmetic; functionally fine. cfcf is the only binary so no `~/.bun/bin/` namespace conflict.
+- `--prefix ~/.bun` is a non-standard npm invocation pattern. Documented clearly + consistent across install.sh, self-update, and the docs' "direct install" examples.
+- uninstall.sh has to know to use `--prefix ~/.bun` too. Done; also detects 3 other historical install locations for cleanliness.
+
+**What a "fully zero-friction-always" install would require (and why we can't have it):**
+
+A generic-user one-liner that works perfectly on EVERY machine WITHOUT ever needing the user to do anything afterwards is **not achievable** under the Unix process model. install.sh's subshell can't reach into the parent shell. For users brand-new to Bun, Bun's installer must add `~/.bun/bin` to their rc, and their current shell must source it once. This is a one-time step Bun's official installer also requires; cfcf doesn't add new friction beyond what Bun itself imposes. The bun-prefix design collapses cfcf-specific friction to **zero** for the realistic cfcf user (someone with Bun already).
+
+**Lessons.**
+
+1. **Test on real machines, not on the dev machine.** Every iteration's "works on my machine" failed on a fresh machine in a different way. Three distinct end-to-end failures (postinstall blocking, EACCES, parent-shell-PATH not picked up) were all surfaced by clean-machine tests, not by the dev environment.
+
+2. **Lean on the user's existing tooling instead of adding new toolchain.** The breakthrough (option 4) was realizing cfcf already requires Bun, so Bun's PATH entry is "free" for us to use. We were trying to install into a NEW directory and add a NEW PATH entry, then fight the parent-shell-can't-be-modified problem. Installing into the EXISTING bun directory uses the EXISTING PATH and side-steps the constraint entirely.
+
+3. **The "(but I hear you about the existing solution)" turn is worth pursuing.** The user explicitly accepted option 2 (bun-only with auto-trust) but flagged residual concern. Re-examining the priorities — "standard JS-ecosystem path", "no allow commands in output" — surfaced npm as the better fit, leading to options 3 then 4. Following the user's reaffirmed priorities even after agreement is more valuable than treating "agreement" as the end of the discussion.
+
+4. **Write up failed designs in the decision log too**, so the next maintainer (or LLM agent) doesn't try them again. The four-option rationale here is the durable artifact; the v0.16.4 CHANGELOG entry only describes what shipped.
+
+**Outcome.** v0.16.4 ships option 4. Both fresh-Mac tests pass on first install with no follow-up steps. Updated install.sh + uninstall.sh + self-update.ts + the README + installing.md + troubleshooting.md + the per-release `INSTALL.md` asset all use `--prefix ~/.bun`.
+
+---
+
 ## 2026-04-29 — Codex `failed to record rollout items: thread ... not found` is benign telemetry noise; we don't filter it
 
 **Context.** Dogfood on the `cfcf-calc` workspace surfaced an entry in the documenter's stderr log:
