@@ -20,6 +20,11 @@ Friction-free install: curl-bash one-liner; cfcf installs into `~/.bun` via `npm
 - `curl -fsSL .../install.sh | bash` one-liner that bootstraps Bun + npm if missing, then runs `npm install -g --prefix ~/.bun @cerefox/codefactory`. Prints a next-steps banner; conditionally adds an "IMPORTANT" block when `~/.bun/bin` isn't on the parent shell's PATH (first-time Bun users only) and a server-restart hint when a cfcf server was running.
 - `INSTALL.md` asset on every GitHub Release.
 - `troubleshooting.md` sections for "`cfcf` not found after running `install.sh`" + EACCES + the bun-trust workaround.
+- `cfcf doctor` "Install location" check — reports where the running cfcf binary lives on disk, categorised against the known install paths (canonical `~/.bun/lib/node_modules`, Bun-only alternative, legacy `~/.npm-global`, dev mode). Diagnostic / informational only; symmetric with `uninstall.sh`'s multi-location detection so users troubleshooting "which cfcf am I actually running?" get a single-line answer.
+
+### Upgrade note
+
+- **From 0.16.2: `cfcf self-update` works but uses Bun's install path** (0.16.2's `self-update.ts` predates the v0.16.4 npm rewrite). Cleaner upgrade: `bun remove -g @cerefox/codefactory @cerefox/codefactory-native-*` once, then re-run `install.sh`. From 0.16.4 onwards, `cfcf self-update` uses the new npm-with-prefix flow.
 
 ### Changed
 

@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
 import { listHelpTopics } from "@cfcf/core";
 
@@ -81,6 +82,73 @@ function checkCfcfPackage(): CheckResult {
       detail: `not resolvable (${err instanceof Error ? err.message : String(err)}). Dev mode is fine; installs should resolve.`,
     };
   }
+}
+
+/**
+ * Report where the running cfcf binary is installed on disk, categorised
+ * against the known install paths cfcf has used over time. Diagnostic /
+ * informational only — the value is symmetric with `uninstall.sh`'s
+ * multi-location detection: a user troubleshooting "which cfcf am I
+ * actually running?" gets a clear, single-line answer.
+ *
+ * Categories (matched in order; first match wins):
+ *   ~/.bun/lib/node_modules/...       canonical, npm install -g --prefix ~/.bun
+ *   ~/.bun/install/global/...         Bun-only alternative (documented)
+ *   ~/.npm-global/lib/...             pre-0.16.4 install.sh draft
+ *   *.ts source                       dev mode (running from repo)
+ *   anything else                     reported as-is (system npm prefix etc.)
+ */
+function checkInstallLocation(): CheckResult {
+  let scriptPath: string;
+  try {
+    scriptPath = fileURLToPath(import.meta.url);
+  } catch {
+    return {
+      name: "Install location",
+      status: "warn",
+      detail: "could not determine — import.meta.url is not a file URL",
+    };
+  }
+
+  if (scriptPath.endsWith(".ts")) {
+    return {
+      name: "Install location",
+      status: "ok",
+      detail: `dev mode (${scriptPath})`,
+    };
+  }
+
+  const home = homedir();
+  const knownLocations: Array<{ prefix: string; label: string }> = [
+    {
+      prefix: join(home, ".bun", "lib", "node_modules"),
+      label: "~/.bun/lib/node_modules (recommended; npm install -g --prefix ~/.bun)",
+    },
+    {
+      prefix: join(home, ".bun", "install", "global", "node_modules"),
+      label: "~/.bun/install/global/node_modules (Bun-only alternative)",
+    },
+    {
+      prefix: join(home, ".npm-global", "lib", "node_modules"),
+      label: "~/.npm-global/lib/node_modules (legacy; pre-0.16.4 install.sh draft)",
+    },
+  ];
+
+  for (const loc of knownLocations) {
+    if (scriptPath.startsWith(loc.prefix)) {
+      return {
+        name: "Install location",
+        status: "ok",
+        detail: loc.label,
+      };
+    }
+  }
+
+  return {
+    name: "Install location",
+    status: "ok",
+    detail: scriptPath,
+  };
 }
 
 /**
@@ -554,6 +622,7 @@ export function registerDoctorCommand(program: Command): void {
       const results: CheckResult[] = [];
       results.push(checkBunRuntime());
       results.push(checkCfcfPackage());
+      results.push(checkInstallLocation());
       results.push(checkCustomSqlite());
       results.push(checkSqliteVec());
       results.push(checkCustomSqliteLoadable());
