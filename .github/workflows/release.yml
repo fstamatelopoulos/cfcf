@@ -307,7 +307,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - uses: actions/download-artifact@v5
@@ -400,22 +400,24 @@ jobs:
           ref: ${{ inputs.tag }}
 
       # Trusted Publishing requires npm CLI >= 11.5.1 and Node >= 22.14.0.
-      # Node 22 ships with npm 10.x, so we explicitly upgrade npm after
-      # setup-node. Must use `npm@latest` (or pin >= 11.5.1) -- earlier
-      # versions silently fall back to token auth and the publish fails
-      # with a non-obvious "401 unauthenticated" instead of "you need a
-      # newer npm". Pre-flight check ensures we caught the upgrade before
-      # the publish step runs.
+      # Node 24 (Active LTS since Oct 2025) ships npm 11.x natively, which
+      # satisfies both. We previously used Node 22 + a self-upgrade step
+      # (`npm install -g npm@latest`) but that hit transient toolcache
+      # brittleness ("Cannot find module 'promise-retry'" on certain hosted
+      # runner images, 2026-05-01). Bumping to Node 24 removes the
+      # self-upgrade step entirely. The sanity check below stays as a
+      # guardrail in case a future Node 24 toolcache ever ships < 11.5 —
+      # earlier npm versions silently fall back to token auth and the
+      # publish fails with a non-obvious "401 unauthenticated" instead of
+      # a clear "you need a newer npm".
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Upgrade npm to >= 11.5 (Trusted Publishing requirement)
+      - name: Verify npm >= 11.5 (Trusted Publishing requirement)
         run: |
-          npm install -g npm@latest
           npm --version
-          # Sanity check: must be >= 11.5
           installed_major="$(npm --version | cut -d. -f1)"
           installed_minor="$(npm --version | cut -d. -f2)"
           if (( installed_major < 11 )) || (( installed_major == 11 && installed_minor < 5 )); then
