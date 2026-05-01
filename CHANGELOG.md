@@ -9,19 +9,48 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-In flight on `iteration-5/npm-publish-5.5b`. Steps 1-6 of an 8-step plan are complete; steps 7 (pre-flight test) and 8 (real publish) are pending. Versions land here once 5.5b ships.
+_No changes yet._
 
-### npm publish pipeline (5.5b, in progress)
+## [0.16.3] -- 2026-05-01
 
-- **Package renamed to `@cerefox/codefactory`** (was `@cerefox/cfcf-cli`). The CLI binary stays `cfcf` — only the npm package name changes. Native packages renamed to `@cerefox/codefactory-native-<platform>`. Rationale + decision log: [`docs/research/npm-publish-5.5b-audit.md`](docs/research/npm-publish-5.5b-audit.md).
+### npm publish pipeline polish (post-first-publish)
+
+After v0.16.2 shipped (the first version on npmjs.com, published with a granular bypass-2FA token), this release switches the publish auth path to **OIDC trusted publishing** + tightens user-facing install docs.
+
+- **`release.yml` switched from `NPM_TOKEN` to OIDC trusted publishing.** Each of the 4 `@cerefox/codefactory*` packages now has a Trusted Publisher entry on npmjs.com pointing at this repo's `release.yml`. The `npm-publish` job mints a short-lived OIDC token via `permissions: id-token: write` per workflow run; npm validates against the registered trust + publishes. The `NODE_AUTH_TOKEN` env var is gone, the `NPM_TOKEN` repo secret is deleted, and the bypass-2FA npm token is revoked. The only path that can publish new versions of these packages is now this exact `release.yml` workflow on `fstamatelopoulos/cfcf`, manually triggered via `workflow_dispatch` with `publish_to_npm=true`.
+- **`--provenance` flag added to all `npm publish` calls.** Each tarball now ships with a sigstore-signed attestation linking it to the exact GitHub Actions run that built it, surfaced as a "Provenance" badge on npmjs.com.
+- **Workflow uses Node 22 + `npm install -g npm@latest`** to ensure npm CLI ≥ 11.5.1 (the minimum Trusted Publishing requirement; Node 22 ships with npm 10.x). A pre-flight version check fails fast with a clear error if the install drops below 11.5.
+- **Publishing access tightened on all 4 packages** to "Require two-factor authentication and disallow tokens (recommended)". Combined with OIDC trusted publishing, this is the most restrictive supply-chain posture npm offers.
+- **README.md "Install" section rewritten** to lead with the now-real `bun install -g @cerefox/codefactory` one-liner. Old "once cfcf is on npmjs.com" hedging removed. Status section trimmed from a 1500-word iteration history to a brief current-focus note + links to `docs/plan.md`, `CHANGELOG.md`, `docs/decisions-log.md` for the long-form history.
+- **`docs/guides/installing.md` rewritten** with the same lead-with-npm flow: 3-step quick install (Bun → cfcf → verify), curl-bash wrapper as alternate, tarball/offline as a separate section. Version examples bumped to v0.16.2.
+
+Both v0.16.2 and v0.16.3 close out plan item 5.5b ("Publish to npmjs.com").
+
+## [0.16.2] -- 2026-05-01
+
+**First public release on npmjs.com.** Plan item 5.5b shipped. cfcf becomes a standard `bun install -g @cerefox/codefactory` install. The 4 published packages are:
+
+- [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory) — the CLI, ~388 KB
+- [`@cerefox/codefactory-native-darwin-arm64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-arm64) — pinned libsqlite3 + sqlite-vec for Apple Silicon
+- [`@cerefox/codefactory-native-darwin-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-x64) — same for Intel Macs (cross-compiled on macos-14 via `clang -arch x86_64`)
+- [`@cerefox/codefactory-native-linux-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-linux-x64) — same for x86_64 Linux
+
+### npm publish pipeline (item 5.5b)
+
+- **Package renamed to `@cerefox/codefactory`** (was `@cerefox/cfcf-cli` pre-publish). The CLI binary stays `cfcf` — only the npm package name changes. Native packages renamed to `@cerefox/codefactory-native-<platform>`. Rationale + decision log: [`docs/research/npm-publish-5.5b-audit.md`](docs/research/npm-publish-5.5b-audit.md).
 - **License switched from `UNLICENSED` to `Apache-2.0`** to match the rest of the Cerefox ecosystem. `LICENSE` file added at the repo root.
 - **`os` + `cpu` declared on the main package itself** (`darwin`/`linux` × `arm64`/`x64`) so `bun install -g @cerefox/codefactory` on Windows-native or FreeBSD fails fast at install time with `EBADPLATFORM` instead of silently succeeding without the matching native package and crashing at first run.
 - **Legacy `@cerefox/cfcf-*` resolution fallback removed** from `constants.ts` / `clio/db.ts` / `doctor.ts` for security: the legacy name can never silently take effect at runtime.
-- **`release.yml` rewritten** with three new pieces: a `publish_to_npm` workflow_dispatch input (default OFF — the GitHub Release leg keeps working unchanged); an `npm publish --dry-run` canary job that runs unconditionally on every release run; a gated real `npm publish` job (native packages first, CLI second, `--access public`) that runs only when `publish_to_npm=true` AND the dry-run passed.
+- **`release.yml` rewritten** with three new pieces: a `publish_to_npm` workflow_dispatch input (default OFF — the GitHub Release leg keeps working unchanged); an `npm publish --dry-run` canary job that runs unconditionally on every release run; a gated real `npm publish` job (native packages first, CLI second, `--access public`) that runs only when `publish_to_npm=true` AND the dry-run passed. **Cross-compile support**: darwin-x64 builds on the macos-14 (arm64) runner via clang's `-arch x86_64` flag — replaced macos-13 after that runner pool became unviable for free-tier public repos (multi-hour queues).
 - **`scripts/build-cli.sh`** version resolution: positional arg → `CFCF_VERSION` env var → root `package.json` (was hardcoded to `v0.0.0-dev`). Build banner reports the source so debugging is trivial. Published `package.json` carries proper npm metadata (`repository`, `homepage`, `bugs`, `keywords`, `description`).
 - **`scripts/install.sh`** defaults to npm; tarball mode auto-engages when `CFCF_BASE_URL` is set or with `CFCF_INSTALL_SOURCE=tarball`. Bun bootstrap + bun-global dedup workaround preserved in both paths.
 - **`cfcf self-update`** rewritten to mirror `install.sh`'s install-source resolution. Default: `bun install -g @cerefox/codefactory@latest`. Latest-version detection via `https://registry.npmjs.org/@cerefox/codefactory/latest` (no npm CLI dependency). Tarball fallback preserved with `--source tarball` / `--base-url`. 17 unit tests cover the source/version resolver. Replaces dead-code MANIFEST detection that had been silently failing since 5.5.
 - **Post-install banner extended** with a third item ("First time? Run `cfcf doctor && cfcf init`") so direct `bun install -g @cerefox/codefactory` users get the same first-run nudge that `scripts/install.sh` users have always had. Items 1 + 2 unchanged.
+
+### Going public
+
+- **Repo flipped from private to public on GitHub** (2026-04-30) after a clean security/privacy sweep: `gitleaks detect` against full history (351 commits, 4.43 MB) returned 0 findings; no `.env*` files in history; no private keys / API tokens / phone numbers / physical addresses / Cerefox-internal URLs. Two emails on git author metadata + author name on 4 design docs are the only personal info, and accepted.
+- **`SECURITY.md` + `CONTRIBUTING.md` added** at repo root (vuln reporting flow + contribution guide). Apache 2.0 LICENSE in place.
 
 ## [0.16.1] -- 2026-04-29
 

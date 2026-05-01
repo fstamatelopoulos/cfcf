@@ -1,75 +1,88 @@
 # Installing cf²
 
-cf² ships as a standard npm-format package: `@cerefox/codefactory`. The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/codefactory-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs.
+cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/codefactory-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs (selected automatically by `os`/`cpu` fields).
 
-**Prerequisites** — `git` + `bun` ≥ 1.3 (the curl-bash installer below installs Bun for you if it's missing).
+**Prerequisites** — `git` + `bun` ≥ 1.3.
 
-## Recommended install — directly from npm
-
-If Bun is already on your machine, this is the one-liner:
+## Quick install (recommended)
 
 ```bash
+# 1. Bun (skip if you already have bun ≥ 1.3)
+curl -fsSL https://bun.sh/install | bash
+# Restart your shell or `source` the line bun added to your rc file.
+
+# 2. cfcf
 bun install -g @cerefox/codefactory             # latest
-bun install -g @cerefox/codefactory@0.16.1      # pinned to a specific version
+# or pin to a specific version:
+bun install -g @cerefox/codefactory@0.16.2
+
+# 3. Verify install + first-run setup
+cfcf doctor
+cfcf init
 ```
 
-Bun's package manager fetches the CLI + the matching per-platform `@cerefox/codefactory-native-<platform>` (selected automatically by the `os`/`cpu` filters declared in the published `package.json`) + the runtime deps (transformers, ORT-node, sharp). One install, one command, no wrapper script needed.
+That's the whole install. After step 2, you have:
 
-After install: `cfcf doctor` to verify, `cfcf init` for first-run setup.
+- The `cfcf` binary on `$PATH` (under `~/.bun/bin/`)
+- The matching `@cerefox/codefactory-native-<platform>` package installed (only the one for your OS/CPU; the others are skipped)
+- Shell tab-completion installed via the package's `postinstall` hook (re-run `cfcf completion install` if your shell doesn't pick it up automatically)
+- A bordered "Next steps" banner printed once (activate completion + run `cfcf doctor && cfcf init`)
 
-## Quick install — curl-bash wrapper
+## curl-bash wrapper (alternate)
 
-If you don't have Bun yet, the wrapper bootstraps it before doing the install:
+If you'd rather use a single-line installer that bootstraps Bun, fetches cfcf, and hands off to `cfcf init` interactively, every release attaches `install.sh` as a Release asset:
 
 ```bash
-curl -fsSL https://<host>/install.sh | bash
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
-Replace `<host>` with the URL the project announces. The script:
+The script:
 
 1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
-2. Picks an install source (defaults to **npm**; falls back to **tarball** when `CFCF_BASE_URL` is set or `CFCF_INSTALL_SOURCE=tarball` is passed — see "Tarball / offline / pinned-mirror install" below).
+2. Picks an install source (defaults to **npm**; falls back to **tarball** when `CFCF_BASE_URL` is set or `CFCF_INSTALL_SOURCE=tarball` is passed — see [Tarball / offline / pinned-mirror install](#tarball--offline--pinned-mirror-install) below).
 3. Runs the appropriate `bun install -g`.
 4. Auto-installs **shell tab completion** for your `$SHELL` (writes the completion script + appends a sentinel-marked block to `~/.zshrc` or `~/.bashrc`). See the [Shell completion section in `manual.md`](manual.md#shell-completion) for what gets added.
 5. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
 
-A bordered "next steps" banner prints at the end summarising the two one-time actions (open a new terminal to activate completion; restart `cfcf server` if it was running).
+A bordered "Next steps" banner prints at the end summarising the one-time actions (open a new terminal to activate completion; restart `cfcf server` if it was running; run `cfcf doctor && cfcf init` if this is your first install).
 
 ## Tarball / offline / pinned-mirror install
 
-When you can't reach npmjs.com (airgapped CI, internal pinned mirror, hand-delivered tarball), the same `install.sh` switches to **tarball mode** and pulls the per-platform CLI + native tarballs from a base URL you provide. Tarball mode auto-engages when `CFCF_BASE_URL` is set; you can also force it with `CFCF_INSTALL_SOURCE=tarball`.
+When you can't reach npmjs.com (airgapped CI, internal pinned mirror, hand-delivered tarball), the same `install.sh` switches to **tarball mode** and pulls the per-platform CLI + native tarballs from a base URL you provide. Every cfcf release publishes the tarballs as GitHub Release assets in addition to npmjs.com, so the offline path always works.
+
+Tarball mode auto-engages when `CFCF_BASE_URL` is set; you can also force it with `CFCF_INSTALL_SOURCE=tarball`.
 
 ```bash
 # 1. Drop the cf² + native tarballs + install.sh into a directory.
 ls dist/
-# cfcf-0.16.1.tgz
-# cerefox-codefactory-native-darwin-arm64-0.16.1.tgz
+# cfcf-0.16.2.tgz
+# cerefox-codefactory-native-darwin-arm64-0.16.2.tgz
 # install.sh
 
 # 2a. Local HTTP server:
 bun run scripts/serve-dist.ts 8080     # in another shell
 CFCF_BASE_URL=http://localhost:8080 \
-CFCF_VERSION=v0.16.1 \
+CFCF_VERSION=v0.16.2 \
   bash dist/install.sh
 
 # 2b. file:// URL (no server needed):
 CFCF_BASE_URL="file://$(pwd)/dist" \
-CFCF_VERSION=v0.16.1 \
+CFCF_VERSION=v0.16.2 \
   bash dist/install.sh
 
 # 2c. GitHub Releases mirror (the script's tarball-mode default URL):
 CFCF_INSTALL_SOURCE=tarball \
-CFCF_VERSION=v0.16.1 \
+CFCF_VERSION=v0.16.2 \
   bash install.sh
 
 # 2d. Or hand the tarball directly to bun (skips install.sh entirely):
-bun install -g ./dist/cfcf-0.16.1.tgz
+bun install -g ./dist/cfcf-0.16.2.tgz
 ```
 
 Notes:
 
 - `CFCF_VERSION=latest` resolves via GitHub's release-redirect when the base URL points at a `releases/latest/download` path; for `file://` URLs the version must be explicit.
-- The recognised env vars are `CFCF_INSTALL_SOURCE` (`npm` | `tarball`), `CFCF_VERSION`, `CFCF_BASE_URL`, `CFCF_RELEASES_REPO` (overrides the default `fstamatelopoulos/cfcf-releases` for the tarball-mode default URL), and `CFCF_SKIP_INIT`.
+- The recognised env vars are `CFCF_INSTALL_SOURCE` (`npm` | `tarball`), `CFCF_VERSION`, `CFCF_BASE_URL`, `CFCF_RELEASES_REPO` (defaults to `fstamatelopoulos/cfcf` — change if you fork), and `CFCF_SKIP_INIT`.
 
 ## What gets installed
 
@@ -108,7 +121,7 @@ The simplest path is `cfcf self-update`:
 cfcf self-update                              # check + interactive upgrade (npm)
 cfcf self-update --check                      # check only; print latest vs current
 cfcf self-update --yes                        # non-interactive
-cfcf self-update --version v0.16.1            # install a specific tag
+cfcf self-update --version v0.16.2            # install a specific tag
 
 # Tarball mode for offline / pinned-mirror setups:
 cfcf self-update --source tarball             # GitHub Releases (default mirror)
