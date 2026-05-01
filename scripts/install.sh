@@ -223,12 +223,21 @@ else
   echo "[cfcf]    https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)"
   mkdir -p "$HOME/.npm-global"
   npm config set prefix "$HOME/.npm-global"
-  export PATH="$HOME/.npm-global/bin:$PATH"
+  npm_prefix="$HOME/.npm-global"
   add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
   add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
   echo "[cfcf]   prefix set: $(npm config get prefix)"
   prefix_was_modified=1
 fi
+
+# ALWAYS export PATH to include the npm prefix's bin dir for THIS
+# subshell. Without this, `command -v cfcf` later fails when the
+# prefix-fix branch wasn't taken (prefix already user-writable case)
+# -- even though the user's PARENT shell has the dir on PATH already
+# from prior setup. The export is local to install.sh's subshell;
+# parent shell inheritance is handled by the rc-file sentinel block
+# above (and the user opening a new terminal / sourcing it).
+export PATH="$npm_prefix/bin:$PATH"
 
 if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
   if [[ "$CFCF_VERSION" == "latest" ]]; then
