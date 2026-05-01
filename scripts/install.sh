@@ -178,16 +178,46 @@ fi
 # We don't touch the user's existing setup if it's already working.
 echo ""
 echo "[cfcf] step 3/4: install cfcf"
+
+# Test if npm's existing prefix is usable for `npm install -g`:
+# specifically, can we write into prefix/lib/node_modules + prefix/bin?
+# Those are the only two directories npm actually touches for global
+# installs. Some setups (including Intel Macs where the user manually
+# chowned /usr/local/{bin,lib/node_modules}) have the prefix root as
+# root-owned BUT the relevant subdirectories user-writable -- npm
+# install -g works fine in that case. Earlier versions of this script
+# tested `[[ -w "$npm_prefix" ]]` which incorrectly rejected the
+# chowned-Intel-Mac case + reconfigured to ~/.npm-global unnecessarily.
 npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
 prefix_writable=0
-if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
-  if [[ -w "$npm_prefix/bin" ]] || [[ ! -e "$npm_prefix/bin" ]]; then
+prefix_was_modified=0
+if [[ -n "$npm_prefix" ]]; then
+  lib_dir="$npm_prefix/lib/node_modules"
+  bin_dir="$npm_prefix/bin"
+  # If a target dir doesn't exist yet, npm would create it during
+  # install. We test whether its parent is writable (would-create-OK)
+  # in addition to direct -w checks.
+  lib_ok=0
+  if [[ -w "$lib_dir" ]]; then
+    lib_ok=1
+  elif [[ ! -e "$lib_dir" ]] && [[ -w "$(dirname "$lib_dir")" ]] 2>/dev/null; then
+    lib_ok=1
+  fi
+  bin_ok=0
+  if [[ -w "$bin_dir" ]]; then
+    bin_ok=1
+  elif [[ ! -e "$bin_dir" ]] && [[ -w "$(dirname "$bin_dir")" ]] 2>/dev/null; then
+    bin_ok=1
+  fi
+  if (( lib_ok && bin_ok )); then
     prefix_writable=1
   fi
 fi
 
-if (( ! prefix_writable )); then
-  echo "[cfcf]   npm prefix '$npm_prefix' is not user-writable."
+if (( prefix_writable )); then
+  echo "[cfcf]   npm prefix '$npm_prefix' has writable lib/node_modules + bin -- skipping prefix fix"
+else
+  echo "[cfcf]   npm prefix '$npm_prefix' has root-owned lib/node_modules or bin."
   echo "[cfcf]   Configuring '~/.npm-global' as a user-writable prefix"
   echo "[cfcf]   (npm's documented fix for EACCES errors:"
   echo "[cfcf]    https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)"
@@ -197,6 +227,7 @@ if (( ! prefix_writable )); then
   add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
   add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
   echo "[cfcf]   prefix set: $(npm config get prefix)"
+  prefix_was_modified=1
 fi
 
 if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
@@ -307,6 +338,24 @@ echo "════════════════════════�
 echo "  Installation complete!"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
+if (( prefix_was_modified )); then
+  # We just added ~/.npm-global/bin to ~/.zshrc/.bashrc. The user's
+  # PARENT shell (the one that ran `curl | bash`) hasn't sourced the
+  # rc update -- they need to either open a new terminal or source
+  # the rc file before cfcf is on PATH. install.sh's PATH export
+  # only affected its own subshell, which exits with this banner.
+  echo "  IMPORTANT — npm prefix was reconfigured to ~/.npm-global,"
+  echo "  so '~/.npm-global/bin' was added to your shell's PATH (in"
+  echo "  ~/.zshrc and/or ~/.bashrc). For your CURRENT terminal:"
+  echo ""
+  echo "    • Open a new terminal window/tab, OR"
+  echo "    • Run:  source ~/.zshrc     (or 'source ~/.bashrc')"
+  echo ""
+  echo "  Then continue with the next steps below."
+  echo ""
+  echo "  ─────────────────────────────────────────────────────────────"
+  echo ""
+fi
 echo "  Next steps:"
 echo ""
 echo "    cfcf init                  # interactive first-run setup"
