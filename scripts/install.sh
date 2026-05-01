@@ -53,6 +53,12 @@
 
 set -euo pipefail
 
+# Capture the parent shell's PATH at the start, before we modify it.
+# Used at the end to determine whether the user's parent shell will
+# be able to find the cfcf binary AS-IS, or whether they need to
+# source their rc / open a new terminal first.
+ORIGINAL_PATH="$PATH"
+
 # ── Defaults ──────────────────────────────────────────────────────────
 : "${CFCF_VERSION:=latest}"
 : "${CFCF_RELEASES_REPO:=fstamatelopoulos/cfcf}"
@@ -224,20 +230,38 @@ else
   mkdir -p "$HOME/.npm-global"
   npm config set prefix "$HOME/.npm-global"
   npm_prefix="$HOME/.npm-global"
-  add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
-  add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
   echo "[cfcf]   prefix set: $(npm config get prefix)"
+fi
+
+# Ensure the user's PARENT shell will actually find cfcf after we exit.
+# Two things to check:
+#   1. The parent shell's PATH (captured at script start as ORIGINAL_PATH)
+#      must include $npm_prefix/bin -- otherwise `cfcf` won't resolve.
+#   2. If it doesn't, ensure ~/.zshrc + ~/.bashrc contain the export
+#      line so future shells will work; then tell the user to source
+#      the rc or open a new terminal so the CURRENT parent shell
+#      picks it up.
+#
+# Note: this check is independent of whether we just configured the
+# prefix or detected an existing one. The earlier "prefix already
+# usable" path falsely assumed the user's PATH was also fine -- not
+# always true (user might have set npm prefix manually without adding
+# the corresponding PATH line to their rc). This catches both cases.
+prefix_bin="$npm_prefix/bin"
+parent_shell_will_find_cfcf=0
+case ":$ORIGINAL_PATH:" in
+  *":$prefix_bin:"*) parent_shell_will_find_cfcf=1 ;;
+esac
+if (( ! parent_shell_will_find_cfcf )); then
+  add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" "export PATH=\"$prefix_bin:\$PATH\""
+  add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" "export PATH=\"$prefix_bin:\$PATH\""
   prefix_was_modified=1
 fi
 
-# ALWAYS export PATH to include the npm prefix's bin dir for THIS
-# subshell. Without this, `command -v cfcf` later fails when the
-# prefix-fix branch wasn't taken (prefix already user-writable case)
-# -- even though the user's PARENT shell has the dir on PATH already
-# from prior setup. The export is local to install.sh's subshell;
-# parent shell inheritance is handled by the rc-file sentinel block
-# above (and the user opening a new terminal / sourcing it).
-export PATH="$npm_prefix/bin:$PATH"
+# Also export PATH for THIS subshell so the verify step (`command -v
+# cfcf` after `npm install -g`) finds the binary. Parent shell
+# inheritance is handled by the rc edit + IMPORTANT banner below.
+export PATH="$prefix_bin:$PATH"
 
 if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
   if [[ "$CFCF_VERSION" == "latest" ]]; then
