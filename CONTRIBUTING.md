@@ -50,6 +50,20 @@ cfcf has strong design principles ([`CLAUDE.md`](CLAUDE.md) → "Key
 Design Principles") — proposals that conflict with those will need
 extra justification.
 
+## Local development
+
+Three modes, in order of iteration speed:
+
+| Mode | Command | When to use |
+|---|---|---|
+| **Dev (no install)** | `bun run packages/cli/src/index.ts <cmd>` (or `bun run dev:cli -- <cmd>`) | Day-to-day iteration on CLI / server / core code. Fastest feedback (~0s). |
+| **Local end-to-end install** | `./scripts/local-install.sh` | Full e2e UX testing: install.sh banner, post-install completion, `~/.bun/bin/cfcf` symlink, exact same flow an end user gets via curl-bash. ~30s per iteration. |
+| **Real release** | trigger `release.yml` from GitHub Actions UI | Ship to npmjs.com + GitHub Release. Maintainer-only. |
+
+Restore the published version after a `local-install.sh` session with
+`cfcf self-update --yes`. The full developer-workflow reference lives
+in [`scripts/README.md`](scripts/README.md).
+
 ## How to submit a fix
 
 1. **Open an issue first** unless the fix is obvious (typo, broken

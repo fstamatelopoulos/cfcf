@@ -321,25 +321,25 @@ async function upgradeTarball(version: string, baseUrl: string): Promise<void> {
 // ── Post-upgrade follow-up ─────────────────────────────────────────────
 
 /**
- * Regenerate shell completion + print follow-up hints. We invoke the
- * NEW cfcf binary as a subprocess so the upgraded verb tree is what
- * runs (this process is the OLD version still in memory).
+ * Regenerate shell completion. The completion-install command is
+ * what prints the post-upgrade "Next steps" banner (see
+ * `printPostInstallBanner` in `commands/completion.ts`); we invoke
+ * the NEW cfcf binary as a subprocess so the upgraded verb tree
+ * is what runs (this process is the OLD version still in memory).
+ *
+ * Banner-redundant follow-up hints used to live here too (a
+ * `printFollowUp` function emitting "Run `cfcf doctor`..." +
+ * "If cfcf server was running..."). Removed 2026-05-01 in the
+ * banner-norms unification: those exact two lines are now part
+ * of the post-install banner itself.
  */
 function postUpgrade(versionLabel: string): void {
-  console.log(`\n✓ upgraded to ${versionLabel}.`);
+  console.log(`\n✓ cfcf upgraded to ${versionLabel}.`);
   try {
-    const completion = spawn("cfcf", ["completion", "install"], { stdio: "inherit" });
-    completion.on("exit", () => printFollowUp());
-    completion.on("error", () => printFollowUp());
+    spawn("cfcf", ["completion", "install"], { stdio: "inherit" });
   } catch {
-    printFollowUp();
-  }
-}
-
-function printFollowUp(): void {
-  console.log(`  Run \`cfcf doctor\` to verify the new install.`);
-  if (process.env.CFCF_INTERNAL_SERVE === undefined) {
-    console.log(`  If cfcf server was running before the upgrade, restart it: cfcf server stop && cfcf server start`);
+    // Banner suppression on completion failure is a best-effort
+    // courtesy; the upgrade itself already succeeded.
   }
 }
 

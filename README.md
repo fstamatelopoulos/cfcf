@@ -129,6 +129,17 @@ bun run dev:server
 bun run dev:cli -- <command>
 ```
 
+### End-to-end UX testing (the install pipeline)
+
+For changes that touch the install flow (`scripts/install.sh`, `scripts/build-cli.sh`, post-install banners, `cfcf self-update`, etc.), the canonical local-test workflow is:
+
+```bash
+./scripts/local-install.sh             # builds, installs, verifies — same flow an end user gets via curl-bash
+cfcf self-update --yes                 # restores the published version when you're done
+```
+
+`local-install.sh` builds the CLI + per-platform native tarball, runs `install.sh` against `file://$(pwd)/dist`, and finishes with `cfcf doctor` to confirm the install took. Auto-derives the version label from root `package.json` (`v0.16.4-local`); cleans any existing cfcf install first. See [`scripts/README.md`](scripts/README.md) for the full developer workflow + script reference.
+
 ## Project Structure
 
 ```

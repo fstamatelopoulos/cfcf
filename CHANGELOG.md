@@ -11,6 +11,25 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.16.5] -- 2026-05-01
+
+UX-improvement bundle. Tagged but **not published to npm or GitHub Releases** — these are internal polish over 0.16.4 (no breaking changes, no urgency to push to users). Next published release will jump from 0.16.4 to whatever's current at the time.
+
+### Changed
+
+- **`cfcf server start` banner** rewritten. Now reports Web UI URL, API URL, Clio DB path (with doc count + active embedder, with graceful fallback if the stats fetch fails), logs path, and PID — labelled-list format aligned with `cfcf server status`. Replaces the previous two-line `started on port X (pid: Y)` output.
+- **`cfcf init` already-configured message** — when run on a machine that already has a config, points the user at `cfcf config show`, `cfcf config edit`, and `cfcf init --force` (was: only `--force` mentioned).
+- **`scripts/install.sh` post-install banner** gains `cfcf server start` + `cfcf workspace init --repo <path> --name <name>` between `cfcf doctor` and `cfcf --help`. Walks new users from "I just installed cfcf" → "I'm tracking my first repo" without a doc round-trip.
+- **Post-install / post-upgrade banner unified across all three install paths** (curl-bash install.sh, npm postinstall, `cfcf self-update`). Replaces the heavy `╔══╗` box + numbered steps + parenthetical caveats with the same indented `command  # comment` format the install.sh + `cfcf server start` banners use. Drops the `printFollowUp` redundancy in `self-update.ts` (its two lines were already covered by the box).
+- **Single source of truth for version**. `resolveVersion()` in `packages/core/src/constants.ts` now finds the **monorepo root** `package.json` (identified by its `workspaces` field) instead of stopping at the first workspace sub-package. Per-package `version` fields removed from `packages/{core,cli,server,web}/package.json` — they had drifted (root said `0.16.4`, sub-packages said `0.16.1`) and were ignored at publish time anyway. Dev mode now reports `<root.version>-dev` accurately.
+
+### Added
+
+- **`cfcf doctor` "Install location" check** — reports where the running cfcf binary lives on disk, categorised against the known install paths (canonical `~/.bun/lib/node_modules`, Bun-only alternative `~/.bun/install/global`, legacy `~/.npm-global`, dev mode). Diagnostic / informational only; symmetric with `uninstall.sh`'s multi-location detection.
+- **`scripts/local-install.sh`** — wraps `stage-dist.sh` + `install.sh` + `cfcf doctor` into a single command for end-to-end local UX testing of install-pipeline changes. Auto-derives version label from root `package.json` (`v<root.version>-local`); cleans existing cfcf install first by default (`--keep` to skip). After the session, restore the published version via `cfcf self-update --yes`.
+- **`scripts/README.md` "Developer workflow" section + `CONTRIBUTING.md` "Local development" section** — three-mode iteration story (dev mode → local-install → real release) with when-to-use guidance for each.
+- **`README.md` "End-to-end UX testing" subsection** under Development — points contributors at `local-install.sh`.
+
 ## [0.16.4] -- 2026-05-01
 
 Friction-free install: curl-bash one-liner; cfcf installs into `~/.bun` via `npm install -g --prefix ~/.bun`. Full design rationale + the four-option journey: [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-01 install entry).

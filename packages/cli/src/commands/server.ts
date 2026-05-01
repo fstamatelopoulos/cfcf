@@ -3,9 +3,49 @@
  */
 
 import type { Command } from "commander";
-import { DEFAULT_PORT, VERSION } from "@cfcf/core";
+import { homedir } from "node:os";
+import { DEFAULT_PORT, VERSION, getLogsDir } from "@cfcf/core";
 import { readPidFile, isProcessRunning, removePidFile, writePidFile } from "@cfcf/core";
 import { get, isServerReachable, post } from "../client.js";
+
+/**
+ * Replace a leading `$HOME` path prefix with `~` so paths read more
+ * naturally in the start banner. Falls back to the absolute path if
+ * the home dir can't be determined or doesn't match.
+ */
+function tildify(path: string): string {
+  const home = homedir();
+  if (home && path.startsWith(home + "/")) {
+    return "~" + path.slice(home.length);
+  }
+  return path;
+}
+
+/**
+ * Format the Clio status line for the server start banner. Best-effort:
+ * a failed stats fetch falls through to the bare DB path so a broken
+ * Clio (corrupt DB, missing migrations, embedder load failure, …) never
+ * breaks `cfcf server start`.
+ */
+async function formatClioStatus(): Promise<string> {
+  try {
+    const res = await get<{
+      dbPath: string;
+      dbSizeBytes: number;
+      documentCount: number;
+      activeEmbedder: { name: string } | null;
+    }>("/api/clio/stats");
+    if (!res.ok || !res.data) {
+      return tildify(`${homedir()}/.cfcf/clio.db`);
+    }
+    const { dbPath, documentCount, activeEmbedder } = res.data;
+    const docPart = `${documentCount} doc${documentCount === 1 ? "" : "s"}`;
+    const embPart = activeEmbedder ? `, embedder: ${activeEmbedder.name}` : "";
+    return `${tildify(dbPath)} (${docPart}${embPart})`;
+  } catch {
+    return tildify(`${homedir()}/.cfcf/clio.db`);
+  }
+}
 
 /**
  * Wait until the cfcf server has actually exited: the HTTP port is
@@ -86,10 +126,22 @@ export function registerServerCommands(program: Command): void {
       }
 
       if (ready) {
-        console.log(`cfcf server v${VERSION} started on port ${port} (pid: ${child.pid})`);
+        const baseUrl = `http://localhost:${port}`;
+        const clioLine = await formatClioStatus();
+        const logsLine = tildify(getLogsDir()) + "/";
+
+        console.log(`✓ cfcf server v${VERSION} started`);
         console.log();
-        console.log("Ready. Create a workspace: cfcf workspace init --repo <path> --name <name>");
-        console.log("Or check status:          cfcf status");
+        console.log(`  Web UI:     ${baseUrl}`);
+        console.log(`  API:        ${baseUrl}/api`);
+        console.log(`  Clio DB:    ${clioLine}`);
+        console.log(`  Logs:       ${logsLine}`);
+        console.log(`  PID:        ${child.pid}`);
+        console.log();
+        console.log("Next steps:");
+        console.log("    cfcf workspace init --repo <path> --name <name>");
+        console.log("    cfcf status        — overview of running loops");
+        console.log("    cfcf server stop   — graceful shutdown");
         // Explicit exit so the CLI parent doesn't stay tethered to the
         // spawned server child (Bun.spawn children keep the parent alive
         // until they exit unless we detach; simplest is to exit on success).

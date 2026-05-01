@@ -49,7 +49,10 @@ export function registerInitCommand(program: Command): void {
       if (exists && !opts.force) {
         console.log("cfcf is already configured.");
         console.log(`  Config file: ${getConfigPath()}`);
-        console.log("  Use --force to reconfigure.");
+        console.log();
+        console.log("  cfcf config show          — view current configuration");
+        console.log("  cfcf config edit          — edit a single setting");
+        console.log("  cfcf init --force         — re-run the full interactive setup");
         return;
       }
 
