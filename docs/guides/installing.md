@@ -1,8 +1,8 @@
 # Installing cf²
 
-cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). cfcf's **runtime is Bun ≥ 1.3** (uses `bun:sqlite`, `Bun.spawn`, etc. directly); the **install tool is npm** (chosen over `bun install` because Bun blocks postinstall scripts by default and would break cfcf's native deps without trust prompts; see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). Two tools, clean separation of concerns. The curl-bash installer below handles all of this automatically.
+cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). Single-tool design: **Bun ≥ 1.3** is both cfcf's runtime (uses `bun:sqlite`, `Bun.spawn`, etc. directly) and its install tool. The curl-bash installer handles a small Bun quirk transparently — see "Why a trust step?" below.
 
-**Prerequisites** — `git`. Everything else (Bun, npm, npm-prefix configuration if needed) is bootstrapped by the installer.
+**Prerequisites** — `git`. Bun is bootstrapped by the installer if missing.
 
 ## Recommended: one-liner
 
@@ -12,56 +12,46 @@ curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/ins
 
 The script (with verbose output at every step):
 
-1. **Bootstraps Bun** ≥ 1.3 if missing (via `curl -fsSL https://bun.sh/install | bash`)
-2. **Bootstraps npm** if missing (via `bun install -g npm`)
-3. **Configures npm prefix** to `~/.npm-global` if your current prefix is root-owned (the EACCES gotcha on stock-installer Node + many Linux distros — npm's [documented fix](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)). Skipped if your npm prefix is already user-writable (homebrew Node, nvm/fnm/asdf users, or anyone who's already done this setup).
-4. **Installs cfcf** via `npm install -g @cerefox/codefactory`
-5. **Runs `cfcf doctor`** to verify all health checks pass
-6. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
+1. **Bootstraps Bun ≥ 1.3** if missing (via `curl -fsSL https://bun.sh/install | bash`)
+2. **Installs cfcf** via `bun install -g @cerefox/codefactory`
+3. **Grants trust + runs the 3 blocked postinstalls** (`bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs` — named packages, not `--all`)
+4. **Runs `cfcf doctor`** for a quick health check
+5. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
 
-No sudo. No silent trust grants. All shell-rc edits go in sentinel-marked blocks (`# >>> cfcf installer (...) >>>` ... `# <<< cfcf installer (...) <<<`) so you can remove them cleanly.
+No sudo. The trust grant is scripted (you don't see a prompt) but auditable in the verbose output — see the "Why a trust step?" section below for what gets trusted and why.
 
-## Direct install (if you already have Bun + npm)
+## Direct install (if you already have Bun)
 
-If your machine is already set up the way you like (Bun installed, npm with a user-writable prefix), skip the wrapper:
+If your machine has Bun and you'd rather skip the wrapper:
 
 ```bash
-# Make sure bun is installed (cfcf's runtime requirement)
-bun --version
-
-# Install cfcf via npm (npm runs postinstalls; bun doesn't by default)
-npm install -g @cerefox/codefactory             # latest
+# Install cfcf via bun
+bun install -g @cerefox/codefactory             # latest
 # or pin to a specific version:
-npm install -g @cerefox/codefactory@0.16.4
+bun install -g @cerefox/codefactory@0.16.4
+
+# Run the postinstalls bun blocks by default
+# (downloads platform-specific runtime binaries, sets up shell completion)
+bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs
 
 # Verify + first-run setup
 cfcf doctor
 cfcf init
 ```
 
-If `npm install -g` errors with `EACCES`, your npm prefix is root-owned. Fix once:
+## Why a trust step?
 
-```bash
-mkdir -p ~/.npm-global
-npm config set prefix ~/.npm-global
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-exec $SHELL
-npm install -g @cerefox/codefactory
-```
+Bun blocks postinstall scripts of installed packages by default as a security measure (vs. npm which runs them automatically). cfcf's runtime correctness depends on three specific postinstalls running:
 
-## Bun-only alternative (advanced)
+| Package | What its postinstall does | What breaks if blocked |
+|---|---|---|
+| `@cerefox/codefactory` | runs `cfcf completion install` | shell tab-completion + post-install banner missing |
+| `onnxruntime-node` | downloads platform-specific `.node` runtime binaries | Clio embedder fails at runtime |
+| `protobufjs` | code-generates serializer stubs onnxruntime depends on | onnxruntime broken (transformers chain) |
 
-If you'd rather not have npm on your machine and want to install via `bun install -g` directly, you can — but Bun blocks the postinstall scripts of `onnxruntime-node` and `protobufjs` by default, which would break Clio's embedder. To make it work:
+The **named, scoped** trust grant (`bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs`) approves exactly those three packages and runs their postinstalls. Never `--all`.
 
-```bash
-bun install -g @cerefox/codefactory
-bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs
-cfcf doctor
-```
-
-This grants explicit, named trust to **just those three packages** (no `--all`). cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]` so the manual `bun pm trust` step will become unnecessary once [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959) lands upstream — at which point Bun will honor the declaration without prompting.
-
-We recommend the curl-bash installer or the `npm install -g` path over this; npm runs postinstalls by default and the experience is friction-free.
+cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, but Bun's transitive-trust handling for global installs is incomplete ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)) — once that upstream issue is fixed, the explicit trust step becomes unnecessary; until then it's the canonical workaround.
 
 ## Tarball / offline / pinned-mirror install
 

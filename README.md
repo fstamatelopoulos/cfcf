@@ -60,18 +60,19 @@ npm install -g @openai/codex
 
 ## Install (end users)
 
-cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). One-liner (handles the full toolchain bootstrap automatically — Bun + npm + npm-prefix-fix-if-needed, then installs cfcf, runs `cfcf doctor`, hands off to `cfcf init`):
+cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). One-liner — bootstraps Bun if missing, installs cfcf, runs `cfcf doctor`, hands off to `cfcf init`:
 
 ```bash
 curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
-No sudo, no surprises. The script bootstraps any missing toolchain bits (Bun is cfcf's runtime; npm is the install tool — chosen over `bun install` because Bun blocks postinstall scripts by default and would break cfcf's native deps without explicit trust prompts). All shell-rc edits are sentinel-marked and removable.
+No sudo, no surprises. The script needs only Bun (cfcf's runtime, installed automatically if missing). All shell-rc edits are sentinel-marked and removable.
 
-If you already have Bun + npm set up the way you like, you can skip the wrapper:
+If you already have Bun set up, you can skip the wrapper — but you'll need one extra command to run cfcf's blocked postinstalls (Bun blocks them by default; see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)):
 
 ```bash
-npm install -g @cerefox/codefactory
+bun install -g @cerefox/codefactory
+bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs   # named, specific
 cfcf doctor && cfcf init
 ```
 

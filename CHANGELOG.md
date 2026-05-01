@@ -13,14 +13,13 @@ _No changes yet._
 
 ## [0.16.4] -- 2026-05-01
 
-### Friction-free install: `curl-bash` one-liner that bootstraps Bun + npm
+### Friction-free install: `curl-bash` one-liner; bun-only design
 
-The reason for v0.16.4 was a clean-machine new-user test that surfaced two real-world install issues v0.16.3 didn't handle:
+The reason for v0.16.4 was a clean-machine new-user test (Apple Silicon Mac, no prior cfcf install) that surfaced real-world friction the install path didn't handle:
 
-1. **Bun blocks postinstalls by default** ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). `bun install -g @cerefox/codefactory` blocks the postinstalls of `@cerefox/codefactory` (which runs `cfcf completion install`), `onnxruntime-node` (downloads platform-specific `.node` runtime), and `protobufjs` (codegen for serializers). Without those running, Clio's embedder breaks at runtime. The user-facing fix would be `bun pm -g trust ...` which is exactly the kind of "click yes to scary security prompt" UX that erodes trust on first impression.
-2. **Stock-Node `npm install -g` hits `EACCES`**. Apple Silicon Macs with the official nodejs.org installer (and many Linux distros' system-package Node) put npm's global prefix at `/usr/local/` or `/usr/lib/`, which is root-owned. `npm install -g` fails without sudo. The user has to know to run `npm config set prefix ~/.npm-global` (npm's documented fix; what `nvm`/`fnm`/`asdf` do automatically). A new user landing on cfcf has no reason to know this.
+1. **Bun blocks postinstalls by default** ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). `bun install -g @cerefox/codefactory` blocks the postinstalls of `@cerefox/codefactory` (runs `cfcf completion install`), `onnxruntime-node` (downloads platform-specific `.node` runtime binaries), and `protobufjs` (codegen). Without those running, Clio's embedder breaks at runtime, and a new user has to know to run `bun pm -g trust ...` — exactly the "click yes to a security prompt" UX that erodes trust on first impression.
 
-The v0.16.4 answer is a curl-bash installer that handles both:
+The v0.16.4 answer is a curl-bash installer that handles this transparently:
 
 ```bash
 curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
@@ -28,26 +27,31 @@ curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/ins
 
 What it does, with verbose output at every step:
 
-1. **Bootstraps Bun ≥ 1.3** if missing (cfcf's RUNTIME requirement; uses `bun:sqlite`, `Bun.spawn`, etc. directly)
-2. **Bootstraps npm** if missing (via `bun install -g npm` — npm is in Bun's default-trusted list, so its install isn't blocked)
-3. **Configures `~/.npm-global`** as a user-writable npm prefix when the existing prefix isn't writable (skipped on machines where it's already user-writable: homebrew Node, nvm/fnm/asdf, anyone who's done the setup before)
-4. **Installs cfcf via `npm install -g @cerefox/codefactory`** (npm runs postinstalls by default, so all three previously-blocked postinstalls just run)
-5. **Runs `cfcf doctor`** to verify
-6. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
+1. **Bootstraps Bun ≥ 1.3** if missing (cfcf's RUNTIME + INSTALL TOOL — uses `bun:sqlite`, `Bun.spawn`, etc. directly)
+2. **Installs cfcf** via `bun install -g @cerefox/codefactory[@version]`
+3. **Grants trust + runs the 3 blocked postinstalls** via `bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs` — **named packages only, never `--all`**. The trust grant is scripted (no user prompt) but auditable in the verbose output.
+4. **Runs `cfcf doctor`** for a quick health check
+5. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
 
-No `sudo`. No silent trust grants. All shell-rc edits are sentinel-marked and removable. Industry-standard pattern (mirrors what `curl bun.sh/install | bash`, `rustup`, `nvm`'s installer all do).
+No sudo. Single-tool design (Bun) — no Node.js / npm requirement. Industry-standard pattern (mirrors what `curl bun.sh/install | bash`, `rustup`, `nvm`'s installer all do).
 
-### Other changes
+cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, so once oven-sh/bun#4959 lands upstream the explicit `bun pm trust` step becomes unnecessary entirely (Bun will honor the manifest declaration directly).
 
-- **`scripts/install.sh` rewritten** to bootstrap Bun + npm + npm-prefix-fix-if-needed and install cfcf via npm. Old logic (bun-bootstrap + bun-install-g + bun-dedup workaround) replaced; bun-dedup is no longer needed since we don't drive bun's package manager from install.sh anymore.
-- **`scripts/uninstall.sh` rewritten** to detect npm-vs-bun install method automatically and remove via the right tool.
-- **`packages/cli/src/commands/self-update.ts`** switched from `bun install -g` to `npm install -g` for the same reasons. The bun-dedup helper stays as best-effort cleanup of pre-v0.16.4 bun-installed cfcf state.
-- **`scripts/build-cli.sh`'s published `trustedDependencies`** changed from `["onnxruntime-node", "sharp"]` to `["onnxruntime-node", "protobufjs"]`. Sharp doesn't have a postinstall in modern versions (ships prebuilt binaries via `optionalDependencies`); protobufjs does. Aligns the declared trust with what's actually blocked. Once oven-sh/bun#4959 lands upstream, this declaration will start working for `bun install -g` users without further changes.
+### Why bun, not npm
+
+The install pipeline went through several iterations. Earlier v0.16.4 drafts used `npm install -g` to side-step Bun's postinstall blocking entirely (npm runs postinstalls by default). That worked but added a two-tool requirement (Bun for runtime + npm for install), an EACCES gotcha around npm's global prefix on stock Node installs, and ~280 lines of install.sh to handle both. The bun-only design is materially simpler (~120 lines), single-tool, and the trust grant is bounded + auditable. If the trust list ever needs to grow we update one place; until oven-sh/bun#4959 lands, it's the canonical workaround.
+
+### Changes
+
+- **`scripts/install.sh` rewritten** for the bun-only flow: 4 steps (bootstrap bun, install cfcf, grant trust + run postinstalls, verify + handoff). Replaces the v0.16.3 bun-only-without-trust flow + the npm-bootstrap drafts.
+- **`scripts/uninstall.sh` rewritten** to detect bun-vs-npm install method automatically (some users may have npm-installed cfcf during the npm-draft phase) and remove via the right tool.
+- **`packages/cli/src/commands/self-update.ts`** updated to mirror install.sh: `bun install -g` followed by `bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs` after each install (registry mode + tarball mode both).
+- **`scripts/build-cli.sh`'s published `trustedDependencies`** changed from `["onnxruntime-node", "sharp"]` to `["onnxruntime-node", "protobufjs"]`. Sharp has no postinstall in modern versions (ships prebuilt binaries via `optionalDependencies`); protobufjs does. Aligns the declared trust with what's actually blocked.
 - **`.github/workflows/release.yml` adds an `INSTALL.md` asset** to every GitHub Release. Self-explanatory README for users landing on the Releases page directly: explains what each `.tgz` is, gives the manual install command for offline / pinned-mirror users, links back to the docs.
-- **README.md** "Install" section reordered to lead with the curl-bash one-liner. The direct `npm install -g` path is preserved as the "if you already have Bun + npm set up" alternative.
-- **`docs/guides/installing.md`** rewritten to mirror the README. New "Bun-only alternative (advanced)" section explicitly documents the `bun pm -g trust` workaround for users who deliberately use Bun instead of npm.
+- **README.md** "Install" section reordered to lead with the curl-bash one-liner. Direct `bun install -g` is documented as the alternative for users who already have Bun.
+- **`docs/guides/installing.md`** rewritten to mirror the README. New "Why a trust step?" section explains exactly which 3 packages get trusted + why, with the link to oven-sh/bun#4959.
 - **`docs/guides/manual.md`** "In one minute" install snippet uses the curl-bash one-liner.
-- **`docs/guides/troubleshooting.md`** new sections for the two issues v0.16.4 resolves at the install-script level: "`npm install -g` fails with EACCES" + "`bun install -g` shows Blocked N postinstalls" — both with the canonical fixes documented.
+- **`docs/guides/troubleshooting.md`** has a section for users who hit "Blocked N postinstalls" because they ran `bun install -g` directly (without the wrapper) — points them at the same `bun pm -g trust` command install.sh runs automatically.
 
 ## [0.16.3] -- 2026-05-01
 

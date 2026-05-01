@@ -277,48 +277,22 @@ This is intentional behavior, not a bug. PA detected a discrepancy between the C
 
 ## Install issues
 
-### `npm install -g` fails with `EACCES` (permission denied, symlink)
+### "Blocked N postinstalls" after `bun install -g`
 
-Stock Node installations (the official `.pkg` installer on macOS, `apt`/`dnf`-installed Node on Linux) point npm's global prefix at `/usr/local/` or `/usr/lib/`, which is root-owned. `npm install -g` then fails with `EACCES` unless run as root. The npm-documented fix is to redirect the prefix to a user-writable directory; this is what `nvm`/`fnm`/`asdf` all do automatically.
-
-```bash
-mkdir -p ~/.npm-global
-npm config set prefix ~/.npm-global
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-exec $SHELL                                                     # reload PATH
-
-# Now retry the install
-npm install -g @cerefox/codefactory
-```
-
-You only need to do this once per machine. cfcf's `install.sh` does this automatically when needed. Reference: [Resolving EACCES permissions errors when installing packages globally — npm Docs](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally).
-
-### `bun install -g` shows "Blocked N postinstalls"
-
-If you used `bun install -g @cerefox/codefactory` instead of npm, Bun blocks the postinstall scripts of three packages by default:
+If you ran `bun install -g @cerefox/codefactory` directly (without using cfcf's `install.sh` wrapper), Bun blocks three postinstall scripts by default:
 
 - `@cerefox/codefactory` (runs `cfcf completion install`)
 - `onnxruntime-node` (downloads platform-specific `.node` runtime binaries)
-- `protobufjs` (generates serializer stubs onnxruntime needs)
+- `protobufjs` (generates serializer stubs onnxruntime depends on)
 
-Without those running, Clio's embedder breaks at runtime. cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, but Bun's transitive-trust handling is incomplete ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)) so it doesn't fully take effect for global installs yet. Two paths forward:
-
-**Recommended**: switch to the npm path (no postinstall blocking):
-
-```bash
-bun remove -g @cerefox/codefactory
-npm install -g @cerefox/codefactory
-```
-
-**If you genuinely prefer bun-only**: grant explicit, named trust to the three packages (no `--all` — you're inspecting + consenting per-package):
+Without those running, Clio's embedder breaks at runtime. The fix is one command — grant **named, scoped** trust to those three packages (never `--all`):
 
 ```bash
 bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs
-cfcf completion install   # the now-allowed postinstall content
-cfcf doctor               # verify everything wired up
+cfcf doctor    # verify everything wired up
 ```
 
-This will become unnecessary once oven-sh/bun#4959 lands upstream; cfcf's manifest is already declaring the right dependencies.
+cfcf's `install.sh` does this automatically for you; the manual step is only for users who installed via `bun install -g` directly. cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, so once [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959) lands upstream, this manual step becomes unnecessary entirely.
 
 ## `bun install -g` warnings
 
