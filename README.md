@@ -60,18 +60,20 @@ npm install -g @openai/codex
 
 ## Install (end users)
 
-cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). One-liner — bootstraps Bun + npm if needed, installs cfcf, prints next steps:
+cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). One-liner — bootstraps Bun + npm if needed, installs cfcf into `~/.bun`, prints next steps:
 
 ```bash
 curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
-No sudo, no surprises. The script bootstraps any missing toolchain bits (Bun is cfcf's runtime; npm is the install tool). All shell-rc edits are sentinel-marked and removable.
+No sudo. No new directories on your PATH beyond what Bun's own installer adds. Zero rc-file edits from cfcf itself.
 
-If you already have Bun + npm set up, you can skip the wrapper:
+How it works: cfcf installs to `~/.bun/bin/cfcf` (via `npm install -g --prefix ~/.bun`). Since cfcf requires Bun and Bun's installer adds `~/.bun/bin` to your shell rc, cfcf is reachable immediately — no separate PATH setup. (If Bun was just installed by this script for the first time, you'll need to open a new terminal once for `~/.bun/bin` to take effect — the same one-time step Bun's official installer prompts for.)
+
+If you already have Bun set up, you can skip the wrapper:
 
 ```bash
-npm install -g @cerefox/codefactory
+npm install -g --prefix ~/.bun @cerefox/codefactory
 cfcf doctor && cfcf init
 ```
 

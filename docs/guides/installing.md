@@ -1,8 +1,10 @@
 # Installing cf²
 
-cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). cfcf's **runtime is Bun ≥ 1.3** (uses `bun:sqlite`, `Bun.spawn`, etc. directly); the **install tool is npm** (chosen over `bun install` because Bun blocks postinstall scripts by default and would break cfcf's native deps without trust prompts; see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). Two tools, clean separation of concerns. The curl-bash installer below handles all of this automatically.
+cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). The recommended install uses a curl-bash one-liner that handles the whole toolchain bootstrap automatically.
 
-**Prerequisites** — `git`. Everything else (Bun, npm, npm-prefix configuration if needed) is bootstrapped by the installer.
+**Architecture**: cfcf's **runtime is Bun ≥ 1.3** (uses `bun:sqlite`, `Bun.spawn`, etc. directly). The **install tool is npm** (chosen over `bun install` because Bun blocks postinstall scripts by default — see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959) — which would break cfcf's native deps). cfcf installs to `~/.bun/bin/cfcf` (via `npm install -g --prefix ~/.bun`). Since `~/.bun/bin` is on your PATH after Bun is installed, cfcf is reachable immediately — no separate PATH setup needed.
+
+**Prerequisites** — `git`. Bun + npm are bootstrapped by the installer if missing.
 
 ## Recommended: one-liner
 
@@ -14,11 +16,12 @@ The script (with verbose output at every step):
 
 1. **Bootstraps Bun** ≥ 1.3 if missing (via `curl -fsSL https://bun.sh/install | bash`)
 2. **Bootstraps npm** if missing (via `bun install -g npm`)
-3. **Configures npm prefix** to `~/.npm-global` if your current prefix is root-owned (the EACCES gotcha on stock-installer Node + many Linux distros — npm's [documented fix](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)). Skipped if your npm prefix is already user-writable (homebrew Node, nvm/fnm/asdf users, or anyone who's already done this setup).
-4. **Installs cfcf** via `npm install -g @cerefox/codefactory`
-5. **Prints a "next steps" banner** with the commands to run (`cfcf init`, `cfcf doctor`, etc.)
+3. **Installs cfcf** via `npm install -g --prefix ~/.bun @cerefox/codefactory`
+4. **Prints a "next steps" banner** with the commands to run (`cfcf init`, `cfcf doctor`, etc.)
 
-No sudo. No silent trust grants. All shell-rc edits go in sentinel-marked blocks (`# >>> cfcf installer (...) >>>` ... `# <<< cfcf installer (...) <<<`) so you can remove them cleanly.
+No sudo. No EACCES (~/.bun is always user-writable). No new PATH entries beyond what Bun's installer adds. No shell-rc edits from cfcf itself.
+
+The only friction case: **first-time Bun users**. If install.sh installs Bun for you (you didn't have it before), Bun's installer adds `~/.bun/bin` to your `~/.zshrc` / `~/.bashrc` — but your CURRENT shell hasn't sourced the rc yet. The banner detects this and tells you to either open a new terminal or run `source ~/.zshrc` once. This is the same one-time step `curl bun.sh/install | bash` requires, regardless of cfcf.
 
 After the installer prints the next-steps banner, you run:
 
@@ -26,33 +29,25 @@ After the installer prints the next-steps banner, you run:
 cfcf init       # interactive first-run setup
 ```
 
-## Direct install (if you already have Bun + npm)
+## Direct install (if you already have Bun)
 
-If your machine is already set up the way you like (Bun installed, npm with a user-writable prefix), skip the wrapper:
+If you have Bun installed already and want to skip the wrapper:
 
 ```bash
-# Make sure bun is installed (cfcf's runtime requirement)
-bun --version
+# npm comes with Node.js (or `bun install -g npm`)
+npm --version || bun install -g npm
 
-# Install cfcf via npm (npm runs postinstalls; bun doesn't by default)
-npm install -g @cerefox/codefactory             # latest
+# Install cfcf into ~/.bun (so it lands at ~/.bun/bin/cfcf, on PATH)
+npm install -g --prefix ~/.bun @cerefox/codefactory             # latest
 # or pin to a specific version:
-npm install -g @cerefox/codefactory@0.16.4
+npm install -g --prefix ~/.bun @cerefox/codefactory@0.16.4
 
 # Verify + first-run setup
 cfcf doctor
 cfcf init
 ```
 
-If `npm install -g` errors with `EACCES`, your npm prefix is root-owned. Fix once:
-
-```bash
-mkdir -p ~/.npm-global
-npm config set prefix ~/.npm-global
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-exec $SHELL
-npm install -g @cerefox/codefactory
-```
+The `--prefix ~/.bun` flag tells npm to install into your Bun directory (which is on PATH) instead of npm's default global prefix (often root-owned, requires sudo or a separate `npm config set prefix ~/.npm-global` setup).
 
 ## Bun-only alternative (advanced)
 
@@ -66,7 +61,7 @@ cfcf doctor
 
 This grants explicit, named trust to **just those three packages** (no `--all`). cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]` so the manual `bun pm trust` step will become unnecessary once [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959) lands upstream.
 
-We recommend the curl-bash installer or the `npm install -g` path over this; npm runs postinstalls by default and the experience is friction-free.
+We recommend the curl-bash installer or the `npm install -g --prefix ~/.bun` path over this; npm runs postinstalls by default and the experience is friction-free.
 
 ## Tarball / offline / pinned-mirror install
 

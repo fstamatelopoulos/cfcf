@@ -235,11 +235,12 @@ jobs:
           # Adjust the platform tag to match your machine: darwin-arm64, darwin-x64, or linux-x64
           PLATFORM=$host_platform
 
-          # Native package first (satisfies CLI's optionalDependencies entry)
-          npm install -g ./cerefox-codefactory-native-\${PLATFORM}-${v_no_prefix}.tgz
+          # Install into ~/.bun (which is on PATH because cfcf requires Bun).
+          # Native package first (satisfies CLI's optionalDependencies entry).
+          npm install -g --prefix ~/.bun ./cerefox-codefactory-native-\${PLATFORM}-${v_no_prefix}.tgz
 
           # CLI second
-          npm install -g ./cfcf-${v_no_prefix}.tgz
+          npm install -g --prefix ~/.bun ./cfcf-${v_no_prefix}.tgz
 
           # Verify
           cfcf doctor

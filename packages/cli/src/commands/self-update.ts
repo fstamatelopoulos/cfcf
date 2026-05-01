@@ -1,15 +1,22 @@
 /**
  * `cfcf self-update` -- upgrade an installed cfcf to a newer release.
  *
- * Mirrors `scripts/install.sh`'s flow: `npm install -g
- * @cerefox/codefactory[@version]`. We use npm (not bun) because Bun
- * blocks postinstall scripts of transitive deps by default
+ * Mirrors `scripts/install.sh`'s flow:
+ *   npm install -g --prefix ~/.bun @cerefox/codefactory[@version]
+ *
+ * We use npm (not bun) as the install tool because Bun blocks
+ * postinstall scripts of transitive deps by default
  * (oven-sh/bun#4959), which would break onnxruntime-node + protobufjs
  * at install time. npm runs postinstalls by default; the upgrade is
- * friction-free. Bun is still cfcf's RUNTIME requirement; only the
- * install tool changed.
+ * friction-free.
  *
- * The user's `~/.cfcf/` data dir (clio.db, logs, models) is never
+ * `--prefix ~/.bun` puts cfcf at ~/.bun/bin/cfcf, which is on PATH
+ * because cfcf requires Bun (Bun's installer adds ~/.bun/bin to the
+ * shell rc). Avoids the EACCES gotcha on stock-installer Node + the
+ * "open a new terminal to pick up ~/.npm-global/bin" friction the
+ * earlier ~/.npm-global design had.
+ *
+ * The user's ~/.cfcf/ data dir (clio.db, logs, models) is never
  * touched -- only the global node_modules entry is swapped, so
  * self-update cannot lose user data by design.
  *
@@ -243,13 +250,22 @@ async function dedupBunGlobal(): Promise<void> {
 // ── Upgrade execution ──────────────────────────────────────────────────
 
 /**
- * Run `npm install -g <spec>` and resolve when npm exits. Fails with a
- * non-zero exit code on npm failure. stdio inherited so the user sees
- * progress in real time.
+ * Run `npm install -g --prefix ~/.bun <spec>` and resolve when npm
+ * exits. Fails with a non-zero exit code on npm failure. stdio
+ * inherited so the user sees progress in real time.
+ *
+ * `--prefix ~/.bun` matches install.sh's design: cfcf installs to
+ * ~/.bun/bin/cfcf, which is on the user's PATH because cfcf requires
+ * Bun (which adds ~/.bun/bin to the shell rc). No EACCES gotcha,
+ * no separate npm-global PATH entry.
  */
 function runNpmInstall(spec: string): Promise<number> {
+  const prefix = process.env.HOME ? `${process.env.HOME}/.bun` : null;
+  const args = prefix
+    ? ["install", "-g", "--prefix", prefix, spec]
+    : ["install", "-g", spec];
   return new Promise((resolve) => {
-    const proc = spawn("npm", ["install", "-g", spec], { stdio: "inherit" });
+    const proc = spawn("npm", args, { stdio: "inherit" });
     proc.on("exit", (code) => resolve(code ?? 1));
   });
 }

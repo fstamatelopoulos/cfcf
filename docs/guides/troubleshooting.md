@@ -277,21 +277,35 @@ This is intentional behavior, not a bug. PA detected a discrepancy between the C
 
 ## Install issues
 
-### `npm install -g` fails with `EACCES` (permission denied, symlink)
+### `cfcf` not found after running `install.sh`
 
-Stock Node installations (the official `.pkg` installer on macOS, `apt`/`dnf`-installed Node on Linux) point npm's global prefix at `/usr/local/` or `/usr/lib/`, which is root-owned. `npm install -g` then fails with `EACCES` unless run as root. The npm-documented fix is to redirect the prefix to a user-writable directory; this is what `nvm`/`fnm`/`asdf` all do automatically.
+If you ran `install.sh` and it completed successfully but `cfcf init` returns "command not found", your shell hasn't picked up the new PATH yet. cfcf installs to `~/.bun/bin/cfcf`, and `~/.bun/bin` is added to your shell rc by Bun's installer — but rc files only re-source on new shell startup. Fix:
 
 ```bash
+source ~/.zshrc       # or 'source ~/.bashrc'
+# OR open a new terminal window/tab
+cfcf init
+```
+
+This is a one-time step (the same one Bun's official `curl bun.sh/install | bash` requires). It only happens if Bun was just installed by `install.sh` for the first time on this machine.
+
+### `npm install -g @cerefox/codefactory` (without `--prefix ~/.bun`) fails with `EACCES`
+
+The direct command in our docs uses `--prefix ~/.bun` specifically to avoid this. If you ran the bare `npm install -g @cerefox/codefactory` (no `--prefix`), npm tries to install to its default global prefix (often `/usr/local/`, root-owned on stock Node installations) and fails with `EACCES`. Two fixes:
+
+```bash
+# Option A (recommended): use the --prefix ~/.bun flag (matches install.sh)
+npm install -g --prefix ~/.bun @cerefox/codefactory
+
+# Option B: configure a user-writable npm prefix once + retry
 mkdir -p ~/.npm-global
 npm config set prefix ~/.npm-global
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-exec $SHELL                                                     # reload PATH
-
-# Now retry the install
+echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc
+exec $SHELL
 npm install -g @cerefox/codefactory
 ```
 
-You only need to do this once per machine. cfcf's `install.sh` does this automatically when needed. Reference: [Resolving EACCES permissions errors when installing packages globally — npm Docs](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally).
+Option A is simpler + doesn't touch your global npm config. Option B is the npm-documented fix ([Resolving EACCES permissions errors](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)) if you want a permanent user-writable prefix for all your `npm install -g` operations.
 
 ### "Blocked N postinstalls" after `bun install -g`
 

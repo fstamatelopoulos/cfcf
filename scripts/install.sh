@@ -5,37 +5,41 @@
 # Canonical one-liner:
 #   curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 #
-# Designed to "just work" on a stock fresh Mac/Linux. Bootstraps the
-# whole toolchain (Bun + npm + npm-prefix-fix-if-needed), installs
-# cfcf via npm, prints a clear "next steps" banner. No sudo. No
-# package-trust prompts. Verbose enough that the user can audit
-# every step.
+# Designed to "just work" on a stock fresh Mac/Linux. No sudo. No
+# trust prompts. No new directories on PATH that require shell rc
+# edits beyond what Bun's own installer already does.
 #
 # Why bun + npm + cfcf?
-#   Bun is cfcf's RUNTIME (bun:sqlite, Bun.spawn, Bun.serve,
-#   Bun.file used directly throughout the codebase -- required at
-#   runtime). npm is cfcf's INSTALL TOOL: chosen over `bun install`
-#   because Bun blocks postinstall scripts by default
-#   (oven-sh/bun#4959), which would break onnxruntime-node +
-#   protobufjs at install time without a manual `bun pm trust`
-#   workaround. npm runs postinstalls by default; the install Just
-#   Works.
+#   Bun is cfcf's RUNTIME (uses bun:sqlite, Bun.spawn, Bun.serve,
+#   Bun.file directly throughout the codebase -- required at runtime).
+#   npm is cfcf's INSTALL TOOL: chosen over `bun install` because Bun
+#   blocks postinstall scripts by default (oven-sh/bun#4959), which
+#   would break onnxruntime-node + protobufjs at install time without
+#   a manual `bun pm trust` workaround. npm runs postinstalls by
+#   default; the install Just Works.
+#
+# Why install cfcf to ~/.bun (instead of npm's default global prefix)?
+#   ~/.bun/bin is already on the user's PATH (Bun's installer adds it
+#   when bun is installed). Using `npm install -g --prefix ~/.bun`
+#   puts cfcf at ~/.bun/bin/cfcf, immediately reachable, with no
+#   additional PATH entries or shell rc edits beyond what Bun itself
+#   needs. This avoids the EACCES gotcha on stock-installer Node
+#   (npm's default prefix is /usr/local/, root-owned) and the "open
+#   a new terminal" friction that came with the ~/.npm-global
+#   workaround. Cosmetic: cfcf lives in ~/.bun/lib/node_modules/...
+#   alongside Bun's own globals; functionally fine, no namespace
+#   conflicts (cfcf is the only binary).
 #
 # Two install paths share this script:
 #
 #   • registry mode (default):
-#       npm install -g @cerefox/codefactory[@version]
+#       npm install -g --prefix ~/.bun @cerefox/codefactory[@version]
 #
 #   • tarball mode (offline / airgapped / pinned-mirror):
-#       npm install -g <native-tarball-URL>
-#       npm install -g <cli-tarball-URL>
-#     Auto-engages when CFCF_BASE_URL is set, or force with
+#       npm install -g --prefix ~/.bun <native-tarball-URL>
+#       npm install -g --prefix ~/.bun <cli-tarball-URL>
+#     Auto-engages when CFCF_BASE_URL is set; force with
 #     CFCF_INSTALL_SOURCE=tarball.
-#
-# Once installed, users with their own setup (homebrew Node,
-# nvm/fnm/asdf with a user-writable npm prefix) can also run
-# `npm install -g @cerefox/codefactory` directly without this wrapper.
-# The wrapper exists for the Bun + npm + prefix-fix bootstrap path.
 #
 # Env vars (all optional):
 #   CFCF_INSTALL_SOURCE  "registry" or "tarball" (auto: tarball if
@@ -47,16 +51,14 @@
 #                        default tarball URL builder
 #                        (default: fstamatelopoulos/cfcf)
 #
-# All shell-rc edits go inside sentinel-marked blocks
-# (`# >>> cfcf installer (npm-global path) >>>` ... `<<<`) so they can
-# be cleanly removed by the user later.
+# install.sh writes nothing to your shell rc. Bun's installer (when
+# called for first-time bun install) writes its own ~/.bun/bin entry.
+# Beyond that, no rc edits.
 
 set -euo pipefail
 
-# Capture the parent shell's PATH at the start, before we modify it.
-# Used at the end to determine whether the user's parent shell will
-# be able to find the cfcf binary AS-IS, or whether they need to
-# source their rc / open a new terminal first.
+# Capture the parent shell's PATH at the start. Used at the end to
+# detect whether the user's parent shell will find cfcf as-is.
 ORIGINAL_PATH="$PATH"
 
 # ── Defaults ──────────────────────────────────────────────────────────
@@ -82,47 +84,34 @@ case "$CFCF_INSTALL_SOURCE" in
     exit 1 ;;
 esac
 
+# Where cfcf gets installed. Always under ~/.bun (which is on PATH
+# thanks to Bun's installer); npm's default prefix is bypassed
+# entirely via `--prefix`.
+CFCF_INSTALL_PREFIX="$HOME/.bun"
+CFCF_BIN="$CFCF_INSTALL_PREFIX/bin/cfcf"
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  cfcf — Cerefox Code Factory installer"
 echo "═══════════════════════════════════════════════════════════════"
 echo "  install source : $CFCF_INSTALL_SOURCE"
 echo "  version        : $CFCF_VERSION"
+echo "  install prefix : $CFCF_INSTALL_PREFIX  (cfcf will land at $CFCF_BIN)"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-# ── Helper: append a sentinel-marked block to a shell rc file ─────────
-# Idempotent (skips if the sentinel is already present). Bash 3.x-
-# compatible (macOS Catalina+ still ships bash 3.2). The user can
-# remove the block cleanly by deleting the lines between `>>>` and `<<<`.
-add_to_rc_idempotent() {
-  local rc="$1"
-  local label="$2"
-  local content="$3"
-  [[ -f "$rc" ]] || return 0
-  if grep -qF "# >>> cfcf installer ($label) >>>" "$rc"; then
-    return 0
-  fi
-  {
-    echo ""
-    echo "# >>> cfcf installer ($label) >>>"
-    echo "# Added by cfcf installer (https://github.com/fstamatelopoulos/cfcf)."
-    echo "# Removable: delete the block between '>>>' and '<<<'."
-    echo "$content"
-    echo "# <<< cfcf installer ($label) <<<"
-  } >> "$rc"
-  echo "[cfcf]   added '$label' block to $rc"
-}
-
 # ── 1/4. Ensure Bun is on PATH (cfcf RUNTIME requirement) ─────────────
+# Also: ~/.bun/bin needs to be on PATH for cfcf to be reachable
+# (since we install cfcf to ~/.bun via npm's --prefix). Bun's own
+# installer handles the rc edit for new shells; we export PATH for
+# THIS subshell so verify works.
 echo "[cfcf] step 1/4: ensure Bun ≥ 1.3 is installed"
+bun_was_just_installed=0
 if command -v bun >/dev/null 2>&1; then
   echo "[cfcf]   Bun found: v$(bun --version)"
 else
   echo "[cfcf]   Bun not found; installing via Bun's official installer..."
   curl -fsSL https://bun.sh/install | bash
-  # Bun's installer adds ~/.bun/bin to ~/.zshrc/.bashrc itself; we still
-  # update PATH for THIS shell session so the next steps see bun.
   export PATH="$HOME/.bun/bin:$PATH"
   if ! command -v bun >/dev/null 2>&1; then
     echo "[cfcf] Bun install failed -- ensure ~/.bun/bin is on PATH and re-run." >&2
@@ -130,6 +119,7 @@ else
     exit 1
   fi
   echo "[cfcf]   Bun installed: v$(bun --version)"
+  bun_was_just_installed=1
 fi
 
 # ── 2/4. Ensure npm is on PATH (cfcf INSTALL TOOL) ────────────────────
@@ -137,8 +127,7 @@ fi
 # scripts by default (oven-sh/bun#4959). cfcf depends on
 # onnxruntime-node + protobufjs whose postinstalls download platform-
 # specific .node binaries and run codegen; if those don't run, Clio's
-# embedder breaks at runtime. npm runs postinstalls by default, so this
-# is the smooth path. Bun stays the runtime; npm is just the install tool.
+# embedder breaks at runtime. npm runs postinstalls by default.
 echo ""
 echo "[cfcf] step 2/4: ensure npm is installed"
 if command -v npm >/dev/null 2>&1; then
@@ -146,7 +135,6 @@ if command -v npm >/dev/null 2>&1; then
 else
   echo "[cfcf]   npm not found; bootstrapping via 'bun install -g npm'..."
   bun install -g npm
-  # bun-installed npm lives at ~/.bun/bin/npm — already on PATH from step 1.
   if ! command -v npm >/dev/null 2>&1; then
     echo "[cfcf] npm install via bun failed -- you may need to install Node.js manually." >&2
     echo "[cfcf] Try one of:" >&2
@@ -158,110 +146,21 @@ else
   echo "[cfcf]   npm installed: v$(npm --version)"
 fi
 
-# ── 3/4. Ensure npm has a user-writable global prefix ─────────────────
-# Stock Node installations (the official .pkg installer on macOS;
-# system packages on Linux) point npm's global prefix at /usr/local/
-# or /usr/lib/, which is root-owned. `npm install -g` then fails with
-# EACCES unless run as root. The npm-documented fix is to redirect the
-# prefix to a user-writable directory; ~/.npm-global is the convention.
-# This is what nvm/fnm/asdf/volta all do automatically.
-# Reference:
-#   https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally
-#
-# This fires:
-#   • macOS w/ official-installer Node (most common: stock fresh Mac)
-#   • Linux w/ apt/dnf/yum-installed Node
-#
-# This SKIPS:
-#   • macOS w/ homebrew Node (homebrew makes /usr/local/ user-writable
-#     on Intel; uses /opt/homebrew/ on Apple Silicon, also user-writable)
-#   • macOS where the user manually chowned /usr/local/bin (Intel-Mac
-#     "I did this once and forgot" case)
-#   • nvm / fnm / asdf / volta installs (each tool uses its own
-#     user-writable prefix)
-#   • Linux w/ user-installed Node
-#
-# We don't touch the user's existing setup if it's already working.
+# ── 3/4. Install cfcf into ~/.bun via `npm install -g --prefix` ───────
+# `--prefix ~/.bun` overrides npm's default global prefix for this
+# command only -- doesn't touch the user's npm config. cfcf lands at:
+#   $CFCF_INSTALL_PREFIX/lib/node_modules/@cerefox/codefactory/...
+#   $CFCF_INSTALL_PREFIX/bin/cfcf  (symlink)
+# ~/.bun/bin is on PATH because cfcf requires Bun + Bun's installer
+# adds it -- so the binary is reachable immediately, no rc edits.
 echo ""
 echo "[cfcf] step 3/4: install cfcf"
 
-# Test if npm's existing prefix is usable for `npm install -g`:
-# specifically, can we write into prefix/lib/node_modules + prefix/bin?
-# Those are the only two directories npm actually touches for global
-# installs. Some setups (including Intel Macs where the user manually
-# chowned /usr/local/{bin,lib/node_modules}) have the prefix root as
-# root-owned BUT the relevant subdirectories user-writable -- npm
-# install -g works fine in that case. Earlier versions of this script
-# tested `[[ -w "$npm_prefix" ]]` which incorrectly rejected the
-# chowned-Intel-Mac case + reconfigured to ~/.npm-global unnecessarily.
-npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
-prefix_writable=0
-prefix_was_modified=0
-if [[ -n "$npm_prefix" ]]; then
-  lib_dir="$npm_prefix/lib/node_modules"
-  bin_dir="$npm_prefix/bin"
-  # If a target dir doesn't exist yet, npm would create it during
-  # install. We test whether its parent is writable (would-create-OK)
-  # in addition to direct -w checks.
-  lib_ok=0
-  if [[ -w "$lib_dir" ]]; then
-    lib_ok=1
-  elif [[ ! -e "$lib_dir" ]] && [[ -w "$(dirname "$lib_dir")" ]] 2>/dev/null; then
-    lib_ok=1
-  fi
-  bin_ok=0
-  if [[ -w "$bin_dir" ]]; then
-    bin_ok=1
-  elif [[ ! -e "$bin_dir" ]] && [[ -w "$(dirname "$bin_dir")" ]] 2>/dev/null; then
-    bin_ok=1
-  fi
-  if (( lib_ok && bin_ok )); then
-    prefix_writable=1
-  fi
-fi
-
-if (( prefix_writable )); then
-  echo "[cfcf]   npm prefix '$npm_prefix' has writable lib/node_modules + bin -- skipping prefix fix"
-else
-  echo "[cfcf]   npm prefix '$npm_prefix' has root-owned lib/node_modules or bin."
-  echo "[cfcf]   Configuring '~/.npm-global' as a user-writable prefix"
-  echo "[cfcf]   (npm's documented fix for EACCES errors:"
-  echo "[cfcf]    https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)"
-  mkdir -p "$HOME/.npm-global"
-  npm config set prefix "$HOME/.npm-global"
-  npm_prefix="$HOME/.npm-global"
-  echo "[cfcf]   prefix set: $(npm config get prefix)"
-fi
-
-# Ensure the user's PARENT shell will actually find cfcf after we exit.
-# Two things to check:
-#   1. The parent shell's PATH (captured at script start as ORIGINAL_PATH)
-#      must include $npm_prefix/bin -- otherwise `cfcf` won't resolve.
-#   2. If it doesn't, ensure ~/.zshrc + ~/.bashrc contain the export
-#      line so future shells will work; then tell the user to source
-#      the rc or open a new terminal so the CURRENT parent shell
-#      picks it up.
-#
-# Note: this check is independent of whether we just configured the
-# prefix or detected an existing one. The earlier "prefix already
-# usable" path falsely assumed the user's PATH was also fine -- not
-# always true (user might have set npm prefix manually without adding
-# the corresponding PATH line to their rc). This catches both cases.
-prefix_bin="$npm_prefix/bin"
-parent_shell_will_find_cfcf=0
-case ":$ORIGINAL_PATH:" in
-  *":$prefix_bin:"*) parent_shell_will_find_cfcf=1 ;;
-esac
-if (( ! parent_shell_will_find_cfcf )); then
-  add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" "export PATH=\"$prefix_bin:\$PATH\""
-  add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" "export PATH=\"$prefix_bin:\$PATH\""
-  prefix_was_modified=1
-fi
-
-# Also export PATH for THIS subshell so the verify step (`command -v
-# cfcf` after `npm install -g`) finds the binary. Parent shell
-# inheritance is handled by the rc edit + IMPORTANT banner below.
-export PATH="$prefix_bin:$PATH"
+# Make sure $CFCF_INSTALL_PREFIX/bin is on this subshell's PATH so
+# the verify step finds cfcf. (It should already be from step 1, but
+# be defensive in case bun was already installed but ~/.bun/bin
+# somehow isn't on PATH.)
+export PATH="$CFCF_INSTALL_PREFIX/bin:$PATH"
 
 if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
   if [[ "$CFCF_VERSION" == "latest" ]]; then
@@ -270,8 +169,8 @@ if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
     v_no_prefix="${CFCF_VERSION#v}"
     pkg_spec="@cerefox/codefactory@${v_no_prefix}"
   fi
-  echo "[cfcf]   npm install -g $pkg_spec"
-  npm install -g "$pkg_spec"
+  echo "[cfcf]   npm install -g --prefix $CFCF_INSTALL_PREFIX $pkg_spec"
+  npm install -g --prefix "$CFCF_INSTALL_PREFIX" "$pkg_spec"
   installed_version="$CFCF_VERSION"
 else
   # ── tarball mode ──
@@ -320,10 +219,10 @@ else
   native_url="$CFCF_BASE_URL/cerefox-codefactory-native-${platform}-${v_no_prefix}.tgz"
 
   # Native first, CLI second.
-  echo "[cfcf]   npm install -g $native_url"
-  npm install -g "$native_url"
-  echo "[cfcf]   npm install -g $cli_url"
-  npm install -g "$cli_url"
+  echo "[cfcf]   npm install -g --prefix $CFCF_INSTALL_PREFIX $native_url"
+  npm install -g --prefix "$CFCF_INSTALL_PREFIX" "$native_url"
+  echo "[cfcf]   npm install -g --prefix $CFCF_INSTALL_PREFIX $cli_url"
+  npm install -g --prefix "$CFCF_INSTALL_PREFIX" "$cli_url"
   installed_version="$version"
 fi
 
@@ -334,24 +233,35 @@ echo "[cfcf] step 4/4: verify install"
 if ! command -v cfcf >/dev/null 2>&1; then
   echo ""
   echo "[cfcf] cfcf was installed but is not on your PATH yet."
-  echo "[cfcf] Open a new terminal (the npm-global path was added to your"
-  echo "[cfcf] shell rc), or for THIS shell:"
-  echo "[cfcf]   export PATH=\"$(npm config get prefix)/bin:\$PATH\""
+  echo "[cfcf] This usually means ~/.bun/bin isn't on your PATH yet"
+  echo "[cfcf] (e.g. Bun was just installed by this script + your"
+  echo "[cfcf] current shell hasn't sourced the rc edit)."
+  echo "[cfcf] Open a new terminal, OR run:"
+  echo "[cfcf]   export PATH=\"\$HOME/.bun/bin:\$PATH\""
   echo "[cfcf] Then run: cfcf doctor"
   exit 0
 fi
 
 actual_version="$(cfcf --version 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
 if [[ -n "$actual_version" ]]; then
-  echo "[cfcf]   cfcf v$actual_version installed (requested: $installed_version)"
+  echo "[cfcf]   cfcf v$actual_version installed at $CFCF_BIN (requested: $installed_version)"
 else
-  echo "[cfcf]   cfcf $installed_version installed"
+  echo "[cfcf]   cfcf $installed_version installed at $CFCF_BIN"
 fi
+
+# Detect whether ~/.bun/bin is on the parent shell's PATH. If not,
+# the user needs to source rc / open new terminal before cfcf works
+# in their parent shell. The most common cause: Bun was just installed
+# by this script, so its installer-added rc edit hasn't been sourced
+# in the user's current shell.
+parent_shell_will_find_cfcf=0
+case ":$ORIGINAL_PATH:" in
+  *":$CFCF_INSTALL_PREFIX/bin:"*) parent_shell_will_find_cfcf=1 ;;
+esac
 
 # Detect whether a cfcf server was running before this install. If
 # there's a PID file under ~/.cfcf/, the running server still has the
-# OLD bundled JS in memory; the user needs to restart it. Used to
-# customise the next-steps banner.
+# OLD bundled JS in memory; the user needs to restart it.
 server_was_running=0
 if [[ -f "$HOME/.cfcf/server.pid" ]]; then
   pid="$(cat "$HOME/.cfcf/server.pid" 2>/dev/null || true)"
@@ -360,26 +270,29 @@ if [[ -f "$HOME/.cfcf/server.pid" ]]; then
   fi
 fi
 
-# Print the canonical next-steps banner. Earlier drafts tried to
-# auto-launch `cfcf init` via `exec cfcf init </dev/tty`, but
-# interactive terminal handling is unreliable when the parent is a
-# `curl | bash` pipe (input frozen, Ctrl-C dead). Bun's installer
-# doesn't try to auto-launch a follow-up tool for the same reason --
-# we print + exit, user runs the commands in their normal shell.
+# Print the canonical next-steps banner.
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Installation complete!"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
-if (( prefix_was_modified )); then
-  # We just added ~/.npm-global/bin to ~/.zshrc/.bashrc. The user's
-  # PARENT shell (the one that ran `curl | bash`) hasn't sourced the
-  # rc update -- they need to either open a new terminal or source
-  # the rc file before cfcf is on PATH. install.sh's PATH export
-  # only affected its own subshell, which exits with this banner.
-  echo "  IMPORTANT — npm prefix was reconfigured to ~/.npm-global,"
-  echo "  so '~/.npm-global/bin' was added to your shell's PATH (in"
-  echo "  ~/.zshrc and/or ~/.bashrc). For your CURRENT terminal:"
+if (( ! parent_shell_will_find_cfcf )); then
+  # ~/.bun/bin not on parent shell PATH. Most common cause: bun was
+  # just installed by this script. Bun's installer added ~/.bun/bin
+  # to ~/.zshrc/.bashrc but the user's CURRENT shell hasn't sourced
+  # the rc update -- they need to open a new terminal or source the
+  # rc file before cfcf is reachable. (install.sh's PATH export only
+  # affects its own subshell, not the user's parent shell.)
+  echo "  IMPORTANT — ~/.bun/bin is not on your CURRENT terminal's PATH."
+  if (( bun_was_just_installed )); then
+    echo "  Bun was just installed by this script; Bun's installer added"
+    echo "  ~/.bun/bin to ~/.zshrc/.bashrc but your current shell hasn't"
+    echo "  picked it up yet. For your CURRENT terminal:"
+  else
+    echo "  ~/.bun/bin should be on your PATH (Bun's installer adds it)."
+    echo "  If it's missing, your shell rc may have been modified. For"
+    echo "  your CURRENT terminal:"
+  fi
   echo ""
   echo "    • Open a new terminal window/tab, OR"
   echo "    • Run:  source ~/.zshrc     (or 'source ~/.bashrc')"
