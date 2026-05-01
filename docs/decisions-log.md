@@ -13,6 +13,69 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-01 — npm publish auth: OIDC trusted publishing + sigstore provenance (bootstrapped via a one-shot token)
+
+**Context.** v0.16.2 was cfcf's first publish to npmjs.com, after the 2026-04-30 public-flip. The publish needed to work the first time with whatever auth path was simplest to bootstrap; subsequent publishes wanted the strongest supply-chain posture npm offers. Two distinct decisions, one workflow.
+
+**Decided — bootstrap path (v0.16.2 only).** Manual `npm publish` from CI using a granular npm access token scoped to `@cerefox/codefactory*`, stored as `NPM_TOKEN` in the repo's GitHub Secrets. The token was created with the **bypass-2FA** option enabled — required because `npm publish` from a non-interactive CI runner can't satisfy a 2FA-via-authenticator-app check. Token was used for v0.16.2's publish and **revoked the same day**.
+
+**Decided — durable path (v0.16.3 onwards).** Switch to **OIDC trusted publishing** via npm's GitHub Actions integration:
+- Each of the 4 `@cerefox/codefactory*` packages has a Trusted Publisher entry on npmjs.com pointing at this exact repo (`fstamatelopoulos/cfcf`) + workflow (`release.yml`).
+- The `npm-publish` job declares `permissions: id-token: write`, mints a short-lived OIDC token per workflow run, and `npm publish` validates against the registered trust before publishing. No long-lived secret anywhere in the repo.
+- All 4 packages have publishing access tightened to "Require two-factor authentication and disallow tokens (recommended)" — the most restrictive supply-chain posture npm offers when combined with OIDC.
+- Workflow uses Node 22 + `npm install -g npm@latest` to ensure npm CLI ≥ 11.5.1 (the minimum Trusted Publishing requirement; Node 22 ships with npm 10.x). A pre-flight version check fails fast with a clear error if the install drops below 11.5.
+- `--provenance` flag added to all `npm publish` calls. Each tarball ships with a sigstore-signed attestation linking it to the exact GitHub Actions run that built it, surfaced as a "Provenance" badge on npmjs.com.
+
+**Why two-step instead of OIDC from day one.** OIDC trusted publishers can only be registered against an existing package + a real workflow run that's already published it. You can't register a Trusted Publisher for a package that doesn't exist yet — npm has nothing to bind the trust against. A bootstrap publish using something else is required. The bypass-2FA token + same-day revocation is the recognised pattern (npm's docs walk through it explicitly). Once v0.16.2 was on npm, registering OIDC against the workflow + future-proofing every subsequent publish was a 5-minute UI step per package.
+
+**Outcome.** Only `release.yml` on `fstamatelopoulos/cfcf`, manually triggered via `workflow_dispatch` with `publish_to_npm=true`, can publish new versions of these 4 packages. The repo holds no long-lived publish secret. All v0.16.3+ tarballs carry a sigstore provenance attestation visible on the package's npmjs.com page.
+
+**Lessons.**
+
+1. **Plan auth in two phases when starting a new package.** OIDC's chicken-and-egg means day 1 needs a different path. Designing for the durable end state from day 1 saves you from leaving a long-lived token in CI "just in case".
+
+2. **Revoke bootstrap credentials the same day**, even if you're "definitely going to switch tomorrow". Tokens that linger past their stated lifetime are how supply-chain incidents start.
+
+3. **Provenance attestation is free with OIDC**, costs one CLI flag, and gives users a visible signal that the artefact came from the repo it claims to. Worth turning on for every package that supports it.
+
+---
+
+## 2026-04-30 — Going public on GitHub: pre-flight sweep + naming + Apache-2.0
+
+**Context.** Prerequisite for npm OIDC trusted publishing (which requires a public repo on the free tier) and for the broader 5.5b "publish to npmjs.com" milestone. The repo had been private since inception (~351 commits, 4.43 MB of history including design notes, dogfood logs, and a Cerefox-internal phase). Flipping to public is one-way; needed a clean security/privacy sweep first.
+
+**Decided — pre-flight sweep before flipping the visibility switch.**
+
+- **Secrets scan**: `gitleaks detect` against the full git history. Returned 0 findings.
+- **`.env*` audit**: confirmed no `.env*` files anywhere in history.
+- **Personal-info audit**: no private keys, API tokens, phone numbers, physical addresses, or Cerefox-internal URLs in any commit, doc, or config.
+- **Author-metadata acceptance**: two emails on git author metadata + author name on 4 design docs — these are intentional and accepted (the project is publicly attributed to its author).
+- **`SECURITY.md` + `CONTRIBUTING.md`** added at repo root before flipping (vuln reporting flow + contribution guide).
+- **`LICENSE`** at repo root: switched the published packages' license from `UNLICENSED` to **Apache-2.0** to match the rest of the Cerefox ecosystem.
+
+**Decided — npm package naming for 5.5b.**
+
+- npm package name = **`@cerefox/codefactory`** (reads cleanly in install instructions; future-proofs the `@cerefox` scope for sibling packages). Was `@cerefox/cfcf-cli` pre-publish.
+- Per-platform native packages = `@cerefox/codefactory-native-<platform>` (was `@cerefox/cfcf-native-*`).
+- **CLI binary stays `cfcf`** — typing-friendly, users invoke 100x/day. No multi-bin aliases (cause cross-platform headaches without enough payoff).
+- **Legacy `@cerefox/cfcf-*` resolution fallback removed** from `constants.ts` / `clio/db.ts` / `doctor.ts` — a hard cut so the legacy name can never silently take effect at runtime (security: prevents a hypothetical attacker from squatting the legacy name).
+
+**Decided — `os`/`cpu` declared on the main package itself**, not just the per-platform native ones (`"os": ["darwin", "linux"]` + `"cpu": ["arm64", "x64"]`). So a Windows-native or FreeBSD user running `npm install -g @cerefox/codefactory` gets a fast, loud `EBADPLATFORM` at install time instead of silent success without the matching native package + a runtime crash on first run. `cfcf doctor`'s libsqlite3 check stays as second line of defense.
+
+**Decided — cross-compile darwin-x64 on macos-14**, not on macos-13. The macos-13 (Intel) runner pool became unviable for free-tier public repos (multi-hour queues during the public-flip window). `clang -arch x86_64` on the macos-14 (arm64) runner produces a working darwin-x64 binary; validated by reverse-direction testing on a real Intel Mac.
+
+**Outcome.** Repo public on 2026-04-30. v0.16.2 published to npmjs.com same day with the bypass-2FA bootstrap token (see 2026-05-01 decision-log entry on publish auth).
+
+**Lessons.**
+
+1. **The cross-compile direction matters.** macos-14 → darwin-x64 cross-compile works; macos-13 → darwin-arm64 is the historical baseline but the runner pool is constrained. Test the direction you can actually run in CI before you commit to it.
+
+2. **Hard-cut legacy package-name fallbacks before going public.** A legacy resolution path is a foot-gun the moment your package-name is on a public registry where anyone can squat the old name.
+
+3. **Loud install-time failure beats silent runtime crash.** `os`/`cpu` on the parent package is the difference between "this OS isn't supported" at `npm install` time versus a SQLite-not-found stack trace 20 minutes into a user's first session.
+
+---
+
 ## 2026-05-01 — Install cfcf into `~/.bun` via `npm install -g --prefix ~/.bun` (zero-friction install)
 
 **Context.** v0.16.2 shipped cfcf to npmjs.com. The next obvious task: a curl-bash one-liner so a random user lands on the GitHub repo, pastes one line, and gets a working cfcf. Multiple iterations between 2026-04-30 and 2026-05-01 tested four distinct install-tool strategies on two real Macs (Intel + Apple Silicon, both with prior cfcf in various states). Each design that "looked right on paper" surfaced a real-world UX problem that ruled it out. Capturing the full journey here so we don't re-litigate.

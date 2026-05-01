@@ -13,113 +13,73 @@ _No changes yet._
 
 ## [0.16.4] -- 2026-05-01
 
-### Friction-free install: curl-bash one-liner; cfcf installs into `~/.bun`
+Friction-free install: curl-bash one-liner; cfcf installs into `~/.bun` via `npm install -g --prefix ~/.bun`. Full design rationale + the four-option journey: [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-01 install entry).
 
-A clean-machine new-user test on a fresh Apple Silicon Mac surfaced two real-world install issues earlier versions didn't handle cleanly:
+### Added
 
-1. **Bun blocks postinstalls by default** ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). `bun install -g @cerefox/codefactory` blocks the postinstalls of `@cerefox/codefactory` + `onnxruntime-node` + `protobufjs`. Without those, Clio's embedder breaks at runtime; user-facing fix would be a `bun pm -g trust ...` command that raises "what am I approving?" concerns.
+- `curl -fsSL .../install.sh | bash` one-liner that bootstraps Bun + npm if missing, then runs `npm install -g --prefix ~/.bun @cerefox/codefactory`. Prints a next-steps banner; conditionally adds an "IMPORTANT" block when `~/.bun/bin` isn't on the parent shell's PATH (first-time Bun users only) and a server-restart hint when a cfcf server was running.
+- `INSTALL.md` asset on every GitHub Release.
+- `troubleshooting.md` sections for "`cfcf` not found after running `install.sh`" + EACCES + the bun-trust workaround.
 
-2. **Stock-Node `npm install -g` hits `EACCES`**. Stock macOS / Linux Node installations point npm's global prefix at root-owned directories. `npm install -g` fails without sudo or a one-time `npm config set prefix ~/.npm-global` setup.
+### Changed
 
-After several iterations through alternative designs (bun-only + auto-trust; npm + ~/.npm-global with shell-rc edits + "open new terminal" hint), the design that actually achieves friction-free install for the realistic cfcf user is to install cfcf into Bun's directory tree:
-
-```bash
-npm install -g --prefix ~/.bun @cerefox/codefactory
-```
-
-Why this works:
-- `~/.bun/bin` is on PATH because cfcf REQUIRES Bun (Bun's installer adds it). No separate PATH entry; no extra rc edit; no "open a new terminal" friction for users who already have Bun.
-- `~/.bun` is always user-writable (Bun's installer creates it under the user's home). No EACCES gotcha.
-- npm runs postinstalls by default. No trust prompts.
-- `--prefix` is per-command. We don't touch the user's npm config.
-
-The curl-bash one-liner handles the whole bootstrap automatically:
-
-```bash
-curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
-```
-
-What it does:
-1. **Bootstraps Bun ≥ 1.3** if missing (via Bun's official installer).
-2. **Bootstraps npm** if missing (via `bun install -g npm` — npm is in Bun's default-trusted list).
-3. **Installs cfcf** via `npm install -g --prefix ~/.bun @cerefox/codefactory[@version]`.
-4. **Prints a "next steps" banner** with the commands to run.
-
-The only friction case: **first-time Bun users**. If install.sh just installed Bun for them, Bun's installer added `~/.bun/bin` to their `~/.zshrc` / `~/.bashrc` but their CURRENT shell hasn't sourced the rc yet. The banner prints an "IMPORTANT" block telling them to source the rc or open a new terminal — same one-time step `curl bun.sh/install | bash` requires regardless of cfcf. For users who already have Bun (the realistic cfcf user, since cfcf REQUIRES Bun), zero friction; cfcf is reachable immediately.
-
-### Two tools (Bun + npm), one curl-bash flow
-
-Bun is cfcf's RUNTIME (uses `bun:sqlite`, `Bun.spawn`, etc. directly). npm is cfcf's INSTALL TOOL (chosen over `bun install` because of #4959 above). The user only deals with both if they're installing manually without the wrapper.
-
-A bun-only design with auto-trust was implemented + tested. It works but the visible `bun pm -g trust` command in the install output raised "what is this approving?" concerns even when the implementation was correct (named packages, not `--all`). npm is more familiar to JS-ecosystem users, runs postinstalls by default, and has no allow-command anywhere in the install output. The bun-only path stays available + documented as an "advanced alternative" in `installing.md` for users who deliberately avoid Node.
-
-### Changes
-
-- **`scripts/install.sh` rewritten**: bootstrap Bun, bootstrap npm, install cfcf via `npm install -g --prefix ~/.bun`, print verify + banner. Replaces both the v0.16.3 `bun install -g`-with-no-trust flow and earlier v0.16.4 drafts that used a separate `~/.npm-global` directory. The `--prefix ~/.bun` design eliminates the EACCES + PATH-friction class entirely for users who have Bun. install.sh writes nothing to your shell rc; Bun's installer handles its own rc edit when called for first-time bun install.
-- **`scripts/install.sh` next-steps banner**: ASCII-bordered block with `cfcf init` + `cfcf doctor` + `cfcf --help`. Conditionally adds: an "IMPORTANT" header when `~/.bun/bin` isn't on the parent shell's PATH (only happens when Bun was just installed and the user's current shell hasn't sourced rc); a server-restart hint when a cfcf server was running before the install.
-- **`scripts/uninstall.sh` rewritten** to detect cfcf at all known install locations (`~/.bun/lib/node_modules/...` for v0.16.4+, `~/.npm-global/lib/...` for the earlier draft, npm system prefix, `~/.bun/install/global/...` for pre-v0.16.4 bun-installed) and clean each up via the right `npm remove -g --prefix ...` or `bun remove -g`. Per-platform native package removed alongside the main package.
-- **`packages/cli/src/commands/self-update.ts`** uses `npm install -g --prefix ~/.bun` to mirror install.sh's destination.
-- **`scripts/build-cli.sh`'s published `trustedDependencies`** changed from `["onnxruntime-node", "sharp"]` to `["onnxruntime-node", "protobufjs"]`. Sharp has no postinstall in modern versions (ships prebuilt binaries via `optionalDependencies`); protobufjs does. Aligns the declared trust with what's actually blocked.
-- **`.github/workflows/release.yml` adds an `INSTALL.md` asset** to every GitHub Release. Self-explanatory README for users landing on the Releases page directly.
-- **README.md** "Install" section: leads with the curl-bash one-liner; documents the direct `npm install -g --prefix ~/.bun` path as the alternative for users who prefer no wrapper.
-- **`docs/guides/installing.md`** rewritten to mirror the README. New section explaining why `--prefix ~/.bun` is used. "Bun-only alternative (advanced)" section documents the `bun pm -g trust` workaround.
-- **`docs/guides/manual.md`** "In one minute" install snippet uses the curl-bash one-liner.
-- **`docs/guides/troubleshooting.md`** new section: "`cfcf` not found after running `install.sh`" (the source-rc / open-new-terminal one-time step for first-time Bun users), plus the EACCES section for users who do `npm install -g` without `--prefix ~/.bun`, plus the existing bun-trust workaround.
-
-### Doc sweep (post-validation)
-
-After the install.sh design landed and was validated on Apple Silicon + Intel Macs, a thorough sweep across all docs caught references to the older `bun install -g` install path + the `~/.bun/install/global/` layout that no longer match the shipped behaviour:
-
-- **`docs/decisions-log.md`** new entry (2026-05-01) capturing the four-option journey + the four lessons learned (the Unix process model is a hard constraint; bin-prefix re-use beats new-PATH-entry; the wrapper carries the cleverness so the manual command stays trivial; clean-machine first-run testing surfaces issues nothing else does).
-- **`docs/guides/installing.md`** "What gets installed" tree now reflects the `~/.bun/lib/node_modules/` layout that npm-with-prefix produces (with a note that the bun-only alternative still uses `~/.bun/install/global/`). The "Uninstalling" section uses `npm remove -g --prefix ~/.bun` to match the recommended install path; the bun-only alternative is documented separately.
-- **`docs/design/cfcf-stack.md`** "Distribution and Installation" section rewritten: curl-bash one-liner is the lead, `npm install -g --prefix ~/.bun` is the manual alternative, with a paragraph explaining why the prefix re-uses Bun's directory.
-- **`docs/research/installer-design.md`** banner at the top marks the doc as historical/superseded and points to the v0.16.4 decisions-log entry + `installing.md` for current install info.
-- **`docs/guides/cli-usage.md`** completion auto-install table updated to differentiate the recommended (`npm install -g --prefix ~/.bun`) path from the Bun-only alternative.
-- **`docs/guides/troubleshooting.md`** "Reset to a known-clean state" steps now use `npm remove -g --prefix ~/.bun` for the recommended install path, with the bun-only commands kept as a comment for users on the alternative.
-- **`docs/plan.md`** rows 5.5b + 5.14 marked ✅ — both shipped via the v0.16.x line + PR #22 respectively.
+- `scripts/install.sh` rewritten to use `npm install -g --prefix ~/.bun` (replaces both the v0.16.3 `bun install -g` flow and a v0.16.4 draft using `~/.npm-global`). install.sh writes nothing to the user's shell rc.
+- `scripts/uninstall.sh` detects cfcf at all known install locations (`~/.bun/lib/node_modules`, `~/.npm-global`, npm system prefix, `~/.bun/install/global`) and cleans each via the right tool. Per-platform native package removed alongside the main package.
+- `packages/cli/src/commands/self-update.ts` mirrors install.sh's destination (`npm install -g --prefix ~/.bun`).
+- Published `trustedDependencies` in `scripts/build-cli.sh`: `["onnxruntime-node", "sharp"]` → `["onnxruntime-node", "protobufjs"]` (sharp no longer has a postinstall; protobufjs does).
+- Docs sweep — `README.md` + `docs/guides/installing.md` + `docs/guides/manual.md` + `docs/guides/troubleshooting.md` + `docs/guides/cli-usage.md` + `docs/design/cfcf-stack.md` updated to match the shipped install flow. `docs/research/installer-design.md` banner-marked as historical.
+- `docs/plan.md` rows 5.5b + 5.14 marked ✅.
 
 ## [0.16.3] -- 2026-05-01
 
-### npm publish pipeline polish (post-first-publish)
+npm publish pipeline switched to **OIDC trusted publishing** + sigstore provenance for all 4 `@cerefox/codefactory*` packages. Bootstrap-vs-durable auth rationale + threat model: [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-01 npm publish auth entry).
 
-After v0.16.2 shipped (the first version on npmjs.com, published with a granular bypass-2FA token), this release switches the publish auth path to **OIDC trusted publishing** + tightens user-facing install docs.
+### Changed
 
-- **`release.yml` switched from `NPM_TOKEN` to OIDC trusted publishing.** Each of the 4 `@cerefox/codefactory*` packages now has a Trusted Publisher entry on npmjs.com pointing at this repo's `release.yml`. The `npm-publish` job mints a short-lived OIDC token via `permissions: id-token: write` per workflow run; npm validates against the registered trust + publishes. The `NODE_AUTH_TOKEN` env var is gone, the `NPM_TOKEN` repo secret is deleted, and the bypass-2FA npm token is revoked. The only path that can publish new versions of these packages is now this exact `release.yml` workflow on `fstamatelopoulos/cfcf`, manually triggered via `workflow_dispatch` with `publish_to_npm=true`.
-- **`--provenance` flag added to all `npm publish` calls.** Each tarball now ships with a sigstore-signed attestation linking it to the exact GitHub Actions run that built it, surfaced as a "Provenance" badge on npmjs.com.
-- **Workflow uses Node 22 + `npm install -g npm@latest`** to ensure npm CLI ≥ 11.5.1 (the minimum Trusted Publishing requirement; Node 22 ships with npm 10.x). A pre-flight version check fails fast with a clear error if the install drops below 11.5.
-- **Publishing access tightened on all 4 packages** to "Require two-factor authentication and disallow tokens (recommended)". Combined with OIDC trusted publishing, this is the most restrictive supply-chain posture npm offers.
-- **README.md "Install" section rewritten** to lead with the now-real `bun install -g @cerefox/codefactory` one-liner. Old "once cfcf is on npmjs.com" hedging removed. Status section trimmed from a 1500-word iteration history to a brief current-focus note + links to `docs/plan.md`, `CHANGELOG.md`, `docs/decisions-log.md` for the long-form history.
-- **`docs/guides/installing.md` rewritten** with the same lead-with-npm flow: 3-step quick install (Bun → cfcf → verify), curl-bash wrapper as alternate, tarball/offline as a separate section. Version examples bumped to v0.16.2.
-- **`docs/guides/manual.md` "In one minute" install snippet** replaced the stale `cfcf-releases` curl-bash one-liner with `bun install -g @cerefox/codefactory`. (manual.md is what `cfcf help` serves offline + what the README links to as "User Manual".)
-- **`docs/guides/troubleshooting.md` "Worst case: clean reinstall"** snippet flipped its reinstall step from `curl … cfcf-releases … install.sh` to `bun install -g @cerefox/codefactory`.
+- `release.yml`: `NPM_TOKEN` removed; `permissions: id-token: write` added; each package's npmjs.com page now lists this repo's `release.yml` as a Trusted Publisher. Only `release.yml` on `fstamatelopoulos/cfcf` (manually triggered with `publish_to_npm=true`) can publish new versions.
+- All `npm publish` calls use `--provenance`. Each tarball now carries a sigstore-signed attestation visible as a "Provenance" badge on npmjs.com.
+- Workflow uses Node 22 + `npm install -g npm@latest` to satisfy npm CLI ≥ 11.5.1 (the Trusted Publishing minimum; Node 22 ships npm 10.x). Pre-flight version check fails fast if the install lands below 11.5.
+- Publishing access on all 4 packages set to "Require 2FA and disallow tokens (recommended)".
+- `README.md` Install section: leads with `bun install -g @cerefox/codefactory`; "once cfcf is on npmjs.com" hedging removed; Status section trimmed (long-form history moved to `docs/plan.md` / `CHANGELOG.md` / `docs/decisions-log.md`).
+- `docs/guides/installing.md`: 3-step quick install (Bun → cfcf → verify), curl-bash wrapper as alternate, tarball/offline separate.
+- `docs/guides/manual.md` + `docs/guides/troubleshooting.md` install snippets: stale `cfcf-releases` references swapped for `bun install -g @cerefox/codefactory`.
 
-Both v0.16.2 and v0.16.3 close out plan item 5.5b ("Publish to npmjs.com").
+### Removed
+
+- `NPM_TOKEN` repo secret. The bypass-2FA npm token used to bootstrap v0.16.2 was revoked.
 
 ## [0.16.2] -- 2026-05-01
 
-**First public release on npmjs.com.** Plan item 5.5b shipped. cfcf becomes a standard `bun install -g @cerefox/codefactory` install. The 4 published packages are:
+**First public release on npmjs.com.** Closes plan item 5.5b. The 4 published packages:
 
-- [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory) — the CLI, ~388 KB
-- [`@cerefox/codefactory-native-darwin-arm64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-arm64) — pinned libsqlite3 + sqlite-vec for Apple Silicon
-- [`@cerefox/codefactory-native-darwin-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-x64) — same for Intel Macs (cross-compiled on macos-14 via `clang -arch x86_64`)
-- [`@cerefox/codefactory-native-linux-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-linux-x64) — same for x86_64 Linux
+- [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory) — the CLI (~388 KB)
+- [`@cerefox/codefactory-native-darwin-arm64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-arm64)
+- [`@cerefox/codefactory-native-darwin-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-darwin-x64) — cross-compiled on macos-14 via `clang -arch x86_64`
+- [`@cerefox/codefactory-native-linux-x64`](https://www.npmjs.com/package/@cerefox/codefactory-native-linux-x64)
 
-### npm publish pipeline (item 5.5b)
+Package-naming, license, going-public sweep, and `os`/`cpu` decisions: [`docs/decisions-log.md`](docs/decisions-log.md) (2026-04-30 going-public entry).
 
-- **Package renamed to `@cerefox/codefactory`** (was `@cerefox/cfcf-cli` pre-publish). The CLI binary stays `cfcf` — only the npm package name changes. Native packages renamed to `@cerefox/codefactory-native-<platform>`. Rationale + decision log: [`docs/research/npm-publish-5.5b-audit.md`](docs/research/npm-publish-5.5b-audit.md).
-- **License switched from `UNLICENSED` to `Apache-2.0`** to match the rest of the Cerefox ecosystem. `LICENSE` file added at the repo root.
-- **`os` + `cpu` declared on the main package itself** (`darwin`/`linux` × `arm64`/`x64`) so `bun install -g @cerefox/codefactory` on Windows-native or FreeBSD fails fast at install time with `EBADPLATFORM` instead of silently succeeding without the matching native package and crashing at first run.
-- **Legacy `@cerefox/cfcf-*` resolution fallback removed** from `constants.ts` / `clio/db.ts` / `doctor.ts` for security: the legacy name can never silently take effect at runtime.
-- **`release.yml` rewritten** with three new pieces: a `publish_to_npm` workflow_dispatch input (default OFF — the GitHub Release leg keeps working unchanged); an `npm publish --dry-run` canary job that runs unconditionally on every release run; a gated real `npm publish` job (native packages first, CLI second, `--access public`) that runs only when `publish_to_npm=true` AND the dry-run passed. **Cross-compile support**: darwin-x64 builds on the macos-14 (arm64) runner via clang's `-arch x86_64` flag — replaced macos-13 after that runner pool became unviable for free-tier public repos (multi-hour queues).
-- **`scripts/build-cli.sh`** version resolution: positional arg → `CFCF_VERSION` env var → root `package.json` (was hardcoded to `v0.0.0-dev`). Build banner reports the source so debugging is trivial. Published `package.json` carries proper npm metadata (`repository`, `homepage`, `bugs`, `keywords`, `description`).
-- **`scripts/install.sh`** defaults to npm; tarball mode auto-engages when `CFCF_BASE_URL` is set or with `CFCF_INSTALL_SOURCE=tarball`. Bun bootstrap + bun-global dedup workaround preserved in both paths.
-- **`cfcf self-update`** rewritten to mirror `install.sh`'s install-source resolution. Default: `bun install -g @cerefox/codefactory@latest`. Latest-version detection via `https://registry.npmjs.org/@cerefox/codefactory/latest` (no npm CLI dependency). Tarball fallback preserved with `--source tarball` / `--base-url`. 17 unit tests cover the source/version resolver. Replaces dead-code MANIFEST detection that had been silently failing since 5.5.
-- **Post-install banner extended** with a third item ("First time? Run `cfcf doctor && cfcf init`") so direct `bun install -g @cerefox/codefactory` users get the same first-run nudge that `scripts/install.sh` users have always had. Items 1 + 2 unchanged.
+### Added
 
-### Going public
+- `LICENSE` (Apache-2.0) at repo root. Published packages' license switched from `UNLICENSED` to `Apache-2.0`.
+- `SECURITY.md` + `CONTRIBUTING.md` at repo root.
+- `release.yml`: `publish_to_npm` `workflow_dispatch` input (default OFF — GitHub Release leg unchanged); unconditional `npm publish --dry-run` canary job; gated real `npm publish --access public` job (native packages first, CLI second) that runs only when `publish_to_npm=true` AND the dry-run passed.
+- `os` + `cpu` declared on the main package (`darwin`/`linux` × `arm64`/`x64`) so unsupported platforms fail fast with `EBADPLATFORM`.
+- Post-install banner item: "First time? Run `cfcf doctor && cfcf init`" so direct-`bun install -g` users get the same first-run nudge as `install.sh` users.
 
-- **Repo flipped from private to public on GitHub** (2026-04-30) after a clean security/privacy sweep: `gitleaks detect` against full history (351 commits, 4.43 MB) returned 0 findings; no `.env*` files in history; no private keys / API tokens / phone numbers / physical addresses / Cerefox-internal URLs. Two emails on git author metadata + author name on 4 design docs are the only personal info, and accepted.
-- **`SECURITY.md` + `CONTRIBUTING.md` added** at repo root (vuln reporting flow + contribution guide). Apache 2.0 LICENSE in place.
+### Changed
+
+- npm package name: `@cerefox/cfcf-cli` → `@cerefox/codefactory`. Per-platform native packages: `@cerefox/cfcf-native-*` → `@cerefox/codefactory-native-*`. CLI binary stays `cfcf`.
+- Repo flipped from private to public on GitHub (2026-04-30) after a clean `gitleaks` sweep on 351 commits / 4.43 MB of history.
+- `scripts/install.sh` defaults to npm; tarball mode auto-engages when `CFCF_BASE_URL` is set or with `CFCF_INSTALL_SOURCE=tarball`.
+- `scripts/build-cli.sh` version resolution: positional arg → `CFCF_VERSION` env → root `package.json` (was hardcoded `v0.0.0-dev`). Published `package.json` carries proper npm metadata (`repository`, `homepage`, `bugs`, `keywords`, `description`).
+- Cross-compile darwin-x64 on macos-14 via `clang -arch x86_64` (replaces macos-13, whose runner pool became unviable for free-tier public repos).
+- `cfcf self-update` rewritten to mirror `install.sh`'s install-source resolution. Default: `bun install -g @cerefox/codefactory@latest`. Latest-version detection via `https://registry.npmjs.org/@cerefox/codefactory/latest`. 17 unit tests cover the resolver.
+
+### Removed
+
+- Legacy `@cerefox/cfcf-*` resolution fallback in `constants.ts` / `clio/db.ts` / `doctor.ts` (security — hard cut).
+- Dead-code MANIFEST detection in self-update (silently failing since 5.5).
 
 ## [0.16.1] -- 2026-04-29
 
