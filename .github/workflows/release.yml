@@ -178,6 +178,92 @@ jobs:
       - name: Copy install script
         run: cp scripts/install.sh dist/
 
+      - name: Write INSTALL.md (asset that explains the release)
+        # Self-explanatory README for anyone who lands on the GH Releases
+        # page + downloads the .tgz files. Without this, the release
+        # page is just "here are 7 files, good luck". Generated inline
+        # from the workflow so each release's INSTALL.md references
+        # that release's exact version.
+        run: |
+          version="${{ inputs.tag }}"
+          v_no_prefix="${version#v}"
+          # Detect what the host platform tag would be for the example
+          host_platform="darwin-arm64"  # docs example; user's actual platform varies
+          cat > dist/INSTALL.md <<EOF
+          # Installing cfcf $version
+
+          The recommended install is **the curl-bash one-liner** — it bootstraps
+          Bun + npm if missing, configures npm's prefix to a user-writable
+          directory if needed, then runs \`npm install -g @cerefox/codefactory\`
+          and hands off to \`cfcf init\`:
+
+          \`\`\`bash
+          curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
+          \`\`\`
+
+          That's the one-liner the README documents and what most users want.
+
+          ---
+
+          ## What the assets in this release are
+
+          If you're here because you want to install offline, in an airgapped
+          environment, or pin to this specific version, you can use the
+          tarballs directly. Each release contains:
+
+          - \`cfcf-${v_no_prefix}.tgz\` — the CLI package (npm-format tarball)
+          - \`cerefox-codefactory-native-darwin-arm64-${v_no_prefix}.tgz\` — pinned libsqlite3 + sqlite-vec for Apple Silicon
+          - \`cerefox-codefactory-native-darwin-x64-${v_no_prefix}.tgz\` — same for Intel Macs
+          - \`cerefox-codefactory-native-linux-x64-${v_no_prefix}.tgz\` — same for x86_64 Linux
+          - \`SHA256SUMS\` — sha256 hashes of the four .tgz files
+          - \`MANIFEST.txt\` — machine-readable manifest (used by \`cfcf self-update\` to resolve "latest")
+          - \`install.sh\` — the curl-bash installer (what the one-liner above downloads)
+          - \`INSTALL.md\` — this file
+
+          ## Manual install from these tarballs
+
+          You need **Bun ≥ 1.3** (cfcf's runtime) and **npm** (install tool, avoids
+          Bun's postinstall-blocking issue [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)).
+          Bun: \`curl -fsSL https://bun.sh/install | bash\`. npm: usually comes with Node.js
+          (\`brew install node\`, \`nvm install --lts\`, or your distro's package manager).
+
+          Then:
+
+          \`\`\`bash
+          # Adjust the platform tag to match your machine: darwin-arm64, darwin-x64, or linux-x64
+          PLATFORM=$host_platform
+
+          # Native package first (so the CLI's optionalDependencies entry is satisfied)
+          npm install -g ./cerefox-codefactory-native-\${PLATFORM}-${v_no_prefix}.tgz
+
+          # CLI second
+          npm install -g ./cfcf-${v_no_prefix}.tgz
+
+          # Verify
+          cfcf doctor
+          \`\`\`
+
+          ## Verifying the tarballs
+
+          \`\`\`bash
+          shasum -a 256 -c SHA256SUMS
+          \`\`\`
+
+          ## Provenance
+
+          Each .tgz published to npmjs.com after v0.16.4 ships with a [sigstore
+          attestation](https://docs.npmjs.com/generating-provenance-statements)
+          linking it to the GitHub Actions run that built it. View on the
+          package's npmjs.com page (look for the "Provenance" badge).
+
+          ## Documentation
+
+          - [README](https://github.com/fstamatelopoulos/cfcf#readme) — overview + install
+          - [Install guide](https://github.com/fstamatelopoulos/cfcf/blob/main/docs/guides/installing.md) — full path coverage
+          - [Troubleshooting](https://github.com/fstamatelopoulos/cfcf/blob/main/docs/guides/troubleshooting.md) — common issues + fixes
+          - [User manual](https://github.com/fstamatelopoulos/cfcf/blob/main/docs/guides/manual.md) — concepts + workflow
+          EOF
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -193,7 +279,8 @@ jobs:
             dist/cerefox-codefactory-native-*.tgz \
             dist/SHA256SUMS \
             dist/MANIFEST.txt \
-            dist/install.sh
+            dist/install.sh \
+            dist/INSTALL.md
 
   # ── npm publish dry-run (always runs; canary) ──────────────────────
   # Validates each tarball's shape against the npm registry without

@@ -11,6 +11,44 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.16.4] -- 2026-05-01
+
+### Friction-free install: `curl-bash` one-liner that bootstraps Bun + npm
+
+The reason for v0.16.4 was a clean-machine new-user test that surfaced two real-world install issues v0.16.3 didn't handle:
+
+1. **Bun blocks postinstalls by default** ([oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). `bun install -g @cerefox/codefactory` blocks the postinstalls of `@cerefox/codefactory` (which runs `cfcf completion install`), `onnxruntime-node` (downloads platform-specific `.node` runtime), and `protobufjs` (codegen for serializers). Without those running, Clio's embedder breaks at runtime. The user-facing fix would be `bun pm -g trust ...` which is exactly the kind of "click yes to scary security prompt" UX that erodes trust on first impression.
+2. **Stock-Node `npm install -g` hits `EACCES`**. Apple Silicon Macs with the official nodejs.org installer (and many Linux distros' system-package Node) put npm's global prefix at `/usr/local/` or `/usr/lib/`, which is root-owned. `npm install -g` fails without sudo. The user has to know to run `npm config set prefix ~/.npm-global` (npm's documented fix; what `nvm`/`fnm`/`asdf` do automatically). A new user landing on cfcf has no reason to know this.
+
+The v0.16.4 answer is a curl-bash installer that handles both:
+
+```bash
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
+```
+
+What it does, with verbose output at every step:
+
+1. **Bootstraps Bun ≥ 1.3** if missing (cfcf's RUNTIME requirement; uses `bun:sqlite`, `Bun.spawn`, etc. directly)
+2. **Bootstraps npm** if missing (via `bun install -g npm` — npm is in Bun's default-trusted list, so its install isn't blocked)
+3. **Configures `~/.npm-global`** as a user-writable npm prefix when the existing prefix isn't writable (skipped on machines where it's already user-writable: homebrew Node, nvm/fnm/asdf, anyone who's done the setup before)
+4. **Installs cfcf via `npm install -g @cerefox/codefactory`** (npm runs postinstalls by default, so all three previously-blocked postinstalls just run)
+5. **Runs `cfcf doctor`** to verify
+6. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
+
+No `sudo`. No silent trust grants. All shell-rc edits are sentinel-marked and removable. Industry-standard pattern (mirrors what `curl bun.sh/install | bash`, `rustup`, `nvm`'s installer all do).
+
+### Other changes
+
+- **`scripts/install.sh` rewritten** to bootstrap Bun + npm + npm-prefix-fix-if-needed and install cfcf via npm. Old logic (bun-bootstrap + bun-install-g + bun-dedup workaround) replaced; bun-dedup is no longer needed since we don't drive bun's package manager from install.sh anymore.
+- **`scripts/uninstall.sh` rewritten** to detect npm-vs-bun install method automatically and remove via the right tool.
+- **`packages/cli/src/commands/self-update.ts`** switched from `bun install -g` to `npm install -g` for the same reasons. The bun-dedup helper stays as best-effort cleanup of pre-v0.16.4 bun-installed cfcf state.
+- **`scripts/build-cli.sh`'s published `trustedDependencies`** changed from `["onnxruntime-node", "sharp"]` to `["onnxruntime-node", "protobufjs"]`. Sharp doesn't have a postinstall in modern versions (ships prebuilt binaries via `optionalDependencies`); protobufjs does. Aligns the declared trust with what's actually blocked. Once oven-sh/bun#4959 lands upstream, this declaration will start working for `bun install -g` users without further changes.
+- **`.github/workflows/release.yml` adds an `INSTALL.md` asset** to every GitHub Release. Self-explanatory README for users landing on the Releases page directly: explains what each `.tgz` is, gives the manual install command for offline / pinned-mirror users, links back to the docs.
+- **README.md** "Install" section reordered to lead with the curl-bash one-liner. The direct `npm install -g` path is preserved as the "if you already have Bun + npm set up" alternative.
+- **`docs/guides/installing.md`** rewritten to mirror the README. New "Bun-only alternative (advanced)" section explicitly documents the `bun pm -g trust` workaround for users who deliberately use Bun instead of npm.
+- **`docs/guides/manual.md`** "In one minute" install snippet uses the curl-bash one-liner.
+- **`docs/guides/troubleshooting.md`** new sections for the two issues v0.16.4 resolves at the install-script level: "`npm install -g` fails with EACCES" + "`bun install -g` shows Blocked N postinstalls" — both with the canonical fixes documented.
+
 ## [0.16.3] -- 2026-05-01
 
 ### npm publish pipeline polish (post-first-publish)

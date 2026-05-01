@@ -2,10 +2,13 @@
  * `cfcf self-update` -- upgrade an installed cfcf to a newer release.
  *
  * Mirrors `scripts/install.sh`'s install-source resolution: npm by
- * default, tarball when the user explicitly opts in. Runs `bun install
- * -g` under the hood; the user's `~/.cfcf/` data dir (clio.db, logs,
- * models) is never touched -- only the global node_modules entry is
- * swapped, so self-update cannot lose user data by design.
+ * default, tarball when the user explicitly opts in. Runs `npm install
+ * -g` under the hood (post-v0.16.4 — was `bun install -g` before;
+ * switched because Bun blocks postinstall scripts by default, breaking
+ * onnxruntime-node + protobufjs at install time. See oven-sh/bun#4959).
+ * The user's `~/.cfcf/` data dir (clio.db, logs, models) is never
+ * touched -- only the global node_modules entry is swapped, so
+ * self-update cannot lose user data by design.
  *
  * Sub-commands / flags:
  *   cfcf self-update                       check + interactive upgrade
@@ -237,13 +240,23 @@ async function dedupBunGlobal(): Promise<void> {
 // ── Upgrade execution ──────────────────────────────────────────────────
 
 /**
- * Run `bun install -g <spec>` and resolve when bun exits. Fails with a
- * non-zero exit code on bun failure. stdio inherited so the user sees
+ * Run `npm install -g <spec>` and resolve when npm exits. Fails with a
+ * non-zero exit code on npm failure. stdio inherited so the user sees
  * progress in real time.
+ *
+ * v0.16.4 switched from `bun install -g` to `npm install -g` to avoid
+ * Bun's postinstall-blocking issue (oven-sh/bun#4959): `bun install -g`
+ * blocks postinstalls of @cerefox/codefactory + onnxruntime-node +
+ * protobufjs by default, which breaks Clio's embedder at runtime
+ * unless the user manually `bun pm -g trust`s them. npm runs
+ * postinstalls by default, so the upgrade is friction-free.
+ *
+ * Bun is still cfcf's RUNTIME requirement; only the install tool
+ * changed.
  */
-function runBunInstall(spec: string): Promise<number> {
+function runNpmInstall(spec: string): Promise<number> {
   return new Promise((resolve) => {
-    const proc = spawn("bun", ["install", "-g", spec], { stdio: "inherit" });
+    const proc = spawn("npm", ["install", "-g", spec], { stdio: "inherit" });
     proc.on("exit", (code) => resolve(code ?? 1));
   });
 }
@@ -252,9 +265,13 @@ async function upgradeNpm(version: string): Promise<void> {
   const spec = version === "latest"
     ? `${NPM_PACKAGE}@latest`
     : `${NPM_PACKAGE}@${version}`;
-  console.log(`\n→ bun install -g ${spec}\n`);
+  console.log(`\n→ npm install -g ${spec}\n`);
+  // Bun-global dedup is a no-op when bun isn't the install tool, but
+  // we still run it as a best-effort cleanup of any prior bun-installed
+  // cfcf state (users who installed via bun pre-v0.16.4 may still have
+  // entries in ~/.bun/install/global/).
   await dedupBunGlobal();
-  const code = await runBunInstall(spec);
+  const code = await runNpmInstall(spec);
   await dedupBunGlobal();
   if (code !== 0) {
     console.error(`\n✗ installer exited with code ${code}`);
@@ -276,16 +293,16 @@ async function upgradeTarball(version: string, baseUrl: string): Promise<void> {
   // require.resolve time even when the npm registry can't be reached.
   const nativeUrl = `${baseUrl}/cerefox-codefactory-native-${tag}-${v}.tgz`;
   const cliUrl = `${baseUrl}/cfcf-${v}.tgz`;
-  console.log(`\n→ bun install -g ${nativeUrl}\n`);
+  console.log(`\n→ npm install -g ${nativeUrl}\n`);
   await dedupBunGlobal();
-  let code = await runBunInstall(nativeUrl);
+  let code = await runNpmInstall(nativeUrl);
   await dedupBunGlobal();
   if (code !== 0) {
     console.error(`\n✗ native-package install exited with code ${code}`);
     process.exit(code);
   }
-  console.log(`\n→ bun install -g ${cliUrl}\n`);
-  code = await runBunInstall(cliUrl);
+  console.log(`\n→ npm install -g ${cliUrl}\n`);
+  code = await runNpmInstall(cliUrl);
   await dedupBunGlobal();
   if (code !== 0) {
     console.error(`\n✗ CLI install exited with code ${code}`);

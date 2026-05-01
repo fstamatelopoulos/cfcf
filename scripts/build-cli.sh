@@ -178,10 +178,21 @@ cat > "$stage/package.json" <<EOF
   },
   "trustedDependencies": [
     "onnxruntime-node",
-    "sharp"
+    "protobufjs"
   ]
 }
 EOF
+# trustedDependencies note: this field tells Bun (when used with
+# `bun install -g`) to allow specific packages' postinstall scripts to
+# run. Sharp doesn't have a postinstall in modern versions (it ships
+# prebuilt binaries via optionalDependencies); onnxruntime-node +
+# protobufjs DO have postinstalls that need to run for Clio's embedder
+# to work. Bun's transitive-trust handling is incomplete
+# (oven-sh/bun#4959), so this declaration alone isn't sufficient -- our
+# install.sh uses `npm install -g` instead to sidestep the issue
+# entirely. The field stays because (a) `bun install -g` is supported
+# as an alternative install path, and (b) once #4959 lands upstream,
+# this will start working without further changes.
 
 # Short README that points users at the install + docs entry points.
 # Kept minimal so the tarball stays small.

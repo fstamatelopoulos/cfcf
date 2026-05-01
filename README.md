@@ -60,23 +60,22 @@ npm install -g @openai/codex
 
 ## Install (end users)
 
-cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). The runtime is **Bun ≥ 1.3** — install Bun first if you don't have it, then install cfcf:
+cfcf is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). One-liner (handles the full toolchain bootstrap automatically — Bun + npm + npm-prefix-fix-if-needed, then installs cfcf, runs `cfcf doctor`, hands off to `cfcf init`):
 
 ```bash
-# 1. Bun (skip if you already have bun ≥ 1.3)
-curl -fsSL https://bun.sh/install | bash
-
-# 2. cfcf — one command pulls the CLI + the matching per-platform native package
-bun install -g @cerefox/codefactory
-
-# 3. Verify + first-run setup
-cfcf doctor
-cfcf init
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
-That's it. Bun's package manager picks the right `@cerefox/codefactory-native-<platform>` automatically based on your OS + CPU (darwin-arm64, darwin-x64, linux-x64). The runtime deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`) come along the same way.
+No sudo, no surprises. The script bootstraps any missing toolchain bits (Bun is cfcf's runtime; npm is the install tool — chosen over `bun install` because Bun blocks postinstall scripts by default and would break cfcf's native deps without explicit trust prompts). All shell-rc edits are sentinel-marked and removable.
 
-For offline / airgapped / pinned-mirror installs, see the [tarball install path](docs/guides/installing.md#tarball--offline--pinned-mirror-install) — every release also publishes tarballs to GitHub Releases as a fallback.
+If you already have Bun + npm set up the way you like, you can skip the wrapper:
+
+```bash
+npm install -g @cerefox/codefactory
+cfcf doctor && cfcf init
+```
+
+For offline / airgapped / pinned-mirror installs, see [`docs/guides/installing.md#tarball--offline--pinned-mirror-install`](docs/guides/installing.md#tarball--offline--pinned-mirror-install) — every release also publishes tarballs to GitHub Releases as a fallback.
 
 Full install guide (upgrade, uninstall, platform support, troubleshooting): [`docs/guides/installing.md`](docs/guides/installing.md).
 

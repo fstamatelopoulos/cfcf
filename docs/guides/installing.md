@@ -1,50 +1,67 @@
 # Installing cf²
 
-cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). The runtime is **Bun ≥ 1.3** — `bun install -g` resolves the heavy native deps (`@huggingface/transformers`, `onnxruntime-node`, `sharp`) the same way every JS-ecosystem CLI does, and a per-platform `@cerefox/codefactory-native-<platform>` package supplies the pinned libsqlite3 + sqlite-vec libs (selected automatically by `os`/`cpu` fields).
+cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com/package/@cerefox/codefactory). cfcf's **runtime is Bun ≥ 1.3** (uses `bun:sqlite`, `Bun.spawn`, etc. directly); the **install tool is npm** (chosen over `bun install` because Bun blocks postinstall scripts by default and would break cfcf's native deps without trust prompts; see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)). Two tools, clean separation of concerns. The curl-bash installer below handles all of this automatically.
 
-**Prerequisites** — `git` + `bun` ≥ 1.3.
+**Prerequisites** — `git`. Everything else (Bun, npm, npm-prefix configuration if needed) is bootstrapped by the installer.
 
-## Quick install (recommended)
-
-```bash
-# 1. Bun (skip if you already have bun ≥ 1.3)
-curl -fsSL https://bun.sh/install | bash
-# Restart your shell or `source` the line bun added to your rc file.
-
-# 2. cfcf
-bun install -g @cerefox/codefactory             # latest
-# or pin to a specific version:
-bun install -g @cerefox/codefactory@0.16.2
-
-# 3. Verify install + first-run setup
-cfcf doctor
-cfcf init
-```
-
-That's the whole install. After step 2, you have:
-
-- The `cfcf` binary on `$PATH` (under `~/.bun/bin/`)
-- The matching `@cerefox/codefactory-native-<platform>` package installed (only the one for your OS/CPU; the others are skipped)
-- Shell tab-completion installed via the package's `postinstall` hook (re-run `cfcf completion install` if your shell doesn't pick it up automatically)
-- A bordered "Next steps" banner printed once (activate completion + run `cfcf doctor && cfcf init`)
-
-## curl-bash wrapper (alternate)
-
-If you'd rather use a single-line installer that bootstraps Bun, fetches cfcf, and hands off to `cfcf init` interactively, every release attaches `install.sh` as a Release asset:
+## Recommended: one-liner
 
 ```bash
 curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 ```
 
-The script:
+The script (with verbose output at every step):
 
-1. Detects whether Bun is on PATH; runs `curl -fsSL https://bun.sh/install | bash` if not.
-2. Picks an install source (defaults to **npm**; falls back to **tarball** when `CFCF_BASE_URL` is set or `CFCF_INSTALL_SOURCE=tarball` is passed — see [Tarball / offline / pinned-mirror install](#tarball--offline--pinned-mirror-install) below).
-3. Runs the appropriate `bun install -g`.
-4. Auto-installs **shell tab completion** for your `$SHELL` (writes the completion script + appends a sentinel-marked block to `~/.zshrc` or `~/.bashrc`). See the [Shell completion section in `manual.md`](manual.md#shell-completion) for what gets added.
-5. Hands off to `cfcf init` interactively. Set `CFCF_SKIP_INIT=1` to skip.
+1. **Bootstraps Bun** ≥ 1.3 if missing (via `curl -fsSL https://bun.sh/install | bash`)
+2. **Bootstraps npm** if missing (via `bun install -g npm`)
+3. **Configures npm prefix** to `~/.npm-global` if your current prefix is root-owned (the EACCES gotcha on stock-installer Node + many Linux distros — npm's [documented fix](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)). Skipped if your npm prefix is already user-writable (homebrew Node, nvm/fnm/asdf users, or anyone who's already done this setup).
+4. **Installs cfcf** via `npm install -g @cerefox/codefactory`
+5. **Runs `cfcf doctor`** to verify all health checks pass
+6. **Hands off to `cfcf init`** interactively (skip with `CFCF_SKIP_INIT=1`)
 
-A bordered "Next steps" banner prints at the end summarising the one-time actions (open a new terminal to activate completion; restart `cfcf server` if it was running; run `cfcf doctor && cfcf init` if this is your first install).
+No sudo. No silent trust grants. All shell-rc edits go in sentinel-marked blocks (`# >>> cfcf installer (...) >>>` ... `# <<< cfcf installer (...) <<<`) so you can remove them cleanly.
+
+## Direct install (if you already have Bun + npm)
+
+If your machine is already set up the way you like (Bun installed, npm with a user-writable prefix), skip the wrapper:
+
+```bash
+# Make sure bun is installed (cfcf's runtime requirement)
+bun --version
+
+# Install cfcf via npm (npm runs postinstalls; bun doesn't by default)
+npm install -g @cerefox/codefactory             # latest
+# or pin to a specific version:
+npm install -g @cerefox/codefactory@0.16.4
+
+# Verify + first-run setup
+cfcf doctor
+cfcf init
+```
+
+If `npm install -g` errors with `EACCES`, your npm prefix is root-owned. Fix once:
+
+```bash
+mkdir -p ~/.npm-global
+npm config set prefix ~/.npm-global
+echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+exec $SHELL
+npm install -g @cerefox/codefactory
+```
+
+## Bun-only alternative (advanced)
+
+If you'd rather not have npm on your machine and want to install via `bun install -g` directly, you can — but Bun blocks the postinstall scripts of `onnxruntime-node` and `protobufjs` by default, which would break Clio's embedder. To make it work:
+
+```bash
+bun install -g @cerefox/codefactory
+bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs
+cfcf doctor
+```
+
+This grants explicit, named trust to **just those three packages** (no `--all`). cfcf's published `package.json` declares `trustedDependencies: ["onnxruntime-node", "protobufjs"]` so the manual `bun pm trust` step will become unnecessary once [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959) lands upstream — at which point Bun will honor the declaration without prompting.
+
+We recommend the curl-bash installer or the `npm install -g` path over this; npm runs postinstalls by default and the experience is friction-free.
 
 ## Tarball / offline / pinned-mirror install
 
