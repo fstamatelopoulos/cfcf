@@ -272,15 +272,24 @@ jobs:
   # (`@cerefox/...`); npm remembers the setting after that. Set on every
   # call so a fresh package's first publish is always public-by-default.
   #
-  # Auth: NODE_AUTH_TOKEN is the standard env var actions/setup-node
-  # configures npm CLI to read. It must be a granular access token
-  # scoped to `@cerefox/codefactory` + `@cerefox/codefactory-native-*`
-  # (decided 2026-04-29; see docs/research/npm-publish-5.5b-audit.md
-  # R3). Stored as `secrets.NPM_TOKEN` on the repo. Until the user adds
-  # it (step 8 of the 8-step plan), this job will fail with a clear
-  # auth error -- which is the correct behaviour: irreversible publish
-  # should NOT silently succeed without credentials, but more
-  # importantly should NOT happen by accident before the user is ready.
+  # Auth: **npm Trusted Publishing via OIDC** (2026-05-01). No
+  # NPM_TOKEN secret -- npm trusts publishes from this repo's
+  # release.yml workflow because each of the 4 packages
+  # (@cerefox/codefactory + @cerefox/codefactory-native-*) has a
+  # Trusted Publisher entry registered on npmjs.com pointing at
+  # fstamatelopoulos/cfcf + release.yml. Each workflow run mints a
+  # short-lived OIDC token via `permissions: id-token: write`; npm
+  # validates it against the registered trust + publishes.
+  #
+  # The first v0.16.2 publish (2026-05-01) was done with a granular
+  # bypass-2FA token because npm's UI requires the package to exist
+  # before configuring trusted publishing (chicken-and-egg, npm/cli#8544).
+  # Token deleted post-publish; v0.16.3+ go through OIDC.
+  #
+  # `--provenance` adds a sigstore-signed attestation linking each
+  # published tarball to this exact GitHub Actions run. Free security
+  # win once OIDC is in place; visible as a "Provenance" badge on
+  # npmjs.com.
   #
   # Recommended: bind this job to a GitHub Environment (`npm-publish`)
   # with a required-reviewers approval rule. Configured outside the
@@ -289,16 +298,40 @@ jobs:
     needs: [build-native, build-cli, npm-dryrun]
     if: ${{ inputs.publish_to_npm }}
     runs-on: ubuntu-latest
+    # OIDC token mint requires id-token: write at the job level.
+    # contents: read so actions/checkout can fetch the tag's source.
+    permissions:
+      contents: read
+      id-token: write
     # environment: npm-publish    # uncomment after creating the env
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag }}
 
+      # Trusted Publishing requires npm CLI >= 11.5.1 and Node >= 22.14.0.
+      # Node 22 ships with npm 10.x, so we explicitly upgrade npm after
+      # setup-node. Must use `npm@latest` (or pin >= 11.5.1) -- earlier
+      # versions silently fall back to token auth and the publish fails
+      # with a non-obvious "401 unauthenticated" instead of "you need a
+      # newer npm". Pre-flight check ensures we caught the upgrade before
+      # the publish step runs.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm to >= 11.5 (Trusted Publishing requirement)
+        run: |
+          npm install -g npm@latest
+          npm --version
+          # Sanity check: must be >= 11.5
+          installed_major="$(npm --version | cut -d. -f1)"
+          installed_minor="$(npm --version | cut -d. -f2)"
+          if (( installed_major < 11 )) || (( installed_major == 11 && installed_minor < 5 )); then
+            echo "::error::npm $(npm --version) is too old for Trusted Publishing (need >= 11.5)"
+            exit 1
+          fi
 
       - uses: actions/download-artifact@v5
         with:
@@ -307,9 +340,11 @@ jobs:
 
       - name: npm publish (native packages, first)
         # `./` prefix required on the tarball path -- see npm-dryrun job
-        # for the full rationale. Same bug would have bitten step 8.
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # for the full rationale (npm-package-arg parses `dist/foo.tgz`
+        # as a github shorthand otherwise).
+        # `--provenance` mints + uploads a sigstore attestation linking
+        # this tarball to this GitHub Actions run. No NODE_AUTH_TOKEN:
+        # OIDC handles auth via the trusted publisher relationship.
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -320,13 +355,11 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::publish $tgz"
-            npm publish --access public "./$tgz"
+            npm publish --access public --provenance "./$tgz"
             echo "::endgroup::"
           done
 
       - name: npm publish (CLI, last)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -337,10 +370,10 @@ jobs:
           fi
           for tgz in "${tarballs[@]}"; do
             echo "::group::publish $tgz"
-            npm publish --access public "./$tgz"
+            npm publish --access public --provenance "./$tgz"
             echo "::endgroup::"
           done
 
       - name: Print install hint
         run: |
-          echo "::notice::Published to npmjs.com. Install with: bun install -g @cerefox/codefactory"
+          echo "::notice::Published to npmjs.com via OIDC trusted publishing. Install with: bun install -g @cerefox/codefactory"
