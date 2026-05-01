@@ -5,41 +5,37 @@
 # Canonical one-liner:
 #   curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
 #
-# Single-tool design (2026-05-01): Bun is both cfcf's RUNTIME (uses
-# bun:sqlite, Bun.spawn, Bun.serve, Bun.file directly) and its install
-# tool. No Node.js / npm requirement.
+# Designed to "just work" on a stock fresh Mac/Linux. Bootstraps the
+# whole toolchain (Bun + npm + npm-prefix-fix-if-needed), installs
+# cfcf via npm, prints a clear "next steps" banner. No sudo. No
+# package-trust prompts. Verbose enough that the user can audit
+# every step.
 #
-# To work around oven-sh/bun#4959 ("Fix postinstall and finish
-# trustedDependencies") -- Bun blocks postinstall scripts of transitive
-# deps even when the manifest declares trustedDependencies -- this
-# script explicitly grants trust to the 3 specific packages whose
-# postinstalls cfcf needs:
-#
-#   • @cerefox/codefactory -- runs `cfcf completion install` to wire
-#     up shell tab completion + print the post-install banner
-#   • onnxruntime-node     -- downloads platform-specific .node runtime
-#                            binaries (required for Clio's embedder)
-#   • protobufjs           -- generates serializer stubs onnxruntime
-#                            depends on
-#
-# Named packages only; never `--all`. The trust grant is scripted, not
-# user-typed, so the user never sees a prompt -- but the install.sh
-# output is verbose enough that the trust step is auditable. cfcf's
-# published package.json declares `trustedDependencies: [
-# "onnxruntime-node", "protobufjs"]`, so once oven-sh/bun#4959 lands
-# upstream, the explicit `bun pm trust` step here becomes a no-op
-# (Bun will honor the manifest declaration directly).
+# Why bun + npm + cfcf?
+#   Bun is cfcf's RUNTIME (bun:sqlite, Bun.spawn, Bun.serve,
+#   Bun.file used directly throughout the codebase -- required at
+#   runtime). npm is cfcf's INSTALL TOOL: chosen over `bun install`
+#   because Bun blocks postinstall scripts by default
+#   (oven-sh/bun#4959), which would break onnxruntime-node +
+#   protobufjs at install time without a manual `bun pm trust`
+#   workaround. npm runs postinstalls by default; the install Just
+#   Works.
 #
 # Two install paths share this script:
 #
 #   • registry mode (default):
-#       bun install -g @cerefox/codefactory[@version]
+#       npm install -g @cerefox/codefactory[@version]
 #
 #   • tarball mode (offline / airgapped / pinned-mirror):
-#       bun install -g <native-tarball-URL>
-#       bun install -g <cli-tarball-URL>
-#     Auto-engages when CFCF_BASE_URL is set; force with
+#       npm install -g <native-tarball-URL>
+#       npm install -g <cli-tarball-URL>
+#     Auto-engages when CFCF_BASE_URL is set, or force with
 #     CFCF_INSTALL_SOURCE=tarball.
+#
+# Once installed, users with their own setup (homebrew Node,
+# nvm/fnm/asdf with a user-writable npm prefix) can also run
+# `npm install -g @cerefox/codefactory` directly without this wrapper.
+# The wrapper exists for the Bun + npm + prefix-fix bootstrap path.
 #
 # Env vars (all optional):
 #   CFCF_INSTALL_SOURCE  "registry" or "tarball" (auto: tarball if
@@ -50,8 +46,10 @@
 #   CFCF_RELEASES_REPO   override github.com/<owner>/<repo> for the
 #                        default tarball URL builder
 #                        (default: fstamatelopoulos/cfcf)
-#   CFCF_SKIP_INIT       skip the press-Enter handoff to cfcf init
-#                        (useful for non-interactive runs / CI)
+#
+# All shell-rc edits go inside sentinel-marked blocks
+# (`# >>> cfcf installer (npm-global path) >>>` ... `<<<`) so they can
+# be cleanly removed by the user later.
 
 set -euo pipefail
 
@@ -87,7 +85,30 @@ echo "  version        : $CFCF_VERSION"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-# ── 1/4. Ensure Bun is on PATH ────────────────────────────────────────
+# ── Helper: append a sentinel-marked block to a shell rc file ─────────
+# Idempotent (skips if the sentinel is already present). Bash 3.x-
+# compatible (macOS Catalina+ still ships bash 3.2). The user can
+# remove the block cleanly by deleting the lines between `>>>` and `<<<`.
+add_to_rc_idempotent() {
+  local rc="$1"
+  local label="$2"
+  local content="$3"
+  [[ -f "$rc" ]] || return 0
+  if grep -qF "# >>> cfcf installer ($label) >>>" "$rc"; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "# >>> cfcf installer ($label) >>>"
+    echo "# Added by cfcf installer (https://github.com/fstamatelopoulos/cfcf)."
+    echo "# Removable: delete the block between '>>>' and '<<<'."
+    echo "$content"
+    echo "# <<< cfcf installer ($label) <<<"
+  } >> "$rc"
+  echo "[cfcf]   added '$label' block to $rc"
+}
+
+# ── 1/4. Ensure Bun is on PATH (cfcf RUNTIME requirement) ─────────────
 echo "[cfcf] step 1/4: ensure Bun ≥ 1.3 is installed"
 if command -v bun >/dev/null 2>&1; then
   echo "[cfcf]   Bun found: v$(bun --version)"
@@ -105,12 +126,78 @@ else
   echo "[cfcf]   Bun installed: v$(bun --version)"
 fi
 
-# ── 2/4. Install cfcf via bun ─────────────────────────────────────────
-# Note: `bun install -g` blocks postinstall scripts of cfcf's
-# dependencies by default. This is fine here because step 3 explicitly
-# grants trust + runs them.
+# ── 2/4. Ensure npm is on PATH (cfcf INSTALL TOOL) ────────────────────
+# We use npm to install cfcf (not bun) because Bun blocks postinstall
+# scripts by default (oven-sh/bun#4959). cfcf depends on
+# onnxruntime-node + protobufjs whose postinstalls download platform-
+# specific .node binaries and run codegen; if those don't run, Clio's
+# embedder breaks at runtime. npm runs postinstalls by default, so this
+# is the smooth path. Bun stays the runtime; npm is just the install tool.
 echo ""
-echo "[cfcf] step 2/4: install cfcf"
+echo "[cfcf] step 2/4: ensure npm is installed"
+if command -v npm >/dev/null 2>&1; then
+  echo "[cfcf]   npm found: v$(npm --version)"
+else
+  echo "[cfcf]   npm not found; bootstrapping via 'bun install -g npm'..."
+  bun install -g npm
+  # bun-installed npm lives at ~/.bun/bin/npm — already on PATH from step 1.
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[cfcf] npm install via bun failed -- you may need to install Node.js manually." >&2
+    echo "[cfcf] Try one of:" >&2
+    echo "[cfcf]   • brew install node    (macOS, homebrew users)" >&2
+    echo "[cfcf]   • nvm install --lts    (with nvm)" >&2
+    echo "[cfcf]   • download from https://nodejs.org/" >&2
+    exit 1
+  fi
+  echo "[cfcf]   npm installed: v$(npm --version)"
+fi
+
+# ── 3/4. Ensure npm has a user-writable global prefix ─────────────────
+# Stock Node installations (the official .pkg installer on macOS;
+# system packages on Linux) point npm's global prefix at /usr/local/
+# or /usr/lib/, which is root-owned. `npm install -g` then fails with
+# EACCES unless run as root. The npm-documented fix is to redirect the
+# prefix to a user-writable directory; ~/.npm-global is the convention.
+# This is what nvm/fnm/asdf/volta all do automatically.
+# Reference:
+#   https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally
+#
+# This fires:
+#   • macOS w/ official-installer Node (most common: stock fresh Mac)
+#   • Linux w/ apt/dnf/yum-installed Node
+#
+# This SKIPS:
+#   • macOS w/ homebrew Node (homebrew makes /usr/local/ user-writable
+#     on Intel; uses /opt/homebrew/ on Apple Silicon, also user-writable)
+#   • macOS where the user manually chowned /usr/local/bin (Intel-Mac
+#     "I did this once and forgot" case)
+#   • nvm / fnm / asdf / volta installs (each tool uses its own
+#     user-writable prefix)
+#   • Linux w/ user-installed Node
+#
+# We don't touch the user's existing setup if it's already working.
+echo ""
+echo "[cfcf] step 3/4: install cfcf"
+npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+prefix_writable=0
+if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
+  if [[ -w "$npm_prefix/bin" ]] || [[ ! -e "$npm_prefix/bin" ]]; then
+    prefix_writable=1
+  fi
+fi
+
+if (( ! prefix_writable )); then
+  echo "[cfcf]   npm prefix '$npm_prefix' is not user-writable."
+  echo "[cfcf]   Configuring '~/.npm-global' as a user-writable prefix"
+  echo "[cfcf]   (npm's documented fix for EACCES errors:"
+  echo "[cfcf]    https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)"
+  mkdir -p "$HOME/.npm-global"
+  npm config set prefix "$HOME/.npm-global"
+  export PATH="$HOME/.npm-global/bin:$PATH"
+  add_to_rc_idempotent "$HOME/.zshrc"  "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
+  add_to_rc_idempotent "$HOME/.bashrc" "npm-global path" 'export PATH="$HOME/.npm-global/bin:$PATH"'
+  echo "[cfcf]   prefix set: $(npm config get prefix)"
+fi
 
 if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
   if [[ "$CFCF_VERSION" == "latest" ]]; then
@@ -119,8 +206,8 @@ if [[ "$CFCF_INSTALL_SOURCE" == "registry" ]]; then
     v_no_prefix="${CFCF_VERSION#v}"
     pkg_spec="@cerefox/codefactory@${v_no_prefix}"
   fi
-  echo "[cfcf]   bun install -g $pkg_spec"
-  bun install -g "$pkg_spec"
+  echo "[cfcf]   npm install -g $pkg_spec"
+  npm install -g "$pkg_spec"
   installed_version="$CFCF_VERSION"
 else
   # ── tarball mode ──
@@ -169,55 +256,23 @@ else
   native_url="$CFCF_BASE_URL/cerefox-codefactory-native-${platform}-${v_no_prefix}.tgz"
 
   # Native first, CLI second.
-  echo "[cfcf]   bun install -g $native_url"
-  bun install -g "$native_url"
-  echo "[cfcf]   bun install -g $cli_url"
-  bun install -g "$cli_url"
+  echo "[cfcf]   npm install -g $native_url"
+  npm install -g "$native_url"
+  echo "[cfcf]   npm install -g $cli_url"
+  npm install -g "$cli_url"
   installed_version="$version"
 fi
 
-# ── 3/4. Grant trust + run blocked postinstalls ───────────────────────
-# Workaround for oven-sh/bun#4959: Bun blocks postinstall scripts of
-# transitive dependencies even when the manifest declares
-# trustedDependencies. cfcf's published package.json declares
-# `trustedDependencies: ["onnxruntime-node", "protobufjs"]`, but Bun
-# doesn't currently honor that for global installs of transitive deps.
-#
-# Without this step, three blocked postinstalls would leave cfcf in a
-# broken state:
-#   • @cerefox/codefactory's own `cfcf completion install` doesn't run
-#     → tab-complete + post-install banner missing
-#   • onnxruntime-node's `node ./script/install` doesn't run
-#     → platform-specific .node binaries missing → embedder fails at runtime
-#   • protobufjs's `node scripts/postinstall` doesn't run
-#     → onnxruntime-dependent codegen missing
-#
-# We grant trust to NAMED, SPECIFIC packages -- never `--all`. The trust
-# is auditable here (visible in the verbose output) + scoped to the
-# minimum needed. Once #4959 lands upstream, this step becomes a no-op
-# (Bun will honor the manifest declaration directly).
+# ── 4/4. Verify install + print next-steps banner ─────────────────────
 echo ""
-echo "[cfcf] step 3/4: run blocked postinstall scripts"
-echo "[cfcf]   bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs"
-echo "[cfcf]   (these 3 packages have postinstalls that download platform-"
-echo "[cfcf]    specific runtime binaries + generate codegen; auditable on:"
-echo "[cfcf]    https://github.com/oven-sh/bun/issues/4959)"
-bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs || {
-  echo "[cfcf] Warning: bun pm trust step had non-zero exit." >&2
-  echo "[cfcf] cfcf may still work; run 'cfcf doctor' below to verify." >&2
-}
-
-# ── 4/4. Verify install + handoff ─────────────────────────────────────
-echo ""
-echo "[cfcf] step 4/4: verify + first-run setup"
+echo "[cfcf] step 4/4: verify install"
 
 if ! command -v cfcf >/dev/null 2>&1; then
   echo ""
-  echo "[cfcf] cfcf was installed but is not on your PATH."
-  echo "[cfcf] This usually means ~/.bun/bin isn't on your PATH yet."
-  echo "[cfcf] Open a new terminal (Bun's installer added the line to your"
+  echo "[cfcf] cfcf was installed but is not on your PATH yet."
+  echo "[cfcf] Open a new terminal (the npm-global path was added to your"
   echo "[cfcf] shell rc), or for THIS shell:"
-  echo "[cfcf]   export PATH=\"\$HOME/.bun/bin:\$PATH\""
+  echo "[cfcf]   export PATH=\"$(npm config get prefix)/bin:\$PATH\""
   echo "[cfcf] Then run: cfcf doctor"
   exit 0
 fi
@@ -229,20 +284,24 @@ else
   echo "[cfcf]   cfcf $installed_version installed"
 fi
 
-# Run doctor for a quick health check (informative; non-blocking).
-echo ""
-echo "[cfcf] running cfcf doctor for a quick health check..."
-echo ""
-cfcf doctor || echo "[cfcf] (cfcf doctor reported issues -- review above)"
-echo ""
+# Detect whether a cfcf server was running before this install. If
+# there's a PID file under ~/.cfcf/, the running server still has the
+# OLD bundled JS in memory; the user needs to restart it. Used to
+# customise the next-steps banner.
+server_was_running=0
+if [[ -f "$HOME/.cfcf/server.pid" ]]; then
+  pid="$(cat "$HOME/.cfcf/server.pid" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    server_was_running=1
+  fi
+fi
 
-# Print clear next steps. Earlier versions tried to auto-handoff to
-# `cfcf init` via `exec cfcf init </dev/tty`, but interactive
-# terminal raw-mode handling gets weird when an exec'd child is
-# launched from a `curl | bash` parent (input frozen, Ctrl-C dead).
-# Bun's installer doesn't try to auto-launch a follow-up tool for
-# exactly this reason. We print + exit, user runs `cfcf init` in
-# their normal shell where TTY handling Just Works.
+# Print the canonical next-steps banner. Earlier drafts tried to
+# auto-launch `cfcf init` via `exec cfcf init </dev/tty`, but
+# interactive terminal handling is unreliable when the parent is a
+# `curl | bash` pipe (input frozen, Ctrl-C dead). Bun's installer
+# doesn't try to auto-launch a follow-up tool for the same reason --
+# we print + exit, user runs the commands in their normal shell.
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Installation complete!"
@@ -250,11 +309,27 @@ echo "════════════════════════�
 echo ""
 echo "  Next steps:"
 echo ""
-echo "    cfcf init       interactive first-run setup"
-echo "                    (picks dev/judge/architect agents + embedder)"
+echo "    cfcf init                  # interactive first-run setup"
+echo "                               # picks dev/judge/architect agents"
+echo "                               # + chooses an embedder (or skip)"
 echo ""
-echo "    cfcf doctor     re-verify install (rerun if anything looked off)"
+echo "    cfcf doctor                # re-verify install (rerun anytime)"
 echo ""
-echo "    cfcf --help     full command reference"
+echo "    cfcf --help                # full command reference"
+echo "    cfcf help <topic>          # focused guides (manual, workflow,"
+echo "                               # cli, clio, spec, installing, ...)"
+echo ""
+if (( server_was_running )); then
+  echo "  Server restart needed:"
+  echo ""
+  echo "    cfcf server stop && cfcf server start"
+  echo "                               # ↑ a cfcf server was running BEFORE"
+  echo "                               # this install; it still has the OLD"
+  echo "                               # bundled JS in memory. Restart it"
+  echo "                               # to pick up v$actual_version."
+  echo ""
+fi
+echo "  Documentation:"
+echo "    https://github.com/fstamatelopoulos/cfcf#readme"
 echo ""
 echo "═══════════════════════════════════════════════════════════════"

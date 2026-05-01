@@ -2,8 +2,8 @@
 #
 # Uninstall cfcf.
 #
-# Removes the cfcf CLI + the per-platform native package from Bun's
-# global node_modules (or npm's, if cfcf was installed via `npm install
+# Removes the cfcf CLI + the per-platform native package from npm's
+# global node_modules (or bun's, if cfcf was installed via `bun install
 # -g`). User data (`~/.cfcf/clio.db`, `~/.cfcf/logs/`, platform config
 # dir, workspace `cfcf-docs/`) is intentionally NOT touched -- removing
 # those is a separate manual decision.
@@ -18,8 +18,8 @@
 set -euo pipefail
 
 # Detect platform tag for the native package (so we can remove it too;
-# `bun remove -g <main>` doesn't cascade to optionalDependencies that
-# were installed alongside as separate top-level entries).
+# `npm/bun remove -g <main>` doesn't cascade to optionalDependencies
+# that were installed alongside as separate top-level entries).
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
 case "$os-$arch" in
@@ -29,18 +29,19 @@ case "$os-$arch" in
   *) platform="" ;;   # unsupported -- shouldn't happen post-install but handle gracefully
 esac
 
-# Detect which package manager has cfcf installed. Try bun first
-# (canonical install path), then npm (alternative path).
+# Detect which package manager has cfcf installed. Try npm first
+# (canonical install path post-v0.16.4), then bun (alternative path
+# for users who manually `bun install -g`'d cfcf).
 detect_install_method() {
-  if command -v bun >/dev/null 2>&1; then
-    if [[ -d "$HOME/.bun/install/global/node_modules/@cerefox/codefactory" ]]; then
-      echo "bun"
-      return 0
-    fi
-  fi
   if command -v npm >/dev/null 2>&1; then
     if npm ls -g --depth=0 --json 2>/dev/null | grep -q '"@cerefox/codefactory"'; then
       echo "npm"
+      return 0
+    fi
+  fi
+  if command -v bun >/dev/null 2>&1; then
+    if [[ -d "$HOME/.bun/install/global/node_modules/@cerefox/codefactory" ]]; then
+      echo "bun"
       return 0
     fi
   fi
@@ -49,10 +50,10 @@ detect_install_method() {
 
 method="$(detect_install_method)"
 if [[ -z "$method" ]]; then
-  echo "[cfcf-uninstall] cfcf doesn't appear to be installed via bun or npm."
+  echo "[cfcf-uninstall] cfcf doesn't appear to be installed via npm or bun."
   echo "[cfcf-uninstall] If you installed via another mechanism, remove it manually:"
-  echo "  bun pm -g ls          # list bun's global packages"
   echo "  npm root -g           # find npm's global node_modules"
+  echo "  bun pm -g ls          # list bun's global packages"
   exit 1
 fi
 
@@ -65,10 +66,10 @@ if [[ -n "$platform" ]]; then
 fi
 
 # Build the command preview for the confirmation message.
-if [[ "$method" == "bun" ]]; then
-  cmd_preview="bun remove -g ${packages[*]}"
-else
+if [[ "$method" == "npm" ]]; then
   cmd_preview="npm remove -g ${packages[*]}"
+else
+  cmd_preview="bun remove -g ${packages[*]}"
 fi
 
 cat <<EOF
@@ -88,7 +89,7 @@ What this does NOT remove (preserved on purpose):
   - the cfcf config file (run \`cfcf config show --path\` BEFORE uninstall to find it)
   - cfcf-docs/ directories inside any workspace -- those are committed git artifacts
   - any sentinel-marked blocks the cfcf installer added to your shell rc
-    (~/.bun/bin or ~/.npm-global/bin lines); these are inert if cfcf is gone
+    (~/.npm-global/bin or ~/.bun/bin lines); these are inert if cfcf is gone
 
 EOF
 
@@ -104,10 +105,10 @@ fi
 # manually removed), we keep going so the others still get removed.
 for pkg in "${packages[@]}"; do
   echo "[cfcf-uninstall] removing $pkg..."
-  if [[ "$method" == "bun" ]]; then
-    bun remove -g "$pkg" || echo "[cfcf-uninstall]   ($pkg wasn't installed; continuing)"
-  else
+  if [[ "$method" == "npm" ]]; then
     npm remove -g "$pkg" || echo "[cfcf-uninstall]   ($pkg wasn't installed; continuing)"
+  else
+    bun remove -g "$pkg" || echo "[cfcf-uninstall]   ($pkg wasn't installed; continuing)"
   fi
 done
 

@@ -193,9 +193,9 @@ jobs:
           # Installing cfcf $version
 
           The recommended install is **the curl-bash one-liner** — it bootstraps
-          Bun if missing, then runs \`bun install -g @cerefox/codefactory\`,
-          grants trust to the 3 specific packages whose postinstalls cfcf
-          needs, and hands off to \`cfcf init\`:
+          Bun + npm if needed, configures npm's prefix to a user-writable
+          directory if needed, then runs \`npm install -g @cerefox/codefactory\`
+          and prints a "next steps" banner:
 
           \`\`\`bash
           curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
@@ -222,8 +222,12 @@ jobs:
 
           ## Manual install from these tarballs
 
-          You need **Bun ≥ 1.3** (cfcf's runtime + install tool):
-          \`curl -fsSL https://bun.sh/install | bash\`.
+          You need **Bun ≥ 1.3** (cfcf's runtime) and **npm** (install tool;
+          chosen over \`bun install\` because Bun blocks postinstall scripts
+          by default — see [oven-sh/bun#4959](https://github.com/oven-sh/bun/issues/4959)).
+          Bun: \`curl -fsSL https://bun.sh/install | bash\`. npm: usually
+          comes with Node.js (\`brew install node\`, \`nvm install --lts\`,
+          or your distro's package manager).
 
           Then:
 
@@ -232,15 +236,10 @@ jobs:
           PLATFORM=$host_platform
 
           # Native package first (satisfies CLI's optionalDependencies entry)
-          bun install -g ./cerefox-codefactory-native-\${PLATFORM}-${v_no_prefix}.tgz
+          npm install -g ./cerefox-codefactory-native-\${PLATFORM}-${v_no_prefix}.tgz
 
           # CLI second
-          bun install -g ./cfcf-${v_no_prefix}.tgz
-
-          # Run the postinstalls Bun blocks by default (oven-sh/bun#4959):
-          # downloads onnxruntime native binaries, sets up shell completion.
-          # Named packages, not --all.
-          bun pm -g trust @cerefox/codefactory onnxruntime-node protobufjs
+          npm install -g ./cfcf-${v_no_prefix}.tgz
 
           # Verify
           cfcf doctor
