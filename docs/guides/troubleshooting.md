@@ -337,7 +337,7 @@ bun remove -g @cerefox/codefactory-native-darwin-arm64    # or your platform
 rm -rf ~/.bun/install/global/{package.json,bun.lock,node_modules}
 
 # 5. Reinstall
-curl -fsSL https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download/install.sh | bash
+bun install -g @cerefox/codefactory
 ```
 
 Your data stays:

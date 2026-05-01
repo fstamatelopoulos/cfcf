@@ -23,6 +23,8 @@ After v0.16.2 shipped (the first version on npmjs.com, published with a granular
 - **Publishing access tightened on all 4 packages** to "Require two-factor authentication and disallow tokens (recommended)". Combined with OIDC trusted publishing, this is the most restrictive supply-chain posture npm offers.
 - **README.md "Install" section rewritten** to lead with the now-real `bun install -g @cerefox/codefactory` one-liner. Old "once cfcf is on npmjs.com" hedging removed. Status section trimmed from a 1500-word iteration history to a brief current-focus note + links to `docs/plan.md`, `CHANGELOG.md`, `docs/decisions-log.md` for the long-form history.
 - **`docs/guides/installing.md` rewritten** with the same lead-with-npm flow: 3-step quick install (Bun → cfcf → verify), curl-bash wrapper as alternate, tarball/offline as a separate section. Version examples bumped to v0.16.2.
+- **`docs/guides/manual.md` "In one minute" install snippet** replaced the stale `cfcf-releases` curl-bash one-liner with `bun install -g @cerefox/codefactory`. (manual.md is what `cfcf help` serves offline + what the README links to as "User Manual".)
+- **`docs/guides/troubleshooting.md` "Worst case: clean reinstall"** snippet flipped its reinstall step from `curl … cfcf-releases … install.sh` to `bun install -g @cerefox/codefactory`.
 
 Both v0.16.2 and v0.16.3 close out plan item 5.5b ("Publish to npmjs.com").
 

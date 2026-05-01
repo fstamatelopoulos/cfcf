@@ -11,9 +11,9 @@ This page is the entry point. It explains the concepts in 3 minutes, points you 
 ## In one minute
 
 ```bash
-# 1. Install (macOS / Linux)
-curl -fsSL https://github.com/fstamatelopoulos/cfcf-releases/releases/latest/download/install.sh | bash
-# Once cfcf goes public on npm:  bun install -g @cerefox/codefactory
+# 1. Install (macOS / Linux). Requires Bun ≥ 1.3 -- install via
+#    https://bun.sh/install if you don't have it.
+bun install -g @cerefox/codefactory
 
 # 2. Configure (interactive — picks dev/judge/architect agents + embedder)
 cfcf init
