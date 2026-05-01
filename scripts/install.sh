@@ -236,21 +236,25 @@ echo ""
 cfcf doctor || echo "[cfcf] (cfcf doctor reported issues -- review above)"
 echo ""
 
-# Hand off to cfcf init (interactive). Skip in CI / non-interactive runs.
-#
-# IMPORTANT: explicitly redirect stdin from /dev/tty when exec'ing cfcf
-# init. When install.sh runs via `curl ... | bash`, our stdin is the
-# (already-consumed) curl pipe, not the terminal. Without `</dev/tty`,
-# cfcf init's prompt would read EOF and exit immediately. Bun's
-# installer handles this the same way; classic curl-bash gotcha.
-if [[ -z "${CFCF_SKIP_INIT:-}" ]] && [[ -t 0 || -e /dev/tty ]]; then
-  echo "[cfcf] Press Enter to run 'cfcf init' now, or Ctrl-C to exit and run it later."
-  read -r _ </dev/tty 2>/dev/null || true
-  echo "[cfcf] Launching cfcf init..."
-  exec cfcf init </dev/tty
-else
-  echo "[cfcf] Next steps:"
-  echo "[cfcf]   cfcf init     (interactive first-run setup)"
-  echo "[cfcf]   cfcf doctor   (rerun if anything was off above)"
-  echo "[cfcf]   cfcf --help   (full command reference)"
-fi
+# Print clear next steps. Earlier versions tried to auto-handoff to
+# `cfcf init` via `exec cfcf init </dev/tty`, but interactive
+# terminal raw-mode handling gets weird when an exec'd child is
+# launched from a `curl | bash` parent (input frozen, Ctrl-C dead).
+# Bun's installer doesn't try to auto-launch a follow-up tool for
+# exactly this reason. We print + exit, user runs `cfcf init` in
+# their normal shell where TTY handling Just Works.
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Installation complete!"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+echo "  Next steps:"
+echo ""
+echo "    cfcf init       interactive first-run setup"
+echo "                    (picks dev/judge/architect agents + embedder)"
+echo ""
+echo "    cfcf doctor     re-verify install (rerun if anything looked off)"
+echo ""
+echo "    cfcf --help     full command reference"
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
