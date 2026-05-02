@@ -346,6 +346,22 @@ export interface LoopDecision {
  * the judge's determination: reflection has the cross-iteration view,
  * so when it flags the loop as fundamentally stuck we pause for the
  * user even if the judge said PROGRESS.
+ *
+ * **Disambiguation on judge SUCCESS** (2026-05-01 fix): when reflection
+ * runs on a SUCCESS iteration (e.g. via the `reflectSafeguardAfter`
+ * ceiling) and sets `recommend_stop=true`, the boolean is ambiguous
+ * between "I agree with SUCCESS, mission accomplished" and "judge said
+ * SUCCESS but I disagree, more work is needed." We disambiguate via
+ * `iteration_health`:
+ *   - `converging` / `stable` → reflection AGREES with SUCCESS; let
+ *     the judge's determination handle the stop (no popup).
+ *   - `stalled` / `diverging` / `inconclusive` → reflection DISAGREES
+ *     with SUCCESS; surface as user-arbitration popup so the user can
+ *     choose to dismiss (accept SUCCESS) or feed back to trigger more
+ *     iterations.
+ * On non-SUCCESS judge determinations, `recommend_stop=true` retains
+ * its original meaning (loop is stuck → pause + popup) regardless of
+ * `iteration_health`.
  */
 export function makeDecision(
   judgeSignals: JudgeSignals | null,
@@ -371,13 +387,25 @@ export function makeDecision(
 
   // Reflection's recommend_stop wins over the judge's determination
   // (research doc Q5, Q6). Never auto-stops -- always pauses + notifies.
+  // Exception: when judge=SUCCESS and reflection's iteration_health
+  // signals agreement (converging/stable), let SUCCESS handle the stop
+  // -- the recommend_stop=true is reflection agreeing with the judge,
+  // not flagging a problem. See doc-comment above.
   if (reflectionSignals?.recommend_stop === true) {
-    return {
-      action: "pause",
-      reason: `Reflection flagged loop as stuck: ${reflectionSignals.key_observation || "no summary"}`,
-      pauseReason: "anomaly",
-      questions: reflectionSignals.key_observation ? [reflectionSignals.key_observation] : [],
-    };
+    const reflectionAgreesWithSuccess =
+      judgeSignals?.determination === "SUCCESS" &&
+      (reflectionSignals.iteration_health === "converging" ||
+        reflectionSignals.iteration_health === "stable");
+    if (!reflectionAgreesWithSuccess) {
+      return {
+        action: "pause",
+        reason: `Reflection flagged loop as stuck: ${reflectionSignals.key_observation || "no summary"}`,
+        pauseReason: "anomaly",
+        questions: reflectionSignals.key_observation ? [reflectionSignals.key_observation] : [],
+      };
+    }
+    // else: fall through to judge-determination handling below; the
+    // SUCCESS case will return action: "stop" naturally.
   }
 
   // If judge signals missing, treat as anomaly
