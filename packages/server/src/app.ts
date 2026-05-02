@@ -1116,17 +1116,42 @@ export function createApp() {
     // Try the literal path first.
     const asset = await loadAsset(path);
     if (asset) {
+      // Content-hashed assets (Vite outputs `/assets/index-<hash>.js`) are
+      // safely cacheable forever — content changes always produce a new
+      // hash. index.html is the exception: it's the unhashed entry point
+      // that tells the browser which hashed assets to load. Cache that
+      // and the browser will keep loading stale asset hashes after a
+      // server upgrade. (Item 6.25 follow-up, 2026-05-02 — see the same
+      // cache-busting meta in packages/web/index.html for full rationale.)
+      const isIndex = path === "/" || path === "/index.html";
+      const headers: Record<string, string> = { "Content-Type": asset.contentType };
+      if (isIndex) {
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        headers["Pragma"] = "no-cache";
+        headers["Expires"] = "0";
+      } else if (path.startsWith("/assets/")) {
+        // Vite's hashed assets — safe to cache aggressively.
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
       return new Response(asset.body as unknown as BodyInit, {
         status: 200,
-        headers: { "Content-Type": asset.contentType },
+        headers,
       });
     }
-    // SPA fallback: if no asset matches, serve index.html so client-side routing works.
+    // SPA fallback: if no asset matches, serve index.html so client-side
+    // routing works. Same no-cache treatment as the explicit index.html
+    // path above — every workspace URL like `/#/workspaces/<id>` falls
+    // through here, so this is the actual hot path for SPA loads.
     const index = await loadIndex();
     if (index) {
       return new Response(index.body as unknown as BodyInit, {
         status: 200,
-        headers: { "Content-Type": index.contentType },
+        headers: {
+          "Content-Type": index.contentType,
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        },
       });
     }
     return c.text(
