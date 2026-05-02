@@ -1,10 +1,11 @@
 # Clio — cf² Memory Layer Design
 
 **Codename:** Clio (muse of history in Greek mythology — remembers what happened, so later agents can learn from it).
-**Plan item:** [5.7 — Cross-project knowledge](../plan.md). Lifts the item from "research" into an implementable design.
+**Plan item:** [5.7 — Cross-project knowledge](../plan.md). Plus follow-up items 5.10 (workspace rename), 5.11 (Cerefox-parity ops + versioning), 5.12 (metadata search + embedder switching), 5.13 (audit log + edit-metadata).
 **Research precursor:** [`docs/research/cross-project-knowledge-layer.md`](../research/cross-project-knowledge-layer.md).
-**Status:** Design draft, 2026-04-21. Meant to iterate before any implementation lands.
 **Cerefox relationship:** [`github.com/fstamatelopoulos/cerefox`](https://github.com/fstamatelopoulos/cerefox) — Clio is a standalone **fork-by-copy** that reuses schema + algorithms but keeps zero runtime dependency on Cerefox. Local Clio stays API/semantic-compatible with Cerefox so a remote Cerefox backend can be plugged in later via a thin adapter, no role-agent code changes.
+
+> **Status (2026-05-02):** This is a **design-of-record + history** doc, not a forward-looking design. Sections 1–7 describe what's **shipped** (items 5.7, 5.10, 5.11, 5.12, 5.13 — landed across v0.9.0–v0.16.x; consolidated migration in v0.16.5). Section 6.4 (per-Project embedder reindex flow) and Section 11.5 (boost profile beyond the v1 minimum) describe items still in the [Backlog](../plan.md) (notably **F.18** — sqlite-vec HNSW — and **6.24** — Cerefox-parity FTS title boosting). Section 11's "v3+ remote Cerefox backend" and Section 10's multi-tenant note remain speculative / future. Cross-references in §X point at [`docs/decisions-log.md`](../decisions-log.md) for lessons learned during shipping. Original 2026-04-21 design draft preserved in §13 changelog.
 
 ---
 
@@ -170,8 +171,9 @@ CREATE TABLE clio_documents (
   updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
--- Chunks: search corpus. One row per chunk, for current and (v2+) archived versions.
--- Current chunks have version_id IS NULL; archived chunks point to clio_document_versions.
+-- Chunks: search corpus. One row per chunk, for current and archived versions.
+-- Current chunks have version_id IS NULL; archived chunks point to clio_document_versions
+-- (live since 5.11 / v0.13.x).
 CREATE TABLE clio_chunks (
   id              TEXT PRIMARY KEY,
   document_id     TEXT NOT NULL REFERENCES clio_documents(id) ON DELETE CASCADE,
@@ -211,8 +213,8 @@ BEGIN
 END;
 -- ... ad / au similarly.
 
--- Document versions: v2+ feature. Schema in place now so v1 ingests don't
--- need a migration later.
+-- Document versions: shipped 5.11 (v0.13.x). Schema landed up-front in v1
+-- so early ingests didn't need a later migration.
 CREATE TABLE clio_document_versions (
   id              TEXT PRIMARY KEY,
   document_id     TEXT NOT NULL REFERENCES clio_documents(id) ON DELETE CASCADE,
@@ -226,7 +228,11 @@ CREATE TABLE clio_document_versions (
   UNIQUE(document_id, version_number)
 );
 
--- Audit log: v2+ feature. Ingested / searched / retrieved / deleted events.
+-- Audit log: shipped 5.13 (v0.16.x). Mutation events only (write-only by
+-- design): ingest / update-content / edit-metadata / delete / restore /
+-- migrate-project / purge. The "search" / "get" events listed below in
+-- the original draft were narrowed to mutations during 5.13 to keep the
+-- log compact and meaningful.
 CREATE TABLE clio_audit_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -238,6 +244,8 @@ CREATE TABLE clio_audit_log (
   metadata     TEXT                -- JSON details
 );
 ```
+
+**Migration history.** During the pre-public v0.5.x–v0.15.x dogfood series the schema evolved across four numbered migrations (`0001_initial.sql` … `0004_*`) covering the original tables, soft-delete columns, version snapshots, audit log, and metadata-search indexes. Pre-v0.17.0 there were no real users, so on **2026-04-27** the four files were consolidated into a single `0001_initial.sql` (see `packages/core/src/clio/migrations/`). Anyone whose `clio.db` was created before the consolidation is in scope for a one-time recreate; from v0.17.0 onward the consolidated migration is the only file. New migrations land additively as numbered files (`0002_*.sql` …) and run on server startup; the runner reads `@migration-flags` markers in each file for non-trivial flags (e.g. running outside a transaction for `VACUUM`).
 
 ### 5.1 Metadata conventions
 
@@ -344,20 +352,19 @@ Users can install a heavier (or lighter) embedder at any time. Clio ships with t
 | `bge-small-en-v1.5` | 384 | 120 MB | Compact alternative to the default — ~512 token context, pick this when disk / RAM is tight |
 | `nomic-embed-text-v1.5` (default) | 768 | 130 MB | 8k token context; fits the Cerefox 4k-token chunk window so long design docs embed as one passage. q8-quantized via dtype option |
 | `bge-base-en-v1.5` | 768 | 430 MB | Quality bump over the small variant |
-| `mxbai-embed-large-v1` | 1024 | 670 MB | Top-quality open-weights option; users who explicitly want "as close to the best as local gets" |
-| Ollama-hosted models (any) | varies | runs in Ollama | If the user already has Ollama, a thin `ollama://<model>` adapter can skip bundling entirely |
+
+The shipped catalogue lives in `packages/core/src/clio/embedders/catalogue.ts` — that file is the source of truth. `mxbai-embed-large-v1` and Ollama-hosted models were considered in the original draft but were not added during 5.7 / 5.11; revisit if there's user demand.
 
 ### 6.3 Embedder CLI
 
 ```bash
-cfcf clio embedder list                      # bundled + installed + available catalogue
-cfcf clio embedder install mxbai-embed-large-v1   # downloads to ~/.cfcf/models/, verifies checksum
-cfcf clio embedder uninstall <name>          # removes the model files
+cfcf clio embedder list                      # catalogue + which is active / downloaded
+cfcf clio embedder install bge-base-en-v1.5  # lazily downloads weights to ~/.cfcf/models/
 cfcf clio embedder set <name>                # makes <name> the active default for new ingests
 cfcf clio embedder active                    # prints the currently active model + dim
 ```
 
-Verification: each installable model has a pinned URL + sha256 in a Clio manifest (`packages/core/src/clio/embedders/catalogue.ts`). Verified on download; refuses mismatch.
+Each catalogue entry pins its HuggingFace `hfModelId` and (where relevant) an explicit `dtype` — see `packages/core/src/clio/embedders/catalogue.ts`. Downloads are mediated by `@huggingface/transformers` against the HuggingFace model hub; cfcf does not maintain its own pinned-URL/sha256 manifest. `uninstall` is not a built-in verb — to free disk, delete the model directory under `~/.cfcf/models/` directly.
 
 ### 6.4 Per-Project embedder pinning + reindex
 
@@ -367,7 +374,7 @@ Embeddings are not cross-model compatible. Every chunk row records `embedder` + 
 2. **`cfcf clio reindex --project <clio-project>`** — re-embeds all chunks under the active model. One-shot, offline. Uses Cerefox's `embedding_upgrade` schema pattern (second vector column populated during migration; atomic cutover when all chunks are re-done) so the corpus stays searchable throughout.
 3. **`cfcf clio reindex --all`** — reindexes every project.
 
-v1 ships with `install`, `list`, `active`, and `set` verbs. `reindex` and `uninstall` are v2.
+**Shipped (5.11–5.12):** `cfcf clio embedder list | install | set | active`, plus `cfcf clio reindex --all` and `cfcf clio reindex --project <p>` for per-project re-embed under the active model. The `/api/clio/embedders/:name/switch-impact` endpoint surfaces a pre-flight summary (chunk count over the new ceiling, etc.) before the user pulls the trigger. **Not shipped:** `embedder uninstall` (just delete from `~/.cfcf/models/`).
 
 ### 6.4 Runtime: ONNX Runtime Node
 
@@ -446,14 +453,16 @@ cfcf clio docs get <document-id>
 cfcf clio docs get <document-id> --raw    # just the content
 cfcf clio docs get <document-id> --json   # with metadata
 
-# Embedders (shipped with bge-small; user can install heavier models on demand)
-cfcf clio embedder list              # bundled + installed + available
-cfcf clio embedder install mxbai-embed-large-v1
+# Embedders (default: nomic-embed-text-v1.5; user can install lighter or heavier
+# alternatives on demand)
+cfcf clio embedder list              # catalogue + active + which are downloaded
+cfcf clio embedder install bge-small-en-v1.5
 cfcf clio embedder set nomic-embed-text-v1.5
 cfcf clio embedder active
 
-# Reindex (v2+): re-embed all chunks with the active embedder
+# Reindex (shipped 5.11/5.12): re-embed chunks under the active embedder
 cfcf clio reindex --project cf-ecosystem
+cfcf clio reindex --all
 
 # Metadata-only edit (5.13 follow-up; mutate metadata without re-ingesting content)
 # No version snapshot; one edit-metadata audit entry with before/after diff.
@@ -568,42 +577,32 @@ What we copy from `../cerefox`:
 - **When `CerefoxRemote` lands** (v3+), it carries its own privacy story: user's self-hosted Cerefox + whatever embedder they've configured there. The cf² binary won't ship OpenAI or any cloud embedder bundled.
 - **The audit log** (v2) stores query strings. User-visible, introspectable via `cfcf clio audit`. Nothing hidden.
 
-## 11. Implementation phases
+## 11. Implementation phases (history + backlog)
 
-### v1 — "local Clio works end-to-end" (one iteration, likely one large PR)
+### Shipped — "local Clio works end-to-end" (items 5.7, 5.10, 5.11, 5.12, 5.13)
 
-- Schema + sqlite-vec + FTS5 + migrations infrastructure.
-- LocalClio `MemoryBackend` impl: write + search + get + list-projects.
-- Bundled embedder (bge-small) + ONNX runtime + sqlite-vec in the binary.
-- HTTP endpoints for the above + `/api/clio/stats`.
-- CLI: `cfcf clio search | ingest | get | projects | stats`. `cfcf memory` alias.
-- Auto-ingest hooks in the iteration loop (dev, judge, reflection, architect artifacts + decision-log entries).
-- Context-assembly preload: `cfcf-docs/clio-relevant.md` generated each iteration.
-- Agent guide: `cfcf-docs/clio-guide.md` generated per iteration; referenced from CLAUDE.md/AGENTS.md Tier-2 reads.
-- Tests: chunking, embeddings, hybrid search, small-to-big expansion, ingest idempotency (content_hash dedup), migration runner.
-- Docs: `docs/guides/clio-quickstart.md`, updates to `workflow.md` + `cli-usage.md`.
-- Release: `v0.8.0` (this is big enough — Clio is a new core component — to bump minor rather than patch).
+Landed across v0.9.0–v0.16.x:
 
-### v2 — governance + migration
+- **5.7 / 5.10 — foundation (v0.9.0):** schema + sqlite-vec + FTS5 + migrations infrastructure; LocalClio `MemoryBackend` impl (write + search + get + list-projects); the lazy embedder pipeline (`@huggingface/transformers` + ONNX Runtime); HTTP endpoints incl. `/api/clio/stats`; CLI: `cfcf clio search | ingest | get | projects | stats` + `cfcf memory` alias; auto-ingest hooks in the iteration loop (dev, judge, reflection, architect, decision-log); context-assembly preload (`cfcf-docs/clio-relevant.md`) + agent guide (`cfcf-docs/clio-guide.md`); cf²'s `project` noun renamed to `workspace` everywhere (5.10).
+- **5.11 — Cerefox-parity ops + versioning:** `clio_document_versions` + version retrieval + restore; soft-delete + restore; update-by-id + update-by-title with version snapshots; `cfcf clio reindex --project | --all`.
+- **5.12 — metadata search + embedder switching:** `/api/clio/metadata-search`, `/api/clio/metadata-keys`, the `switch-impact` pre-flight endpoint, and the `recommendedChunkMaxChars` ceiling enforcement at ingest.
+- **5.13 — audit log + edit-metadata:** the write-only mutation audit log (`clio_audit_log`), `cfcf clio audit`, and the `PATCH /api/clio/documents/:id` metadata-only edit (no version bump; one `edit-metadata` audit row with before/after diff).
 
-- `clio_document_versions` + `cfcf clio reindex`.
-- `clio_audit_log` + `cfcf clio audit`.
-- Metadata search endpoints (`/api/clio/metadata/*`).
-- Embedder switching + multi-embedder support (with the `embedding_upgrade` column pattern from Cerefox).
-- `cfcf clio migrate --to cerefox` one-shot exporter.
+### Backlog (still in flight)
 
-### v3+ — remote Cerefox backend
+Pulled from `docs/plan.md` Backlog:
 
-- `CerefoxRemote` `MemoryBackend` impl behind the same interface.
-- `memoryBackend: { kind: "cerefox", url, token }` config + validation.
-- All CLI verbs work identically against either backend.
+- **F.18 — sqlite-vec HNSW.** Current brute-force KNN is sub-second at our expected scale (<100k chunks per user). HNSW is on the sqlite-vec roadmap; cfcf will adopt when the upstream extension exposes it stably.
+- **6.24 — Cerefox-parity FTS title boosting.** Title field needs a multiplier in the BM25 normalisation; today it's just one of the indexed columns.
+- **`cfcf clio migrate --to cerefox`** one-shot exporter for users adopting a self-hosted Cerefox.
 
-### Out of scope (for now)
+### Speculative / future
 
-- MCP server. If we want it later, the Cerefox edge-function code is the template.
-- Knowledge graph / entity extraction.
-- LLM-based memory compaction (Generative Agents-style). Revisit when corpus grows past O(100k) chunks.
-- Multi-user / team deployments.
+- **`CerefoxRemote` `MemoryBackend` impl** behind the same interface, configured via `memoryBackend: { kind: "cerefox", url, token }`. All CLI verbs work identically against either backend. Pre-condition: a stable Cerefox HTTP/RPC contract that Clio can target.
+- **MCP server.** If we want it later, the Cerefox edge-function code is the template.
+- **Knowledge graph / entity extraction.**
+- **LLM-based memory compaction** (Generative Agents-style). Revisit when corpus grows past O(100k) chunks.
+- **Multi-user / team deployments.** Out of scope while cfcf is single-user-on-the-machine.
 
 ## 11.5 Ranking + boosting (scratchpad, will become its own doc)
 
@@ -684,5 +683,6 @@ Applied after RRF, before small-to-big. No cross-encoder in v1 (add v2). No user
 
 ## 13. Changelog
 
+- **2026-05-02**: Refresh against shipped state at v0.17.0. Added the "Status" box at the top reframing the doc as design-of-record + history rather than forward-looking design. §5 schema annotations updated: `clio_document_versions` and `clio_audit_log` are no longer "v2+" — they shipped 5.11 and 5.13 respectively. Added a migration-history note (the four pre-public migrations were consolidated into `0001_initial.sql` on 2026-04-27). §6 embedder catalogue table dropped `mxbai-embed-large-v1` and the Ollama-adapter row (neither shipped); pointed at `packages/core/src/clio/embedders/catalogue.ts` as the source of truth. §6.3 / §7.2 CLI examples replaced `mxbai-embed-large-v1` defaults with shipped commands; clarified that `embedder uninstall` is not a built-in verb. §6.4 noted `reindex` is shipped (5.11). §11 "Implementation phases" replaced with "Shipped (5.7–5.13)" + "Backlog" (cross-referencing F.18 and 6.24) + "Speculative / future" framing.
 - **2026-04-21**: Initial design draft. Picks embedded-SQLite + sqlite-vec + bundled ONNX embedder as the concrete path (Option B.1 from the research doc); maps Cerefox reuse by file; defines schema, API verbs, and packaging; proposes workspace-vs-Clio-project rename.
 - **2026-04-21 (revision 2)**: Broadened `artifact_type` taxonomy (§5.1) to be open-ended — Clio welcomes user/agent-ingested design guidelines, domain knowledge, research notes, ADRs, onboarding material, etc. beyond just cf²'s own artifacts. `artifact_type` is stored as a freeform string; Clio accepts unknown values without schema changes. Added `origin` metadata key distinguishing `cfcf-auto` from `user-cli` / `agent-tool` / `external-import`. §5.2 rewritten around a `clio.ingestPolicy` knob — default `"summaries-only"` (reflection analyses, architect reviews, decision-log lessons/strategies, a new cfcf-generated `iteration-summary` per iteration) with opt-in `"all"` for raw-trace dogfooding and `"off"` for user-ingest-only mode. §6 embedder strategy flipped to an install-on-demand model — ships with bge-small-en-v1.5 bundled, heavier alternatives (nomic, bge-base, mxbai) installable via `cfcf clio embedder install`. New §11.5 "Ranking + boosting" captures v1 boost profile + brainstorm of future improvements; will spin off into its own doc (`docs/design/clio-ranking.md`) once v1 has run. §12 resolved six of seven original open questions (workspace rename ✅, dedup granularity ✅, ingest cadence ✅, ranking ✅ moved, dogfooding ✅, latency ✅) and added a new §12.1 with four still-open items — most importantly, the Clio-Project-reassignment migration story.

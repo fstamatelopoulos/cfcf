@@ -73,7 +73,7 @@ This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ec
 
 - **Framework**: Commander.js for command and subcommand routing.
 - **Terminal UI**: Ink (React-based terminal rendering). Used for interactive iteration display, agent status, open question prompts, and progress indicators.
-- **Entry point**: The `cfcf` command (installed by `npm install -g --prefix ~/.bun @cerefox/codefactory` to `~/.bun/bin/cfcf`) routes to subcommands (`cfcf iterate`, `cfcf init`, `cfcf status`, `cfcf logs`, etc.).
+- **Entry point**: The `cfcf` command (installed by `npm install -g --prefix ~/.bun @cerefox/codefactory` to `~/.bun/bin/cfcf`) routes to subcommands. Lifecycle: `cfcf init`, `cfcf server start|stop|status`, `cfcf workspace init|list|show|delete`, `cfcf spec`, `cfcf review`, `cfcf run` (the iteration loop — replaces the older `cfcf iterate` verb), `cfcf resume`, `cfcf stop`, `cfcf reflect`, `cfcf document`, `cfcf status`, `cfcf clio …` (alias `cfcf memory`), `cfcf config show|edit`, `cfcf doctor`, `cfcf self-update`, `cfcf help [assistant]`.
 
 ### Server Layer
 
@@ -81,22 +81,24 @@ This is the same distribution model `vercel`, `yarn`, `openclaw`, and most JS-ec
 - **Role**: Manages workspace and iteration lifecycles, exposes a local API consumed by both the CLI and the web GUI, manages agent process lifecycles, and streams logs and events.
 - **Transport**: HTTP/SSE for streaming event output to the web GUI. WebSocket as an option for bidirectional agent communication.
 
-### Web GUI (Iteration 4 — Available)
+### Web GUI (shipped iteration 4; expanded in iteration 5)
 
 A React + Vite web GUI at `packages/web`. The Vite build output (`packages/web/dist/`) is **embedded into the bundled CLI JS at build time** via `scripts/embed-web-dist.ts` — the Hono server serves the embedded bytes directly, so the npm package carries both the API and the web UI with no separate asset deployment. In dev mode (`bun run dev:server`), the server falls back to reading `packages/web/dist/` from disk. The CLI remains the primary headless interface; the web GUI is for monitoring and control. Both drive the same server.
 
-Implemented (iteration 4):
+Shipped:
 - Dashboard with workspace list + status badges
 - Workspace detail page with tabs: Status, History, Logs, Config
 - Unified PhaseIndicator for loop / review / document runs
-- LoopControls with Start / Stop / Resume / Review / Document
+- LoopControls with Start / Stop / Resume / Review / Document, plus contextual pause-action buttons matching the `ResumeAction` enum (`continue` / `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection` — item 6.25)
 - Real-time log streaming via SSE (persists across tab switches)
-- Unified workspace history timeline (reviews + iterations + documents)
+- Unified workspace history timeline with `review`, `iteration`, `document`, `reflection`, `pa-session`, and `loop-stopped` events
+- **Editable global settings** (item 5.9, v0.7.3) — per-role agent + model picker, Clio defaults, notification config
+- **Editable per-workspace settings** (item 6.14, v0.7.4) — per-role overrides, ingest policy, max iterations, pause cadence, etc.
 
-Still planned for later iterations:
+Still planned (items in iteration-6 backlog):
+- Clio browser tab (item 6.18)
 - Diff viewer per iteration
-- Agent telemetry and token usage dashboards
-- Configuration editing in the web UI (currently read-only)
+- Agent telemetry and token-usage dashboards
 - Remote access (tunneled or network-exposed)
 
 The GUI is a plain React + Vite app with no UI framework. Dark theme, minimal CSS, no routing library (hash-based routing).
@@ -160,8 +162,8 @@ cfcf runs as a background service on the user's machine. The server process mana
 - **Start**: `cfcf server start` launches the server as a background process. Auto-start on boot is an optional setup step (via launchd on macOS, systemd on Linux, or a Windows service).
 - **Communication**: CLI talks to the server via HTTP on a configurable local port (default: `localhost:7233`).
 - **Event streaming**: The server exposes an SSE endpoint for real-time updates (iteration progress, test results, alerts). The CLI and web GUI subscribe to this stream.
-- **Notifications**: The server alerts the user via configurable channels when loops pause, complete, or an agent fails. v1 channels (iteration 4): terminal bell, macOS Notification Center (osascript), Linux notify-send, JSON Lines log file. Webhook channel (Slack, email, custom URLs) deferred to iteration 5.
-- **Graceful degradation**: If the server is not running, `cfcf iterate` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. This is useful for quick one-off iterations and development/debugging of cfcf itself.
+- **Notifications**: The server alerts the user via configurable channels when loops pause, complete, or an agent fails. Channels: terminal bell, macOS Notification Center (osascript), Linux notify-send, JSON Lines log file. Webhook channel (Slack, email, custom URLs) is on the iteration-6 backlog.
+- **Graceful degradation**: If the server is not running, `cfcf run` can operate in "direct mode" -- running the iteration loop in the foreground CLI process. This is useful for quick one-off iterations and development/debugging of cfcf itself.
 
 ---
 
@@ -220,13 +222,13 @@ Vendor AI SDKs (Anthropic, OpenAI, etc.) are dependencies of individual adapter 
 
 ## Memory Layer
 
-cfcf has a self-contained, file-based memory layer stored under `~/.cfcf/`. All iteration history, logs, judge assessments, decision logs, and cross-run knowledge are stored as structured Markdown and JSON files on the local filesystem. No external database or service is required.
+cfcf's memory layer has two tiers:
 
-The memory layer is designed to be human-readable, version-controllable, and easy to back up. The user can copy the entire `~/.cfcf/` directory to preserve all workspace history.
+**Per-workspace, file-based, version-controlled.** All iteration artifacts -- handoffs, judge assessments, reflection analyses, architect reviews, decision logs, the evolving plan -- live as structured Markdown and JSON under `cfcf-docs/` in the user's repo and are committed each iteration. Raw agent stdout/stderr (too large + potentially containing secrets) goes to `~/.cfcf/logs/<workspace>/` and is not committed. See `agent-process-and-context.md` for the full directory structure.
 
-> **Note:** Cerefox (the OSS knowledge base) is supported as an optional external memory backend. When configured, cfcf syncs memory documents to Cerefox for semantic search across workspaces. This is not required -- the built-in file-based memory is fully functional on its own.
+**Cross-workspace: Clio (shipped iteration 5).** Clio is a local SQLite-backed memory layer at `~/.cfcf/clio.db` shared across all workspaces, scoped by named **Clio Project**. It stores curated cf² artifacts (reflection analyses, architect reviews, decision-log lessons / strategies, iteration summaries) and any user- or agent-ingested Markdown (design guidelines, ADRs, domain notes…). Search is **hybrid**: FTS5 + sqlite-vec, blended via α-weighted score blending (default α=0.7), with per-document small-to-big retrieval (small docs return full content; large docs return matched chunk + sibling window). Every mutation is audit-logged; content updates write a version snapshot, metadata-only edits do not. The iteration loop auto-ingests on a `workspace.clio.ingestPolicy` knob (`summaries-only` default / `all` / `off`); agent roles auto-consume the top-k hits via a fresh `cfcf-docs/clio-relevant.md` written each iteration plus the `cfcf-docs/clio-guide.md` cue card. A `MemoryBackend` interface is the swap point for a future remote-Cerefox adapter -- local Clio stays API/semantic-compatible with Cerefox so role-agent code wouldn't change.
 
-See `agent-process-and-context.md` for the full directory structure and file specifications.
+The full design (schema, embedder catalogue, CLI surface) lives in `clio-memory-layer.md`. The user-facing intro is `docs/guides/clio-quickstart.md`.
 
 ---
 

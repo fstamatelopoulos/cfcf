@@ -1,13 +1,13 @@
-# cfcf: Cerefox Code Factory -- Requirements & Vision v0.4
+# cfcf: Cerefox Code Factory -- Requirements & Vision v0.5
 
 *cfcf is pronounced "cf square" and may be written as cf² in documentation. Code and package names always use `cfcf`.*
 
 **Author:** Fotis Stamatelopoulos (with Claude)
 **Status:** Living Document
-**Date:** April 2026
+**Date:** May 2026 (last refreshed 2026-05-02 against shipped state at v0.17.0)
 **Parent Brand:** Cerefox
-**Related Documents:** cfcf-stack.md, agent-process-and-context.md, technical-design.md, ../plan.md, ../api/server-api.md
-**Changelog:** v0.4 decouples cfcf from Cerefox as a hard dependency (self-contained file-based memory layer, Cerefox as optional backend), removes Cerefox Agent references (conceptual predecessor, not a product), resolves several open design questions, and adds long-term vision for coordinator agent pattern. v0.3 renames project to cfcf (from CF-CF), updates tech stack references to TypeScript/Bun (documented separately), clarifies human-on-the-loop model with configurable N-iteration pause cadence, and expands the target agent set to reflect the broader ecosystem.
+**Related Documents:** cfcf-stack.md, agent-process-and-context.md, technical-design.md, clio-memory-layer.md, ../plan.md, ../api/server-api.md
+**Changelog:** v0.5 (May 2026) refreshes the doc against shipped state at v0.17.0 — expands the role table from five to seven (adds Product Architect + Help Assistant), updates the AgentAdapter sketch to camelCase to match the implementation, replaces the `tests/` Problem Pack convention with `success.md` + optional `context/`, rewrites the CLI sketch around the actual current verbs (`run` not `iterate`; no `prepare` / `log`), records that the web UI shipped in iteration 4 and that Clio cross-workspace memory shipped in iteration 5, and adds a Distribution section for the npm-format release of `@cerefox/codefactory`. v0.4 decoupled cfcf from Cerefox as a hard dependency, removed Cerefox Agent references, resolved several open design questions, and added the coordinator-agent long-term vision. v0.3 renamed the project to cfcf (from CF-CF), pinned the tech stack to TypeScript/Bun, and introduced the human-on-the-loop pause cadence.
 
 ---
 
@@ -72,7 +72,7 @@ The path from v0.1 to this vision is incremental: first prove the loop works wit
 - Multi-agent parallelism within a single iteration (one dev agent + one judge per iteration for now).
 - Cloud-hosted execution (local-only for now).
 - Container-based isolation (agents run as local processes; container mode is a future option).
-- Web UI in v0.1 (CLI-first; GUI is a near-term addition for visualization, telemetry, and config management).
+- ~~Web UI in v0.1~~ — **Shipped.** A React + Vite web GUI landed in iteration 4 (read-only views), with editable global config in v0.7.3 and editable per-workspace config in v0.7.4. The CLI remains the primary headless interface; the web GUI is for monitoring, control, and configuration.
 - Automatic problem decomposition (the user defines the problem).
 - Support for non-coding tasks (research, content creation).
 
@@ -85,13 +85,14 @@ The path from v0.1 to this vision is incremental: first prove the loop works wit
 A directory of Markdown files that define the problem. This is the user's primary input to cfcf. Minimum contents:
 
 - **problem.md** -- What needs to be built or fixed. Clear problem statement, constraints, existing context.
-- **success.md** -- Machine-checkable success criteria. Primarily: which tests must pass. May also include lint rules, type-check requirements, and build success. May include qualitative criteria for the LLM judge.
-- **tests/** -- Test files or test scenario definitions that the agent's output will be evaluated against.
+- **success.md** -- Machine-checkable success criteria. Which tests must pass, lint / type-check / build requirements, plus any qualitative criteria for the LLM judge. Tests themselves live in the user's repo (or are written by the dev agent during iteration); cfcf does not require a separate `tests/` directory inside the Problem Pack.
 
 Optional:
 - **context/** -- Additional context files (architecture docs, API specs, Mermaid diagrams, existing code snippets, reference implementations).
 - **constraints.md** -- Explicit constraints: "do not modify file X", "must use library Y", "must be backwards compatible with Z".
 - **hints.md** -- Soft guidance: preferred approaches, known pitfalls, "try X before Y".
+
+The shipped examples in `problem-packs/` follow this shape (`problem.md` + `success.md`, no `tests/` dir).
 
 ### 4.2 Mission Control
 
@@ -105,15 +106,24 @@ The deterministic orchestration layer. Responsibilities:
 
 ### Agent Roles
 
-cf² manages five distinct agent roles, each independently configurable (agent adapter + model):
+cf² manages **seven** distinct agent roles, each independently configurable (agent adapter + model). Five drive the iteration loop; two are interactive helpers that book-end the dev workflow.
+
+**Iteration-loop roles:**
 
 | Role | Purpose | When invoked |
 |------|---------|-------------|
-| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. Re-review-aware: on a workspace with completed iterations, the architect appends new pending iterations non-destructively when new requirements appear. | User-invoked (`cfcf review`), optional, can run multiple times |
+| **Solution Architect** | Reviews Problem Pack for completeness, feasibility, clarity. Advisory tool for the user, not a gate. Re-review-aware: on a workspace with completed iterations, the architect appends new pending iterations non-destructively when new requirements appear. Returns one of `READY`, `NEEDS_REFINEMENT`, `BLOCKED`, or `SCOPE_COMPLETE` (the last signals all planned work is done and the loop should terminate cleanly). | User-invoked (`cfcf review`), optional, can run multiple times |
 | **Dev Agent** | Reads context, writes code, runs tests, produces handoff + iteration-log + signals. | Each iteration |
 | **Judge** | Reviews iteration results, determines SUCCESS/PROGRESS/STALLED/ANOMALY, opts in/out of reflection via the `reflection_needed` signal. | After each iteration |
 | **Reflection** | Reads the full cross-iteration history (decision log, per-iteration changelogs, prior reflection analyses, compact git log of iteration branches, tail of the latest dev log), classifies iteration health, and may non-destructively rewrite pending plan items. The only role allowed to edit a plan that has completed work. | After each judge, unless the judge opts out and `reflectSafeguardAfter` is not yet hit. Also user-invoked ad-hoc via `cfcf reflect`. |
 | **Documenter** | Produces polished final workspace documentation (architecture, API reference, setup guide). | Auto post-SUCCESS, or user-invoked (`cfcf document`) |
+
+**Interactive roles:**
+
+| Role | Purpose | When invoked |
+|------|---------|-------------|
+| **Product Architect** (`productArchitectAgent`) | Authors and iterates the Problem Pack itself (`problem.md` / `success.md` / `process.md` / `constraints.md`) -- the spec the dev/judge/reflect loop will satisfy. Sits at the START of the development flow, between `cfcf workspace init` and `cfcf review`. Hard "no implementation drift" boundary: declines to write code or design architecture, redirects to the appropriate role. Backfills to `architectAgent` when unset. | User-invoked interactively via `cfcf spec [task...]`. |
+| **Help Assistant** (`helpAssistantAgent`) | Interactive cf²-expert support session. Runs the configured agent CLI in the current shell with a curated system prompt + the embedded help bundle + Clio memory access. Read-only by default; mutations gated by the agent CLI's per-command permission prompt. Backfills to `devAgent` when unset. | User-invoked interactively via `cfcf help assistant`. |
 
 Cross-agent review is encouraged: e.g., Codex for dev, Claude Code for judge and architect, Claude Opus for reflection and documenter. Different agents catch different types of issues. Reflection has the broadest context of any role, so a strong model is recommended there.
 
@@ -309,39 +319,39 @@ The adapter interface is intentionally minimal so that adding new agents is stra
 
 ## 7. Agent Adapter Interface
 
-Each supported coding agent implements a common adapter interface:
+Each supported coding agent implements a common adapter interface (see `packages/core/src/types.ts` for the authoritative definition):
 
-```
-AgentAdapter:
-  name: string                    # "claude-code", "codex", "opencode", ...
+```typescript
+interface AgentAdapter {
+  /** Unique identifier: "claude-code", "codex", etc. */
+  name: string;
 
-  check_availability() -> { available, version?, error? }
-  # Verify the agent CLI is installed and authenticated
+  /** Human-readable display name */
+  displayName: string;
 
-  prepare_context(
-    problem_pack: ProblemPack,
-    iteration_context: IterationContext,
-    repo_path: string
-  ) -> AgentInput
-  # Translates cfcf's assembled context into agent-specific format
-  # e.g., CLAUDE.md for Claude Code, config files for other agents
+  /** Verify the agent CLI is installed and authenticated */
+  checkAvailability(): Promise<AgentAvailability>;
 
-  build_command(input: AgentInput) -> { command, args[] }
-  # Returns the CLI command to run this agent non-interactively
-  # e.g., ["claude", "--dangerously-skip-permissions", "-p", "..."]
+  /** Agent-specific flags for unattended execution
+   * (e.g., ["--dangerously-skip-permissions"] for Claude Code) */
+  unattendedFlags(): string[];
 
-  unattended_flags() -> string[]
-  # Agent-specific flags for unattended execution
+  /** Build the command + args to run the agent non-interactively */
+  buildCommand(
+    workspacePath: string,
+    prompt: string,
+    model?: string,
+  ): { command: string; args: string[] };
 
-  parse_output(
-    logs: string,
-    repo_path: string
-  ) -> AgentOutput
-  # Extracts structured results: files_changed, test_results,
-  # agent_reasoning, errors, token_usage (best-effort)
+  /** The filename this agent reads its instruction file from
+   * (e.g., "CLAUDE.md" for Claude Code, "AGENTS.md" for Codex) */
+  instructionFilename: string;
+}
 ```
 
-Agent-specific logic is fully contained within the adapter. cfcf core has no knowledge of any particular agent's invocation format, output structure, or LLM vendor.
+Context assembly is centralised in `packages/core/src/context-assembler.ts` rather than per-adapter: it generates the shared `cfcf-docs/` artifacts and writes the agent-specific instruction file (named via `instructionFilename`) once per iteration. The adapter stays narrow — agent identity, the launch command, and unattended flags. Output parsing is also handled by the harness: agents communicate back via signal files in `cfcf-docs/` (e.g., `cfcf-iteration-signals.json`, `cfcf-judge-signals.json`) rather than via stdout parsing. Two adapters ship today: `claude-code` and `codex`.
+
+Agent-specific logic is fully contained within the adapter. cfcf core has no knowledge of any particular agent's LLM vendor.
 
 ---
 
@@ -363,11 +373,11 @@ For v0.1, **all cfcf-generated files live in the workspace repo** under `cfcf-do
 **Agent logs (outside repo, under ~/.cfcf/):**
 - Full agent stdout/stderr is too large for the repo. cfcf stores it under `~/.cfcf/logs/<workspace-id>/`.
 
-**Cross-workspace knowledge** (e.g., which agents work best for which tasks, lessons across workspaces) is a future extension. The need will appear organically as cfcf evolves.
+**Cross-workspace knowledge** is provided by **Clio** (shipped iteration 5; items 5.7, 5.10, 5.11, 5.12, 5.13). Clio is a local SQLite-backed memory layer at `~/.cfcf/clio.db`, shared across all workspaces and scoped by named *Clio Project* (a grouping of workspaces that share a knowledge domain — distinct from a cfcf workspace, which is one managed git repo). FTS5 + sqlite-vec back hybrid search with α-weighted score blending and per-document small-to-big retrieval. The iteration loop auto-ingests reflection analyses, architect reviews, decision-log entries, and iteration summaries; agent roles auto-consume the top-k hits via a fresh `cfcf-docs/clio-relevant.md` written each iteration plus the `cfcf-docs/clio-guide.md` cue card. A `MemoryBackend` interface is the swap point for a future remote-Cerefox adapter — local Clio is API/semantic-compatible with Cerefox so role-agent code wouldn't need to change.
 
-> **Note:** Cerefox (the Cerefox knowledge base) is supported as an optional future memory backend for richer semantic search across workspaces. Not required -- the built-in repo-based memory is fully functional on its own.
+See `clio-memory-layer.md` for the full design and `agent-process-and-context.md` section 7 for the per-iteration file structure.
 
-See `agent-process-and-context.md` section 7 for the full file structure specification.
+> **Note:** Cerefox (the OSS knowledge base) remains supported as an optional future external backend behind the `MemoryBackend` interface. Not required — local Clio is fully functional on its own.
 
 ---
 
@@ -422,39 +432,85 @@ Between iterations, the harness uses small/fast language models for preparation 
 
 ---
 
-## 10. CLI Interface (Sketch)
+## 10. CLI Interface
+
+The current CLI surface is grouped by lifecycle stage. All commands talk to the cf² server over local HTTP; the server can also be driven from the web UI.
 
 ```bash
-# Initialize a new problem pack
-cfcf init my-problem/
+# First-run interactive setup: pick adapters per role, install an embedder, etc.
+cfcf init
 
-# Start iterating
-cfcf iterate my-problem/ \
-  --repo /path/to/project \
-  --agent claude-code \
-  --max-iterations 10 \
-  --pause-every 3 \           # Human review every 3 iterations (0 = no pauses)
-  --on-failure continue \     # or: stop, reset-and-retry
-  --judge-frequency 1 \       # Tier 2 every cycle
-  --reflect-frequency 5 \     # Tier 3 every 5 cycles
-  --judge-model anthropic/claude-sonnet-4-20250514 \
-  --slm-model ollama/llama3.2:3b
+# Server lifecycle
+cfcf server start | stop | status
 
-# Check status of a running workspace
-cfcf status --workspace <name>
+# Workspaces (one per managed git repo). --project assigns a Clio Project.
+cfcf workspace init --repo /path/to/repo --problem-pack ./my-problem/ \
+                    --project cf-ecosystem
+cfcf workspace list
+cfcf workspace show <name>
+cfcf workspace delete <name>
 
-# Review iteration history
-cfcf log <workspace-name>
+# Spec authoring (interactive Product Architect; iterates problem.md / success.md)
+cfcf spec [task...]
 
-# Apply the successful result to your repo
-cfcf apply <workspace-name>
+# Solution Architect review (advisory; READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE)
+cfcf review --workspace <name>
 
-# List available agent adapters
-cfcf agents
+# Iteration loop. Replaces the older `cfcf iterate` verb.
+cfcf run --workspace <name> --max-iterations 10 --pause-every 3
 
-# Dry run -- show assembled context without launching
-cfcf prepare my-problem/ --repo /path/to/project --agent claude-code
+# Pause / resume / stop. --action selects the structured resume behaviour:
+#   continue | finish_loop | stop_loop_now | refine_plan | consult_reflection
+cfcf resume --workspace <name> --action continue
+cfcf stop   --workspace <name>
+
+# Ad-hoc cross-iteration reflection pass
+cfcf reflect --workspace <name>
+
+# Final docs (auto-runs post-SUCCESS unless `autoDocumenter: false`)
+cfcf document --workspace <name>
+
+# Status overview
+cfcf status [--workspace <name>]
+
+# Cross-workspace memory (Clio). `cfcf memory` is registered as an alias.
+cfcf clio search "flaky async tests" --project cf-ecosystem
+cfcf clio docs ingest path/to/note.md --project cf-ecosystem --artifact-type design-guideline
+cfcf clio embedder install            # interactive picker
+cfcf clio projects | versions | audit | metadata-search | metadata-keys | reindex | stats
+
+# Global config
+cfcf config show
+cfcf config edit
+
+# Diagnostics + maintenance
+cfcf doctor
+cfcf self-update
+
+# Help (cf²-expert interactive support)
+cfcf help [topic]
+cfcf help assistant
 ```
+
+There is no `cfcf iterate`, `cfcf prepare`, or `cfcf log` — the actual verbs are `cfcf run`, the web UI's log viewer / `~/.cfcf/logs/`, and the agent's view of context in `cfcf-docs/`. There is no `cfcf apply` either: cfcf works on a feature branch in the user's own repo and merges to main directly, so "applying" is just the merge.
+
+---
+
+## 10a. Distribution
+
+cfcf is distributed as the **`@cerefox/codefactory`** npm package on npmjs.com. The public release line started with **v0.17.0 (2026-05-02)**; everything before that was a dogfood-only series (v0.5.x–v0.16.x) used to harden the release pipeline. End users install with one command:
+
+```bash
+curl -fsSL https://github.com/fstamatelopoulos/cfcf/releases/latest/download/install.sh | bash
+# or, manually:
+npm install -g --prefix ~/.bun @cerefox/codefactory
+```
+
+The curl-bash installer bootstraps Bun if missing, then runs `npm install -g --prefix ~/.bun @cerefox/codefactory`. The `~/.bun/bin` PATH entry that Bun's installer already creates becomes cfcf's home, so no second PATH edit is needed. Native deps (libsqlite3, sqlite-vec) ship as a per-platform `@cerefox/codefactory-native-<platform>` package resolved at runtime; ONNX runtime + the embedder model are fetched lazily via `@huggingface/transformers`.
+
+Updates are delivered via `cfcf self-update` (shipped item 5.5), which fetches the latest release tarball + verifies its sigstore provenance. Releases are signed via OIDC trusted publishing on GitHub Actions; `npm install` and `cfcf self-update` both verify the sigstore-attested provenance attestation before swapping the binary in.
+
+For the full distribution rationale (why npm-format and not `bun --compile` self-contained binaries), see `cfcf-stack.md` and the 2026-04-26 + 2026-05-01 entries in `docs/decisions-log.md`.
 
 ---
 
