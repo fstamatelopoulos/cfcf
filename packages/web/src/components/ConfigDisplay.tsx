@@ -5,8 +5,22 @@ import { fetchGlobalConfig, saveWorkspace } from "../api";
 
 const ROLE_KEYS: (keyof Pick<
   WorkspaceConfig,
-  "devAgent" | "judgeAgent" | "architectAgent" | "documenterAgent" | "reflectionAgent"
->)[] = ["devAgent", "judgeAgent", "architectAgent", "documenterAgent", "reflectionAgent"];
+  | "devAgent"
+  | "judgeAgent"
+  | "architectAgent"
+  | "documenterAgent"
+  | "reflectionAgent"
+  | "productArchitectAgent"
+  | "helpAssistantAgent"
+>)[] = [
+  "devAgent",
+  "judgeAgent",
+  "architectAgent",
+  "documenterAgent",
+  "reflectionAgent",
+  "productArchitectAgent",
+  "helpAssistantAgent",
+];
 
 const ROLE_LABEL: Record<string, string> = {
   devAgent: "Dev",
@@ -14,6 +28,8 @@ const ROLE_LABEL: Record<string, string> = {
   architectAgent: "Architect",
   documenterAgent: "Documenter",
   reflectionAgent: "Reflection",
+  productArchitectAgent: "Product Architect",
+  helpAssistantAgent: "Help Assistant",
 };
 
 const NOTIFICATION_EVENTS: NotificationEventType[] = [
