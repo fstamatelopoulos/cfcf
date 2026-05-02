@@ -9,6 +9,27 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.16.6] -- 2026-05-02
+
+Tagged but **not published to npm or GitHub Releases** — internal release for local-install dogfooding. Skips `0.16.5` on npm (which was also tag-only); the next published release will jump from `0.16.4` directly to whatever's current at the time.
+
+Includes the contents of the `0.16.5` tag (UX bundle + 5.15 research + workspace settings UI note) **plus** the items below.
+
+### Added — Reflection `recommend_stop=true` disambiguation on judge SUCCESS (precursor fix)
+
+Shipped via PR #26 (`fix/reflection-success-disambiguation`, 2026-05-01). Surfaced during dogfooding the tracker workspace: iter-5 had judge `SUCCESS` (9/10, 20/20 tests, plan 100%); reflection ran via the `reflectSafeguardAfter=3` ceiling, observed "loop has nothing left to do", set `recommend_stop=true` — harness misinterpreted the agreement as a stuck-loop signal and surfaced a "Questions needing your input" popup.
+
+`makeDecision` now disambiguates `recommend_stop=true` on judge SUCCESS via `iteration_health`:
+
+- `converging` / `stable` → reflection AGREES with SUCCESS; let the judge's determination handle the stop (no popup)
+- `stalled` / `diverging` / `inconclusive` → reflection DISAGREES with SUCCESS; surface the popup so the user can arbitrate
+
+On non-SUCCESS judge determinations, `recommend_stop=true` retains its original meaning (loop stuck → pause + popup) regardless of `iteration_health`.
+
+5 new unit tests in `iteration-loop.test.ts` covering each `iteration_health` value × judge=SUCCESS combination.
+
 ### Added — Structured pause actions (item 6.25)
 
 When the iteration loop pauses for arbitration, the user now picks **one of five structured actions** that drives the harness's next move; the textarea remains optional context routed to the right destination per action. Surfaced 2026-05-01 during dogfooding; full design + matrix in [`docs/research/structured-pause-actions-design.md`](docs/research/structured-pause-actions-design.md); root-cause + lessons in [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-02 entry).
