@@ -463,4 +463,93 @@ describe("makeDecision - reflection precedence (research Q6)", () => {
     );
     expect(decision.action).toBe("continue");
   });
+
+  // 2026-05-01: judge=SUCCESS + recommend_stop=true is ambiguous between
+  // "I agree, mission accomplished" and "I disagree with SUCCESS." We
+  // disambiguate via iteration_health. See makeDecision doc-comment.
+
+  test("judge=SUCCESS + recommend_stop=true + health=converging: silent SUCCESS stop (reflection agrees)", () => {
+    // Real-world reproducer: tracker workspace, iter-5, 2026-05-01.
+    // Reflection ran via reflectSafeguardAfter ceiling on the SUCCESS
+    // iteration; agreed with judge; pre-fix this surfaced as a spurious
+    // user-input popup.
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({
+        recommend_stop: true,
+        iteration_health: "converging",
+        key_observation: "loop has nothing left to do",
+      }),
+    );
+    expect(decision.action).toBe("stop");
+    expect(decision.reason).toContain("SUCCESS");
+    expect(decision.pauseReason).not.toBe("anomaly");
+  });
+
+  test("judge=SUCCESS + recommend_stop=true + health=stable: silent SUCCESS stop (reflection agrees)", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({
+        recommend_stop: true,
+        iteration_health: "stable",
+      }),
+    );
+    expect(decision.action).toBe("stop");
+    expect(decision.reason).toContain("SUCCESS");
+  });
+
+  test("judge=SUCCESS + recommend_stop=true + health=stalled: pause for user (reflection disagrees)", () => {
+    // Defense-in-depth: judge says SUCCESS but the cross-iteration view
+    // sees the loop stuck somewhere. User must arbitrate.
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({
+        recommend_stop: true,
+        iteration_health: "stalled",
+        key_observation: "judge said SUCCESS but the auth approach is still broken in iter-3 carryover",
+      }),
+    );
+    expect(decision.action).toBe("pause");
+    expect(decision.pauseReason).toBe("anomaly");
+    expect(decision.reason).toContain("Reflection flagged");
+  });
+
+  test("judge=SUCCESS + recommend_stop=true + health=diverging: pause for user (reflection disagrees)", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({
+        recommend_stop: true,
+        iteration_health: "diverging",
+      }),
+    );
+    expect(decision.action).toBe("pause");
+    expect(decision.pauseReason).toBe("anomaly");
+  });
+
+  test("judge=SUCCESS + recommend_stop=true + health=inconclusive: pause for user (reflection disagrees)", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      makeReflectionSignals({
+        recommend_stop: true,
+        iteration_health: "inconclusive",
+      }),
+    );
+    expect(decision.action).toBe("pause");
+    expect(decision.pauseReason).toBe("anomaly");
+  });
 });
