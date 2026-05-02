@@ -767,7 +767,18 @@
 
 .project-history__table td {
   border-bottom: 1px solid var(--color-border);
-  vertical-align: middle;
+  /*
+   * Item 6.25 follow-up (2026-05-02): top-align cells so action buttons
+   * (Log column especially) sit at a consistent vertical offset across
+   * all rows regardless of TYPE-column wrapping. Previously
+   * `vertical-align: middle` made buttons drift vertically when the
+   * TYPE cell wrapped to two lines, creating visual misalignment with
+   * single-line rows. Top-align is the standard data-table pattern
+   * for variable-height rows.
+   */
+  vertical-align: top;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
 }
 
 .project-history__row:hover {
