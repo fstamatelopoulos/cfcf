@@ -13,6 +13,38 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-02 — Post-6.25 UX iteration: history-row rendering, pause message wording, paused-state control-surface deduplication
+
+**Context.** Three small UX gaps surfaced during the first round of dogfooding the structured pause actions (item 6.25, shipped via PR #27 a few hours earlier). Each was a discrete defect with its own root cause; together they're a useful study of "what kinds of things go wrong when you ship a feature that introduces a new event type + a new control surface." Captured as one entry because the lessons compound.
+
+**The three defects (in order of how the user encountered them).**
+
+1. **`loop-stopped` history rows rendered with empty Type / Agent / Result columns + a broken "log" button.** The new `loop-stopped` event type was added to core's `HistoryEventType`, but the web package has its **own** mirror of that type (in `packages/web/src/types.ts`) which wasn't updated. Result: the web's `typeLabel` switch fell through to `undefined`; `agentLabel` defaulted to the (now-undefined) `event.agent` and rendered empty; the result-column had no render branch for the new type; and the actions column fell through to a generic `[log]` button that called `onSelectLog({ logFile: undefined })` — broken click target. The root typecheck (`bun run typecheck` from the repo root) didn't catch the gap because it doesn't typecheck the web package; only `cd packages/web && bun run build` (which the local-install path triggers) caught the type mismatch downstream.
+
+2. **The pre-loop pause message read as jargon.** *"Pre-loop review readiness=missing does not satisfy gate=needs_refinement_or_blocked. Edit the Problem Pack and resume."* The user's reaction — "ok, but not user-friendly" — captured the problem precisely: the message described the *gate-arithmetic* (which the user has to mentally translate back to "what does this mean for me?") rather than the *user's situation* and *what to do*. Replaced with a tailored plain-English message per case (review error / missing signal / verdict mismatch), mentioning concrete file paths (`problem-pack/problem.md` + `success.md`) and the resume-action alternatives (`Stop loop now`, `Refine plan`).
+
+3. **Top-level Resume / Stop / Document buttons competed with the new structured FeedbackForm action panel during pause state.** Two control surfaces showing simultaneously, both routing to "resume." Worse, the legacy `Resume` button called `api.resumeLoop(workspaceId)` **without** the new `action` argument — defaulting server-side to `"continue"` and **bypassing the user's structured choice from the FeedbackForm**. This wasn't just visual clutter; it was a wrong-routing footgun. The fix was conditional rendering: hide all three legacy buttons when `phase === "paused"`. The FeedbackForm's 5-action panel becomes the single control surface during pause; legacy buttons reappear naturally on transition out of paused.
+
+**Lessons.**
+
+1. **A new event type or signal touches every consumer.** When `loop-stopped` was added to `HistoryEventType`, the natural assumption was "I added it to the type definition; everywhere using the type is auto-covered." Wrong: the web package has its **own** mirror of the type — not a shared import — so the addition was silently incomplete. **For any new enum value or event type, grep for the existing values across all packages and update each consumer.** The doc says they should be in sync; the type system can't enforce sync between two parallel definitions.
+
+2. **The root `bun run typecheck` doesn't cover the web package.** Caught this when `local-install.sh` failed — the web package's `tsc -b && vite build` is stricter than root's `tsc --noEmit` and runs only when explicitly invoked (or transitively by the install script). **Future improvement** (already filed as a follow-up after the 0.16.5 SSOT version work): root typecheck should walk all packages, so the dev loop catches web type errors before manual builds. Until then: any change to shared types should run `cd packages/web && bun run build` as part of pre-commit smoke.
+
+3. **Empty cells in a UI table = forgotten code path.** The `loop-stopped` row's empty Type / Agent / Result columns weren't a styling bug; they were "the switch fell through, the conditional render had no branch." Empty cells should be visually loud (they were silent here) — or, better, every renderable union member should have an exhaustive `switch` that TypeScript's never-check enforces. The row's broken "log" button is the same lesson: **action buttons should check their data exists before rendering**, not assume the dispatcher will handle a missing target gracefully.
+
+4. **A new control surface needs an audit of existing surfaces it competes with.** The structured FeedbackForm was added without checking whether the LoopControls (top-level buttons) were going to render simultaneously. Both rendered correctly *in isolation*; together they created a wrong-routing path because the legacy Resume call didn't pass the new `action` parameter. **When you add a new control surface, audit every existing surface that's reachable in the same app state for overlap.** Hide or update the old surface; don't leave both visible.
+
+5. **"Pause message wording" is a recurring failure mode.** The earlier "fix" had used gate-arithmetic phrasing ("readiness=missing does not satisfy gate=..."). That phrasing worked for an engineer reading the code; it didn't work for a user reading a UI prompt. **Pause messages should describe the user's situation + what to do, not the harness's internal state machine.** Future auto-generated pause messages should be reviewed against this lens.
+
+**Outcome.** All three fixes shipped in this branch (`fix/loop-stopped-history-render`) with no test regressions. UX is meaningfully cleaner: history rows render with full info, pause messages read in plain English, the FeedbackForm is the single source of action during pause.
+
+**Cross-refs.**
+- Commits: `c30cf1d` (loop-stopped + pause message), `d1017ee` (hide legacy buttons), `bd0bb92` (SCOPE_COMPLETE — separate entry below).
+- Affected files: `packages/web/src/types.ts`, `packages/web/src/components/{WorkspaceHistory,FeedbackForm,LoopControls}.tsx`, `packages/web/src/pages/WorkspaceDetail.tsx`, `packages/core/src/iteration-loop.ts:buildPreLoopBlockReason`.
+
+---
+
 ## 2026-05-02 — Architect SCOPE_COMPLETE readiness verdict + holistic agent-signal audit
 
 **Context.** Two days into dogfooding the structured pause actions (item 6.25), a follow-up gap surfaced when the user re-ran the loop on the calc workspace (whose 4 iterations had completed days earlier). The Solution Architect correctly observed *"No new product-scope gaps: the current problem pack's power operation is already implemented and tested in source"* — but had to express this through `readiness: NEEDS_REFINEMENT` because the existing 3-value enum (`READY` / `NEEDS_REFINEMENT` / `BLOCKED`) had no way to say "spec is fine but there's no work to do." The user's "fix the spec" mental model from the misleading verdict competed with the architect's actual analysis ("the scope is done").
