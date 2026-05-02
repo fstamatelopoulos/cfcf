@@ -9,6 +9,12 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.17.0] -- 2026-05-02
+
+**First public release after the v0.16.x dogfood-only series.** Bumps the minor version for the substantial UX and signal-vocabulary additions since 0.16.4 (the last npm-published release). **Includes everything from the tag-only `v0.16.5` + `v0.16.6` releases** (see those entries below for full detail) — most notably the structured pause actions feature (item 6.25) and the reflection-on-SUCCESS disambiguation (PR #26) — **plus** the post-6.25 polish below that surfaced during dogfooding.
+
 ### Added — Architect `SCOPE_COMPLETE` readiness verdict (item 6.25 follow-up)
 
 Surfaced 2026-05-02 dogfooding: re-running the loop on a previously-completed workspace forced the Solution Architect into a misleading `NEEDS_REFINEMENT` verdict because the existing 3-value enum had no way to say *"spec is fine but the work is already done."* Same vocabulary-conflation pattern as the structured pause actions fix (single field overloaded across orthogonal axes). Full design rationale + holistic agent-signal audit + 4 lessons in [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-02 SCOPE_COMPLETE entry).
@@ -34,6 +40,7 @@ Surfaced 2026-05-02 in dogfooding the v0.16.6 release.
 - **`loop-stopped` history rows now render correctly.** Previously the new `loop-stopped` event type wasn't in the web `HistoryEventType` enum, so rows showed empty Type/Agent/Result columns and a broken "log" button. Now: type label "Loop stopped by user · after iter N", agent column "(user action)", result column shows a feedback summary with click-to-expand pill, expandable detail panel renders the full feedback verbatim.
 - **Pre-loop pause message rewritten** to plain English. Was: *"Pre-loop review readiness=missing does not satisfy gate=needs_refinement_or_blocked. Edit the Problem Pack and resume."* Now: clear explanation of what happened, what the gate means in concrete terms, what files to edit, and which resume actions apply.
 - **Top-level Resume / Stop / Document buttons hidden during pause.** They competed with the new structured FeedbackForm action panel, and the legacy `Resume` button bypassed the structured action by defaulting server-side to `"continue"`. Now: the FeedbackForm's 5 action buttons are the single control surface during pause.
+- **No-cache headers on the SPA host page** (`packages/web/index.html` + server response on `/` and `/index.html`). Prevents the "stale browser bundle" class of bug where users navigating after a server upgrade load the cached `index.html` → cached asset hashes → cached JS still in memory. Vite's content-hashed `/assets/*` get aggressive caching (`max-age=31536000, immutable`) since their content can never change for the same URL. Net cost: one ~0.4 KB `index.html` round-trip per page load; net benefit: no more stale-SPA bugs after server upgrades.
 
 ### Changed
 
