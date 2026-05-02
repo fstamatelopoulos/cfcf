@@ -27,6 +27,10 @@ const readinessColor: Record<string, string> = {
   READY: "var(--color-success)",
   NEEDS_REFINEMENT: "var(--color-warning)",
   BLOCKED: "var(--color-error)",
+  // SCOPE_COMPLETE (item 6.25 follow-up): not a problem state — the spec
+  // is fine, there's just no work left. Render as info/neutral rather
+  // than success (which would imply the loop ran successfully) or warning.
+  SCOPE_COMPLETE: "var(--color-info)",
 };
 
 const healthColor: Record<IterationHealth, string> = {

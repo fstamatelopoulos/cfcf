@@ -26,6 +26,12 @@ function pauseReasonAllowedActions(pauseReason: LoopState["pauseReason"]): Resum
       return ["continue", "finish_loop", "stop_loop_now", "refine_plan", "consult_reflection"];
     case "max_iterations":
       return ["finish_loop", "stop_loop_now"];
+    case "scope_complete":
+      // Architect SCOPE_COMPLETE (item 6.25 follow-up): no work to build,
+      // no iterations to reflect on. finish_loop runs documenter if
+      // configured; stop_loop_now accepts "project done"; refine_plan
+      // re-runs the architect after the user adds new requirements.
+      return ["finish_loop", "stop_loop_now", "refine_plan"];
     default:
       // Pre-loop review block (A1)
       return ["continue", "stop_loop_now", "refine_plan"];

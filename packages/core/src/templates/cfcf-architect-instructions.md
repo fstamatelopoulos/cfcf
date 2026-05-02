@@ -46,7 +46,7 @@ Write a comprehensive review following this structure:
 # Solution Architect Review
 
 ## Readiness Assessment
-<!-- Overall readiness: READY / NEEDS_REFINEMENT / BLOCKED -->
+<!-- Overall readiness: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE -->
 <!-- One-paragraph summary of readiness -->
 
 ## Context Completeness
@@ -205,6 +205,7 @@ Write a JSON file with this exact structure:
 - `READY`: Problem definition is clear and actionable. Dev agents can proceed with high confidence.
 - `NEEDS_REFINEMENT`: There are gaps or ambiguities that should be addressed. Development can proceed but may hit blockers.
 - `BLOCKED`: Critical information is missing. Development should not proceed until resolved.
+- `SCOPE_COMPLETE`: The Problem Pack describes work that is **already implemented and tested** in the source tree (regardless of whether the spec itself needs polish). Use this instead of `READY` or `NEEDS_REFINEMENT` when the loop has nothing meaningful to build — e.g. the workspace was previously completed and the user re-launched the loop, or the implementation was done manually outside cfcf and the spec is just describing what already exists. Document any remaining concerns (missing scaffold files, broken tooling, repo state issues) in the `risks` field — those are real but not loop-blocking *work-items*; they are separate fixes the user owns. The harness always pauses on `SCOPE_COMPLETE` regardless of `readinessGate` setting and offers the user three actions: stop the loop, refresh the documenter, or refine the plan with new requirements.
 
 ### 5. Seed entries in `cfcf-docs/decision-log.md` (optional but encouraged)
 

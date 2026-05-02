@@ -13,6 +13,52 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-02 — Architect SCOPE_COMPLETE readiness verdict + holistic agent-signal audit
+
+**Context.** Two days into dogfooding the structured pause actions (item 6.25), a follow-up gap surfaced when the user re-ran the loop on the calc workspace (whose 4 iterations had completed days earlier). The Solution Architect correctly observed *"No new product-scope gaps: the current problem pack's power operation is already implemented and tested in source"* — but had to express this through `readiness: NEEDS_REFINEMENT` because the existing 3-value enum (`READY` / `NEEDS_REFINEMENT` / `BLOCKED`) had no way to say "spec is fine but there's no work to do." The user's "fix the spec" mental model from the misleading verdict competed with the architect's actual analysis ("the scope is done").
+
+This is the **same vocabulary-conflation pattern** as the 2026-05-02 structured-pause-actions entry above: when a single signal is overloaded across orthogonal axes (here: spec-quality vs work-remaining), the harness silently misroutes the agent's actual intent. Different enum, same anti-pattern.
+
+**Decided.** Add `SCOPE_COMPLETE` to `ArchitectReadiness`:
+
+- Always blocks the loop regardless of `readinessGate` setting (no semantic where "proceed despite no work" makes sense; the gate's "tolerate spec issues and run anyway" semantic doesn't apply when there's no work).
+- Pauses with a dedicated `pauseReason: "scope_complete"` (not `"anomaly"` — this is a positive outcome, not a problem state).
+- Available actions narrow to `finish_loop` / `stop_loop_now` / `refine_plan` (hides `continue` — nothing to build — and `consult_reflection` — no iterations to reflect on).
+- Distinct UI rendering: `readinessColor: var(--color-info)` (neutral), dedicated `architect-review` guidance text, `pauseReasonTitle: "Loop paused: scope already complete"`.
+
+**Naming**: `SCOPE_COMPLETE` chosen over `NOTHING_TO_DO` / `ALREADY_DONE` / `IMPLEMENTATION_COMPLETE`. Mirrors the architect's own language ("no new product-scope gaps"); reads naturally in the UI ("Architect rated this `SCOPE_COMPLETE`"); distinguishes clearly from `judge.determination === "SUCCESS"` (which means "the loop ran successfully") — `SCOPE_COMPLETE` means "the loop never started because there was nothing to do."
+
+**Holistic agent-signal audit.** Triggered by the same vocabulary-conflation lesson, audited every agent's signal vocabulary against real-world cases to identify other gaps. **Outcome: only the architect needed extending.** Other roles either compose existing signals naturally or have orthogonal coverage:
+
+| Role | Signal vocabulary | Verdict |
+|---|---|---|
+| **Architect** | `readiness`: 3 values | **Gap fixed**: added `SCOPE_COMPLETE` |
+| **Dev** | `status`: completed / partial / blocked + tests + self_assessment + blockers | Sufficient. The "nothing to do mid-loop" case (e.g. iter-N over-delivers and consumes iter-N+1's plan items) is caught downstream by judge's `anomaly_type: "no_changes"` — semantically accurate enough; no new dev signal warranted by current usage. |
+| **Judge** | 4 determinations + 5 anomaly_types + reflection_needed/reason | Sufficient. The 5 anomaly types (`token_exhaustion` / `user_input_needed` / `circling` / `no_changes` / `regression`) cover the long tail of iteration outcomes. SCOPE_COMPLETE-equivalent at iteration time = `anomaly_type: "no_changes"` + `should_continue: false` + `key_concern` explanation. |
+| **Reflection** | 5 iteration_health values + `recommend_stop` + `harness_action_recommendation` | Sufficient. The earlier 2026-05-01 fix already added iteration_health-based disambiguation; SCOPE_COMPLETE-equivalent at reflection time = `recommend_stop: true` + `iteration_health: "converging"`. |
+| **PA** | Free-form `outcomeSummary` + `decisionsCount` + `clioWorkspaceMemoryDocId` | N/A. PA is conversational by design — no structured-determination enum. Free text expresses any outcome. |
+
+**Lessons.**
+
+1. **The vocabulary-conflation anti-pattern recurs naturally.** First instance: `recommend_stop=true` overloaded across stuck/done/disagree (2026-05-02 entry above). Second instance: `readiness` overloaded across spec-quality and work-remaining (this entry). Both fixes were "split the conflated axis." Worth watching for in any future signal additions: **if one signal field has to express two orthogonal axes, the consumer will silently misroute one of them.**
+
+2. **Audit before assuming symmetry.** When the user asked "now that we've added a new state to the architect, should we add it to other roles too for consistency?" — the natural temptation was to mechanically add SCOPE_COMPLETE everywhere. The right answer was an honest analysis: *only the architect was missing it; other roles already have sufficient expressivity through different mechanisms.* Symmetry-for-symmetry's-sake is the failure mode I previously called out in the structured-pause-actions discussion (PA + HA per-workspace overrides). Same lesson applies to signal vocabulary.
+
+3. **The "always blocks regardless of gate" semantic is the right shape for terminal-positive states.** SCOPE_COMPLETE is functionally a terminal state (loop has nowhere to go), but it's a *positive* terminal — not a failure. The gate's tolerance semantic ("yes, run anyway") only makes sense when there's *something to run*; for "no work" it doesn't apply at all. Future agent-signal extensions in the "loop already done somehow" space should follow this pattern: hard-block, dedicated pauseReason, dedicated narrowed action set.
+
+4. **A new signal value forces a checklist of touchpoints.** For `SCOPE_COMPLETE`: type extension, gate logic, pause-reason, allowed-actions matrix, UI color, UI guidance text, agent prompt, tests across all of those, decisions-log entry. ~9 surfaces touched. Captured here so the next maintainer adding a signal value has a checklist to follow rather than hunting for affected sites by grep.
+
+**Outcome.** SCOPE_COMPLETE shipped end-to-end on `fix/loop-stopped-history-render` (commits TBD on push). 12 new unit tests. CHANGELOG + workflow.md updated. Per-role audit findings captured in this entry — confirms that no further signal additions are needed at this time; future signal expansions must justify against the conflation-anti-pattern lens.
+
+**Cross-refs.**
+- Architect prompt extension: `packages/core/src/templates/cfcf-architect-instructions.md`
+- Type: `packages/core/src/types.ts` (`ArchitectReadiness` enum)
+- Harness logic: `packages/core/src/architect-runner.ts:readinessGateBlocks` + `packages/core/src/iteration-loop.ts:buildPreLoopBlockReason` + `pauseReasonAllowedActions`
+- UI: `packages/web/src/components/ArchitectReview.tsx` (readinessMeta) + `packages/web/src/components/WorkspaceHistory.tsx` (readinessColor) + `packages/web/src/components/FeedbackForm.tsx` (action matrix)
+- Tests: `packages/core/src/iteration-loop.test.ts` (12 new tests covering `readinessGateBlocks`, `buildPreLoopBlockReason`, `pauseReasonAllowedActions` for SCOPE_COMPLETE)
+
+---
+
 ## 2026-05-02 — Structured pause actions: ResumeAction enum + iteration_health discrimination + reflection consult mode
 
 **Context.** Two related bugs surfaced during dogfooding the tracker workspace on 2026-05-01:

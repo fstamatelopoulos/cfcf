@@ -113,7 +113,12 @@ export interface LoopState {
   pauseEvery: number;
   startedAt: string;
   completedAt?: string;
-  pauseReason?: "cadence" | "anomaly" | "user_input_needed" | "max_iterations";
+  pauseReason?:
+    | "cadence"
+    | "anomaly"
+    | "user_input_needed"
+    | "max_iterations"
+    | "scope_complete";  // item 6.25 follow-up: architect SCOPE_COMPLETE
   pendingQuestions?: string[];
   userFeedback?: string;
   iterations: LoopIterationRecord[];

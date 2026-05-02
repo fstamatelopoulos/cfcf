@@ -534,11 +534,19 @@ export async function runReviewSync(
  *     block unless the gate is `never` (pre-loop without signals is a
  *     genuine anomaly; the user should see what happened before we burn
  *     an iteration's worth of compute).
+ *
+ * **SCOPE_COMPLETE always blocks** (item 6.25 follow-up, 2026-05-02): when
+ * the architect determines the spec describes work that's already done, no
+ * gate value lets the loop proceed -- there's literally nothing to build.
+ * The gate's "should we tolerate spec issues and run anyway" semantic does
+ * not apply when there's no work, regardless of the gate setting.
  */
 export function readinessGateBlocks(
   readiness: string | undefined,
   gate: import("./types.js").ReadinessGate,
 ): boolean {
+  // SCOPE_COMPLETE always blocks regardless of gate: no work, no run.
+  if (readiness === "SCOPE_COMPLETE") return true;
   if (gate === "never") return false;
   if (!readiness) return true;
   if (gate === "blocked") return readiness === "BLOCKED";

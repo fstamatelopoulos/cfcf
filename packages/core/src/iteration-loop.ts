@@ -77,7 +77,12 @@ export interface LoopState {
   startedAt: string;
   completedAt?: string;
   /** Reason the loop is paused */
-  pauseReason?: "cadence" | "anomaly" | "user_input_needed" | "max_iterations";
+  pauseReason?:
+    | "cadence"
+    | "anomaly"
+    | "user_input_needed"
+    | "max_iterations"
+    | "scope_complete";  // item 6.25 follow-up: architect SCOPE_COMPLETE
   /** Questions from dev/judge that need user answers */
   pendingQuestions?: string[];
   /** User feedback to inject into the next iteration */
@@ -628,6 +633,16 @@ export function pauseReasonAllowedActions(
       // or stop_loop_now make sense.
       return ["finish_loop", "stop_loop_now"];
 
+    case "scope_complete":
+      // Architect SCOPE_COMPLETE (item 6.25 follow-up, 2026-05-02): spec
+      // describes work already done. Hide `continue` (loop has nothing
+      // to build) + `consult_reflection` (no iterations to reflect on).
+      // Available actions:
+      //   - finish_loop  → run documenter to refresh docs (if configured)
+      //   - stop_loop_now → accept "project is done"
+      //   - refine_plan  → user adds new requirements, re-runs review
+      return ["finish_loop", "stop_loop_now", "refine_plan"];
+
     default:
       // A1 pre-loop review blocked. continue (after user edited the
       // Problem Pack), stop_loop_now, refine_plan (re-run architect
@@ -740,6 +755,8 @@ function pauseReasonTitle(reason?: LoopState["pauseReason"]): string {
       return "Loop needs your input";
     case "max_iterations":
       return "Loop reached max iterations";
+    case "scope_complete":
+      return "Loop paused: scope already complete";
     default:
       return "Loop paused";
   }
@@ -766,6 +783,14 @@ export function buildPreLoopBlockReason(
 ): string {
   if (reviewError) {
     return `The Solution Architect's pre-loop review failed before it could produce a verdict (${reviewError}). Check the architect log for details, then resume to retry, or pick "Stop loop now" to abandon.`;
+  }
+
+  // SCOPE_COMPLETE: the spec is fine but the work it describes is already
+  // implemented + tested. Loop has nothing to do. Always blocks regardless
+  // of gate. Different message + different action set than the spec-quality
+  // verdicts (READY/NEEDS_REFINEMENT/BLOCKED).
+  if (readiness === "SCOPE_COMPLETE") {
+    return `The Solution Architect determined that your Problem Pack describes work that is already implemented and tested — there is nothing left for an iteration loop to build. The spec itself is fine. Pick one of the actions below: "Stop loop now" to accept the project is done, "Refine plan" to add new requirements then re-review, or "Finish loop" to run the documenter to refresh docs (no implementation work).`;
   }
 
   // What does each gate accept?
@@ -1128,8 +1153,11 @@ async function runLoop(
     if (blocked || reviewError) {
       // Gate rejected -- pause the loop. User edits problem pack, then
       // resumes, which will re-enter this block and re-review.
+      // Item 6.25 follow-up: SCOPE_COMPLETE gets its own pauseReason so
+      // the UI doesn't mislabel "scope already done" as an anomaly.
       state.phase = "paused";
-      state.pauseReason = "anomaly";
+      state.pauseReason =
+        readiness === "SCOPE_COMPLETE" ? "scope_complete" : "anomaly";
       const reason = buildPreLoopBlockReason(
         reviewError,
         readiness,

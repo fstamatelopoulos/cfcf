@@ -473,8 +473,30 @@ export type ResumeAction =
   | "refine_plan"
   | "consult_reflection";
 
+/**
+ * Architect's verdict on the Problem Pack's readiness for an iteration loop.
+ *
+ * - `READY` — spec is well-defined; loop can proceed.
+ * - `NEEDS_REFINEMENT` — spec has gaps the user should address; gate-dependent
+ *   whether the loop proceeds anyway.
+ * - `BLOCKED` — spec has fundamental problems; loop cannot proceed without
+ *   significant rework.
+ * - `SCOPE_COMPLETE` — spec describes work that is **already implemented and
+ *   tested** in the source tree. The spec itself is fine, but there is
+ *   nothing left for the loop to build. ALWAYS blocks the loop regardless
+ *   of `readinessGate` setting; no semantic where "proceed despite no work
+ *   to do" makes sense. Added 2026-05-02 (item 6.25 follow-up); see
+ *   `docs/decisions-log.md` 2026-05-02 entry on agent-harness signal
+ *   vocabulary.
+ */
+export type ArchitectReadiness =
+  | "READY"
+  | "NEEDS_REFINEMENT"
+  | "BLOCKED"
+  | "SCOPE_COMPLETE";
+
 export interface ArchitectSignals {
-  readiness: "READY" | "NEEDS_REFINEMENT" | "BLOCKED";
+  readiness: ArchitectReadiness;
   gaps: string[];
   suggestions: string[];
   risks: string[];

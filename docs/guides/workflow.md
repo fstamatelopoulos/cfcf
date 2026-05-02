@@ -560,6 +560,14 @@ When cf² pauses, you choose **one structured action** to drive the harness, plu
 
 **Which actions are available depends on why the loop paused** — the UI hides actions that don't make sense for the current pause case (e.g. you can't `Refine plan` when the dev agent is mid-iteration asking a question; you can't `Finish loop` when the loop hasn't started yet because the pre-loop review was blocked). The CLI rejects inapplicable `--action` values with a clear error and the list of allowed actions.
 
+**Special pause case: `SCOPE_COMPLETE`** (architect verdict, item 6.25 follow-up). When the Solution Architect determines that your Problem Pack describes work that's already implemented + tested in the source tree (e.g. you re-launched a loop on a previously-completed workspace), the loop pauses with `pauseReason: "scope_complete"` regardless of your `readinessGate` setting. The available actions narrow to:
+
+- **Finish loop** — refresh the documenter (if `autoDocumenter=true`) and end on a positive note. Useful when you want updated docs but no new implementation.
+- **Stop loop now** — accept that the project is done; terminate the loop and capture any feedback you provide as audit history.
+- **Refine plan** — add new requirements to `problem-pack/problem.md` + `success.md`, then re-run the architect with your feedback as direction.
+
+`Continue` and `Ask Reflection to decide` are hidden because there's no work to continue with and no iterations for reflection to reflect on.
+
 **No bare "Resume."** You always pick an action. The textarea is optional context; the action button is required. This forces clarity of intent — no silent "resume = continue" shortcut.
 
 **Examples:**
