@@ -17,13 +17,13 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 **Context.** Three small UX gaps surfaced during the first round of dogfooding the structured pause actions (item 6.25, shipped via PR #27 a few hours earlier). Each was a discrete defect with its own root cause; together they're a useful study of "what kinds of things go wrong when you ship a feature that introduces a new event type + a new control surface." Captured as one entry because the lessons compound.
 
-**The three defects (in order of how the user encountered them).**
+**The three defects (briefly, as context for the lessons).**
 
-1. **`loop-stopped` history rows rendered with empty Type / Agent / Result columns + a broken "log" button.** The new `loop-stopped` event type was added to core's `HistoryEventType`, but the web package has its **own** mirror of that type (in `packages/web/src/types.ts`) which wasn't updated. Result: the web's `typeLabel` switch fell through to `undefined`; `agentLabel` defaulted to the (now-undefined) `event.agent` and rendered empty; the result-column had no render branch for the new type; and the actions column fell through to a generic `[log]` button that called `onSelectLog({ logFile: undefined })` — broken click target. The root typecheck (`bun run typecheck` from the repo root) didn't catch the gap because it doesn't typecheck the web package; only `cd packages/web && bun run build` (which the local-install path triggers) caught the type mismatch downstream.
+1. **`loop-stopped` history rows rendered with empty Type / Agent / Result columns + a broken "log" button.** Root cause: the new `loop-stopped` event type was added to core's `HistoryEventType`, but the web package keeps its **own parallel mirror** of that type. Adding to one doesn't auto-update the other; the type system can't enforce sync between two parallel definitions. Compounded by the root `bun run typecheck` not covering the web package's stricter `tsc -b && vite build` — the gap surfaced only when `local-install.sh` triggered the web build.
 
-2. **The pre-loop pause message read as jargon.** *"Pre-loop review readiness=missing does not satisfy gate=needs_refinement_or_blocked. Edit the Problem Pack and resume."* The user's reaction — "ok, but not user-friendly" — captured the problem precisely: the message described the *gate-arithmetic* (which the user has to mentally translate back to "what does this mean for me?") rather than the *user's situation* and *what to do*. Replaced with a tailored plain-English message per case (review error / missing signal / verdict mismatch), mentioning concrete file paths (`problem-pack/problem.md` + `success.md`) and the resume-action alternatives (`Stop loop now`, `Refine plan`).
+2. **The pre-loop pause message read as jargon.** Original phrasing described *gate-arithmetic* ("readiness=missing does not satisfy gate=needs_refinement_or_blocked") rather than *the user's situation + what to do*. Engineer-readable, user-hostile.
 
-3. **Top-level Resume / Stop / Document buttons competed with the new structured FeedbackForm action panel during pause state.** Two control surfaces showing simultaneously, both routing to "resume." Worse, the legacy `Resume` button called `api.resumeLoop(workspaceId)` **without** the new `action` argument — defaulting server-side to `"continue"` and **bypassing the user's structured choice from the FeedbackForm**. This wasn't just visual clutter; it was a wrong-routing footgun. The fix was conditional rendering: hide all three legacy buttons when `phase === "paused"`. The FeedbackForm's 5-action panel becomes the single control surface during pause; legacy buttons reappear naturally on transition out of paused.
+3. **Top-level Resume / Stop / Document buttons competed with the new structured FeedbackForm action panel during pause state.** Not just visual clutter: the legacy `Resume` button called `api.resumeLoop(workspaceId)` **without** the new `action` argument — defaulting server-side to `"continue"` and **bypassing the user's structured choice from the FeedbackForm**. Wrong-routing footgun on top of the duplicated control surfaces.
 
 **Lessons.**
 
@@ -37,11 +37,7 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 5. **"Pause message wording" is a recurring failure mode.** The earlier "fix" had used gate-arithmetic phrasing ("readiness=missing does not satisfy gate=..."). That phrasing worked for an engineer reading the code; it didn't work for a user reading a UI prompt. **Pause messages should describe the user's situation + what to do, not the harness's internal state machine.** Future auto-generated pause messages should be reviewed against this lens.
 
-**Outcome.** All three fixes shipped in this branch (`fix/loop-stopped-history-render`) with no test regressions. UX is meaningfully cleaner: history rows render with full info, pause messages read in plain English, the FeedbackForm is the single source of action during pause.
-
-**Cross-refs.**
-- Commits: `c30cf1d` (loop-stopped + pause message), `d1017ee` (hide legacy buttons), `bd0bb92` (SCOPE_COMPLETE — separate entry below).
-- Affected files: `packages/web/src/types.ts`, `packages/web/src/components/{WorkspaceHistory,FeedbackForm,LoopControls}.tsx`, `packages/web/src/pages/WorkspaceDetail.tsx`, `packages/core/src/iteration-loop.ts:buildPreLoopBlockReason`.
+**Cross-refs.** Commits `c30cf1d`, `d1017ee` on `fix/loop-stopped-history-render`.
 
 ---
 
@@ -80,7 +76,7 @@ This is the **same vocabulary-conflation pattern** as the 2026-05-02 structured-
 
 4. **A new signal value forces a checklist of touchpoints.** For `SCOPE_COMPLETE`: type extension, gate logic, pause-reason, allowed-actions matrix, UI color, UI guidance text, agent prompt, tests across all of those, decisions-log entry. ~9 surfaces touched. Captured here so the next maintainer adding a signal value has a checklist to follow rather than hunting for affected sites by grep.
 
-**Outcome.** SCOPE_COMPLETE shipped end-to-end on `fix/loop-stopped-history-render` (commits TBD on push). 12 new unit tests. CHANGELOG + workflow.md updated. Per-role audit findings captured in this entry — confirms that no further signal additions are needed at this time; future signal expansions must justify against the conflation-anti-pattern lens.
+**Conclusion.** Per-role audit findings captured above confirm no further signal additions are warranted at this time. Future signal expansions must justify against the conflation-anti-pattern lens (one field, one axis) before being added.
 
 **Cross-refs.**
 - Architect prompt extension: `packages/core/src/templates/cfcf-architect-instructions.md`
