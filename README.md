@@ -14,9 +14,9 @@ A deterministic orchestration harness that runs AI coding agents in iterative lo
 
 ## Status
 
-**Early development.** First public release: `v0.16.2` on npmjs.com (May 2026). Iteration 5 largely shipped; iteration 6 in progress.
+**Early development.** Current release: `v0.17.0` on npmjs.com (May 2026). Iteration 5 fully shipped (Clio cross-workspace memory, npm publish pipeline, Product Architect role); iteration 6 in progress.
 
-**Currently working on**: closing out iteration 5 with the npm publish pipeline + the Product Architect role; iteration 6 is the next major focus area (web UI Clio tab, multi-workspace coordination, and a few QoL items).
+**Currently working on**: iteration 6 — web UI Clio tab, multi-workspace coordination, structured pause actions (shipped 2026-05-02), and additional QoL items.
 
 cfcf can be driven from the CLI or from the web GUI served by the same Hono server. For the full roadmap, decisions log, and iteration-by-iteration history, see [`docs/plan.md`](docs/plan.md) (living roadmap) + [`CHANGELOG.md`](CHANGELOG.md) (per-version changes) + [`docs/decisions-log.md`](docs/decisions-log.md) (architectural decisions + post-mortems).
 
@@ -106,9 +106,9 @@ bun run dev:cli -- workspace init --repo /path/to/your/project --name my-app
 # Launch the AI agent against your problem
 bun run dev:cli -- run --workspace my-app
 
-# Or run a manual command (for testing)
-bun run dev:cli -- run --workspace my-app -- npm test
 ```
+
+> Resume a paused loop with a structured action: `cfcf resume --workspace my-app --action continue` (or `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection`). Stop a running loop with `cfcf stop --workspace my-app`.
 
 ## Development
 
@@ -138,16 +138,17 @@ For changes that touch the install flow (`scripts/install.sh`, `scripts/build-cl
 cfcf self-update --yes                 # restores the published version when you're done
 ```
 
-`local-install.sh` builds the CLI + per-platform native tarball, runs `install.sh` against `file://$(pwd)/dist`, and finishes with `cfcf doctor` to confirm the install took. Auto-derives the version label from root `package.json` (`v0.16.4-local`); cleans any existing cfcf install first. See [`scripts/README.md`](scripts/README.md) for the full developer workflow + script reference.
+`local-install.sh` builds the CLI + per-platform native tarball, runs `install.sh` against `file://$(pwd)/dist`, and finishes with `cfcf doctor` to confirm the install took. Auto-derives the version label from root `package.json` (`v0.17.0-local`); cleans any existing cfcf install first. See [`scripts/README.md`](scripts/README.md) for the full developer workflow + script reference.
 
 ## Project Structure
 
 ```
 cfcf/
   packages/
-    core/               # Shared types, config, adapters, context assembly
-    server/             # Hono HTTP server (backbone)
+    core/               # Shared types, config, adapters, context assembly, Clio backend
+    server/             # Hono HTTP server (backbone) + /api/clio routes
     cli/                # Commander.js CLI (user interface)
+    web/                # React + Vite web GUI (served by the Hono server)
   problem-packs/        # Example problem definitions
     example/            # Calculator module example
   docs/
@@ -169,18 +170,32 @@ cfcf/
   CHANGELOG.md          # Release notes (follows Keep a Changelog)
 ```
 
-### Five Agent Roles
+### Agent Roles
 
-cfcf uses five independently configurable agent roles -- each role can use
-a different adapter and model:
+cfcf uses seven independently configurable agent roles — each role can use
+a different adapter and model. Five run inside the iteration loop; two are
+interactive:
 
 | Role | Purpose |
 |------|---------|
-| Solution Architect | Reviews Problem Pack, produces / extends `plan.md` |
+| Solution Architect | Reviews Problem Pack, produces / extends `plan.md` (verdicts: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE) |
 | Dev agent | Writes code, runs tests, authors per-iteration changelog |
 | Judge agent | Per-iteration assessment + `reflection_needed` opt-out signal |
 | Reflection agent | Cross-iteration strategic review, non-destructive plan edits |
 | Documenter | Polished final docs after SUCCESS |
+| Product Architect (interactive) | Live spec iteration before launching the loop |
+| Help Assistant (interactive) | In-shell help + how-to guidance |
+
+### Clio cross-workspace memory
+
+cfcf ships with **Clio**, a local SQLite knowledge layer at `~/.cfcf/clio.db`
+shared across all workspaces and scoped by named **Clio Projects**. FTS5
+keyword search out of the box; install an embedder via
+`cfcf clio embedder install` for hybrid semantic search (alpha-weighted blend
+of cosine + BM25). The iteration loop auto-ingests reflection analyses,
+architect reviews, decision-log entries, and iteration summaries so future
+iterations across any workspace can retrieve them. CLI: `cfcf clio …`
+(alias `cfcf memory …`). See [`docs/guides/clio-quickstart.md`](docs/guides/clio-quickstart.md).
 
 ## Architecture at a Glance
 

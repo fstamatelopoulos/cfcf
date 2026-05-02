@@ -14,7 +14,8 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - **Commander.js** CLI that communicates with the server via HTTP
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
-- **Five agent roles**: dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack), reflection (cross-iteration strategic review), documenter (produces final docs). Each role independently configurable (adapter + model).
+- **Seven agent roles**: five run inside the iteration loop — dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack; verdicts: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE), reflection (cross-iteration strategic review), documenter (produces final docs); two are interactive — Product Architect (live spec iteration before the loop, item 5.14) and Help Assistant (in-shell guidance). Each role independently configurable (adapter + model).
+- **Structured pause actions** (item 6.25, shipped 2026-05-02): when a paused loop is resumed via `cfcf resume --action <…>`, the user picks one of `continue` / `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection`. `loop-stopped` is a workspace-history event type for user-initiated `stop_loop_now`.
 - **Three commits per iteration** when reflection runs: `cfcf iteration N dev (...)`, `cfcf iteration N judge (...)`, `cfcf iteration N reflect (<health>): <key_observation>`.
 - **Async execution**: iterate endpoint returns 202, CLI polls for status.
 - **Clio cross-workspace memory** (items 5.7 + 5.11 + 5.12 + 5.13): persistent SQLite knowledge layer at `~/.cfcf/clio.db`. Shared across all workspaces, scoped by named **Clio Project**. FTS5 keyword search out of the box; install an embedder via `cfcf clio embedder install` to enable hybrid (α-weighted blend of cosine + normalised BM25, default α=0.7) + semantic search. **Cerefox-parity surface**: doc-level search by default (`--by-chunk` for raw chunk view), per-document small-to-big retrieval (small docs return full content, large docs return chunk + context window), update-by-document-id + update-by-title (with version snapshots in `clio_document_versions`), metadata-only edit (`cfcf clio docs edit` / `PATCH /api/clio/documents/:id`: title/author/project/metadata change with NO version snapshot — versions protect chunks, not metadata; one `edit-metadata` audit entry per non-empty edit), soft-delete + restore, audit log (write-only, with `edit-metadata` before/after diffs), metadata-search + metadata-keys discovery, `--alpha` / `--small-doc-threshold` / `--context-window` per-call knobs and matching `clio.*` global config. Iteration-loop auto-ingests reflection analyses, architect reviews, decision-log entries, iteration summaries (gated by `workspace.clio.ingestPolicy`). All agent roles read Clio via `cfcf-docs/clio-relevant.md` (top-k hits matched against `problem.md`) + the `cfcf-docs/clio-guide.md` cue card. Backend code lives behind a `MemoryBackend` interface so a future remote-Cerefox adapter can swap in cleanly.
@@ -115,6 +116,11 @@ packages/
       document.ts        # Generate final docs (cfcf document)
       reflect.ts         # Ad-hoc reflection pass (cfcf reflect, 5.6)
       status.ts          # Status overview with loop state
+      spec.ts            # Product Architect interactive spec iteration (cfcf spec, 5.14)
+      doctor.ts          # Environment / install diagnostics (cfcf doctor)
+      self-update.ts     # In-place upgrade to latest npm release (cfcf self-update)
+      help.ts            # In-shell user-manual + focused guides (cfcf help [topic])
+      completion.ts      # Shell completion scripts (cfcf completion)
       clio.ts            # cfcf clio {search,ingest,get,docs {list,edit},projects,project,
                          #   versions,audit,delete,restore,metadata-search,metadata-keys,
                          #   embedder {list,active,install,set},reindex,stats}
@@ -143,7 +149,7 @@ docs/                    # Design docs, API reference, guides
 - Adapter names are kebab-case: `claude-code`, `codex`
 - All decisions logged in `docs/plan.md` decision log and `docs/decisions-log.md`
 - Feature branches for cfcf development: `iteration-N/<description>` (e.g., `iteration-5/reflection-pr1`)
-- Five agent roles: dev, judge, architect, reflection, documenter -- each independently configurable (agent + model)
+- Seven agent roles: 5 iteration (dev, judge, architect, reflection, documenter) + 2 interactive (Product Architect, Help Assistant) -- each independently configurable (agent + model)
 - Reflection defaults to the architect agent's adapter when unset; `reflectSafeguardAfter` defaults to `3` consecutive judge opt-outs
 
 ## What NOT to Do
@@ -172,6 +178,11 @@ docs/
     server-api.md                  # Server REST API endpoints
   research/                        # Ideas and explorations (not yet in the plan)
   guides/                          # User guides
-    workflow.md                    # Complete user workflow (the main user guide)
+    manual.md                      # 3-minute getting started + concepts (entry point; mirrored by `cfcf help`)
+    workflow.md                    # Complete user workflow
     cli-usage.md                   # CLI command reference
+    installing.md                  # Install / upgrade / uninstall / offline
+    clio-quickstart.md             # Clio cross-workspace memory quickstart
+    product-architect.md           # Product Architect interactive role
+    troubleshooting.md             # Troubleshooting guide
 ```
