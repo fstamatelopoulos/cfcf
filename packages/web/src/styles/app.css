@@ -804,16 +804,23 @@
 }
 
 .project-history__actions {
-  display: flex;
-  gap: 0.25rem;
   /*
-   * Item 6.25 follow-up #2 (2026-05-02): the actions class is applied
-   * directly to the <td>, and `display: flex` overrides the table-cell
-   * `vertical-align: top` we set on `.project-history__table td`. Need
-   * `align-items: flex-start` so the LOG-column buttons sit at the top
-   * of the row when the TYPE / RESULT cells wrap to two lines.
+   * Item 6.25 follow-up #3 (2026-05-02): drop `display: flex` from the
+   * <td> entirely — `display: flex` on a table-cell element fights
+   * table-row layout in subtle ways (the browser still treats the td as
+   * `table-cell` externally, but the flex container inside doesn't
+   * reliably honour the `vertical-align: top` set on the parent rule).
+   * Result: LOG-column buttons drifted to mid-row when neighbouring
+   * cells wrapped to two lines. Use simple inline-block + sibling
+   * margin for button spacing instead. The td inherits
+   * `vertical-align: top` from `.project-history__table td`, which now
+   * applies cleanly.
    */
-  align-items: flex-start;
+  white-space: nowrap;
+}
+
+.project-history__actions > * + * {
+  margin-left: 0.25rem;
 }
 
 .project-history__empty {
