@@ -806,6 +806,14 @@
 .project-history__actions {
   display: flex;
   gap: 0.25rem;
+  /*
+   * Item 6.25 follow-up #2 (2026-05-02): the actions class is applied
+   * directly to the <td>, and `display: flex` overrides the table-cell
+   * `vertical-align: top` we set on `.project-history__table td`. Need
+   * `align-items: flex-start` so the LOG-column buttons sit at the top
+   * of the row when the TYPE / RESULT cells wrap to two lines.
+   */
+  align-items: flex-start;
 }
 
 .project-history__empty {
