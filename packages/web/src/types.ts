@@ -160,7 +160,13 @@ export interface HealthResponse {
 
 // --- Workspace history ---
 
-export type HistoryEventType = "review" | "iteration" | "document" | "reflection" | "pa-session";
+export type HistoryEventType =
+  | "review"
+  | "iteration"
+  | "document"
+  | "reflection"
+  | "pa-session"
+  | "loop-stopped";  // item 6.25 — user-initiated stop_loop_now
 
 export type IterationHealth =
   | "converging"
@@ -219,8 +225,16 @@ export interface BaseHistoryEvent {
   status: HistoryEventStatus;
   startedAt: string;
   completedAt?: string;
-  logFile: string;
-  agent: string;
+  /**
+   * Optional because user-action events (e.g. `loop-stopped`) don't
+   * spawn an agent and have no log file.
+   */
+  logFile?: string;
+  /**
+   * Optional because user-action events (e.g. `loop-stopped`) don't
+   * involve an agent.
+   */
+  agent?: string;
   model?: string;
   error?: string;
 }
@@ -302,9 +316,24 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
   problemPackFilesAtStart: number;
 }
 
+/**
+ * Item 6.25: user-initiated `stop_loop_now` event. Captures the
+ * iteration the loop stopped at + the user's free-text feedback as
+ * an audit note. No agent runs — `logFile` / `agent` from the base
+ * are absent. Mirrors `LoopStoppedHistoryEvent` in @cfcf/core's
+ * `workspace-history.ts`.
+ */
+export interface LoopStoppedHistoryEvent extends BaseHistoryEvent {
+  type: "loop-stopped";
+  iteration: number;
+  /** User's free-text feedback at the time of stopping. Audit-only. */
+  userFeedback?: string;
+}
+
 export type HistoryEvent =
   | ReviewHistoryEvent
   | IterationHistoryEvent
   | DocumentHistoryEvent
   | ReflectionHistoryEvent
-  | PaSessionHistoryEvent;
+  | PaSessionHistoryEvent
+  | LoopStoppedHistoryEvent;

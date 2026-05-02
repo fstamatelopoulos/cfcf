@@ -746,6 +746,56 @@ function pauseReasonTitle(reason?: LoopState["pauseReason"]): string {
 }
 
 /**
+ * Build the human-readable reason text shown when the pre-loop review's
+ * readiness gate rejects the architect's verdict (or the architect run
+ * itself failed). Replaces the older jargon-y form
+ *   "Pre-loop review readiness=missing does not satisfy gate=...".
+ *
+ * Two cases:
+ *   - The architect process itself errored before producing signals
+ *     (`reviewError` set) — surface the error verbatim with brief
+ *     context.
+ *   - The architect produced signals but the readiness verdict didn't
+ *     pass the gate — explain in plain English what the verdict was,
+ *     what the gate requires, and what the user can do.
+ */
+export function buildPreLoopBlockReason(
+  reviewError: string | undefined,
+  readiness: string | undefined,
+  gate: string,
+): string {
+  if (reviewError) {
+    return `The Solution Architect's pre-loop review failed before it could produce a verdict (${reviewError}). Check the architect log for details, then resume to retry, or pick "Stop loop now" to abandon.`;
+  }
+
+  // What does each gate accept?
+  const gateExplanation = (() => {
+    switch (gate) {
+      case "never":
+        return "your readiness gate is set to 'never' (always proceed) -- but the review didn't produce a verdict at all";
+      case "blocked":
+        return "your readiness gate is set to 'blocked' (anything but BLOCKED proceeds)";
+      case "needs_refinement_or_blocked":
+        return "your readiness gate is set to 'needs_refinement_or_blocked' (only READY proceeds)";
+      default:
+        return `your readiness gate is set to '${gate}'`;
+    }
+  })();
+
+  if (!readiness) {
+    return `The Solution Architect reviewed your Problem Pack but didn't produce a clear readiness verdict (signal file missing or malformed). This usually means the review run hit an error mid-way — check the architect log. To proceed: edit problem-pack/problem.md + success.md to address any obvious issues, then pick "Continue" to retry the review.`;
+  }
+
+  const verdict = readiness;
+  const action =
+    verdict === "READY"
+      ? "edit problem-pack/problem.md + success.md to align with the gate setting (or change the gate via cfcf config)"
+      : "edit problem-pack/problem.md + success.md to address the gaps listed below, then resume";
+
+  return `The Solution Architect reviewed your Problem Pack and rated it '${verdict}' — ${gateExplanation}. To proceed: ${action}. Or pick a different action ("Stop loop now" to abandon, "Refine plan" to re-run the review with your feedback as direction).`;
+}
+
+/**
  * Check if the loop has reached a terminal or paused state.
  * Used after calling runJudgeAndDecide() which mutates state.phase.
  */
@@ -1080,9 +1130,11 @@ async function runLoop(
       // resumes, which will re-enter this block and re-review.
       state.phase = "paused";
       state.pauseReason = "anomaly";
-      const reason = reviewError
-        ? `Pre-loop review failed: ${reviewError}`
-        : `Pre-loop review readiness=${readiness ?? "missing"} does not satisfy gate="${loopCfg.readinessGate}". Edit the Problem Pack and resume.`;
+      const reason = buildPreLoopBlockReason(
+        reviewError,
+        readiness,
+        loopCfg.readinessGate,
+      );
       const questions = reviewRes?.signals?.gaps?.slice(0, 5) ?? [];
       state.pendingQuestions = questions.length ? questions : [reason];
       await saveLoopState(state);
