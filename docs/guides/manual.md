@@ -103,6 +103,10 @@ A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory 
 
 `cfcf server start` boots a local Hono server (default port `7233`) that hosts the HTTP API and a React web UI. Most cfcf CLI commands hit this server. The web UI is the easiest way to watch the loop in real time — `http://127.0.0.1:7233` after start.
 
+### Pause actions
+
+When the loop pauses, you can resume with one of five structured actions (`continue` / `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection`) instead of a bare "Resume." Each action routes the harness — and any free-text feedback you provide — to a different destination. See [Workflow → User actions at pause points](workflow.md#user-actions-at-pause-points) for the full table and CLI examples.
+
 ---
 
 ## Where to go next

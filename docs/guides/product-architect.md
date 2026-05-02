@@ -210,7 +210,7 @@ cfcf reads `meta.json.lastSession` after the agent exits to enrich the workspace
 See [`troubleshooting.md`](troubleshooting.md) for PA-specific issues. The most common ones:
 
 - **PA reports "server is not running" but it IS running.** You're in `--safe` mode + codex's sandbox is blocking loopback. Either drop `--safe` (default mode lifts the sandbox) or trust the State Assessment in the prompt (it was computed from outside the sandbox).
-- **PA's Memory Inventory says "no workspace memory" but I had a session yesterday.** Pre-v0.x.x, the agent's ingest may have auto-routed to the `default` Clio Project. Recent versions search project-agnostic by metadata, so this should resolve on next launch. If it persists, check `cfcf clio metadata search --filter '{"role":"pa","artifact_type":"workspace-memory"}'` for the doc.
+- **PA's Memory Inventory says "no workspace memory" but I had a session yesterday.** Pre-v0.15.0, the agent's ingest may have auto-routed to the `default` Clio Project. Recent versions search project-agnostic by metadata, so this should resolve on next launch. If it persists, check `cfcf clio metadata search --filter '{"role":"pa","artifact_type":"workspace-memory"}'` for the doc.
 - **Session ended without saving.** Disk session log at `<repo>/.cfcf-pa/session-<id>.md` is preserved (turn-by-turn writes). Next PA launch will detect the discrepancy + offer to push the unfinished session to Clio.
 
 ## Design baseline

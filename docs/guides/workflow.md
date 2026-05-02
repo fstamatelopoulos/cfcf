@@ -268,7 +268,7 @@ The Solution Architect reads your Problem Pack and produces:
 - **`cfcf-docs/architect-review.md`** -- readiness assessment, gaps, ambiguities, security considerations, risk factors, recommendations
 - **`cfcf-docs/plan.md`** -- initial implementation plan outline for the dev agent to build on
 - **`docs/architecture.md`**, **`docs/api-reference.md`**, **`docs/setup-guide.md`** -- initial documentation stubs (first-run only)
-- **`cfcf-docs/cfcf-architect-signals.json`** -- structured readiness signal (READY / NEEDS_REFINEMENT / BLOCKED)
+- **`cfcf-docs/cfcf-architect-signals.json`** -- structured readiness signal (READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE)
 
 ### The architect has two modes
 
@@ -541,6 +541,7 @@ When the decision log grows past 50 iterations, cf² fires a single informationa
 | **Judge flags anomaly** | Token exhaustion, circling, regression detected. cf² alerts user. |
 | **Judge says STALLED** | No progress for N consecutive iterations. cf² alerts user. |
 | **Reflection flags `recommend_stop`** | Reflection believes the loop is fundamentally stuck. cf² pauses and alerts the user. This takes precedence over a judge `PROGRESS` vote. |
+| **Architect returns `SCOPE_COMPLETE`** | A mid-loop architect re-review concluded the Problem Pack is already fully delivered. cf² pauses with `pauseReason: "scope_complete"`; the resume-action menu narrows to `finish_loop` / `stop_loop_now` / `refine_plan`. |
 | **Success** | All criteria met. cf² runs documenter, merges to main, pushes, notifies user. |
 | **Max iterations reached** | cf² stops and reports final state. |
 
@@ -705,6 +706,12 @@ cf² is designed for the "add more work later" case. The flow for extending a su
 ```
 
 Because the non-destructive rules are applied to both architect re-review *and* reflection-during-loop, completed work from prior iterations is never lost.
+
+**`SCOPE_COMPLETE` is the architect's verdict for this scenario.** When you re-launch a loop on a workspace whose Problem Pack is already fully delivered (e.g. you ran `cfcf run` on a finished project without editing the spec), the pre-loop architect review returns `readiness: SCOPE_COMPLETE` and the loop pauses before iteration 1 with `pauseReason: "scope_complete"`. From there:
+
+- `cfcf resume --workspace <name> --action refine_plan --feedback "<new requirements>"` — extend the scope. Architect reads your feedback + the (now-edited) Problem Pack and appends new pending iterations to `plan.md`. The loop resumes with the next iteration.
+- `cfcf resume --workspace <name> --action finish_loop` — wrap up via the documenter to refresh the final docs (if `autoDocumenter=true`) and end on a positive note.
+- `cfcf resume --workspace <name> --action stop_loop_now` — accept that the project is done and terminate without running the documenter; any `--feedback` becomes audit history on the new `loop-stopped` event.
 
 ---
 

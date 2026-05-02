@@ -19,7 +19,7 @@ Lightweight health check. Use this to verify the server is running.
 ```json
 {
   "status": "ok",
-  "version": "0.0.0",
+  "version": "0.17.0",
   "uptime": 42
 }
 ```
@@ -41,7 +41,7 @@ Detailed server status including configuration state.
 ```json
 {
   "status": "running",
-  "version": "0.0.0",
+  "version": "0.17.0",
   "uptime": 42,
   "pid": 12345,
   "port": 7233,
@@ -525,6 +525,7 @@ Events are returned in insertion order (chronological). Clients should sort if a
 | `iteration` | Iteration loop | `iteration`, `branch`, `devLogFile`, `judgeLogFile`, `devExitCode`, `judgeExitCode`, `judgeDetermination`, `judgeQuality`, `merged`, `devSignals`, `judgeSignals` |
 | `reflection` | Reflection runner (loop or ad-hoc) | `iteration`, `trigger` (`"loop"` or `"manual"`), `signals`, `iterationHealth`, `planModified`, `planRejectionReason` (when applicable) |
 | `document` | Documenter run | `docsFileCount`, `committed`, `exitCode` |
+| `loop-stopped` | User selected `stop_loop_now` at a pause (item 6.25, 2026-05-02) | `iteration` (the iteration number at the time of stopping), `userFeedback?` (audit-only free text). No `logFile`, no `agent` — this is a user-action event, no agent runs. `status` is always `"completed"`. |
 | `pa-session` | Product Architect (`cfcf spec`) | `sessionId`, `sessionFilePath`, `outcomeSummary`, `decisionsCount`, `clioWorkspaceMemoryDocId`, `exitCode`, `workspaceRegisteredAtStart`, `gitInitializedAtStart`, `problemPackFilesAtStart` |
 
 A `pa-session` event example:
@@ -655,6 +656,8 @@ Get the status of an architect review.
   }
 }
 ```
+
+`readiness` enum: `READY` | `NEEDS_REFINEMENT` | `BLOCKED` | `SCOPE_COMPLETE`. The fourth value (added 2026-05-02) means the architect believes the plan is fully delivered and recommends ending the loop; the harness translates this to `pauseReason: "scope_complete"` mid-loop.
 
 ---
 
@@ -848,15 +851,30 @@ Get the full loop state including iteration history.
 
 ### POST /api/workspaces/:id/loop/resume
 
-Resume a paused loop with optional user feedback.
+Resume a paused loop with an optional structured action and free-text feedback. Item 6.25 (2026-05-02) generalised the body from a bare `{ feedback }` into `{ feedback?, action? }`; `action` defaults to `"continue"` for back-compat.
+
+```ts
+type ResumeAction =
+  | "continue"            // default; run next dev iteration
+  | "finish_loop"         // exit loop, run documenter (if autoDocumenter=true)
+  | "stop_loop_now"       // exit loop immediately; no documenter; capture feedback as audit
+  | "refine_plan"         // synchronously run architect to revise plan.md, then resume
+  | "consult_reflection"; // run reflection in consult mode with feedback as the query, then resume
+```
 
 **Request body (optional):**
 
 ```json
 {
-  "feedback": "Focus on error handling in the API layer"
+  "feedback": "Focus on error handling in the API layer",
+  "action": "continue"
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `feedback` | `string?` | Free-text guidance. Destination depends on `action`: dev prompt for `continue`, documenter for `finish_loop`, audit for `stop_loop_now`, architect for `refine_plan`, reflection for `consult_reflection`. |
+| `action` | `ResumeAction?` | Defaults to `"continue"`. The server validates the value against the current `pauseReason` and returns `400` if the action isn't applicable (e.g. `consult_reflection` before any iteration has run). The error body includes the list of allowed actions. |
 
 **Response:** `202 Accepted`
 

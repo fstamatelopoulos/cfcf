@@ -122,11 +122,15 @@ cfcf-docs/
   cfcf-reflection-instructions.md   # cf² generates from template per reflection run
   cfcf-reflection-signals.json      # Reflection agent writes after each run
   cfcf-reflection-context.md        # cf² assembles: compact per-iteration-branch git log + tail of the last dev log
-  reflection-analysis.md            # Human-readable cross-iteration review (latest)
-  reflection-reviews/               # ARCHIVED prior reflection analyses
+  reflection-analysis.md            # Human-readable cross-iteration review (latest, top-level — mirrors iteration-reviews/ pattern)
+  reflection-reviews/               # ARCHIVED prior reflection analyses (v0.6.0+)
     reflection-1.md                 # cf² archives reflection-analysis.md → reflection-N.md after each run
     reflection-2.md
     ...
+
+  # --- Clio cross-workspace memory hooks (item 5.7+) ---
+  clio-relevant.md                  # Top-k Clio hits matched against problem.md, regenerated each iteration
+  clio-guide.md                     # Cue card for agents on how to query Clio
 ```
 
 **Signal file lifecycle:**
@@ -214,7 +218,7 @@ The user drives this process. It is iterative and optional:
 }
 ```
 
-Readiness values: `READY` | `NEEDS_REFINEMENT` | `BLOCKED`
+Readiness values: `READY` | `NEEDS_REFINEMENT` | `BLOCKED` | `SCOPE_COMPLETE`. The fourth value (added 2026-05-02) means the architect believes the plan is already fully delivered and recommends ending the loop; mid-loop the harness translates this to `pauseReason: "scope_complete"` and narrows the resume-action menu to `finish_loop` / `stop_loop_now` / `refine_plan`.
 
 The signal file is rewritten from the template at the start of every review run, so it only reflects the most recent review. cfcf parses it after the architect exits and persists the full `ArchitectSignals` object inline on the corresponding `ReviewHistoryEvent` in `history.json` — that is what lets the web UI surface prior reviews (Status tab shows the latest; History tab expands each review row to display its gaps/suggestions/risks/approach and guidance for next steps).
 
@@ -305,8 +309,10 @@ The agent follows the process defined in CLAUDE.md and process.md:
    - **Stalled**: Judge determination = STALLED → apply configured policy (continue/stop/alert user).
    - **Anomaly**: Judge determination = ANOMALY (token exhaustion, circling, regression) → alert user, wait for input.
    - **User input needed**: Dev or judge signals `user_input_needed = true` → alert user with questions, wait for responses.
+   - **Scope complete** (2026-05-02): A mid-loop architect re-review returned `readiness: SCOPE_COMPLETE`, meaning the Problem Pack appears already delivered → pause with `pauseReason: "scope_complete"`. The available resume actions narrow to `finish_loop` / `stop_loop_now` / `refine_plan`.
    - **Max iterations**: Iteration count reached configured maximum → stop, report to user.
    - **User pause**: Pause cadence reached → alert user, wait for feedback.
+   - **User-initiated stop** (2026-05-02): User selected the `stop_loop_now` resume action → cf² appends a `loop-stopped` history event (status `completed`, captures `userFeedback` as audit-only free text, no agent ran) and terminates the loop without running the documenter.
 9. **Archive judge assessment**: Move current `judge-assessment.md` to `iteration-reviews/iteration-N.md`. Store agent logs to `~/.cfcf/logs/`.
 
 ---
@@ -512,6 +518,23 @@ All structured cfcf files live in the repo under `cfcf-docs/`. This is the sourc
       iteration-1-summary.md
       iteration-2-summary.md
       ...
+
+    # Per-iteration handoffs (forward-looking dev notes, v0.7.6+)
+    iteration-handoffs/            # Archived forward-looking handoffs (one per iteration)
+      iteration-1.md
+      iteration-2.md
+      ...
+
+    # Reflection role outputs (v0.6.0+)
+    reflection-analysis.md         # Latest cross-iteration reflection (top-level, mirrors iteration-reviews/ pattern)
+    reflection-reviews/            # Archived prior reflection analyses
+      iteration-1.md
+      iteration-2.md
+      ...
+
+    # Clio cross-workspace memory hooks (item 5.7+)
+    clio-relevant.md               # Top-k Clio hits matched against problem.md, regenerated each iteration
+    clio-guide.md                  # Cue card for agents on how to query Clio
 
   CLAUDE.md                        # Agent instruction file (regenerated each iteration by cfcf)
 ```

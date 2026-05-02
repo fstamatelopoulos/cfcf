@@ -25,7 +25,7 @@ cfcf init
 What it does:
 1. Scans for installed agents (Claude Code, Codex CLI) and reports what it finds
 2. Verifies git is available
-3. Asks you to choose agents for all five roles (dev, judge, architect, documenter, reflection)
+3. Asks you to choose agents for **seven roles**: five iteration roles (dev, judge, architect, reflection, documenter) plus two interactive roles (Product Architect, Help Assistant). Each prompt asks for both adapter and model.
 4. Asks for model selection per role (optional; reflection defaults to the strongest available model)
 5. Asks for default iteration limits (max iterations, pause cadence) and the reflection safeguard ceiling (`reflectSafeguardAfter`, default `3` -- the maximum consecutive iterations the judge may skip reflection before cfcf forces it)
 6. Asks for the pre-loop review + post-SUCCESS documenter flags (item 5.1):
@@ -74,7 +74,7 @@ cfcf server status
 
 Output:
 ```
-cfcf server v0.7.0
+cfcf server v0.17.0
   Status:     running
   Port:       7233
   PID:        12345
@@ -109,6 +109,8 @@ Judge agent:      codex
 Architect agent:  claude-code
 Documenter agent: claude-code
 Reflection agent: claude-code (model: opus)
+Product Architect agent: claude-code (model: sonnet)
+Help Assistant agent:    claude-code (model: sonnet)
 Max iterations:   10
 Pause every:      never
 Reflect safeguard: force after 3 consecutive judge opt-outs
@@ -244,7 +246,7 @@ What the architect does:
 4. Runs an initial security assessment
 5. Outlines solution options and trade-offs
 6. **Produces an implementation plan** (`cfcf-docs/plan.md`) for the dev agent to build on
-7. Writes a readiness assessment: READY / NEEDS_REFINEMENT / BLOCKED
+7. Writes a readiness assessment: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE — the last value (added 2026-05-02) means the architect believes the plan is fully delivered and recommends ending the loop.
 
 ### First-run vs re-review mode (v0.7.0+)
 
@@ -273,6 +275,8 @@ cfcf run --workspace my-project        # Start unattended development
 ### `cfcf run` -- Dark Factory Loop
 
 Start the full iteration loop. Each iteration runs `dev → judge → reflect (conditional) → decide` and produces up to three separate commits; when `autoReviewSpecs=true` a leading pre-loop `review` phase runs on main and gates the loop on the architect's readiness signal; when the judge determines SUCCESS, `documenter` runs (unless `autoDocumenter=false`). This is the primary workflow.
+
+> **Pause vs. resume.** `cfcf run` has no `--action` flag — it always starts a fresh loop. Pause-action choice (continue / finish_loop / stop_loop_now / refine_plan / consult_reflection) happens at **resume time** via `cfcf resume --action <action>`. See `cfcf resume` below.
 
 ```bash
 cfcf run --workspace my-project
@@ -359,9 +363,28 @@ Resume a paused iteration loop. The loop pauses when:
 ```bash
 cfcf resume --workspace my-project
 cfcf resume --workspace my-project --feedback "Focus on error handling in the API layer"
+cfcf resume --workspace my-project --action finish_loop
+cfcf resume --workspace my-project --action consult_reflection --feedback "judge says SUCCESS but reflection says STALLED — which is right?"
+cfcf resume --workspace my-project --action stop_loop_now --feedback "started by mistake, no scope to deliver"
 ```
 
-The optional `--feedback` text is written to `cfcf-docs/user-feedback.md` and read by the next agent spawn. Two distinct code paths use this, both via the same flag:
+**Structured pause actions (`--action <action>`, item 6.25, 2026-05-02).** Defaults to `continue` for back-compat. Validated by `commander`'s `choices()`; bad values are rejected at parse time. The five values:
+
+| Action | What the harness does |
+|---|---|
+| `continue` (default) | Run the next dev iteration. Free-text `--feedback` becomes guidance for the dev agent. |
+| `finish_loop` | Exit the loop on a positive note. Documenter runs if `autoDocumenter=true`. |
+| `stop_loop_now` | Exit the loop immediately. **No documenter regardless of config.** Free-text `--feedback` is captured as an audit note in a new `loop-stopped` history event. |
+| `refine_plan` | Run the architect synchronously to revise `cfcf-docs/plan.md` with your feedback as direction, then resume the loop. |
+| `consult_reflection` | Run reflection in *consult mode* with `--feedback` as the query. Reflection sets `harness_action_recommendation` in its signals; the harness then routes per the recommendation. |
+
+**Action availability is gated by pause reason.** The server validates the action against the current `pauseReason` and rejects mismatched combinations with a clear error and the list of allowed actions. For example:
+
+- `consult_reflection` is only valid when reflection signals are available (i.e. at least one iteration has run).
+- `refine_plan` is valid in pre-loop pauses (architect blocked the loop) and in mid-loop pauses; it is **not** valid mid-iteration when the dev agent is asking a `user_input_needed` question.
+- On the special `scope_complete` pause case (architect's `SCOPE_COMPLETE` verdict), only `finish_loop` / `stop_loop_now` / `refine_plan` are accepted; `continue` and `consult_reflection` are hidden.
+
+**`--feedback` lifecycle.** The optional `--feedback` text is written to `cfcf-docs/user-feedback.md` and read by the next agent spawn. Two distinct code paths use this, both via the same flag:
 
 | Pause reason | Who reads the feedback |
 |---|---|
@@ -437,6 +460,51 @@ cfcf stop --workspace my-project
 ```
 
 The iteration branch is preserved. You can review the code, then restart with `cfcf run`.
+
+---
+
+## Maintenance commands
+
+### `cfcf self-update`
+
+Upgrade cf² to the latest (or a specific) version. Runs the same install pathway as the curl-based installer; the `~/.cfcf/` data dir (Clio DB, logs, embedder models) is never touched.
+
+```bash
+cfcf self-update                             # check + interactive upgrade (npm)
+cfcf self-update --check                     # check only; print latest vs current
+cfcf self-update --yes                       # non-interactive (use in CI)
+cfcf self-update --version v0.17.0           # install a specific tag
+cfcf self-update --source tarball            # GitHub Releases mirror
+cfcf self-update --base-url file:///tmp/dist # any HTTP / file:// mirror
+```
+
+See [`installing.md`](installing.md) for the full upgrade story (env-var equivalents, atomicity, etc.).
+
+### `cfcf doctor`
+
+Health-check your install: PATH, Bun version, native packages, agent CLIs, Clio DB, embedder, shell tab-completion, server reachability. Use after install/upgrade or when something feels off.
+
+```bash
+cfcf doctor                                  # human-readable report
+cfcf doctor --json                           # machine-readable (CI / scripts)
+```
+
+Each check prints `OK` / `WARN` / `FAIL` with a short diagnosis + suggested fix when applicable. The check count grows over time as we add new diagnostics.
+
+### `cfcf help`
+
+Print user-facing documentation, or launch the interactive **Help Assistant** (cf² support agent).
+
+```bash
+cfcf help                                    # topic hub (table of contents)
+cfcf help <topic>                            # print that topic to stdout
+cfcf help --full                             # print the full user manual (~280 lines)
+cfcf help assistant                          # launch the Help Assistant TUI
+cfcf help assistant --workspace my-project   # include workspace state in the prompt
+cfcf help assistant --print-prompt           # debug: print system prompt + exit
+```
+
+The Help Assistant is one of the two interactive agent roles (alongside the Product Architect). It has the full cf² docs in its system prompt and can read your Clio memory + run diagnostics. Read-only by default — it asks before mutating anything.
 
 ---
 

@@ -40,7 +40,7 @@ npm --version || bun install -g npm
 # Install cfcf into ~/.bun (so it lands at ~/.bun/bin/cfcf, on PATH)
 npm install -g --prefix ~/.bun @cerefox/codefactory             # latest
 # or pin to a specific version:
-npm install -g --prefix ~/.bun @cerefox/codefactory@0.16.4
+npm install -g --prefix ~/.bun @cerefox/codefactory@0.17.0
 
 # Verify + first-run setup
 cfcf doctor
@@ -72,28 +72,28 @@ Tarball mode auto-engages when `CFCF_BASE_URL` is set; you can also force it wit
 ```bash
 # 1. Drop the cf² + native tarballs + install.sh into a directory.
 ls dist/
-# cfcf-0.16.2.tgz
-# cerefox-codefactory-native-darwin-arm64-0.16.2.tgz
+# cfcf-0.17.0.tgz
+# cerefox-codefactory-native-darwin-arm64-0.17.0.tgz
 # install.sh
 
 # 2a. Local HTTP server:
 bun run scripts/serve-dist.ts 8080     # in another shell
 CFCF_BASE_URL=http://localhost:8080 \
-CFCF_VERSION=v0.16.2 \
+CFCF_VERSION=v0.17.0 \
   bash dist/install.sh
 
 # 2b. file:// URL (no server needed):
 CFCF_BASE_URL="file://$(pwd)/dist" \
-CFCF_VERSION=v0.16.2 \
+CFCF_VERSION=v0.17.0 \
   bash dist/install.sh
 
 # 2c. GitHub Releases mirror (the script's tarball-mode default URL):
 CFCF_INSTALL_SOURCE=tarball \
-CFCF_VERSION=v0.16.2 \
+CFCF_VERSION=v0.17.0 \
   bash install.sh
 
 # 2d. Or hand the tarball directly to bun (skips install.sh entirely):
-bun install -g ./dist/cfcf-0.16.2.tgz
+bun install -g ./dist/cfcf-0.17.0.tgz
 ```
 
 Notes:
@@ -142,7 +142,7 @@ The simplest path is `cfcf self-update`:
 cfcf self-update                              # check + interactive upgrade (npm)
 cfcf self-update --check                      # check only; print latest vs current
 cfcf self-update --yes                        # non-interactive
-cfcf self-update --version v0.16.2            # install a specific tag
+cfcf self-update --version v0.17.0            # install a specific tag
 
 # Tarball mode for offline / pinned-mirror setups:
 cfcf self-update --source tarball             # GitHub Releases (default mirror)

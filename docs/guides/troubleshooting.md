@@ -238,7 +238,7 @@ Symptom: you ran PA before, decisions were made, but the new session's prompt sh
 
 Cause: pre-fix, the agent's `cfcf clio docs ingest` may have auto-routed to the `default` Clio Project (because `cfcf-memory-pa` didn't exist). cfcf's reader was project-scoped to `cfcf-memory-pa`, so it missed the orphaned doc.
 
-Fix: this should resolve on its own with cfcf v0.x.x and later — the launcher pre-creates `cfcf-memory-pa` + `cfcf-memory-global` Clio Projects, and the reader now searches by metadata (project-agnostic). If you have an old orphaned doc, find it:
+Fix: this should resolve on its own with cfcf v0.17.0 and later — the launcher pre-creates `cfcf-memory-pa` + `cfcf-memory-global` Clio Projects, and the reader now searches by metadata (project-agnostic). If you have an old orphaned doc, find it:
 
 ```bash
 cfcf clio metadata search --filter '{"role":"pa","artifact_type":"workspace-memory"}'
