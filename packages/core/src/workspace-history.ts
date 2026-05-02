@@ -20,7 +20,13 @@ const HISTORY_FILENAME = "history.json";
 
 // --- Event types ---
 
-export type HistoryEventType = "review" | "iteration" | "document" | "reflection" | "pa-session";
+export type HistoryEventType =
+  | "review"
+  | "iteration"
+  | "document"
+  | "reflection"
+  | "pa-session"
+  | "loop-stopped";  // item 6.25 — user-initiated stop_loop_now
 
 export type HistoryEventStatus = "running" | "completed" | "failed";
 
@@ -31,10 +37,17 @@ export interface BaseHistoryEvent {
   status: HistoryEventStatus;
   startedAt: string;
   completedAt?: string;
-  /** Log file name (not absolute path, just the filename under the workspace's log dir) */
-  logFile: string;
-  /** Adapter used (e.g. "claude-code", "codex") */
-  agent: string;
+  /**
+   * Log file name (not absolute path, just the filename under the
+   * workspace's log dir). Optional because user-action events
+   * (e.g. `loop-stopped`) don't spawn an agent and have no log.
+   */
+  logFile?: string;
+  /**
+   * Adapter used (e.g. "claude-code", "codex"). Optional because
+   * user-action events (e.g. `loop-stopped`) don't involve an agent.
+   */
+  agent?: string;
   /** Model (if configured) */
   model?: string;
   /** Error message if failed */
@@ -179,12 +192,28 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
   problemPackFilesAtStart: number;
 }
 
+/**
+ * Item 6.25: user-initiated `stop_loop_now` event. Captures the
+ * iteration the loop stopped at + the user's free-text feedback as an
+ * audit note. No agent runs — `logFile` / `agent` from the base are
+ * intentionally absent. The same information also appears as a human-
+ * readable narrative in `cfcf-docs/iteration-history.md` (appended by
+ * `handleStopLoopNow` in `iteration-loop.ts`).
+ */
+export interface LoopStoppedHistoryEvent extends BaseHistoryEvent {
+  type: "loop-stopped";
+  iteration: number;
+  /** User's free-text feedback at the time of stopping. Audit-only. */
+  userFeedback?: string;
+}
+
 export type HistoryEvent =
   | ReviewHistoryEvent
   | IterationHistoryEvent
   | DocumentHistoryEvent
   | ReflectionHistoryEvent
-  | PaSessionHistoryEvent;
+  | PaSessionHistoryEvent
+  | LoopStoppedHistoryEvent;
 
 // --- Storage ---
 

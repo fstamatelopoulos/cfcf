@@ -13,6 +13,64 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-02 — Structured pause actions: ResumeAction enum + iteration_health discrimination + reflection consult mode
+
+**Context.** Two related bugs surfaced during dogfooding the tracker workspace on 2026-05-01:
+
+1. **Reflection-on-SUCCESS misroute**: iter-5 ended with judge SUCCESS (9/10, 20/20 tests, plan 100% complete). The `reflectSafeguardAfter=3` ceiling forced reflection even though `reflection_needed: false`. Reflection honestly observed "loop has nothing left to do" and set `recommend_stop: true`. The harness saw `recommend_stop=true` and surfaced a "Questions needing your input" popup — a false alarm, because reflection AGREED with SUCCESS rather than flagging a problem.
+
+2. **Free-text feedback misroute**: user typed *"Judge and Reflection agree, proceed to the Documentation phase and close the loop"* into the popup. The harness's resume contract had **one input channel** (textarea) and **one output behavior** (continue with the text injected into the next dev agent's prompt as "guidance"). The user's clear *control intent* was silently rerouted as *agent context* — fired iter-6, dev agent got confused user feedback that didn't match the iteration it was running.
+
+Both bugs traced to the same root cause: the harness's pause-resume contract had **insufficient signal vocabulary** to express user intent. `recommend_stop=true` was overloaded across three meanings ("stuck" / "done, agree" / "supposedly done, disagree"); the `feedback` string was overloaded across "context for next agent" / "instructions for harness" / "audit note." When semantics are conflated into one channel, the harness has no choice but to pick one default routing — silently misrouting all the others.
+
+**Options considered.**
+
+1. **Just dismiss the false-alarm popup; accept the noise.** Cheapest. Rejected: the popup creates anxiety (*"did I do something wrong?"*) at exactly the moment of celebration (loop succeeded). Triggers any time `reflectSafeguardAfter` cycles complete on a SUCCESS iteration — non-rare in practice.
+
+2. **Skip reflection entirely on SUCCESS iterations.** Eliminates the problem class but loses real audit/safeguard value: reflection's cross-iteration view occasionally catches nuance the single-iteration judge misses. The user explicitly pushed back on this option; correctly.
+
+3. **Disambiguate `recommend_stop=true` via `iteration_health`** — already-existing reflection signal field with semantically distinct values (`converging`/`stable` = agreement; `stalled`/`diverging`/`inconclusive` = disagreement). Shipped first as a small fix (PR #26, 889127a, 2026-05-01).
+
+4. **Generalize: introduce a structured `ResumeAction` enum** so all 9 pause cases get the same routing precision, not just reflection-on-SUCCESS. Free text stays optional + routes per action to the right destination. Shipped second as the bigger feature (PR #29, item 6.25, 2026-05-02). Full design in [`docs/research/structured-pause-actions-design.md`](research/structured-pause-actions-design.md).
+
+**Decided** — ship both fixes (3 + 4). They're complementary:
+
+- The `iteration_health` discrimination is the *minimal* fix for the specific tracker case; required regardless of the bigger framework.
+- The `ResumeAction` enum is the *general* solution for the pause-resume contract across all cases. Without it, every pause case has the same "single textarea silently routes one way" failure mode.
+
+**Specific design choices for `ResumeAction`:**
+
+- Five actions, no more: `continue`, `finish_loop`, `stop_loop_now`, `refine_plan`, `consult_reflection`. Empirically covers the universe per the [matrix in the design doc](research/structured-pause-actions-design.md). Adding a sixth would mean the matrix grew a column; we've staffed it for one human-decision step at a time.
+- **`finish_loop` vs `stop_loop_now`** chosen over `stop_and_document` vs `stop` (initial naming). Clearer framing: "honour the configured loop end-state" vs "explicit immediate termination." `finish_loop` respects `autoDocumenter=false`; `stop_loop_now` always skips the documenter.
+- **`consult_reflection` as the escape hatch.** When the user has nuanced free-text intent that doesn't map to a button, route through reflection — it has the cross-iteration view + already outputs structured signals. New field `harness_action_recommendation` lets reflection tell the harness what to do. Cheaper + cleaner than a separate "interpreter agent."
+- **No bare "Resume" button.** User must explicitly pick an action. Forces clarity; eliminates silent defaults. Mirrored in CLI: `cfcf resume --action <name>` (defaults to `continue` for back-compat with pre-6.25 scripts only).
+- **Free text always optional + always routed.** Per the [routing table](research/structured-pause-actions-design.md), text goes to the right destination per action: dev prompt for `continue`, documenter prompt for `finish_loop`, history audit for `stop_loop_now`, architect prompt for `refine_plan`, reflection prompt for `consult_reflection`. Never silently lost; never silently misrouted.
+- **Per-pause-case applicability matrix** computed by `pauseReasonAllowedActions()`, single source of truth for both UI button visibility AND CLI argument validation. The two surfaces stay in sync because they consume the same helper.
+- **`refine_plan` flow**: synchronous architect spawn → automatic continue. No mid-flow re-pause (avoids pause-loops). Architect's existing `plan-validation.ts` guardrails catch destructive rewrites.
+- **`stop_loop_now` history note**: dual-write — structured `loop-stopped` event in `history.json` (machine-readable) + human-readable narrative paragraph in `iteration-history.md`. Two surfaces; one truth.
+- **`consult_reflection` after A6** (reflection just ran with `recommend_stop=true`): allowed. Re-spawn reflection with the user's new feedback as fresh input. Full flexibility; cost is one extra agent run.
+
+**Lessons.**
+
+1. **When semantics are conflated into one channel, the harness silently misroutes.** This was the meta-pattern across both bugs. `recommend_stop` was a single boolean expressing three things; `feedback` was a single string expressing three things. Once we explicitly separated control-intent (action) from context (free text), every pause case routed correctly without per-case heuristics. **The fix is in the protocol vocabulary, not in the harness logic.**
+
+2. **Defense-in-depth: signals-as-contract is the right design even when agents misbehave.** The reflection-on-SUCCESS bug only mattered because the agent did its job correctly (wrote good signals + a thorough analysis) but the harness misinterpreted. Both fixes preserve the "files are the contract; agents are producers" invariant established in 5.6 (reflection PR1). Any future signal vocabulary expansion (this entry) reinforces rather than weakens it.
+
+3. **Symmetry is a misleading argument.** Reflection-PR-discussion gave us "reflection runs every iteration → per-workspace override useful" → *therefore by symmetry* PA + HA should also be per-workspace overridable. Wrong: the workload structures differ, and symmetry is a UI-tidiness argument, not a design argument. Same lesson applies in reverse: just because reflection-on-PROGRESS pauses make sense doesn't mean reflection-on-SUCCESS pauses do (different scenarios despite similar signals). **Look at the actual workload, not the surface symmetry.**
+
+4. **The user's free-text feedback is precious — never silently drop it.** Even when no agent runs (e.g. `stop_loop_now`), capture the text to history as audit. Future debugging + retrospectives benefit from "what was the user thinking when they did this?" Free text without a destination is data leak; free text routed to *somewhere* is always useful.
+
+5. **The escape hatch is a feature, not a fallback.** `consult_reflection` doesn't exist because we couldn't enumerate the long-tail; it exists because the LLM-interpreter pattern is genuinely the right tool for "the user's intent is nuanced and I have an agent that's good at interpretation." Building it as a first-class action (rather than as a "Layer 2 fallback when buttons are too restrictive") makes the design honest about what each component is for.
+
+**Outcome.** Item 6.25 ships with full per-pause-case action routing, contextual UI button matrix, CLI `--action` flag with matrix validation, reflection consult mode, and `stop_loop_now` audit history. Both fixes (small `iteration_health` discrimination + general `ResumeAction` enum) cover the bug class end-to-end. ~580 tests passing.
+
+**Cross-refs.**
+- [`docs/research/structured-pause-actions-design.md`](research/structured-pause-actions-design.md) — full design + matrix
+- [`docs/plan.md`](plan.md) row 6.25
+- 2026-05-01 reflection-on-SUCCESS fix (commit 889127a, PR #26): `iteration_health` discrimination via the pre-existing signal field
+
+---
+
 ## 2026-05-01 — npm publish auth: OIDC trusted publishing + sigstore provenance (bootstrapped via a one-shot token)
 
 **Context.** v0.16.2 was cfcf's first publish to npmjs.com, after the 2026-04-30 public-flip. The publish needed to work the first time with whatever auth path was simplest to bootstrap; subsequent publishes wanted the strongest supply-chain posture npm offers. Two distinct decisions, one workflow.

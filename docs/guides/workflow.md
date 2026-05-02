@@ -396,10 +396,10 @@ This deserves its own walkthrough -- it's a tight user-in-the-loop pattern for g
 2. Architect writes its output and exits. cfcf reads the readiness signal.
 3. **If `readinessGate` accepts** (default `"blocked"` means accept anything but `BLOCKED`): cfcf proceeds to iteration 1. The iteration branch `cfcf/iteration-1` is created from `main` and inherits the architect's artifacts + `user-feedback.md`.
 4. **If `readinessGate` rejects**: cfcf pauses the loop with `pauseReason: "anomaly"` and the architect's gaps populated as `pendingQuestions`. The web UI shows the FeedbackForm; the CLI prints the questions via `cfcf status` and offers `cfcf resume`. The PhaseIndicator stays at `Review (agent) -- PAUSED`.
-5. **User refines and resumes.** Two paths, composable:
-    - **Edit the source.** Open `problem-pack/problem.md` and/or `problem-pack/success.md` in your editor and tighten the spec based on the architect's listed gaps. (Remember: `cfcf-docs/problem.md` is a generated copy -- see the "Files you edit vs. files cfcf regenerates" section above.)
-    - **Provide guidance.** Type a clarifying answer into the FeedbackForm (web) or pass it via `cfcf resume --feedback "..."` (CLI). The text is written to `cfcf-docs/user-feedback.md` on main before the next architect spawn, so the architect sees it too. This is especially useful when the gap is small and doesn't warrant reopening the Problem Pack.
-    - Either / both / neither + Resume -- all valid. A Resume with no changes and no feedback re-runs the architect against the same source; useful if you suspect the previous spawn was a one-off stumble.
+5. **User refines and resumes.** Pick one of the three applicable resume actions for a pre-loop block (per the matrix in [User actions at pause points](#user-actions-at-pause-points)):
+    - **Edit the source first.** Open `problem-pack/problem.md` and/or `problem-pack/success.md` in your editor and tighten the spec based on the architect's listed gaps. (Remember: `cfcf-docs/problem.md` is a generated copy -- see the "Files you edit vs. files cfcf regenerates" section above.)
+    - **Pick `Continue`** (with optional feedback) or **`Refine plan`** (with feedback as architect direction) — both re-run the architect against the source you just edited. The text you provide is written to `cfcf-docs/user-feedback.md` so the architect sees it. Especially useful when the gap is small and doesn't warrant reopening the Problem Pack.
+    - **Pick `Stop loop now`** if you've decided to abandon and rewrite the strategy.
 6. cfcf re-runs the architect (same `pre_loop_reviewing` phase, new `architect-NNN.log` sequence). Back to step 2.
 7. Eventually the gate accepts and the loop moves on. `state.userFeedback` carries through to iteration 1's `user-feedback.md` so the dev agent reads it too; it clears automatically after iteration 1's DECIDE phase.
 
@@ -546,19 +546,53 @@ When the decision log grows past 50 iterations, cf² fires a single informationa
 
 ### User actions at pause points
 
+When cf² pauses, you choose **one structured action** to drive the harness, plus optional free-text feedback that becomes context for whichever destination the action implies. The web UI shows the applicable buttons; the CLI uses `--action`. (Item 6.25, 2026-05-02.)
+
+**The five actions:**
+
+| Action | What the harness does | Where free-text feedback goes |
+|---|---|---|
+| **Continue** (default) | Run the next iteration with your feedback as guidance for the dev agent. | Next dev iteration's prompt |
+| **Finish loop** | End the loop on a successful note. Documenter runs if `autoDocumenter=true`; if `false`, just terminate. | Documenter prompt (when it runs) |
+| **Stop loop now** | Terminate immediately. **No documenter regardless of config.** | Audit history (`history.json` event + `iteration-history.md` narrative paragraph) |
+| **Refine plan** | Run the architect synchronously with your feedback to update `plan.md`, then continue with the next iteration. | Architect prompt |
+| **Ask Reflection to decide** | Spawn reflection in *consult mode* with your feedback. Reflection sets `harness_action_recommendation` in its signals; harness routes per the recommendation. | Reflection prompt (consult mode) |
+
+**Which actions are available depends on why the loop paused** — the UI hides actions that don't make sense for the current pause case (e.g. you can't `Refine plan` when the dev agent is mid-iteration asking a question; you can't `Finish loop` when the loop hasn't started yet because the pre-loop review was blocked). The CLI rejects inapplicable `--action` values with a clear error and the list of allowed actions.
+
+**No bare "Resume."** You always pick an action. The textarea is optional context; the action button is required. This forces clarity of intent — no silent "resume = continue" shortcut.
+
+**Examples:**
+
 ```bash
-# Review
+# Review the state before deciding
 cat cfcf-docs/judge-assessment.md
 cat cfcf-docs/reflection-analysis.md
 cat cfcf-docs/plan.md
 
-# Resume (optionally with feedback for the next iteration)
-cfcf resume --workspace my-project
-cfcf resume --workspace my-project --feedback "Focus on error handling"
+# Continue with guidance for the dev agent
+cfcf resume --workspace my-project --action continue --feedback "Focus on error handling"
 
-# Stop the loop
+# We're done — wrap up properly (runs documenter if autoDocumenter=true)
+cfcf resume --workspace my-project --action finish_loop
+
+# Wrong direction; stop immediately, no docs
+cfcf resume --workspace my-project --action stop_loop_now --feedback "Wrong approach; will rewrite the spec"
+
+# Plan needs work; route through architect first, then iterate
+cfcf resume --workspace my-project --action refine_plan --feedback "Drop the Redis dependency; use in-memory store"
+
+# Not sure; let reflection decide
+cfcf resume --workspace my-project --action consult_reflection --feedback "I think the loop is converging but iter-3 worried me; what do you think?"
+
+# Hard stop independent of pause (kills the loop process)
 cfcf stop --workspace my-project
 ```
+
+**`stop_loop_now` vs `Stop loop` (the CLI `cfcf stop` command).** Different concepts:
+
+- **`stop_loop_now` resume action**: requires the loop to be paused first; captures your feedback as audit; clean shutdown.
+- **`cfcf stop`**: works whenever the loop is running; kills agent processes; no feedback capture; for "I need this to stop *right now* regardless of state."
 
 ---
 

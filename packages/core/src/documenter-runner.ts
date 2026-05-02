@@ -186,9 +186,15 @@ export async function startDocument(
  * Run the documenter agent synchronously (used by the loop post-SUCCESS).
  * Allocates its own sequence number and writes a history event.
  * Returns the exit code and log file info.
+ *
+ * `opts.userFeedback` (item 6.25): when the loop is finished via the
+ * `finish_loop` resume action, the user's free-text framing is appended
+ * to the documenter's prompt so the agent can emphasise the right things
+ * in the final docs. Optional; absent during routine post-SUCCESS runs.
  */
 export async function runDocumentSync(
   workspace: WorkspaceConfig,
+  opts?: { userFeedback?: string },
 ): Promise<{ exitCode: number; logFile: string; logFileName: string; sequence: number; historyEventId: string }> {
   await ensureWorkspaceLogDir(workspace.id);
   const sequence = await nextAgentRunSequence(workspace.id, "documenter");
@@ -215,7 +221,11 @@ export async function runDocumentSync(
 
   await writeDocumenterInstructions(workspace.repoPath, workspace);
 
-  const prompt = `Read cfcf-docs/cfcf-documenter-instructions.md and follow the instructions exactly. Produce comprehensive workspace documentation in the docs/ directory before exiting.`;
+  const basePrompt = `Read cfcf-docs/cfcf-documenter-instructions.md and follow the instructions exactly. Produce comprehensive workspace documentation in the docs/ directory before exiting.`;
+  const userFeedbackBlock = opts?.userFeedback?.trim()
+    ? `\n\nAdditional user direction (provided when finishing the loop): ${opts.userFeedback.trim()}\n\nUse this guidance to inform what to emphasise in the documentation.`
+    : "";
+  const prompt = basePrompt + userFeedbackBlock;
   const cmd = adapter.buildCommand(workspace.repoPath, prompt, workspace.documenterAgent.model);
 
   const managed = await spawnProcess({

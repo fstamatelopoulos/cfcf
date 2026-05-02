@@ -456,7 +456,27 @@ export interface ReflectionRunResult {
 export async function runReflectionSync(
   workspace: WorkspaceConfig,
   iteration: number,
-  opts?: { reason?: string },
+  opts?: {
+    reason?: string;
+    /**
+     * Item 6.25: when set, reflection runs in **consult mode** —
+     * invoked by the harness in response to a `consult_reflection`
+     * resume action. The user's free-text feedback is appended to
+     * the prompt + reflection is asked to set
+     * `harness_action_recommendation` in its signals output. The
+     * harness reads that field on return to decide what to do next
+     * (continue / finish_loop / stop_loop_now / pause_for_user).
+     */
+    consultMode?: boolean;
+    /**
+     * User's free-text feedback (item 6.25). Appended to the
+     * reflection prompt as context — useful both in consult mode
+     * (the user's interpretation request) and as general guidance
+     * during routine post-iteration reflection if the user happens
+     * to provide feedback.
+     */
+    userFeedback?: string;
+  },
 ): Promise<ReflectionRunResult> {
   await ensureWorkspaceLogDir(workspace.id);
   const sequence = await nextAgentRunSequence(workspace.id, "reflection");
@@ -499,7 +519,13 @@ export async function runReflectionSync(
   const reasonHint = opts?.reason
     ? ` The judge flagged: "${opts.reason.replace(/"/g, '\\"')}". Weigh it against the cross-iteration evidence.`
     : "";
-  const prompt = `Read cfcf-docs/cfcf-reflection-instructions.md and follow the instructions exactly. This reflection runs at the END of iteration ${iteration}. Review the full cross-iteration history (decision log, iteration logs, prior reflections, compact git log in cfcf-docs/cfcf-reflection-context.md), classify iteration health, optionally rewrite pending items in cfcf-docs/plan.md (non-destructive: preserve all completed items), and produce cfcf-docs/reflection-analysis.md + cfcf-docs/cfcf-reflection-signals.json before exiting.${reasonHint}`;
+  const userFeedbackBlock = opts?.userFeedback?.trim()
+    ? `\n\nUser-provided feedback (verbatim): ${opts.userFeedback.trim()}`
+    : "";
+  const consultModeBlock = opts?.consultMode
+    ? `\n\nCONSULT MODE: This reflection was invoked by the user pausing the loop and asking you to interpret their feedback (above) and decide what the harness should do next. In addition to the standard reflection output, you MUST set \`harness_action_recommendation\` in cfcf-docs/cfcf-reflection-signals.json to one of:\n  - "continue"        → next iteration with your plan tweaks\n  - "finish_loop"     → loop is done; documenter should run if configured\n  - "stop_loop_now"   → loop is unrecoverable; terminate immediately, no docs\n  - "pause_for_user"  → you cannot decide; bounce back to user via key_observation\nWeigh the user's feedback against the cross-iteration evidence; pick the action that best honours both.`
+    : "";
+  const prompt = `Read cfcf-docs/cfcf-reflection-instructions.md and follow the instructions exactly. This reflection runs at the END of iteration ${iteration}. Review the full cross-iteration history (decision log, iteration logs, prior reflections, compact git log in cfcf-docs/cfcf-reflection-context.md), classify iteration health, optionally rewrite pending items in cfcf-docs/plan.md (non-destructive: preserve all completed items), and produce cfcf-docs/reflection-analysis.md + cfcf-docs/cfcf-reflection-signals.json before exiting.${reasonHint}${userFeedbackBlock}${consultModeBlock}`;
   const cmd = adapter.buildCommand(workspace.repoPath, prompt, agent.model);
 
   const managed = await spawnProcess({

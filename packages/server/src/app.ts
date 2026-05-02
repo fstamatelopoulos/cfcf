@@ -1006,12 +1006,18 @@ export function createApp() {
       return c.json({ error: "Workspace not found" }, 404);
     }
 
+    // Item 6.25: structured resume action drives harness routing.
+    // `feedback` remains optional free-text context for whichever
+    // destination the action specifies. `action` defaults to
+    // "continue" so pre-6.25 callers (CLI without --action, scripts
+    // not aware of the new field) keep getting the legacy behaviour.
     const body = await c.req.json<{
       feedback?: string;
-    }>().catch(() => ({} as { feedback?: string }));
+      action?: import("@cfcf/core").ResumeAction;
+    }>().catch(() => ({} as { feedback?: string; action?: import("@cfcf/core").ResumeAction }));
 
     try {
-      const state = await resumeLoop(workspace.id, body.feedback);
+      const state = await resumeLoop(workspace.id, body.feedback, body.action);
       return c.json({
         workspaceId: state.workspaceId,
         phase: state.phase,
