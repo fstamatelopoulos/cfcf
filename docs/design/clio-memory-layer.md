@@ -606,15 +606,21 @@ Pulled from `docs/plan.md` Backlog:
 
 ## 11.5 Ranking + boosting (scratchpad, will become its own doc)
 
-> **Note (2026-04-27).** This section was written when hybrid search used RRF (k=60). The engine has since switched to **alpha-weighted score blending** (see §4.3). Boost ideas below still apply — they'd multiply / add against the blended score instead of the RRF score. Conceptual structure unchanged; just substitute "blended score" for "RRF score" wherever it appears.
+Hybrid search today (`searchHybrid` in `packages/core/src/clio/backend/local-clio.ts`) treats every document equally — its score is purely
 
-Hybrid search treats every document equally, which loses information — a `reflection-analysis` is strategically curated; an `iteration-log` is a raw trace; a `design-guideline` is authoritative; a `meeting-notes` is casual. Clio should rank these differently.
+```
+blended = α × cosine + (1 − α) × normalised_bm25
+```
 
-This section captures the scratchpad of ideas for later iteration. **Expected to grow into its own design doc** (`docs/design/clio-ranking.md`) once we have enough signal to choose between them. v1 ships the simplest defensible boost set; v2+ iterates.
+with `α = 0.7` default. That loses information: a `reflection-analysis` is strategically curated; an `iteration-log` is a raw trace; a `design-guideline` is authoritative; a `meeting-notes` is casual. Clio should rank these differently.
+
+This section captures the scratchpad of ideas for later iteration. **Expected to grow into its own design doc** (`docs/design/clio-ranking.md`) once we have enough signal to choose between them. The v1 baseline is "blended score, no boosts"; the boost layer described here is post-v1 work.
 
 ### Ideas to consider
 
-- **Artifact-type boost.** Curated types score higher than raw episodic traces. Rough ordering: `design-guideline`, `adr`, `architect-review`, `reflection-analysis` → boost; `iteration-summary`, `decision-log-entry (lesson/strategy)` → medium; `iteration-log`, `iteration-handoff`, `judge-assessment`, `meeting-notes`, `research-note` → baseline. Implementation: a small lookup of multiplicative boosts applied to RRF score.
+All of these are conceived as adjustments to the blended score (`α × cosine + (1 − α) × normalised_bm25`). They run after `searchHybrid` produces its candidate-ordered list and before small-to-big expansion.
+
+- **Artifact-type boost.** Curated types score higher than raw episodic traces. Rough ordering: `design-guideline`, `adr`, `architect-review`, `reflection-analysis` → boost; `iteration-summary`, `decision-log-entry (lesson/strategy)` → medium; `iteration-log`, `iteration-handoff`, `judge-assessment`, `meeting-notes`, `research-note` → baseline. Implementation: a small lookup of multiplicative boosts applied to the blended score.
 - **Tier boost.** `tier=semantic` generally outranks `tier=episodic` for cross-project transfer queries. Not necessarily within same-workspace queries, where episodic recency matters.
 - **Recency decay.** `score(d) *= exp(-age_days / τ)` with τ on the order of 90–180 days. Prevents ancient decisions from drowning current ones. Optional per-query override (`--no-decay` for archaeology).
 - **Project-match boost.** Same Clio Project as the query's originating workspace → multiplier. Different Project, same organisation-level tag → smaller multiplier. No relation → baseline.
@@ -622,26 +628,29 @@ This section captures the scratchpad of ideas for later iteration. **Expected to
 - **Heading-path match.** A chunk whose `heading_path` contains query-relevant terms gets a score bump (the passage is structurally about the query topic, not just mentions it).
 - **Reflection health signal.** Reflection analyses with `iteration_health: converging` suggest generalisable success patterns; `stalled` / `diverging` suggest cautionary tales. Both useful, but possibly for different query classes. Open question — worth instrumenting once we have data.
 - **User-pinned "important" flag.** Explicit opt-in curation: user runs `cfcf clio pin <doc-id>`, the document gets a strong boost. For the things the user *knows* matter.
-- **Cross-encoder reranker.** After RRF + boosts produce top-N (say N=30), run them through a small cross-encoder model (e.g. `bge-reranker-base`, ~100 MB) to pick the final top-k. Published benchmarks show meaningful gains. Cost: a second model + ~200ms latency. Worth it for v2.
+- **Cross-encoder reranker.** After the blended-and-boosted top-N (say N=30), run candidates through a small cross-encoder model (e.g. `bge-reranker-base`, ~100 MB) to pick the final top-k. Published benchmarks show meaningful gains. Cost: a second model + ~200ms latency. Worth evaluating once boost layer is in.
 - **Per-role ranking flavours.** Dev query might benefit from code-example boosts; architect query from architectural-decision boosts; reflection query from cross-iteration pattern boosts. Implementation: pass `role=<caller>` at query time and switch between named boost profiles.
+- **Per-call α tuning.** The blend weight is already exposed (`?alpha=` / `--alpha`), so the simplest "boost profile" is just a per-role α default — e.g. `α=0.5` for "find this exact phrase" lookups, `α=0.85` for "find conceptually-related notes".
 - **Workspace-scoped vs cross-project intent detection.** If the query mentions "last iteration" or "in this project", prefer same-workspace results. If it mentions "we've seen before" or "usually", prefer cross-workspace. Probably out of scope for v1; note for later.
 
 ### Open questions for the ranking doc
 
-1. **Score normalisation.** RRF scores are tiny (≈ 1/60 to 2/60). Boosts as multiplicative or additive? Combined final score shape?
-2. **Boost-combination formula.** Independent multipliers (product) vs weighted additive (sum with per-factor weights)? Product is sensitive to extreme values; additive is tunable but arbitrary.
-3. **Expose boosts to the user?** As CLI flags (`--boost artifact-type reflection-analysis=2.0`) so users can tune per-query? Or internal-only with a default profile?
-4. **Are boosts evaluated before or after small-to-big expansion?** The chunk that matched gets the boost — does the expanded passage inherit the same score, or does the document score come from the best-ranked chunk in it?
-5. **How do we tune?** Without labelled evaluation data, boost values are guesses. Option: self-dogfood with a small eval set we curate by hand (query → which document we *expected* to rank top-1).
-6. **When to rerank.** Top-30 → cross-encoder → top-5? Top-50 → top-10? Depends on latency budget and user's patience.
-7. **Interaction with the ingest-policy knob.** Under `summaries-only`, episodic artifacts aren't in the index at all — so the tier boost is partially redundant. Under `all`, the episodic flood is real and tier boost matters most.
+1. **Boost combination formula.** Independent multipliers (product) vs weighted additive (sum with per-factor weights)? The blended score is already in `[0, 1]` (cosine in `[0, 1]` + normalised BM25 in `[0, 1]` with α-weighting), which makes both approaches viable. Product is sensitive to extreme values; additive is tunable but arbitrary.
+2. **Expose boosts to the user?** As CLI flags (`--boost artifact-type reflection-analysis=2.0`) so users can tune per-query? Or internal-only with a default profile? `--alpha` is already user-tunable; boosts could follow the same pattern.
+3. **Are boosts evaluated before or after small-to-big expansion?** The chunk that matched gets the boost — does the expanded passage inherit the same score, or does the document score come from the best-ranked chunk in it?
+4. **How do we tune?** Without labelled evaluation data, boost values are guesses. Option: self-dogfood with a small eval set we curate by hand (query → which document we *expected* to rank top-1). Same data also lets us tune the per-role α defaults.
+5. **When to rerank.** Top-30 → cross-encoder → top-5? Top-50 → top-10? Depends on latency budget and user's patience.
+6. **Interaction with the ingest-policy knob.** Under `summaries-only`, episodic artifacts aren't in the index at all — so the tier boost is partially redundant. Under `all`, the episodic flood is real and tier boost matters most.
+7. **Renormalisation interaction.** Because `normalised_bm25` is computed against the candidate pool (see §4.3), the same query against different filter combinations produces different absolute blended scores. Boosts are multiplicative on those absolute values — does that make cross-query boost tuning unstable? (Probably no: relative ranking inside one query is what matters; cross-query scores were never directly comparable anyway.)
 
 ### v1 starting posture
 
-Ship with a **minimal, documented boost profile**:
+Ship with **no boost layer** in the v1 LocalClio. Hybrid search returns the raw blended score; doc-level dedup picks one chunk per document; small-to-big expands the matched chunk's neighbourhood. That's the baseline.
+
+When a v2+ ranking doc lands, the proposed minimal profile to start from:
 
 ```ts
-const V1_BOOSTS = {
+const PROPOSED_BOOSTS = {
   tier_semantic:    1.25,   // multiplicative
   type_reflection:  1.20,
   type_architect:   1.20,
@@ -654,7 +663,7 @@ const V1_BOOSTS = {
 };
 ```
 
-Applied after RRF, before small-to-big. No cross-encoder in v1 (add v2). No user-tunable flags (add when we have something to tune against). Log the raw RRF score and the applied boost multipliers in the audit log so we can reason about why a result ranked where it did.
+Applied after the blended score, before small-to-big. The audit log already records ingest / mutation events; if boosts ship, log the raw blended score and the applied boost multipliers per result so we can reason about why a result ranked where it did.
 
 ---
 
@@ -683,6 +692,8 @@ Applied after RRF, before small-to-big. No cross-encoder in v1 (add v2). No user
 
 ## 13. Changelog
 
+- **2026-05-02 (followup)**: §11.5 ranking scratchpad rewritten in alpha-blending terms throughout. Removed the in-section "switched from RRF" callout; the RRF→alpha-blending move itself is captured here as a one-line ranking-strategy history note (below) and in `docs/decisions-log.md` 2026-04-27.
+- **Ranking strategy history.** Hybrid search initially shipped using **Reciprocal Rank Fusion (RRF, k=60)** to combine FTS5 BM25 and vector cosine. On **2026-04-27** the engine switched to **alpha-weighted score blending** (`α × cosine + (1 − α) × normalised_bm25`, default α=0.7) for Cerefox parity and per-call tunability. See §4.3 and `docs/decisions-log.md` 2026-04-27 entry "Hybrid search algorithm: alpha-weighted score blending over RRF" for rationale.
 - **2026-05-02**: Refresh against shipped state at v0.17.0. Added the "Status" box at the top reframing the doc as design-of-record + history rather than forward-looking design. §5 schema annotations updated: `clio_document_versions` and `clio_audit_log` are no longer "v2+" — they shipped 5.11 and 5.13 respectively. Added a migration-history note (the four pre-public migrations were consolidated into `0001_initial.sql` on 2026-04-27). §6 embedder catalogue table dropped `mxbai-embed-large-v1` and the Ollama-adapter row (neither shipped); pointed at `packages/core/src/clio/embedders/catalogue.ts` as the source of truth. §6.3 / §7.2 CLI examples replaced `mxbai-embed-large-v1` defaults with shipped commands; clarified that `embedder uninstall` is not a built-in verb. §6.4 noted `reindex` is shipped (5.11). §11 "Implementation phases" replaced with "Shipped (5.7–5.13)" + "Backlog" (cross-referencing F.18 and 6.24) + "Speculative / future" framing.
 - **2026-04-21**: Initial design draft. Picks embedded-SQLite + sqlite-vec + bundled ONNX embedder as the concrete path (Option B.1 from the research doc); maps Cerefox reuse by file; defines schema, API verbs, and packaging; proposes workspace-vs-Clio-project rename.
 - **2026-04-21 (revision 2)**: Broadened `artifact_type` taxonomy (§5.1) to be open-ended — Clio welcomes user/agent-ingested design guidelines, domain knowledge, research notes, ADRs, onboarding material, etc. beyond just cf²'s own artifacts. `artifact_type` is stored as a freeform string; Clio accepts unknown values without schema changes. Added `origin` metadata key distinguishing `cfcf-auto` from `user-cli` / `agent-tool` / `external-import`. §5.2 rewritten around a `clio.ingestPolicy` knob — default `"summaries-only"` (reflection analyses, architect reviews, decision-log lessons/strategies, a new cfcf-generated `iteration-summary` per iteration) with opt-in `"all"` for raw-trace dogfooding and `"off"` for user-ingest-only mode. §6 embedder strategy flipped to an install-on-demand model — ships with bge-small-en-v1.5 bundled, heavier alternatives (nomic, bge-base, mxbai) installable via `cfcf clio embedder install`. New §11.5 "Ranking + boosting" captures v1 boost profile + brainstorm of future improvements; will spin off into its own doc (`docs/design/clio-ranking.md`) once v1 has run. §12 resolved six of seven original open questions (workspace rename ✅, dedup granularity ✅, ingest cadence ✅, ranking ✅ moved, dogfooding ✅, latency ✅) and added a new §12.1 with four still-open items — most importantly, the Clio-Project-reassignment migration story.
