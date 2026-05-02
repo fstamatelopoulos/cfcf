@@ -21,6 +21,15 @@ const readinessMeta: Record<
     guidance:
       "The architect flagged blockers that prevent a loop from being useful. Resolve the gaps below before retrying Review or starting a loop.",
   },
+  // SCOPE_COMPLETE (item 6.25 follow-up): the spec describes work that's
+  // already implemented and tested. The spec itself is fine; there's just
+  // nothing left to build. Always blocks the loop regardless of gate.
+  SCOPE_COMPLETE: {
+    color: "var(--color-info)",
+    label: "SCOPE_COMPLETE",
+    guidance:
+      "The architect determined that your Problem Pack describes work that's already implemented and tested in the source tree. The spec itself is fine — there's just no work left for an iteration loop to build. Pick \"Stop loop now\" to accept the project is done, \"Refine plan\" to add new requirements, or \"Finish loop\" to refresh the docs.",
+  },
 };
 
 function Section({

@@ -9,7 +9,35 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Architect `SCOPE_COMPLETE` readiness verdict (item 6.25 follow-up)
+
+Surfaced 2026-05-02 dogfooding: re-running the loop on a previously-completed workspace forced the Solution Architect into a misleading `NEEDS_REFINEMENT` verdict because the existing 3-value enum had no way to say *"spec is fine but the work is already done."* Same vocabulary-conflation pattern as the structured pause actions fix (single field overloaded across orthogonal axes). Full design rationale + holistic agent-signal audit + 4 lessons in [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-02 SCOPE_COMPLETE entry).
+
+- **`ArchitectReadiness` enum extended**: new `"SCOPE_COMPLETE"` value joining `READY` / `NEEDS_REFINEMENT` / `BLOCKED`. Always blocks the loop **regardless of `readinessGate` setting** (no semantic where "proceed despite no work" makes sense).
+- **`LoopState.pauseReason` extended**: new `"scope_complete"` value joining `cadence` / `anomaly` / `user_input_needed` / `max_iterations`. Distinct from `"anomaly"` so the UI doesn't mislabel "scope already done" as a problem state.
+- **`pauseReasonAllowedActions` matrix entry**: SCOPE_COMPLETE narrows to `finish_loop` / `stop_loop_now` / `refine_plan`. Hides `continue` (loop has nothing to build) and `consult_reflection` (no iterations to reflect on).
+- **`buildPreLoopBlockReason` dedicated branch**: plain-English message tailored to the SCOPE_COMPLETE case, mentioning the three applicable actions concretely.
+- **`pauseReasonTitle("scope_complete")`**: `"Loop paused: scope already complete"`.
+- **Architect prompt extension**: `cfcf-architect-instructions.md` documents the new value with guidance on when to use it (workspace previously completed, or implementation done outside cfcf).
+- **Web UI rendering**: `readinessColor.SCOPE_COMPLETE` = info/neutral (not success — loop didn't run; not warning — spec isn't broken). `ArchitectReview.readinessMeta.SCOPE_COMPLETE` has dedicated guidance text. `FeedbackForm`'s contextual button matrix narrows correctly when paused with `scope_complete`.
+- **CLI**: `cfcf review` auto-handles via passthrough (prints `Readiness: SCOPE_COMPLETE`); `cfcf resume --action <name>` validates against the narrowed action set per the harness's matrix.
+- **12 new unit tests** in `iteration-loop.test.ts` covering `readinessGateBlocks` (always-blocks regardless of gate), `buildPreLoopBlockReason` (dedicated message + gate-independence), and `pauseReasonAllowedActions` (correct action narrowing). Total now 55, was 43.
+
+### Added — Holistic agent-signal audit (item 6.25 follow-up)
+
+After SCOPE_COMPLETE landed, audited every agent role's signal vocabulary against real-world cases to identify other gaps. **Outcome: only the architect needed extending.** Dev / judge / reflection / PA all have sufficient expressivity through existing signals or compositions thereof. Full audit + per-role verdicts captured in the same 2026-05-02 decisions-log entry — confirms no further signal additions are warranted at this time, with the conflation-anti-pattern lens captured for future signal expansion reviews.
+
+### Fixed — UX gaps in the structured pause actions feature
+
+Surfaced 2026-05-02 in dogfooding the v0.16.6 release.
+
+- **`loop-stopped` history rows now render correctly.** Previously the new `loop-stopped` event type wasn't in the web `HistoryEventType` enum, so rows showed empty Type/Agent/Result columns and a broken "log" button. Now: type label "Loop stopped by user · after iter N", agent column "(user action)", result column shows a feedback summary with click-to-expand pill, expandable detail panel renders the full feedback verbatim.
+- **Pre-loop pause message rewritten** to plain English. Was: *"Pre-loop review readiness=missing does not satisfy gate=needs_refinement_or_blocked. Edit the Problem Pack and resume."* Now: clear explanation of what happened, what the gate means in concrete terms, what files to edit, and which resume actions apply.
+- **Top-level Resume / Stop / Document buttons hidden during pause.** They competed with the new structured FeedbackForm action panel, and the legacy `Resume` button bypassed the structured action by defaulting server-side to `"continue"`. Now: the FeedbackForm's 5 action buttons are the single control surface during pause.
+
+### Changed
+
+- `BaseHistoryEvent.logFile` and `BaseHistoryEvent.agent` now optional (mirrors core type). User-action events (`loop-stopped`) correctly omit them.
 
 ## [0.16.6] -- 2026-05-02
 

@@ -177,8 +177,14 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                 : `Document (${newest.agent})`;
           const logFile =
             newest.type === "iteration" ? (newest as IterationHistoryEvent).devLogFile : newest.logFile;
-          setLogTarget({ workspaceId, logFile, label });
-          setActiveTab("logs");
+          if (logFile) {
+            // Guard against the new optional logFile (loop-stopped + future
+            // user-action events lack a log). targetType filter above only
+            // matches review/document/iteration which always set logFile,
+            // so this is belt-and-suspenders for type narrowing.
+            setLogTarget({ workspaceId, logFile, label });
+            setActiveTab("logs");
+          }
         }
       }, 500);
     }

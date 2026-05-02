@@ -3,6 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Cache-busting for the SPA host page (item 6.25 follow-up, 2026-05-02).
+
+      Vite's content-hashed asset filenames (e.g. `/assets/index-BjADqkJe.js`)
+      make the JS / CSS bundles safely cacheable, BUT index.html itself is
+      what tells the browser which hashed assets to load. If browsers cache
+      index.html, users navigating after a server upgrade can still load the
+      OLD index.html → OLD asset hashes → OLD JS still in memory, even
+      though the server is now serving a newer cfcf.
+
+      Symptom (2026-05-02): a paused loop with the new server-side
+      `pauseReason: "scope_complete"` rendered the A1 default action set
+      because the user's browser had a cached SPA from a previous build
+      (which didn't have the `case "scope_complete":` branch). Server text
+      was fresh; client logic was stale.
+
+      Fix: tell browsers + intermediate proxies NEVER to cache this tiny
+      (~0.4 KB) host page. The hashed assets it references stay cacheable,
+      so the bandwidth cost is one round-trip for index.html per page load.
+    -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>cf² -- Cerefox Code Factory</title>
   </head>
   <body>

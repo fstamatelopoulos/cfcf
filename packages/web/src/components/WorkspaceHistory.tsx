@@ -6,6 +6,7 @@ import type {
   DocumentHistoryEvent,
   ReflectionHistoryEvent,
   PaSessionHistoryEvent,
+  LoopStoppedHistoryEvent,
   IterationHealth,
 } from "../types";
 import type { LogTarget } from "./LogViewer";
@@ -26,6 +27,10 @@ const readinessColor: Record<string, string> = {
   READY: "var(--color-success)",
   NEEDS_REFINEMENT: "var(--color-warning)",
   BLOCKED: "var(--color-error)",
+  // SCOPE_COMPLETE (item 6.25 follow-up): not a problem state — the spec
+  // is fine, there's just no work left. Render as info/neutral rather
+  // than success (which would imply the loop ran successfully) or warning.
+  SCOPE_COMPLETE: "var(--color-info)",
 };
 
 const healthColor: Record<IterationHealth, string> = {
@@ -137,21 +142,43 @@ function HistoryRow({
         return "Documenter";
       case "pa-session":
         return "Product Architect";
+      case "loop-stopped": {
+        const e = event as LoopStoppedHistoryEvent;
+        return e.iteration
+          ? `Loop stopped by user · after iter ${e.iteration}`
+          : "Loop stopped by user";
+      }
     }
   })();
 
-  const agentLabel = event.model ? `${event.agent}:${event.model}` : event.agent;
+  // For events that don't run an agent (loop-stopped — user action),
+  // show "(user action)" in the Agent column instead of an empty cell.
+  const agentLabel = event.agent
+    ? event.model
+      ? `${event.agent}:${event.model}`
+      : event.agent
+    : "(user action)";
 
   const reviewEvent = event.type === "review" ? (event as ReviewHistoryEvent) : null;
   const iterationEvent = event.type === "iteration" ? (event as IterationHistoryEvent) : null;
   const reflectionEvent = event.type === "reflection" ? (event as ReflectionHistoryEvent) : null;
   const paSessionEvent = event.type === "pa-session" ? (event as PaSessionHistoryEvent) : null;
+  const loopStoppedEvent =
+    event.type === "loop-stopped" ? (event as LoopStoppedHistoryEvent) : null;
 
   const hasReviewDetail = !!reviewEvent?.signals;
   const hasIterationDetail = !!(iterationEvent?.judgeSignals || iterationEvent?.devSignals);
   const hasReflectionDetail = !!reflectionEvent; // always expandable once it exists
   const hasPaSessionDetail = !!paSessionEvent; // always expandable
-  const canExpand = hasReviewDetail || hasIterationDetail || hasReflectionDetail || hasPaSessionDetail;
+  // loop-stopped is only expandable when the user provided feedback —
+  // otherwise the row already shows everything (iteration, status).
+  const hasLoopStoppedDetail = !!loopStoppedEvent?.userFeedback?.trim();
+  const canExpand =
+    hasReviewDetail ||
+    hasIterationDetail ||
+    hasReflectionDetail ||
+    hasPaSessionDetail ||
+    hasLoopStoppedDetail;
 
   const [expanded, setExpanded] = useState(false);
   const toggle = () => setExpanded((v) => !v);
@@ -256,6 +283,21 @@ function HistoryRow({
               <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
             </button>
           )}
+          {loopStoppedEvent &&
+            (hasLoopStoppedDetail ? (
+              <button
+                type="button"
+                className="project-history__readiness-pill"
+                onClick={toggle}
+                title="Click to view the user's feedback on stop"
+                style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+              >
+                <LoopStoppedResult event={loopStoppedEvent} />
+                <span style={{ color: "var(--color-text-muted)" }}> {expanded ? "▾" : "▸"}</span>
+              </button>
+            ) : (
+              <LoopStoppedResult event={loopStoppedEvent} />
+            ))}
         </td>
         <td>{formatDurationOrRunning(event.startedAt, event.completedAt)}</td>
         <td className="project-history__actions">
@@ -297,19 +339,36 @@ function HistoryRow({
             >
               {expanded ? "hide" : "view"}
             </button>
-          ) : (
+          ) : event.type === "loop-stopped" ? (
+            // No agent log to stream -- this is a user action. Offer
+            // "view"/"hide" if the user provided feedback worth showing.
+            hasLoopStoppedDetail ? (
+              <button
+                type="button"
+                className="btn btn--small btn--secondary"
+                onClick={toggle}
+                title="Toggle user feedback detail"
+              >
+                {expanded ? "hide" : "view"}
+              </button>
+            ) : (
+              <span style={{ color: "var(--color-text-muted)" }}>—</span>
+            )
+          ) : event.logFile ? (
             <button
               className="btn btn--small btn--secondary"
               onClick={() =>
                 onSelectLog({
                   workspaceId,
-                  logFile: event.logFile,
-                  label: `${typeLabel} (${event.agent})`,
+                  logFile: event.logFile!,
+                  label: `${typeLabel} (${event.agent ?? "agent"})`,
                 })
               }
             >
               log
             </button>
+          ) : (
+            <span style={{ color: "var(--color-text-muted)" }}>—</span>
           )}
         </td>
       </tr>
@@ -338,6 +397,9 @@ function HistoryRow({
             )}
             {hasPaSessionDetail && paSessionEvent && (
               <PaSessionDetail event={paSessionEvent} workspaceId={workspaceId} />
+            )}
+            {hasLoopStoppedDetail && loopStoppedEvent && (
+              <LoopStoppedDetail event={loopStoppedEvent} />
             )}
           </td>
         </tr>
@@ -456,5 +518,96 @@ function PaSessionResult({ event }: { event: PaSessionHistoryEvent }) {
       </span>
       {decisionsBadge}
     </>
+  );
+}
+
+/**
+ * Item 6.25: summary cell for a `loop-stopped` row. Shows a short
+ * blurb (first ~80 chars of the user's feedback, if any) inline; if
+ * no feedback, a neutral "stopped by user" mark. Always shows the
+ * iteration the loop stopped at, so the user can correlate quickly.
+ */
+function LoopStoppedResult({ event }: { event: LoopStoppedHistoryEvent }) {
+  const fb = event.userFeedback?.trim();
+  const previewLen = 80;
+  const preview = fb
+    ? fb.length > previewLen
+      ? fb.slice(0, previewLen).trimEnd() + "…"
+      : fb
+    : null;
+
+  return (
+    <span style={{ color: "var(--color-text)" }}>
+      stopped by user
+      {preview && (
+        <>
+          <span style={{ color: "var(--color-text-muted)" }}> · </span>
+          <span style={{ color: "var(--color-text-muted)", fontStyle: "italic" }}>
+            "{preview}"
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Item 6.25: expanded detail row for a `loop-stopped` event — shows
+ * the user's full feedback (preserved verbatim) plus the metadata
+ * a user might want when reviewing why the loop stopped.
+ */
+function LoopStoppedDetail({ event }: { event: LoopStoppedHistoryEvent }) {
+  const fb = event.userFeedback?.trim();
+  return (
+    <div
+      style={{
+        padding: "0.75rem 1rem",
+        background: "color-mix(in srgb, var(--color-info) 6%, transparent)",
+        borderLeft: "3px solid var(--color-text-muted)",
+        borderRadius: "4px",
+      }}
+    >
+      <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+        <strong>Loop stopped by user</strong>
+        {event.iteration ? ` after iteration ${event.iteration}` : ""}.{" "}
+        {event.completedAt && (
+          <span style={{ color: "var(--color-text-muted)" }}>
+            ({formatTime(event.completedAt)})
+          </span>
+        )}
+      </div>
+      {fb ? (
+        <div>
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--color-text-muted)",
+              marginBottom: "0.25rem",
+            }}
+          >
+            User feedback:
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              padding: "0.5rem 0.75rem",
+              background: "var(--color-surface, rgba(0,0,0,0.04))",
+              borderRadius: "3px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontSize: "0.85rem",
+              fontFamily: "inherit",
+              lineHeight: 1.5,
+            }}
+          >
+            {fb}
+          </pre>
+        </div>
+      ) : (
+        <div style={{ fontSize: "0.85rem", color: "var(--color-text-muted)" }}>
+          (No feedback provided.)
+        </div>
+      )}
+    </div>
   );
 }

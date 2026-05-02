@@ -650,4 +650,83 @@ describe("pauseReasonAllowedActions (item 6.25)", () => {
     expect(allowed).not.toContain("refine_plan");
     expect(allowed).not.toContain("consult_reflection");
   });
+
+  // 2026-05-02: SCOPE_COMPLETE pauseReason narrows the action set —
+  // continue + consult_reflection are inapplicable (no work to build,
+  // no iterations to reflect on). Architect signal vocabulary
+  // extension; see docs/decisions-log.md 2026-05-02 entry.
+  test("scope_complete: only finish_loop + stop_loop_now + refine_plan", () => {
+    expectActions(pauseReasonAllowedActions("scope_complete"), [
+      "finish_loop",
+      "stop_loop_now",
+      "refine_plan",
+    ]);
+  });
+
+  test("scope_complete excludes continue (loop has nothing to build)", () => {
+    expect(pauseReasonAllowedActions("scope_complete")).not.toContain("continue");
+  });
+
+  test("scope_complete excludes consult_reflection (no iterations to reflect on)", () => {
+    expect(pauseReasonAllowedActions("scope_complete")).not.toContain("consult_reflection");
+  });
+});
+
+// 2026-05-02: Architect SCOPE_COMPLETE readiness verdict (item 6.25 follow-up).
+// The "spec is fine but no work left" semantic gap surfaced 2026-05-02 when
+// re-running the loop on a completed calc workspace; architect was forced
+// to pick between READY (would proceed to a no-op iteration) and
+// NEEDS_REFINEMENT (misleading — spec was fine). New verdict + always-blocks
+// gate behaviour + dedicated pauseReason.
+
+import { readinessGateBlocks } from "./architect-runner.js";
+import { buildPreLoopBlockReason } from "./iteration-loop.js";
+
+describe("readinessGateBlocks: SCOPE_COMPLETE always blocks", () => {
+  test("SCOPE_COMPLETE blocks under gate=never (no work to do, regardless of permissive gate)", () => {
+    expect(readinessGateBlocks("SCOPE_COMPLETE", "never")).toBe(true);
+  });
+  test("SCOPE_COMPLETE blocks under gate=blocked", () => {
+    expect(readinessGateBlocks("SCOPE_COMPLETE", "blocked")).toBe(true);
+  });
+  test("SCOPE_COMPLETE blocks under gate=needs_refinement_or_blocked", () => {
+    expect(readinessGateBlocks("SCOPE_COMPLETE", "needs_refinement_or_blocked")).toBe(true);
+  });
+  test("READY still proceeds under gate=needs_refinement_or_blocked (regression check)", () => {
+    expect(readinessGateBlocks("READY", "needs_refinement_or_blocked")).toBe(false);
+  });
+  test("NEEDS_REFINEMENT still blocks under gate=needs_refinement_or_blocked (regression check)", () => {
+    expect(readinessGateBlocks("NEEDS_REFINEMENT", "needs_refinement_or_blocked")).toBe(true);
+  });
+});
+
+describe("buildPreLoopBlockReason: SCOPE_COMPLETE message", () => {
+  test("SCOPE_COMPLETE: dedicated message mentions all three applicable actions", () => {
+    const msg = buildPreLoopBlockReason(undefined, "SCOPE_COMPLETE", "blocked");
+    expect(msg).toContain("already implemented and tested");
+    expect(msg).toContain("Stop loop now");
+    expect(msg).toContain("Refine plan");
+    expect(msg).toContain("Finish loop");
+    expect(msg).not.toContain("readiness gate"); // gate setting is irrelevant for SCOPE_COMPLETE
+  });
+
+  test("SCOPE_COMPLETE message is the same regardless of gate setting (gate doesn't apply)", () => {
+    const m1 = buildPreLoopBlockReason(undefined, "SCOPE_COMPLETE", "never");
+    const m2 = buildPreLoopBlockReason(undefined, "SCOPE_COMPLETE", "blocked");
+    const m3 = buildPreLoopBlockReason(undefined, "SCOPE_COMPLETE", "needs_refinement_or_blocked");
+    expect(m1).toBe(m2);
+    expect(m2).toBe(m3);
+  });
+
+  test("NEEDS_REFINEMENT message still mentions gate setting (regression check)", () => {
+    const msg = buildPreLoopBlockReason(undefined, "NEEDS_REFINEMENT", "needs_refinement_or_blocked");
+    expect(msg).toContain("'NEEDS_REFINEMENT'");
+    expect(msg).toContain("readiness gate");
+  });
+
+  test("review error path takes precedence over readiness", () => {
+    const msg = buildPreLoopBlockReason("network timeout", "SCOPE_COMPLETE", "blocked");
+    expect(msg).toContain("network timeout");
+    expect(msg).not.toContain("already implemented");
+  });
 });
