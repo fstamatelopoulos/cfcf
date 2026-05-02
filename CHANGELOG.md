@@ -11,6 +11,47 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.17.1] -- 2026-05-02
+
+**Tag-only release; not published to npmjs.com.** Patch-bump rolling up the post-0.17.0 housekeeping pass: a CSS fix for the workspace History table, a major plan cleanup, and a comprehensive documentation refresh against the v0.17.0 shipped state. No code-behaviour changes outside the one CSS rule. Distribution channels stay on `0.17.0`.
+
+### Fixed
+
+- **History table LOG-column alignment** (`packages/web/src/styles/app.css`). When the TYPE or RESULT cell in the workspace History table wrapped to two lines, the LOG-column action buttons (`log` / `view` / `dev` + `judge`) drifted to mid-row instead of staying top-aligned. Three iterations to land the right fix:
+    - First attempt: added `vertical-align: top` + balanced padding to `.project-history__table td` (commit `7b81994`). Effective for cells with no `display:flex`, but the LOG-column `<td>` had `display:flex` itself — flex containers ignore `vertical-align`, so the buttons stayed centred.
+    - Second attempt: added `align-items: flex-start` to the flex container (commit `9b7efaa`). Browsers treat `<td>` as `table-cell` externally and re-purpose `flex` for inner layout in subtle and not-fully-reliable ways; the buttons still drifted.
+    - Final fix: dropped `display:flex` entirely from `.project-history__actions` (commit `28ae7cb`). The `<td>` now inherits `vertical-align:top` cleanly from the parent rule. Sibling-margin (`* + *`) handles the inter-button gap. Lesson worth capturing: for variable-row-height table layouts, prefer table-cell `vertical-align` over `display:flex` on `<td>`.
+
+### Changed — Plan reorganisation (2026-05-02 housekeeping pass)
+
+- **Iteration 5 closed.** All 16 items shipped 2026-04-12 → 2026-05-02. Top-of-`plan.md` "Current Status" block summarises iter-5 deltas + iter-6 active scope.
+- **All 8 pending iter-6 items resolved.** No more 🟡 (open) statuses in the iter-6 table. 6.1 (diff viewer) → ⏸ superseded by F.13. 6.2 (`cfcf log` CLI) → ⏸ subsumed by 6.12 parity audit. 6.10 (sandbox) → ⏸ moved to F.5. 6.15 (sqlite-vec HNSW) → ⏸ moved to F.18 (with corpus-size trigger). 6.8 (custom directions) → ❌ blocked on 6.11. 6.11 (ADLC) → ❌ research-only. 6.13 (scheduled execution) → ❌ research-only. F.18 added to Backlog.
+- **6.20 design refined.** New-version notification now scoped to ship a minimal `JobScheduler` primitive (in `packages/core/src/scheduler/`) that 6.13 will extend rather than duplicate. CLI banner gated to lifecycle commands (`init` / `server` / `status` / `doctor` / `self-update --check`) instead of every `cfcf <verb>` invocation — keeps the banner's signal value and avoids 5–20 ms FS-read overhead in scripted operations. 6.13 row updated to forward-reference the primitive.
+- **Backlog unified.** Old "Backlog / Future iterations" section merged with the historical "Future Iterations (v0.7+)" section into a single `## Backlog` with `F.1`–`F.18` sequential numbering (append-only). Original `6.x` numbers preserved in Notes column for traceability.
+- **Decision Log table at end of plan.md removed.** Duplicated entries already living in `docs/decisions-log.md` with richer context. Replaced with a one-paragraph cross-reference pointing at the SSOT.
+
+### Changed — Documentation refresh against v0.17.0 shipped state
+
+A full pass through every documentation surface to align prose, examples, and reference content with what's actually shipping today. No code changes anywhere in this section — purely doc fidelity.
+
+- **User-facing + API docs (`b244355`)**:
+    - `docs/guides/cli-usage.md`: `cfcf init` lists all 7 roles (5 iteration + 2 interactive); `cfcf review` readiness includes `SCOPE_COMPLETE`; new full `cfcf resume --action` documentation with the 5 values, pause-reason gating, and examples; new "Maintenance commands" section for `self-update` / `doctor` / `help`.
+    - `docs/api/server-api.md`: resume endpoint body schema rewritten with `ResumeAction` type definition; architect signals enumerate `SCOPE_COMPLETE`; events table adds the new `loop-stopped` event type; version placeholders bumped from `0.0.0` to `0.17.0`.
+    - `docs/design/agent-process-and-context.md`: architect readiness enum + JSON example add `SCOPE_COMPLETE`; decision-step list adds Scope-complete and User-initiated stop bullets; `cfcf-docs/` tree listings include the Clio + reflection + iteration-handoffs files that were missing.
+    - `docs/guides/workflow.md`: signal-values list + "When cf² involves the user" table + "Extending a Finished Project" all updated for `SCOPE_COMPLETE`.
+    - `docs/guides/installing.md`: version pins bumped `0.16.x` → `0.17.0`.
+    - `docs/guides/troubleshooting.md` / `product-architect.md`: filled in `v0.x.x` version placeholders.
+    - `docs/guides/manual.md`: added one-line cross-reference to the workflow.md pause-action documentation.
+- **Design docs refresh (`d9992f1`, `f07c7e7`)**:
+    - `docs/design/cfcf-requirements-vision.md` (v0.4 → v0.5): roles table expanded from 5 to 7; `AgentAdapter` sketch rewritten as TypeScript with the actual shipped camelCase signature; Problem Pack section drops the `tests/` requirement; web UI moved from "non-goal" to "shipped iteration 4"; CLI sketch rewritten around current verbs; Memory Layer leads with Clio; new section "10a. Distribution" for npm + sigstore + `self-update`.
+    - `docs/design/cfcf-stack.md`: CLI entry-point list enumerates the actual current surface; Web GUI section rebadged from "Iteration 4 — Available" to "shipped iteration 4; expanded in iteration 5"; Memory Layer rewritten to describe both tiers (per-workspace `cfcf-docs/` + cross-workspace Clio); `cfcf iterate` replaced with `cfcf run`.
+    - `docs/design/clio-memory-layer.md`: top-of-file Status box reframes the doc as design-of-record + history (sections 1–7 shipped, sections 8+ are backlog/future); `v2+` annotations dropped from `clio_document_versions` (5.11) and `clio_audit_log` (5.13); embedder catalogue synced to the shipped `catalogue.ts`; `reindex` CLI verb documented as shipped (5.11); §11 Implementation phases restructured from `v1/v2/v3` to `Shipped/Backlog/Speculative` with F.18 + 6.24 cross-references.
+    - `docs/design/technical-design.md`: large refresh — header status moved from "Draft / April 2026" to "Living document / refreshed against shipped state at v0.17.0"; `v0.1` / `Iteration 0` / `Deferred to Iteration 1+` framing dropped throughout; system-overview ASCII diagram extended with Architect + Reflection runners + Clio Backend + `~/.cfcf/clio.db`; endpoint sketch updated for `/api/clio/*`, `/run` rename, `/reflect`, `/document`, `/activity`, `/api/config`; `WorkspaceConfig` rewritten to match `packages/core/src/types.ts`; state machine adds `REFLECTING` phase + `ResumeAction`; per-iteration flow shows three commits + `plan-validation` + Clio auto-ingest; new full schemas for `ArchitectSignals` (incl. `SCOPE_COMPLETE`) + `ReflectionSignals` + `ResumeAction`; memory section rewritten as two-tier with `MemoryBackend` swap point.
+    - `docs/design/clio-memory-layer.md` §11.5: RRF residue removed throughout the body; rewritten in alpha-blending terms with the actual `searchHybrid` formula (`α × cosine + (1 − α) × normalised_bm25`, default `α=0.7`); v1 starting posture corrected to "no boost layer in v1"; ranking-strategy history (RRF k=60 → alpha-blending on 2026-04-27) captured as a single-line note in §13 instead of being threaded through the body.
+- **Project-root docs (`13b3e28`)**:
+    - `README.md`: status block bumped `v0.16.2` → `v0.17.0`; Agent Roles table grew from 5 to 7; new Clio cross-workspace memory subsection linking the quickstart guide.
+    - `CLAUDE.md`: Architecture Overview "five agent roles" → "seven agent roles" with iteration/interactive split; new bullet for structured pause actions (item 6.25) with all 5 `ResumeAction` values + `loop-stopped` history event type; expanded `packages/cli/src/commands/` list to include `spec.ts`, `doctor.ts`, `self-update.ts`, `help.ts`, `completion.ts`; `guides/` doc tree expanded from 2 files to the actual 7-file set.
+
 ## [0.17.0] -- 2026-05-02
 
 **First public release after the v0.16.x dogfood-only series.** Bumps the minor version for the substantial UX and signal-vocabulary additions since 0.16.4 (the last npm-published release). **Includes everything from the tag-only `v0.16.5` + `v0.16.6` releases** (see those entries below for full detail) — most notably the structured pause actions feature (item 6.25) and the reflection-on-SUCCESS disambiguation (PR #26) — **plus** the post-6.25 polish below that surfaced during dogfooding.
