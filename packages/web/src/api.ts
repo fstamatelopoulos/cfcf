@@ -159,8 +159,27 @@ export function stopLoop(workspaceId: string): Promise<{ phase: string }> {
   return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/stop`);
 }
 
-export function resumeLoop(workspaceId: string, feedback?: string): Promise<{ phase: string }> {
-  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/resume`, feedback ? { feedback } : undefined);
+/**
+ * Item 6.25: structured resume action drives harness routing; free-text
+ * feedback is optional context for the destination implied by the action.
+ * Default action "continue" preserves pre-6.25 behaviour for any caller
+ * that doesn't pass it.
+ */
+export type ResumeAction =
+  | "continue"
+  | "finish_loop"
+  | "stop_loop_now"
+  | "refine_plan"
+  | "consult_reflection";
+
+export function resumeLoop(
+  workspaceId: string,
+  feedback?: string,
+  action: ResumeAction = "continue",
+): Promise<{ phase: string }> {
+  const body: Record<string, unknown> = { action };
+  if (feedback) body.feedback = feedback;
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/loop/resume`, body);
 }
 
 // --- Review ---

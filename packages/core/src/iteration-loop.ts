@@ -35,7 +35,7 @@ import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
 import { nextIteration, updateWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
-import { runReflectionSync } from "./reflection-runner.js";
+import { runReflectionSync, parseReflectionSignals } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { registerProcess } from "./active-processes.js";
@@ -123,6 +123,14 @@ export interface LoopState {
     autoDocumenter?: boolean;
     readinessGate?: import("./types.js").ReadinessGate;
   };
+  /**
+   * Structured action chosen by the user when resuming a paused loop
+   * (item 6.25). Set by `resumeLoop`; consumed + cleared by `runLoop`
+   * on the next iteration of the work pump. Default behaviour (when
+   * absent or set to "continue") matches pre-6.25: spawn next dev
+   * iteration with `userFeedback` as prompt context.
+   */
+  resumeAction?: import("./types.js").ResumeAction;
 }
 
 export interface LoopIterationRecord {
@@ -566,11 +574,81 @@ export async function startLoop(
 }
 
 /**
- * Resume a paused loop with optional user feedback.
+ * Compute which `ResumeAction` values are applicable for a given pause
+ * scenario (item 6.25 — see docs/research/structured-pause-actions-design.md).
+ *
+ * Drives both UI button visibility (`FeedbackForm`) and CLI argument
+ * validation (`cfcf resume --action <enum>`). Single source of truth so
+ * the two surfaces stay in sync.
+ *
+ * Optional `signals` argument enables sub-case discrimination beyond
+ * `pauseReason` alone (A2 dev-mid-iter vs A3 judge-needs-input;
+ * A6 reflection-stuck vs A4/A5/A9 judge-state-anomaly; A8 judge-missing).
+ * When `signals` is absent, returns the permissive superset for the
+ * pause class.
+ */
+export function pauseReasonAllowedActions(
+  pauseReason: LoopState["pauseReason"],
+  signals?: {
+    judge?: JudgeSignals | null;
+    dev?: DevSignals | null;
+    reflection?: ReflectionSignals | null;
+  },
+): import("./types.js").ResumeAction[] {
+  // Mapping per docs/research/structured-pause-actions-design.md matrix;
+  // keep this in sync with that doc.
+  switch (pauseReason) {
+    case "user_input_needed":
+      // A2 (dev mid-iter) vs A3 (judge needs input). The dev case is a
+      // strict subset because dev hasn't finished -- finish_loop and
+      // refine_plan don't apply. Discriminate via dev signals if given.
+      if (signals?.dev?.user_input_needed) {
+        return ["continue", "stop_loop_now"];
+      }
+      // A3 (judge user_input_needed) -- full set
+      return ["continue", "finish_loop", "stop_loop_now", "refine_plan", "consult_reflection"];
+
+    case "anomaly":
+      // A4 ANOMALY | A5 STALLED+alert | A6 reflection-stuck | A8 missing-judge | A9 unknown-judge.
+      // Discriminate the broken-judge cases (A8) via null judge.
+      if (signals?.judge === null) {
+        return ["stop_loop_now", "refine_plan"];
+      }
+      // A4 / A5 / A6 / A9 -- full set including consult_reflection (A6
+      // re-spawns reflection with user feedback as fresh context;
+      // decided 2026-05-01 alongside the design doc).
+      return ["continue", "finish_loop", "stop_loop_now", "refine_plan", "consult_reflection"];
+
+    case "cadence":
+      // A7: routine check-in; full set applicable.
+      return ["continue", "finish_loop", "stop_loop_now", "refine_plan", "consult_reflection"];
+
+    case "max_iterations":
+      // B1: ceiling reached -- only finish_loop (run docs if configured)
+      // or stop_loop_now make sense.
+      return ["finish_loop", "stop_loop_now"];
+
+    default:
+      // A1 pre-loop review blocked. continue (after user edited the
+      // Problem Pack), stop_loop_now, refine_plan (re-run architect
+      // re-review). finish_loop ✗ (no iters yet); consult_reflection
+      // ✗ (no iterations for reflection to reflect on).
+      return ["continue", "stop_loop_now", "refine_plan"];
+  }
+}
+
+/**
+ * Resume a paused loop with the user's structured action + optional
+ * free-text feedback (item 6.25).
+ *
+ * Default `action: "continue"` preserves pre-6.25 behaviour for any
+ * caller (CLI without --action, API request without action field) so
+ * existing automation/scripts keep working.
  */
 export async function resumeLoop(
   workspaceId: string,
   feedback?: string,
+  action: import("./types.js").ResumeAction = "continue",
 ): Promise<LoopState> {
   const state = await getLoopState(workspaceId);
   if (!state) {
@@ -580,7 +658,17 @@ export async function resumeLoop(
     throw new Error(`Loop is not paused (current phase: ${state.phase})`);
   }
 
+  // Validate the action against the pause scenario. Reject early with a
+  // clear error so CLI / API callers don't silently get a no-op resume.
+  const allowed = pauseReasonAllowedActions(state.pauseReason);
+  if (!allowed.includes(action)) {
+    throw new Error(
+      `Action '${action}' is not applicable for this pause (reason: ${state.pauseReason ?? "pre-loop"}). Allowed: ${allowed.join(", ")}.`,
+    );
+  }
+
   state.userFeedback = feedback;
+  state.resumeAction = action;
   state.pauseReason = undefined;
   state.pendingQuestions = undefined;
 
@@ -665,6 +753,201 @@ function isLoopDone(state: LoopState): boolean {
   return state.phase === "paused" || state.phase === "completed" || state.phase === "stopped";
 }
 
+// --- Resume-action handlers (item 6.25) ---
+
+/**
+ * Handle the `stop_loop_now` resume action: terminate the loop
+ * immediately, no documenter, capture the user's free-text feedback as
+ * an audit note in both `history.json` (as a `loop-stopped` event) and
+ * the human-readable `iteration-history.md`. Per design decision
+ * 2026-05-01 (docs/research/structured-pause-actions-design.md §5).
+ */
+async function handleStopLoopNow(
+  workspace: WorkspaceConfig,
+  state: LoopState,
+): Promise<void> {
+  const userFeedback = state.userFeedback;
+  state.userFeedback = undefined;
+  state.phase = "stopped";
+  state.outcome = "stopped";
+  state.completedAt = new Date().toISOString();
+
+  // Append a structured event to history.json so the web UI History
+  // tab + downstream automation can see why the loop ended.
+  const historyEventId = randomBytes(8).toString("hex");
+  await appendHistoryEvent(workspace.id, {
+    id: historyEventId,
+    type: "loop-stopped",
+    status: "completed",
+    startedAt: state.completedAt,
+    completedAt: state.completedAt,
+    iteration: state.currentIteration,
+    userFeedback,
+  } as import("./workspace-history.js").LoopStoppedHistoryEvent);
+
+  // Append a human-readable narrative to iteration-history.md so the
+  // markdown ledger also captures the stop reason. Best-effort —
+  // failure to write the narrative does not fail the stop.
+  try {
+    const lines: string[] = [
+      "",
+      `## Loop stopped at iteration ${state.currentIteration}`,
+      "",
+      `Stopped by user via \`stop_loop_now\` resume action on ${state.completedAt}.`,
+      "",
+    ];
+    if (userFeedback?.trim()) {
+      lines.push(`**User note:** ${userFeedback.trim()}`, "");
+    }
+    const histPath = join(workspace.repoPath, "cfcf-docs", "iteration-history.md");
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(histPath, lines.join("\n"), "utf-8");
+  } catch (err) {
+    console.warn(`[stop_loop_now] failed to append narrative to iteration-history.md: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  await saveLoopState(state);
+  await updateWorkspace(workspace.id, { status: "stopped" });
+
+  dispatchForWorkspace(
+    makeEvent({
+      type: "loop.completed",
+      title: "Loop stopped by user",
+      message: `${workspace.name}: stopped at iteration ${state.currentIteration} via stop_loop_now${userFeedback?.trim() ? ` — "${userFeedback.trim().slice(0, 80)}${userFeedback.trim().length > 80 ? "…" : ""}"` : ""}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      details: { outcome: "stopped", iterations: state.currentIteration, userFeedback },
+    }),
+    workspace.notifications,
+  );
+}
+
+/**
+ * Handle the `finish_loop` resume action: skip the iteration spawn,
+ * jump to the configured end-of-loop sequence (documenter when
+ * `autoDocumenter=true`; otherwise just terminate cleanly with success
+ * outcome). Per design decision 2026-05-01: respect `autoDocumenter`
+ * config — `finish_loop` doesn't override the user's documenter
+ * preference, only their loop-completion intent.
+ */
+async function handleFinishLoop(
+  workspace: WorkspaceConfig,
+  state: LoopState,
+  loopCfg: { autoDocumenter: boolean },
+): Promise<void> {
+  const userFeedback = state.userFeedback;
+  state.userFeedback = undefined;
+
+  if (loopCfg.autoDocumenter) {
+    state.phase = "documenting";
+    await saveLoopState(state);
+
+    try {
+      const docResult = await runDocumentSync(workspace, { userFeedback });
+      let committed = false;
+      if (await gitManager.hasChanges(workspace.repoPath)) {
+        const commitResult = await gitManager.commitAll(
+          workspace.repoPath,
+          `cfcf documentation (${workspace.documenterAgent.adapter})`,
+        );
+        committed = commitResult.success;
+      }
+      await updateHistoryEvent(workspace.id, docResult.historyEventId, {
+        committed,
+      } as Partial<import("./workspace-history.js").DocumentHistoryEvent>);
+    } catch (err) {
+      console.warn(`[finish_loop] documenter failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  state.phase = "completed";
+  state.outcome = "success";
+  state.completedAt = new Date().toISOString();
+  await saveLoopState(state);
+  await updateWorkspace(workspace.id, { status: "completed" });
+
+  dispatchForWorkspace(
+    makeEvent({
+      type: "loop.completed",
+      title: "Loop finished by user",
+      message: `${workspace.name}: finished at iteration ${state.currentIteration} via finish_loop${loopCfg.autoDocumenter ? " (documenter ran)" : " (autoDocumenter=false; no docs)"}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      details: { outcome: "success", iterations: state.currentIteration, finishedByUser: true },
+    }),
+    workspace.notifications,
+  );
+
+  // Push to remote on success (mirrors the natural-success path).
+  await gitManager.push(workspace.repoPath).catch(() => {});
+}
+
+/**
+ * Handle the `consult_reflection` resume action: spawn reflection in
+ * consult mode with the user's feedback as input. Reflection sets
+ * `harness_action_recommendation` in its signals; we route per the
+ * recommendation:
+ *   - "stop_loop_now"   → finalize via handleStopLoopNow → return "stop"
+ *   - "finish_loop"     → finalize via handleFinishLoop → return "stop"
+ *   - "pause_for_user"  → re-pause with reflection's new key_observation → return "stop"
+ *   - "continue"        → fall through to next iteration → return "continue"
+ *   - undefined         → treat as "continue" (reflection didn't disambiguate)
+ */
+async function handleConsultReflection(
+  workspace: WorkspaceConfig,
+  state: LoopState,
+): Promise<"continue" | "stop"> {
+  const userFeedback = state.userFeedback;
+  state.userFeedback = undefined;
+
+  let recommendation: ReflectionSignals["harness_action_recommendation"];
+  try {
+    const result = await runReflectionSync(workspace, state.currentIteration, {
+      consultMode: true,
+      userFeedback,
+    });
+    recommendation = result.signals?.harness_action_recommendation;
+  } catch (err) {
+    console.warn(`[consult_reflection] reflection spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+    // On failure, bounce back to user via re-pause with a clear note.
+    state.phase = "paused";
+    state.pauseReason = "anomaly";
+    state.pendingQuestions = [
+      `consult_reflection: reflection agent failed to run (${err instanceof Error ? err.message : String(err)}). Pick a different action to resume.`,
+    ];
+    await saveLoopState(state);
+    await updateWorkspace(workspace.id, { status: "paused" });
+    return "stop";
+  }
+
+  if (recommendation === "stop_loop_now") {
+    await handleStopLoopNow(workspace, state);
+    return "stop";
+  }
+  if (recommendation === "finish_loop") {
+    await handleFinishLoop(workspace, state, resolveLoopConfig(workspace, state));
+    return "stop";
+  }
+  if (recommendation === "pause_for_user") {
+    // Reflection couldn't decide; bounce back. Use its key_observation
+    // as the new question so the user knows what the ambiguity was.
+    state.phase = "paused";
+    state.pauseReason = "anomaly";
+    // Read the reflection signals from disk so we have the latest
+    // key_observation (runReflectionSync's return shape may not
+    // expose it directly).
+    const sigs = await parseReflectionSignals(workspace.repoPath);
+    state.pendingQuestions = [
+      sigs?.key_observation ?? "Reflection consulted but couldn't decide on a next step. Pick an action to proceed.",
+    ];
+    await saveLoopState(state);
+    await updateWorkspace(workspace.id, { status: "paused" });
+    return "stop";
+  }
+  // "continue" or undefined → fall through to next iteration.
+  return "continue";
+}
+
 /**
  * The main iteration loop.
  * Runs iterations until a stop condition is met or the loop is paused.
@@ -676,6 +959,63 @@ async function runLoop(
 ): Promise<void> {
   const packPath = opts?.problemPackPath || join(workspace.repoPath, "problem-pack");
   const loopCfg = resolveLoopConfig(workspace, state);
+
+  // --- RESUME ACTION HANDLING (item 6.25) ---
+  // When the user resumes a paused loop with a structured action, route
+  // before the normal iteration flow runs. "continue" falls through to
+  // the existing pre-loop / iteration logic; other actions either
+  // terminate early (stop_loop_now / finish_loop) or run a one-shot
+  // agent and then fall through (refine_plan / consult_reflection).
+  // The action is consumed (cleared) here so it doesn't re-fire on the
+  // next iteration's resume cycle.
+  const resumeAction = state.resumeAction;
+  state.resumeAction = undefined;
+  if (resumeAction === "stop_loop_now") {
+    await handleStopLoopNow(workspace, state);
+    return;
+  }
+  if (resumeAction === "finish_loop") {
+    await handleFinishLoop(workspace, state, loopCfg);
+    return;
+  }
+  if (resumeAction === "refine_plan") {
+    // Sync architect re-review with userFeedback as direction.
+    // Architect runner consumes state.userFeedback via writeContextToRepo;
+    // we don't clear it here — the next dev iteration may still want it
+    // as broader context (it'll be cleared after that iteration consumes
+    // it, mirroring the existing flow).
+    try {
+      await runReviewSync(workspace, {
+        problemPackPath: packPath,
+        userFeedback: state.userFeedback,
+        trigger: "loop",
+      });
+      // Commit any architect outputs to current branch (mirrors the
+      // pre-loop review block's behaviour).
+      if (await gitManager.hasChanges(workspace.repoPath)) {
+        await gitManager.commitAll(
+          workspace.repoPath,
+          `cfcf architect re-review (refine_plan resume action, item 6.25)`,
+        );
+      }
+    } catch (err) {
+      // If the architect spawn itself fails, log and fall through to
+      // the iteration loop anyway -- the failure is captured in the
+      // architect history event.
+      console.warn(`[refine_plan] architect re-review failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Fall through to the regular pre-loop / iteration logic.
+  }
+  if (resumeAction === "consult_reflection") {
+    // Spawn reflection in consult mode with userFeedback as input.
+    // Reflection sets harness_action_recommendation; route per its
+    // recommendation (or fall through to next iteration on "continue").
+    const consultResult = await handleConsultReflection(workspace, state);
+    if (consultResult === "stop") return;
+    // "continue" or "pause_for_user" → fall through (pause_for_user
+    // is handled inside the consult helper, which sets the pause state
+    // and returns "stop" to abort runLoop).
+  }
 
   // --- PRE-LOOP REVIEW (item 5.1 autoReviewSpecs=true) ---
   // Runs before iteration 1, not on resume. When the readiness gate

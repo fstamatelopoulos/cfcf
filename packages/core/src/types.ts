@@ -430,7 +430,48 @@ export interface ReflectionSignals {
    * user should intervene. Never auto-stops -- always pauses + notifies.
    */
   recommend_stop?: boolean;
+  /**
+   * Set ONLY when reflection was invoked via the `consult_reflection`
+   * resume action (item 6.25). Reflection reads the user's free-text
+   * feedback + current loop state and recommends what the harness
+   * should do next, expressed as one of the four downstream actions.
+   * The harness honours this recommendation (rather than the usual
+   * recommend_stop / iteration_health route).
+   *
+   * - "continue"          → next dev iteration with reflection's plan tweaks
+   * - "finish_loop"       → loop is done; jump to documenter (if configured)
+   * - "stop_loop_now"     → loop is unrecoverable; terminate immediately
+   * - "pause_for_user"    → reflection couldn't decide; bounce back to user
+   *                         with key_observation explaining the ambiguity
+   *
+   * Outside consult mode this field is undefined and ignored.
+   */
+  harness_action_recommendation?:
+    | "continue"
+    | "finish_loop"
+    | "stop_loop_now"
+    | "pause_for_user";
 }
+
+/**
+ * Structured action a user picks when resuming a paused loop (item 6.25).
+ * Tells the harness what to do next; free-text feedback (state.userFeedback)
+ * remains optional and routes per-action to the right destination (next
+ * dev agent, documenter, architect, reflection, or audit-only history note).
+ *
+ * Default in `resumeLoop` is `continue` for back-compat with pre-6.25
+ * callers (CLI without --action, API requests without action field).
+ *
+ * Per-pause-case applicability is computed by `pauseReasonAllowedActions`;
+ * the UI shows only the applicable buttons and the CLI rejects inapplicable
+ * --action values with a clear error.
+ */
+export type ResumeAction =
+  | "continue"
+  | "finish_loop"
+  | "stop_loop_now"
+  | "refine_plan"
+  | "consult_reflection";
 
 export interface ArchitectSignals {
   readiness: "READY" | "NEEDS_REFINEMENT" | "BLOCKED";

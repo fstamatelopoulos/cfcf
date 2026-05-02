@@ -553,3 +553,101 @@ describe("makeDecision - reflection precedence (research Q6)", () => {
     expect(decision.pauseReason).toBe("anomaly");
   });
 });
+
+// =================================================================
+// Item 6.25: structured pause actions
+// =================================================================
+
+import { pauseReasonAllowedActions } from "./iteration-loop.js";
+import type { ResumeAction } from "./types.js";
+
+describe("pauseReasonAllowedActions (item 6.25)", () => {
+  function expectActions(actual: ResumeAction[], expected: ResumeAction[]): void {
+    expect([...actual].sort()).toEqual([...expected].sort());
+  }
+
+  test("pre-loop block (undefined pauseReason): continue + stop_loop_now + refine_plan", () => {
+    expectActions(pauseReasonAllowedActions(undefined), [
+      "continue",
+      "stop_loop_now",
+      "refine_plan",
+    ]);
+  });
+
+  test("user_input_needed without dev signals: full set (treated as A3 superset)", () => {
+    expectActions(pauseReasonAllowedActions("user_input_needed"), [
+      "continue",
+      "finish_loop",
+      "stop_loop_now",
+      "refine_plan",
+      "consult_reflection",
+    ]);
+  });
+
+  test("user_input_needed + dev mid-iter (A2): only continue + stop_loop_now", () => {
+    expectActions(
+      pauseReasonAllowedActions("user_input_needed", {
+        dev: makeDevSignals({ user_input_needed: true, questions: ["q?"] }),
+      }),
+      ["continue", "stop_loop_now"],
+    );
+  });
+
+  test("user_input_needed + judge needs input (A3, no dev flag): full set", () => {
+    expectActions(
+      pauseReasonAllowedActions("user_input_needed", {
+        dev: makeDevSignals({ user_input_needed: false }),
+        judge: makeJudgeSignals({ user_input_needed: true }),
+      }),
+      ["continue", "finish_loop", "stop_loop_now", "refine_plan", "consult_reflection"],
+    );
+  });
+
+  test("anomaly without signals: full permissive set (A4/A5/A6/A9 superset)", () => {
+    expectActions(pauseReasonAllowedActions("anomaly"), [
+      "continue",
+      "finish_loop",
+      "stop_loop_now",
+      "refine_plan",
+      "consult_reflection",
+    ]);
+  });
+
+  test("anomaly + judge=null (A8 — broken state): only stop_loop_now + refine_plan", () => {
+    expectActions(
+      pauseReasonAllowedActions("anomaly", { judge: null }),
+      ["stop_loop_now", "refine_plan"],
+    );
+  });
+
+  test("cadence (A7): full set", () => {
+    expectActions(pauseReasonAllowedActions("cadence"), [
+      "continue",
+      "finish_loop",
+      "stop_loop_now",
+      "refine_plan",
+      "consult_reflection",
+    ]);
+  });
+
+  test("max_iterations (B1): only finish_loop + stop_loop_now", () => {
+    expectActions(pauseReasonAllowedActions("max_iterations"), [
+      "finish_loop",
+      "stop_loop_now",
+    ]);
+  });
+
+  test("default (continue) is in pre-loop A1, anomaly, cadence, user_input_needed superset", () => {
+    expect(pauseReasonAllowedActions(undefined)).toContain("continue");
+    expect(pauseReasonAllowedActions("anomaly")).toContain("continue");
+    expect(pauseReasonAllowedActions("cadence")).toContain("continue");
+    expect(pauseReasonAllowedActions("user_input_needed")).toContain("continue");
+  });
+
+  test("max_iterations excludes continue + refine_plan + consult_reflection", () => {
+    const allowed = pauseReasonAllowedActions("max_iterations");
+    expect(allowed).not.toContain("continue");
+    expect(allowed).not.toContain("refine_plan");
+    expect(allowed).not.toContain("consult_reflection");
+  });
+});

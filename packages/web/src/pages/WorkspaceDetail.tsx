@@ -271,6 +271,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         <FeedbackForm
           workspaceId={workspace.id}
           questions={loopState?.pendingQuestions}
+          pauseReason={loopState?.pauseReason}
           onResume={() => handleAgentAction("resume")}
         />
       )}

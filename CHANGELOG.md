@@ -9,7 +9,37 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Structured pause actions (item 6.25)
+
+When the iteration loop pauses for arbitration, the user now picks **one of five structured actions** that drives the harness's next move; the textarea remains optional context routed to the right destination per action. Surfaced 2026-05-01 during dogfooding; full design + matrix in [`docs/research/structured-pause-actions-design.md`](docs/research/structured-pause-actions-design.md); root-cause + lessons in [`docs/decisions-log.md`](docs/decisions-log.md) (2026-05-02 entry).
+
+- New `ResumeAction` enum: `continue` (default; resume next iter w/ feedback as dev context) | `finish_loop` (run documenter if `autoDocumenter=true`, else just terminate) | `stop_loop_now` (immediate termination, no docs regardless of config; feedback captured to audit history) | `refine_plan` (sync architect re-review with feedback, then continue) | `consult_reflection` (escape hatch: reflection consults user feedback + state, sets `harness_action_recommendation`, harness routes per recommendation).
+- Reflection signals gain `harness_action_recommendation?: "continue" | "finish_loop" | "stop_loop_now" | "pause_for_user"` — set only when reflection runs in consult mode.
+- New `LoopStoppedHistoryEvent` (`type: "loop-stopped"`) captures `stop_loop_now` events with the user's feedback as audit; written to both `history.json` (structured) and `iteration-history.md` (narrative paragraph).
+- `pauseReasonAllowedActions(pauseReason, signals?)` helper — single source of truth for which actions apply per pause case (drives UI button visibility AND CLI argument validation).
+- API: `POST /api/workspaces/:id/loop/resume` body now accepts `action?: ResumeAction` (defaults to `"continue"` for back-compat).
+- CLI: `cfcf resume --action <continue|finish_loop|stop_loop_now|refine_plan|consult_reflection>` with `choices()` validation. Default `continue`.
+- Web UI: `FeedbackForm` rewritten as contextual button matrix — shows only the buttons applicable for the current pause case. **No bare "Resume"** — user explicitly picks an action.
+- Documenter runner accepts optional `userFeedback`, appended to its prompt as user direction.
+- Reflection runner gains `consultMode: boolean` + `userFeedback` opts; in consult mode the prompt instructs the agent to set `harness_action_recommendation`.
+- `runLoop` switches on `state.resumeAction` at the top: `stop_loop_now` and `finish_loop` terminate early; `refine_plan` runs architect synchronously then falls through; `consult_reflection` runs reflection in consult mode and routes per the recommendation.
+- 10 new unit tests covering the `pauseReasonAllowedActions` matrix (9 pause cases × applicable subsets) — total `iteration-loop.test.ts` count: 43 (was 33).
+
+### Docs
+
+- `docs/guides/workflow.md` "User actions at pause points" section rewritten with the 5-action table + per-action examples + `stop_loop_now` vs `cfcf stop` clarification.
+- `docs/decisions-log.md` 2026-05-02 entry capturing the design journey + 5 lessons learned (semantics-as-protocol-vocabulary, signals-as-contract, symmetry-is-misleading, free-text-is-precious, escape-hatch-is-a-feature).
+- `docs/research/structured-pause-actions-design.md` updated with locked-in decisions (rename `stop_and_document`→`finish_loop` + `stop`→`stop_loop_now`, allow A6 consult, mandatory action, dual history write).
+
+### Changed
+
+- `BaseHistoryEvent.logFile` and `BaseHistoryEvent.agent` are now optional (were required) — user-action events like `loop-stopped` don't have an associated agent or log file.
+
+### Compatibility
+
+- API: pre-6.25 callers omitting `action` still get `"continue"` behavior identical to the previous default.
+- CLI: pre-6.25 invocations of `cfcf resume --feedback "..."` still work; default action is `continue`.
+- No agent prompt changes for routine post-iteration reflection runs — the new `harness_action_recommendation` field is documented in consult-mode prompts only.
 
 ## [0.16.5] -- 2026-05-01
 
