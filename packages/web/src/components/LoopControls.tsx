@@ -101,42 +101,37 @@ export function LoopControls({
             {loading === "stop" ? "Stopping..." : "Stop"}
           </button>
         )}
-        {isPaused && (
-          <button
-            className="btn btn--primary"
-            disabled={loading !== null}
-            onClick={() => doAction("resume", () => api.resumeLoop(workspaceId))}
-          >
-            {loading === "resume" ? "Resuming..." : "Resume"}
-          </button>
-        )}
-        {isPaused && (
-          <button
-            className="btn btn--danger"
-            disabled={loading !== null}
-            onClick={() => doAction("stop", () => api.stopLoop(workspaceId))}
-          >
-            Stop
-          </button>
-        )}
+        {/* Resume / Stop / Document buttons are hidden when the loop is
+            paused (item 6.25, fix 2026-05-02). The FeedbackForm's 5
+            action buttons (Continue / Finish loop / Stop loop now /
+            Refine plan / Ask Reflection to decide) cover every case
+            and route correctly through the structured ResumeAction
+            enum. The legacy buttons here would call resumeLoop without
+            an action (defaulting server-side to "continue") or stopLoop
+            (skipping the audit-feedback capture path) — both are wrong
+            routing surfaces while the FeedbackForm is showing. */}
 
-        {/* Document: while running, button becomes Stop Document (red) */}
-        {isDocumentRunning ? (
-          <button
-            className="btn btn--danger"
-            disabled={loading !== null}
-            onClick={() => doAction("stopDocument", () => api.stopDocument(workspaceId))}
-          >
-            {loading === "stopDocument" ? "Stopping..." : "Stop Document"}
-          </button>
-        ) : (
-          <button
-            className="btn btn--primary"
-            disabled={loading !== null || isBusy}
-            onClick={() => doAction("document", () => api.startDocument(workspaceId))}
-          >
-            {loading === "document" ? "Starting document..." : "Document"}
-          </button>
+        {/* Document button: visible when loop is NOT paused (post-loop
+            manual run is a sensible action). When paused, "Finish loop"
+            in the FeedbackForm runs the documenter as part of resuming. */}
+        {!isPaused && (
+          isDocumentRunning ? (
+            <button
+              className="btn btn--danger"
+              disabled={loading !== null}
+              onClick={() => doAction("stopDocument", () => api.stopDocument(workspaceId))}
+            >
+              {loading === "stopDocument" ? "Stopping..." : "Stop Document"}
+            </button>
+          ) : (
+            <button
+              className="btn btn--primary"
+              disabled={loading !== null || isBusy}
+              onClick={() => doAction("document", () => api.startDocument(workspaceId))}
+            >
+              {loading === "document" ? "Starting document..." : "Document"}
+            </button>
+          )
         )}
       </div>
       {autoReviewSpecs && (
