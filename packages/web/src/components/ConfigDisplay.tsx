@@ -264,6 +264,26 @@ export function ConfigDisplay({
             })}
           </tbody>
         </table>
+        <p
+          style={{
+            marginTop: "0.75rem",
+            marginBottom: 0,
+            fontSize: "0.8rem",
+            color: "var(--color-text-muted, #888)",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>Product Architect</strong> (<code>cfcf spec</code>) and{" "}
+          <strong>Help Assistant</strong> (<code>cfcf help assistant</code>) are
+          configured globally — see{" "}
+          <a href="#/server" style={{ color: "var(--color-info)" }}>
+            Settings
+          </a>
+          . They run once per task (PA: spec authoring at the start of a
+          workspace; HA: ad-hoc cf² Q&amp;A) and intentionally aren't
+          per-workspace overridable; pick one agent you trust for those
+          workloads and use it everywhere.
+        </p>
       </FormSection>
 
       {/* Iteration defaults + loop policy */}
