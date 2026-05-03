@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import type { WorkspaceConfig } from "../types";
 import type { NotificationChannelName, NotificationEventType } from "../types";
 import { fetchGlobalConfig, saveWorkspace } from "../api";
+import { ClioProjectDialog } from "./ClioProjectDialog";
+import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
+import { navigateTo } from "../hooks/useRoute";
 
 const ROLE_KEYS: (keyof Pick<
   WorkspaceConfig,
@@ -50,6 +53,8 @@ export function ConfigDisplay({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [clioDialogOpen, setClioDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   // Sync draft when the upstream workspace prop changes (e.g. after external refresh)
   useEffect(() => {
@@ -196,7 +201,7 @@ export function ConfigDisplay({
         </div>
       )}
 
-      {/* Identity + runtime (read-only) */}
+      {/* Identity + runtime (read-only, except Clio Project which is changed via a dedicated dialog) */}
       <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
         <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
           Identity
@@ -212,6 +217,23 @@ export function ConfigDisplay({
               value={String(workspace.currentIteration || 0)}
             />
             <InfoRow label="Process template" value={workspace.processTemplate} />
+            {/* Clio Project: shown read-only with an inline change button.
+                The reassignment uses a separate endpoint
+                (PUT /api/workspaces/:id/clio-project) because it can
+                migrate historical docs as a side-effect, so it doesn't
+                belong in the bulk-save patch flow below. */}
+            <tr>
+              <th>Clio Project</th>
+              <td>
+                <span style={{ marginRight: "0.5rem" }}>{workspace.clioProject ?? "(none)"}</span>
+                <button
+                  className="btn btn--small btn--secondary"
+                  onClick={() => setClioDialogOpen(true)}
+                >
+                  Change…
+                </button>
+              </td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -493,6 +515,45 @@ export function ConfigDisplay({
           </span>
         )}
       </div>
+
+      {/* Danger zone (item 6.12). Sits at the very bottom because the
+          consequence is irreversible and we don't want it on the eye-line
+          while users are editing routine config. */}
+      <section style={{ marginTop: "2rem" }}>
+        <div className="danger-zone">
+          <h3 className="danger-zone__title">Delete workspace</h3>
+          <div className="danger-zone__body">
+            Removes <strong>{workspace.name}</strong> from cfcf's registry and per-workspace state.
+            The repo folder at <code>{workspace.repoPath}</code> is <strong>not touched</strong>.
+            iteration branches and ingested Clio docs are also left alone.
+          </div>
+          <button
+            className="btn btn--danger btn--small"
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            Delete workspace…
+          </button>
+        </div>
+      </section>
+
+      <ClioProjectDialog
+        open={clioDialogOpen}
+        onClose={() => setClioDialogOpen(false)}
+        workspace={workspace}
+        onSaved={(newProject) => {
+          // Optimistic refresh: surface the new value immediately by
+          // calling the parent's onSaved with a patched workspace
+          // (server is the source of truth, but the workspace is
+          // re-fetched on next poll regardless).
+          onSaved?.({ ...workspace, clioProject: newProject });
+        }}
+      />
+      <DeleteWorkspaceDialog
+        open={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        workspace={workspace}
+        onDeleted={() => navigateTo("/")}
+      />
     </div>
   );
 }

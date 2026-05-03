@@ -44,6 +44,8 @@ export interface WorkspaceConfig {
   currentIteration: number;
   status?: WorkspaceStatus;
   notifications?: NotificationConfig;
+  /** Clio Project name this workspace ingests into (item 5.7). */
+  clioProject?: string;
 }
 
 // Keep in sync with packages/core/src/iteration-loop.ts
