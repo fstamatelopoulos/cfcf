@@ -13,12 +13,13 @@ _No changes yet._
 
 ## [0.18.0] -- 2026-05-02
 
-**Items 6.20 + 6.12 ship.** Two coordinated additive feature drops:
+**Items 6.20 + 6.12 + 6.26 ship.** Three coordinated additive feature drops:
 
 - **6.20** — minimal `JobScheduler` primitive that item 6.13 (cron-like recurring execution) will extend rather than duplicate, plus the first job that uses it: a 24h `update-check` against npm that drives a web UI banner, a CLI lifecycle banner, and a `cfcf doctor` check. No auto-update — the user always runs `cfcf self-update --yes` explicitly.
 - **6.12** — closes every CLI ↔ web parity gap surfaced by the audit (workspace creation / deletion / Clio Project reassignment / ad-hoc Reflect / read-only Memory browser) plus a full theming pass (light / dark / auto with toggle, `color-scheme` for native widgets, dark-theme contrast bump, readability tokens, panel-surface convention).
+- **6.26** — replaces the free-text per-role model field across web Settings, workspace Config, and CLI init / config-edit with a registry-driven dropdown. Bundled seed (generic aliases like `opus` / `sonnet` / `gpt-5-codex`) merged with an optional user override managed via a new Settings → Model registry editor. Plus a typography polish pass (small text on every view bumped to a coordinated `--text-xs/sm/md` scale; clickable-looking section titles fixed; remaining plan-item refs stripped from UI strings).
 
-Minor bump because this introduces a new core module (`scheduler`), new user-visible behaviour (banners + theme toggle), and substantial new web surfaces (Memory page, modals, Reflect button, workspace lifecycle UI). All surfaces are additive — no breaking config or API changes.
+Minor bump because this introduces a new core module (`scheduler`), new user-visible behaviour (banners + theme toggle + model dropdowns + Model registry editor), and substantial new web surfaces (Memory page, modals, Reflect button, workspace lifecycle UI). All surfaces are additive — no breaking config or API changes.
 
 ### Added — Item 6.20: minimal `JobScheduler` primitive + new-version notification
 
@@ -86,6 +87,51 @@ Closes every user-facing CLI ↔ web parity gap surfaced by the audit in plan ro
 
 - **Row 6.9** appended with a follow-up note about the Clio Project namespace convention surfaced during dogfooding (system-managed projects like `cfcf-memory-pa` should be filtered or prefixed at picker sites once the convention firms up).
 - **New row 6.26**: per-role model selection — dropdowns sourced from each agent's supported-models list (replace today's free-text model field in web Settings + workspace Config + CLI init/config edit).
+
+### Added — Item 6.26: per-role model selection dropdowns + Model registry editor
+
+Replaces the free-text per-role model field across web Settings, workspace Config, and CLI init / config-edit with a registry-driven dropdown. The registry is the bundled seed in `packages/core/src/adapters/seed-models.ts` merged with an optional user override on `CfcfGlobalConfig.agentModels[<adapter>]`. Free-text input was risky: typos silently propagated and the user had no discoverability of what models the installed agent CLI actually supports.
+
+**Why no remote registry / API query** — investigated first; documented in the design discussion + CLAUDE.md:
+
+- Neither `claude` nor `codex` exposes a `list-models` subcommand, so we can't query the CLI directly.
+- Anthropic / OpenAI Models APIs require an API key, which Claude Code's OAuth-subscription users don't have.
+- Hosting our own remote registry would shift maintenance responsibility (model-list curation, rate-limiting, availability) onto cfcf maintainers indefinitely.
+
+Seed + user override side-steps all three. The seed is intentionally minimal — generic aliases (`opus`, `sonnet`, `haiku` for claude-code; `gpt-5-codex`, `gpt-5`, `o3` for codex) over date-bound full names so it ages slowly. Hand-edited config values not in the registry are preserved as `(custom)` entries on first render so back-compat doesn't break.
+
+**Surfaces:**
+
+- **Settings → Agent roles** + **workspace Config → Agent roles**: free-text model field becomes `<AgentModelSelect>` — a `<select>` with `(adapter default)` first option + the resolved registry. Adapter swap re-targets the model dropdown.
+- **Settings → Model registry** (new section): per-adapter card showing the resolved list as deletable chips + add-model input + "Reset to seed" button when an override is in effect. Saving an empty list (or one identical to the seed) clears the override so future seed updates flow through automatically.
+- **CLI `cfcf init` / `cfcf config edit`**: numbered selector matching the existing `pickAgent` pattern (e.g. `0. (use adapter default) / 1. opus / 2. sonnet / 3. haiku`). Hand-edited per-role models that aren't in the registry survive as a numbered "(custom — from existing config)" line so re-running init keeps the user's pick.
+
+**Single edit surface:** an earlier draft included a "(custom model name…)" inline sentinel in every picker as a one-shot escape hatch, but review feedback noted that two add-paths (inline + Settings editor) created a UX question the design didn't answer cleanly. Dropped in favour of one edit surface (Settings → Model registry); the back-compat `(custom)` rendering covers the legacy-config case.
+
+**Files added:**
+
+- `packages/core/src/adapters/seed-models.ts` — bundled seed registry per adapter
+- `packages/core/src/agent-models.ts` — `resolveModelsForAdapter()` + `resolveAllModels()` helpers
+- `packages/core/src/agent-models.test.ts` — 8 unit tests (seed lookup, override precedence, empty-array fallback, malformed-entry filtering, per-adapter isolation, user-only adapter)
+- `packages/server/src/routes/agent-models.ts` — `GET /api/agents/models` returning `{ adapters, seed }`
+- `packages/server/src/routes/agent-models.test.ts` — 4 HTTP tests
+- `packages/web/src/components/AgentModelSelect.tsx` — read-only dropdown component, used in both Settings + workspace Config
+
+**Files changed:**
+
+- `packages/core/src/types.ts` + `config.ts` — `agentModels?: Record<string, string[]>` on `CfcfGlobalConfig` with `validateConfig` coercion of malformed entries
+- `packages/cli/src/commands/init.ts` — replaces `prompt("X agent model", ...)` per role with the numbered picker
+- `packages/web/src/components/ConfigDisplay.tsx` + `pages/ServerInfo.tsx` — wire `<AgentModelSelect>` into the per-role tables; ServerInfo also gains the "Model registry" editor section
+
+**Maintenance**: when an upstream agent CLI ships a new headline model worth surfacing as a default, edit the relevant array in `seed-models.ts` and ship in the next release; user overrides survive the upgrade.
+
+### Changed — Typography polish + theme consistency (6.26 review)
+
+A polish pass that fell out of dogfooding the new dropdowns:
+
+- **Plan-item refs stripped from UI strings** — `"Model registry (item 6.26)"` and `"Behaviour flags (item 5.1)"` had leaked into rendered titles. Now plain `"Model registry"` and `"Behaviour flags"`. Code comments still carry the trace, which is the right place for them.
+- **Static section titles no longer look clickable** — the `architect-review__summary` class was reused on `FormSection`'s `<h3>`s but it has `cursor: pointer` + a hover colour swap because it's also used on real `<summary>` elements inside `<details>` (ArchitectReview, JudgeDetail). Split into a new `.section-title` class with the same typography but no interactivity styling.
+- **Small text bumped on every view** to a coordinated `--text-xs` (~13.2px) / `--text-sm` (~14.4px) / `--text-md` (~15.2px) scale. The original 6.12 typography pass landed only on a few table classes; this sweep replaces every remaining `0.7Xrem` literal — both `font-size` declarations in `app.css` and inline `style={{ fontSize: ... }}` overrides in 12 components (the inline ones win over class CSS via specificity, so they couldn't be reached otherwise). Net effect: workspace Detail / History / Logs / Memory / Help / judge / architect / reflection detail panels and modals all read at the same size as Settings + workspace Config.
 
 ## [0.17.1] -- 2026-05-02
 
