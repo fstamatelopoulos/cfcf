@@ -18,6 +18,15 @@
  */
 
 :root {
+  /* `color-scheme` tells the browser which palette to use for native
+     widgets the page CSS can't reach -- in particular the <select>
+     popup, scrollbars, and input spinners. Without it, those follow the
+     OS preference and mismatch the rest of the page when the user has
+     forced light/dark via our toggle. data-theme overrides below adjust
+     it; "auto" leaves color-scheme: light dark so the OS preference
+     drives both the popup AND our prefers-color-scheme media query. */
+  color-scheme: dark;
+
   /* Dark is the default; data-theme="light" overrides below. */
   --color-bg: #0d1018;
   --color-surface: #181c27;
@@ -46,6 +55,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --color-bg: #f6f7fb;
   --color-surface: #ffffff;
   --color-surface-alt: #eef0f6;
@@ -62,9 +72,15 @@
   --color-muted: #6b7280;
 }
 
-/* When the user picks "auto" we omit data-theme entirely and let the
-   media query decide. The dark tokens above are the default, so this
-   block only needs to swap to light when the system prefers it. */
+/* When the user picks "auto" we omit data-theme entirely. Tell the
+   browser to follow the OS for native widgets so the <select> popup
+   matches whichever theme the media query below resolves to. */
+:root:not([data-theme]) {
+  color-scheme: light dark;
+}
+
+/* The dark tokens above are the default, so this block only needs to
+   swap to light when the system prefers it. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     --color-bg: #f6f7fb;
