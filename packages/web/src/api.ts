@@ -101,6 +101,8 @@ export interface GlobalConfig {
   autoDocumenter?: boolean;
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
   notifications?: NotificationConfig;
+  /** Web UI theme (item 6.12). "auto" follows prefers-color-scheme. */
+  theme?: "auto" | "dark" | "light";
   /**
    * Clio (item 5.7) global config. Mirrors `ClioGlobalConfig` in
    * @cfcf/core. Per-workspace overrides live on `WorkspaceConfig.clio`.

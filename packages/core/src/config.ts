@@ -196,6 +196,11 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (typeof config.notifyUpdates !== "boolean") {
     config.notifyUpdates = true;
   }
+  // item 6.12 -- web UI theme. Default "auto" so existing installs follow
+  // the user's OS preference until they pick a theme explicitly.
+  if (config.theme !== "dark" && config.theme !== "light" && config.theme !== "auto") {
+    config.theme = "auto";
+  }
   return config;
 }
 
