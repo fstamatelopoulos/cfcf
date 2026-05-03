@@ -46,6 +46,54 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+/* --- Update banner (item 6.20) --- */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1.25rem;
+  background: color-mix(in srgb, var(--color-info) 15%, var(--color-surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-info) 35%, var(--color-border));
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.update-banner__icon {
+  font-size: 1rem;
+}
+
+.update-banner__body {
+  flex: 1;
+}
+
+.update-banner__body code {
+  background: color-mix(in srgb, var(--color-info) 20%, transparent);
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8rem;
+}
+
+.update-banner__body a {
+  color: var(--color-primary-hover);
+  text-decoration: underline;
+}
+
+.update-banner__dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.update-banner__dismiss:hover {
+  color: var(--color-text);
+}
+
 .header__logo {
   font-size: 1.25rem;
   font-weight: 700;

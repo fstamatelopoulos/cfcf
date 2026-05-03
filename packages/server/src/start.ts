@@ -19,10 +19,14 @@ import {
   killAllActiveProcesses,
   getAllActiveProcesses,
   updateHistoryEvent,
+  JobScheduler,
+  makeUpdateCheckJob,
+  clearStaleUpdateFlag,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
+let scheduler: JobScheduler | null = null;
 let shuttingDown = false;
 
 /**
@@ -75,6 +79,14 @@ async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<v
 
     // Kill all the processes
     killAllActiveProcesses();
+  }
+
+  // Stop the JobScheduler so its periodic timer doesn't keep the event
+  // loop alive past process.exit (timer is unref'd, but stop() is also
+  // explicit about intent for tests / programmatic restarts).
+  if (scheduler) {
+    try { scheduler.stop(); } catch { /* ignore */ }
+    scheduler = null;
   }
 
   // Close Clio backend (flushes WAL, releases SQLite handle)
@@ -161,6 +173,39 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
     gracefulShutdown("uncaughtException", 1).catch(() => process.exit(1));
   });
 
+  // Local stale-flag GC (item 6.20 follow-up). The scheduler's runOnStart
+  // update-check (below) does the canonical refresh + cleanup against the
+  // npm registry, but it requires network. This pure-local pass deletes a
+  // stale flag file when the running version has caught up, so users on a
+  // disconnected machine still see the banner disappear after a self-
+  // update. Defense-in-depth, sub-millisecond cost.
+  try {
+    const cleared = await clearStaleUpdateFlag(VERSION);
+    if (cleared) console.log(`Cleared stale update-available flag (running v${VERSION} caught up to flagged version)`);
+  } catch { /* best-effort */ }
+
+  // Start the JobScheduler with the built-in update-check job (item 6.20).
+  // The job sets `runOnStart: true` so every server boot fires a fresh npm
+  // registry check unconditionally; the 24h interval is the safeguard
+  // cadence for long-running servers. Network failures are recorded on the
+  // job's lastError -- they never crash the server.
+  try {
+    scheduler = new JobScheduler();
+    scheduler.register(makeUpdateCheckJob({ currentVersion: VERSION }));
+    // Fire-and-forget: scheduler.start() awaits state-load + first tick,
+    // but we don't want server startup to block on a 24h-interval job
+    // catching up over a slow network. Errors are best-effort logged.
+    scheduler.start().catch((err) => {
+      console.error(
+        `JobScheduler start failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  } catch (err) {
+    console.error(
+      `JobScheduler init failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   console.log(`cfcf server v${VERSION} listening on http://localhost:${port}`);
   return serverInstance;
 }
@@ -169,6 +214,10 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
  * Stop the running server (programmatic, e.g. from tests or /api/shutdown).
  */
 export async function stopServer(): Promise<void> {
+  if (scheduler) {
+    try { scheduler.stop(); } catch { /* ignore */ }
+    scheduler = null;
+  }
   if (serverInstance) {
     serverInstance.stop();
     serverInstance = null;

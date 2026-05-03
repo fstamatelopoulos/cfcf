@@ -190,6 +190,12 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (!isValidReadinessGate(config.readinessGate)) {
     config.readinessGate = "blocked";
   }
+  // item 6.20 -- new-version notification opt-out. Default true so existing
+  // installs start surfacing the lifecycle banner once they upgrade past
+  // 0.18.0 without needing a config edit.
+  if (typeof config.notifyUpdates !== "boolean") {
+    config.notifyUpdates = true;
+  }
   return config;
 }
 

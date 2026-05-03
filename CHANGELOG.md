@@ -11,6 +11,48 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.18.0] -- 2026-05-02
+
+**Item 6.20 ships.** Adds a minimal `JobScheduler` primitive that item 6.13 (cron-like recurring execution) will extend rather than duplicate, plus the first job that uses it: a 24h `update-check` against npm that drives a web UI banner, a CLI lifecycle banner, and a `cfcf doctor` check. No auto-update — the user always runs `cfcf self-update --yes` explicitly.
+
+Minor bump because this introduces a new core module (`scheduler`) and new user-visible behaviour (the banners). Both surfaces are additive — no breaking config or API changes.
+
+### Added — Item 6.20: minimal `JobScheduler` primitive + new-version notification
+
+A small, restart-resilient periodic-job runner (`packages/core/src/scheduler/`) plus the first job that uses it: a 24h `update-check` against the npm registry that drops a flag file at `~/.cfcf/update-available.json` when a newer release of `@cerefox/codefactory` is published. The flag file drives:
+
+- **Web UI top-bar banner** (`packages/web/src/components/UpdateBanner.tsx`) — always-on, dismissible per-session (per-`latestVersion` so a newer release re-shows). Powered by `GET /api/update-status` (200 + JSON when newer; 204 otherwise). Update-status piggybacks on the shared `ServerStatusProvider` poll loop (one tick covers health + activity + update-status at the existing 3 s / 10 s cadence) so no extra timer is added to the page.
+- **CLI lifecycle banner** — printed at startup of `init` / `server` / `status` / `doctor` and `self-update --check` only. Other verbs (`run`, `clio`, `workspace`, …) stay silent so scripted operations don't pay the 5–20 ms FS-read cost or get noise in their stdout. Suppress via `notifyUpdates: false` in global config or the env var `CFCF_NO_UPDATE_NOTICE=1`.
+- **`cfcf doctor` check** — surfaces the same flag as either an `ok` "running v0.X.Y (latest known)" line or a `warn` "v0.X.Y available -- run: cfcf self-update --yes" line.
+
+**No auto-update under any circumstance.** The user always runs `cfcf self-update` explicitly; the flag file just nudges them at moments when they're already paying attention to lifecycle state.
+
+**Why a primitive, not a one-off timer?** Item 6.13 (cron-like recurring execution research) extends this same primitive — keeping update-check + 6.13 on a shared seam means the cron work is "extend the interface" rather than "build a parallel timer mechanism." User-defined jobs, cron expressions, schedule-management UX, and concurrency policy are explicitly out of scope here and are 6.13's job.
+
+**Files added:**
+
+- `packages/core/src/scheduler/{types,scheduler,index}.ts` — `Job` + `JobScheduler` + `SchedulerStateFile`. Persists `~/.cfcf/scheduler-state.json` after each job run (bounds restart-loss to one tick interval per job).
+- `packages/core/src/update-check.ts` — `compareSemver`, `runUpdateCheck`, `makeUpdateCheckJob`, `readUpdateAvailable`, `defaultUpdateFilePath` (honours `CFCF_UPDATE_FILE` for tests).
+- `packages/server/src/routes/update.ts` — `GET /api/update-status`.
+- `packages/web/src/components/UpdateBanner.tsx` + matching `.update-banner` CSS in `app.css`.
+- `packages/cli/src/update-banner.ts` — lifecycle gating, sync FS reads, stderr output.
+- `docs/design/scheduler-and-update-notification.md` — design rationale + interface notes.
+
+**Files changed:**
+
+- `packages/core/src/types.ts` + `config.ts` — `notifyUpdates?: boolean` (default `true`, backfilled by `validateConfig` so existing installs start showing the banner without a config edit on upgrade).
+- `packages/server/src/start.ts` — wires the `JobScheduler` into the server lifecycle (start on boot, stop on graceful shutdown). The update-check job sets `runOnStart: true` so every server boot fires a fresh npm registry check unconditionally; the 24h interval is the long-running-server safeguard cadence. Also calls `clearStaleUpdateFlag(VERSION)` as defense-in-depth so disconnected upgrades still clear the banner without network. Failures inside the job are recorded on `lastError`, never crash the server.
+- `packages/web/src/hooks/useServerStatus.tsx` — new shared `ServerStatusProvider` context owning a single poll loop for health + activity + update-status. Header + UpdateBanner consume it; no per-component timers.
+- `packages/web/src/App.tsx` — renders `<UpdateBanner />` above `<Header />`.
+- `packages/cli/src/index.ts` — calls `maybePrintUpdateBanner()` before commander parsing.
+- `packages/cli/src/commands/doctor.ts` — adds `checkUpdateAvailable()`.
+
+**Tests added:** scheduler tick + persistence + register validation; semver comparison + flag-file lifecycle; `/api/update-status` HTTP route; CLI banner lifecycle gating + suppression knobs.
+
+### Security — flag file carries no clickable URL
+
+`~/.cfcf/update-available.json` deliberately omits `releaseNotesUrl`. The file lives in `~/.cfcf/`, which is user-writable, so a local actor (malicious script, misbehaving install) could otherwise plant an attacker-controlled link that the web banner would render as `<a target="_blank">` — a phishing surface. The upgrade command (`cfcf self-update --yes`) is canonical and self-contained; the version number is all the surfaces need.
+
 ## [0.17.1] -- 2026-05-02
 
 **Tag-only release; not published to npmjs.com.** Patch-bump rolling up the post-0.17.0 housekeeping pass: a CSS fix for the workspace History table, a major plan cleanup, and a comprehensive documentation refresh against the v0.17.0 shipped state. No code-behaviour changes outside the one CSS rule. Distribution channels stay on `0.17.0`.

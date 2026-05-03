@@ -123,6 +123,15 @@ export interface CfcfGlobalConfig {
   /** Notification configuration (optional; defaults applied if missing) */
   notifications?: NotificationConfig;
   /**
+   * When true (the default), `cfcf init` / `cfcf server` / `cfcf status` /
+   * `cfcf doctor` print a one-line "newer version available" banner at
+   * startup if the JobScheduler's update-check has flagged one. Set to
+   * false to silence the CLI banner unconditionally; the web UI banner is
+   * unaffected. The env var `CFCF_NO_UPDATE_NOTICE=1` is an equivalent
+   * one-shot suppression. (item 6.20)
+   */
+  notifyUpdates?: boolean;
+  /**
    * Default for new workspaces' `cleanupMergedBranches`. When true, merged
    * iteration branches are deleted after a successful auto-merge. Default
    * false (keep for audit). (item 5.2)

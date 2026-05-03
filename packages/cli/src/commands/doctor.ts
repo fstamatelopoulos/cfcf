@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
-import { listHelpTopics } from "@cfcf/core";
+import { listHelpTopics, compareSemver, defaultUpdateFilePath, VERSION } from "@cfcf/core";
 
 interface CheckResult {
   name: string;
@@ -603,6 +603,45 @@ function checkShellCompletion(): CheckResult {
   };
 }
 
+/**
+ * Update-availability check (item 6.20). Reads the JobScheduler's flag
+ * file at `~/.cfcf/update-available.json` (or `$CFCF_UPDATE_FILE`). Emits:
+ *   - "warn" when a newer version is known and the running install is older,
+ *   - "ok" otherwise (file absent, stale, or running == latest).
+ *
+ * Doesn't trigger a network check itself -- the scheduler does that on its
+ * own 24h cadence. Doctor is a snapshot; "no banner" doesn't mean "no
+ * update", it just means "scheduler hasn't seen one yet".
+ */
+function checkUpdateAvailable(): CheckResult {
+  const name = "Update availability";
+  try {
+    const path = defaultUpdateFilePath();
+    if (!existsSync(path)) {
+      return { name, status: "ok", detail: `running v${VERSION}; no newer version flagged` };
+    }
+    const raw = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(raw) as { latestVersion?: string };
+    if (typeof parsed.latestVersion !== "string") {
+      return { name, status: "ok", detail: `running v${VERSION}` };
+    }
+    if (compareSemver(parsed.latestVersion, VERSION) > 0) {
+      return {
+        name,
+        status: "warn",
+        detail: `v${parsed.latestVersion} available -- run: cfcf self-update --yes`,
+      };
+    }
+    return { name, status: "ok", detail: `running v${VERSION} (latest known)` };
+  } catch (err) {
+    return {
+      name,
+      status: "ok",
+      detail: `running v${VERSION}; flag-file unreadable (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 function fmt(r: CheckResult): string {
@@ -634,6 +673,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkProductArchitect());
       results.push(checkShellCompletion());
       results.push(checkBunGlobalPkgDups());
+      results.push(checkUpdateAvailable());
 
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));

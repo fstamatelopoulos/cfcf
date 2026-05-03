@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
-import { fetchHealth, fetchActivity, type ActivityItem } from "../api";
-import type { HealthResponse } from "../types";
+import { type ActivityItem } from "../api";
 import { navigateTo } from "../hooks/useRoute";
+import { useServerStatus } from "../hooks/useServerStatus";
 
 /**
  * Label the current iteration phase in a compact, human-readable form.
@@ -37,25 +36,10 @@ function activityCaption(a: ActivityItem): string {
 }
 
 export function Header() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
-
+  // Health + activity now flow through the shared ServerStatusProvider so
+  // we share one poll loop with UpdateBanner (item 6.20 follow-up).
+  const { health, activity } = useServerStatus();
   const anyActive = activity.length > 0;
-
-  useEffect(() => {
-    const tick = () => {
-      fetchHealth().then(setHealth).catch(() => setHealth(null));
-      fetchActivity()
-        .then((res) => setActivity(res.active))
-        .catch(() => setActivity([]));
-    };
-    tick();
-    // Poll faster (3s) while something is running, slower (10s) when idle.
-    // The effect re-runs when `anyActive` flips because it's in the deps
-    // list -- React reinstalls the interval at the new rate.
-    const id = setInterval(tick, anyActive ? 3000 : 10000);
-    return () => clearInterval(id);
-  }, [anyActive]);
 
   return (
     <header className="header">

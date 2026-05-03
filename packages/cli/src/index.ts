@@ -42,6 +42,7 @@ import { registerSelfUpdateCommand } from "./commands/self-update.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerHelpCommand } from "./commands/help.js";
 import { registerSpecCommand } from "./commands/spec.js";
+import { maybePrintUpdateBanner } from "./update-banner.js";
 
 // --- Internal: run the server in-process ---
 // When the CLI is a compiled binary, `cfcf server start` re-spawns the same
@@ -54,6 +55,10 @@ if (process.env.CFCF_INTERNAL_SERVE === "1") {
   await startServer(port);
   // The server keeps the event loop alive; do not fall through to CLI parsing.
 } else {
+  // item 6.20 -- print the new-version banner BEFORE commander parses, so
+  // it lands above the verb's own output. No-ops on non-lifecycle verbs;
+  // never throws.
+  maybePrintUpdateBanner();
   runCli();
 }
 
