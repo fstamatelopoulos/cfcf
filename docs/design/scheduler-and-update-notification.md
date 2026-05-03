@@ -74,6 +74,7 @@ interface Job {
   id: string;            // unique per scheduler; persistence key
   intervalMs: number;    // minimum interval between successful runs
   fn: () => Promise<void>;
+  runOnStart?: boolean;  // run unconditionally at scheduler.start() (opt-in)
   lastRun?: Date;
   lastError?: string;
 }
@@ -114,10 +115,13 @@ Written after every job run (not every tick). Cost is small and bounds the resta
 
 - `start()`:
   1. Load state from `statePath` (silently treats missing or corrupt files as no state).
-  2. If `runOnStartIfDue` (default true), fire one tick immediately. This is what catches missed ticks across server restarts.
-  3. Schedule `setInterval(this.tick, tickIntervalMs)`. Timer is `unref()`'d so it never blocks process exit.
+  2. Fire any `runOnStart: true` jobs unconditionally (opt-in per job). This is what guarantees the update-check runs on every server boot regardless of when it last ran.
+  3. If `runOnStartIfDue` (default true), fire one tick immediately. This catches missed ticks across server restarts for non-`runOnStart` jobs. A job that just fired in step (2) is skipped here because its `lastRun` was just bumped.
+  4. Schedule `setInterval(this.tick, tickIntervalMs)`. Timer is `unref()`'d so it never blocks process exit.
 - `tick()`: walk every registered job; if `Date.now() - lastRun >= intervalMs`, run it.
 - A job that throws records `lastError` on the Job, but `lastRun` still bumps to `now()` so a perpetually failing job doesn't hot-loop.
+
+`runOnStart` is per-job (opt-in) rather than a scheduler-wide flag so future cron-style jobs can choose: a 24h update-check wants the freshness on every boot, but a "weekly Monday 09:00 CVE sweep" should NOT fire just because the server happened to restart on Tuesday.
 
 ### Why one tick over per-job timers
 
@@ -151,10 +155,11 @@ function makeUpdateCheckJob(opts: {
 {
   "currentVersion": "0.17.1",
   "latestVersion": "0.18.0",
-  "checkedAt": "2026-05-02T12:00:00.000Z",
-  "releaseNotesUrl": "https://github.com/fstamatelopoulos/cfcf/releases/tag/v0.18.0"
+  "checkedAt": "2026-05-02T12:00:00.000Z"
 }
 ```
+
+The flag file intentionally carries **no clickable URL**. `~/.cfcf/` is user-writable, so a malicious local write could otherwise plant an attacker-controlled link that the web banner would render as `<a target="_blank">`. The upgrade command (`cfcf self-update --yes`) is canonical and self-contained; the version number is all the surfaces need.
 
 ### Stale-flag GC at server startup
 
@@ -178,9 +183,11 @@ The web client uses 204 specifically to avoid a JSON-parse step on the no-banner
 
 ### Web UI: `<UpdateBanner />`
 
-`packages/web/src/components/UpdateBanner.tsx`. Rendered above `<Header />` in `App.tsx`. Polls `/api/update-status` once on mount and every 5 minutes after that. Per-session dismissal in `sessionStorage`, keyed by `latestVersion` so a newer release re-shows.
+`packages/web/src/components/UpdateBanner.tsx`. Rendered above `<Header />` in `App.tsx`. Update-status data flows through `ServerStatusProvider` (`packages/web/src/hooks/useServerStatus.tsx`) — one shared poll cycle covers `health` + `activity` + `update-status` at the existing 3 s (active) / 10 s (idle) cadence. UpdateBanner has no timer of its own.
 
-Cost: one HTTP call per page load, dwarfed by the dashboard's existing polling. No per-CLI-invocation cost concern applies because the web UI is a single long-lived tab.
+Per-session dismissal in `sessionStorage`, keyed by `latestVersion` so a newer release re-shows.
+
+The provider lives at the top of `App.tsx` so any future component (Settings page, workspace detail) can subscribe via `useServerStatus()` without spawning its own poll loop.
 
 ### CLI lifecycle banner
 
