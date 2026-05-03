@@ -216,8 +216,9 @@ export function registerInitCommand(program: Command): void {
       // optional override on `agentModels`).
       console.log();
       console.log("Model selection per role:");
-      console.log("  Pick from the adapter's registry, or 0 to use the agent's default,");
-      console.log("  or a number greater than the list to type a custom name.");
+      console.log("  Pick from the adapter's registry, or 0 to use the agent's default.");
+      console.log("  To add or remove models from a list, edit the Model registry");
+      console.log("  in the web Settings page (or hand-edit `agentModels` in the config).");
       console.log();
 
       // Pick a model for a role by number against the resolved registry
@@ -225,35 +226,35 @@ export function registerInitCommand(program: Command): void {
       // Layout:
       //   0. (adapter default)
       //   1..N. registry entries
-      //   N+1. (custom -- type a name)
+      //   [+N+1. <currentModel> (custom)]   -- only when the existing
+      //     per-role model is a hand-edited value not in the registry,
+      //     so re-running init doesn't silently lose it
       // Pressing Enter keeps the existing per-role model when set.
       async function pickModel(roleLabel: string, adapterName: string, currentModel: string): Promise<string | undefined> {
         const models = resolveModelsForAdapter(adapterName, config);
-        const customIdx = models.length + 1;
-        // Default index: position of currentModel in the list (1-based),
-        // or 0 if none/blank, or `customIdx` if currentModel is a hand-
-        // edited value not in the registry.
+        const customPreserved = currentModel !== "" && !models.includes(currentModel);
+        const customIdx = customPreserved ? models.length + 1 : -1;
+        const maxIdx = customPreserved ? customIdx : models.length;
         const defaultIdx = currentModel === ""
           ? 0
           : models.indexOf(currentModel) >= 0
             ? models.indexOf(currentModel) + 1
-            : customIdx;
+            : customIdx; // customPreserved is true here
         console.log(`${roleLabel} model (adapter: ${adapterName}):`);
         console.log(`  0. (use adapter default)`);
         models.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
-        console.log(`  ${customIdx}. (custom -- type a name)`);
+        if (customPreserved) {
+          console.log(`  ${customIdx}. ${currentModel} (custom — from existing config)`);
+        }
         while (true) {
           const raw = await prompt("Choose", String(defaultIdx));
           const n = parseInt(raw, 10);
-          if (Number.isNaN(n) || n < 0 || n > customIdx) {
-            console.log(`  Invalid choice "${raw}". Enter 0-${customIdx}.`);
+          if (Number.isNaN(n) || n < 0 || n > maxIdx) {
+            console.log(`  Invalid choice "${raw}". Enter 0-${maxIdx}.`);
             continue;
           }
           if (n === 0) return undefined;
-          if (n === customIdx) {
-            const custom = await prompt("Custom model name", currentModel || "");
-            return custom.trim() || undefined;
-          }
+          if (customPreserved && n === customIdx) return currentModel;
           return models[n - 1];
         }
       }
