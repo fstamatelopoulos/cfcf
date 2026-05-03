@@ -13,14 +13,11 @@ import type { WorkspaceConfig } from "../types";
  * when fields are omitted, so we only ask for the essentials: name,
  * repo path, and an optional Clio Project.
  *
- * Repo-path entry: a text input + a "Browse…" button that uses the
- * File System Access API's `showDirectoryPicker()` when the browser
- * supports it (Chrome / Edge as of 2026). The text input remains the
- * source of truth and works in every browser; "Browse…" is a
- * convenience that fills it in. The picker doesn't expose a real OS
- * path -- it returns a `FileSystemDirectoryHandle` whose `.name` is
- * just the basename -- so the field is editable after picking and
- * users can paste a full path manually if they prefer.
+ * Repo path is a plain text field -- the user pastes an absolute path.
+ * We previously had a `showDirectoryPicker()`-backed "Browse…" button
+ * but the browser sandbox only exposes the directory's basename (no
+ * absolute OS path is ever returned to the page), which made the
+ * affordance misleading. Removed in the 6.12 polish pass.
  */
 export function NewWorkspaceModal({
   open,
@@ -47,29 +44,6 @@ export function NewWorkspaceModal({
     setSubmitting(false);
     fetchClioProjects().then(setProjects).catch(() => setProjects([]));
   }, [open]);
-
-  const supportsDirectoryPicker = typeof window !== "undefined" &&
-    typeof (window as unknown as { showDirectoryPicker?: () => Promise<unknown> }).showDirectoryPicker === "function";
-
-  async function browse() {
-    try {
-      const win = window as unknown as {
-        showDirectoryPicker: (opts?: { mode?: "read" | "readwrite" }) => Promise<{ name: string }>;
-      };
-      const handle = await win.showDirectoryPicker({ mode: "read" });
-      // The picker exposes only the directory name, NOT a real OS path.
-      // We populate just the basename to give the user a starting point;
-      // they typically need to paste the absolute path manually anyway,
-      // since cfcf needs the host-side absolute path (the server runs
-      // outside the browser sandbox).
-      if (handle?.name && !repoPath) setRepoPath(handle.name);
-    } catch (err: unknown) {
-      // User-cancel is a no-op; only surface real errors.
-      if (err instanceof Error && err.name !== "AbortError") {
-        setError(err.message);
-      }
-    }
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -136,31 +110,17 @@ export function NewWorkspaceModal({
 
         <div className="form-row">
           <label htmlFor="new-ws-repo">Repository path</label>
-          <div className="form-row__inline">
-            <input
-              id="new-ws-repo"
-              type="text"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              placeholder="/absolute/path/to/repo"
-              required
-            />
-            {supportsDirectoryPicker && (
-              <button
-                type="button"
-                className="btn btn--secondary btn--small"
-                onClick={browse}
-                disabled={submitting}
-                title="Open the browser's directory picker (fills the basename only; paste the full absolute path)"
-              >
-                Browse…
-              </button>
-            )}
-          </div>
+          <input
+            id="new-ws-repo"
+            type="text"
+            value={repoPath}
+            onChange={(e) => setRepoPath(e.target.value)}
+            placeholder="/absolute/path/to/repo"
+            required
+          />
           <span className="form-row__hint">
-            Absolute path to a git working tree on this machine. The server (not your browser) opens the path,
+            Paste the absolute path to a git working tree on this machine. The server (not your browser) opens the path,
             so it must be accessible from where <code>cfcf server</code> is running.
-            {!supportsDirectoryPicker && " Your browser doesn't support a directory picker — paste the path manually."}
           </span>
         </div>
 
