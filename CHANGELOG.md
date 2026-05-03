@@ -11,6 +11,34 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.19.0] -- 2026-05-03
+
+**Item 6.24 ships.** First feature drop in 0.19.0; more iter-6 work (6.18 web Clio tab + others) will land under the same minor before this gets cut to npm.
+
+Minor bump because the migration changes the on-disk FTS schema. Reading + writing remain backward compatible (the migration is automatic, runs on first Clio touch after upgrade, and is wrapped in `BEGIN IMMEDIATE; ...; COMMIT` so partial failures roll back cleanly). No API or config breaking changes.
+
+### Added — Item 6.24: Clio FTS title boosting (Cerefox parity)
+
+Brings Clio's FTS ranking up to Cerefox parity for title-boosted search: query terms that match a document title or a chunk heading now outrank body-only matches at the same ratio Cerefox uses (effective A:B = 2.5×).
+
+**Migration `0002_fts_title_boost.sql`** drops the existing 2-column `clio_chunks_fts` (`chunk_title` + `content`) and recreates it as a 3-column FTS5 (`doc_title` + `chunk_title` + `content`), backfilling via `INSERT ... SELECT` joining `clio_chunks → clio_documents` so existing corpora pick up the title column with no user action. Five triggers handle every path:
+
+- `clio_chunks_fts_ai` / `_ad` / `_au` — chunk lifecycle, JOIN to `clio_documents` for `doc_title`
+- `clio_documents_fts_bd` (BEFORE DELETE) — pre-clears FTS rows for current chunks before the cascade-delete on `clio_chunks` fires; required because the chunk-AD trigger can't reconstruct `doc_title` via JOIN once the parent doc is gone
+- `clio_documents_fts_title_au` (AFTER UPDATE OF title) — refreshes FTS `doc_title` for all current chunks of a renamed doc; mirrors Cerefox's `cerefox_update_chunk_fts` RPC, but declarative (the trigger fires automatically on `cfcf clio docs edit --title` and any other path that updates the column)
+
+**`searchFts()` + chunk-level hybrid path** now call `bm25(clio_chunks_fts, 2.5, 2.5, 1.0)`. Constants extracted as `FTS_BM25_WEIGHT_DOC_TITLE` / `CHUNK_TITLE` / `CONTENT` for one-spot tuning. The 2.5× ratio matches Cerefox's effective A:B from Postgres `ts_rank_cd`'s default weight table `{D:0.1, C:0.2, B:0.4, A:1.0}` (A/B = 1.0/0.4 = 2.5×). The underlying ranker is necessarily different across the two stacks (Postgres `ts_rank_cd` cover-density vs SQLite `bm25` Okapi BM25) — that's a "we picked SQLite" consequence, not a tuning choice — but the title-boost ratio is the user-visible knob that decides "how much do title matches outrank body matches?".
+
+**Tests added**: 6 new (90 total in `local-clio.test.ts`, was 84) — title-only outranks body-only; chunk-heading outranks body-only; rename refreshes FTS for all current chunks; rename trigger doesn't blow away unrelated docs; soft-delete still removes from search (existing JOIN-level filter, belt-and-suspenders to confirm the migration didn't break it); end-to-end backfill verification.
+
+**Migration behaviour**: lazy — runs on first `getClioBackend()` call after server boot (Memory page stats fetch, search, ingest, etc.). Sub-second on small corpora; sub-minute on 10k chunks. No separate `cfcf clio reindex --refts` flag needed (the in-place `INSERT ... SELECT` backfill made it unnecessary).
+
+**Backlog follow-up F.19**: two related FTS gaps surfaced during the Cerefox-parity review — stop-word handling (FTS5 ships no English stop-word list; queries like "design of agents" match every doc containing "of") and Google-style query operators (`-foo`, `"phrase"`, `OR` — supported natively by Postgres `websearch_to_tsquery`, not by Clio's current parser). Both are query-time pure-TS fixes; deferred until dogfooding surfaces a concrete pain point.
+
+### Fixed
+
+- **Stale `releaseNotesUrl` assertion in `update.test.ts`** (6.20 follow-up). The v0.18.0 review pass removed `releaseNotesUrl` from the flag-file shape for security reasons (the file lives in `~/.cfcf/`, user-writable; an attacker-controlled link rendered as `<a target="_blank">` would be a phishing surface), but the corresponding test still asserted on the field's presence and was quietly failing. Replaced the contains-URL check with a `toBeUndefined` check that locks in the security property.
+
 ## [0.18.0] -- 2026-05-02
 
 **Items 6.20 + 6.12 + 6.26 ship.** Three coordinated additive feature drops:
