@@ -58,6 +58,15 @@ export function Header() {
           Workspaces
         </a>
         <a
+          href="#/memory"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo("/memory");
+          }}
+        >
+          Memory
+        </a>
+        <a
           href="#/server"
           onClick={(e) => {
             e.preventDefault();

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 interface Route {
-  page: "dashboard" | "workspace" | "server" | "help";
+  page: "dashboard" | "workspace" | "server" | "help" | "memory";
   workspaceId?: string;
   helpTopic?: string;
 }
@@ -18,6 +18,9 @@ function parseHash(): Route {
   }
   if (hash === "/server") {
     return { page: "server" };
+  }
+  if (hash === "/memory") {
+    return { page: "memory" };
   }
   return { page: "dashboard" };
 }
