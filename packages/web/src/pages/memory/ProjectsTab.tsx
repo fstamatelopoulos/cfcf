@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { createClioProject, fetchClioProjects, type ClioProject } from "../../api";
+import { EditProjectDialog } from "./EditProjectDialog";
+import { DeleteProjectDialog } from "./DeleteProjectDialog";
 
 /**
  * Project listing + create on the Memory page (item 6.18). Mirrors
@@ -19,6 +21,8 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createdName, setCreatedName] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<ClioProject | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ClioProject | null>(null);
 
   function reload() {
     setLoading(true);
@@ -119,6 +123,7 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
                 <th>Documents</th>
                 <th>Description</th>
                 <th>Created</th>
+                <th style={{ width: "10rem" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -128,15 +133,51 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
                   <td>{p.documentCount ?? "—"}</td>
                   <td>{p.description ?? <span className="form-row__hint">—</span>}</td>
                   <td className="project-history__time">{p.createdAt}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      <button
+                        className="btn btn--small btn--secondary"
+                        onClick={() => setEditTarget(p)}
+                        title="Rename or re-describe this project"
+                      >
+                        Edit…
+                      </button>
+                      <button
+                        className="btn btn--small btn--danger"
+                        onClick={() => setDeleteTarget(p)}
+                        title="Delete this project (server refuses if any docs/workspaces still reference it)"
+                      >
+                        Delete…
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
         <div className="form-row__hint" style={{ marginTop: "0.5rem" }}>
-          Rename and delete are not yet exposed in the API or CLI; ingest a fresh project name and migrate docs to it via the per-workspace <strong>Change Clio Project</strong> action.
+          Edit + delete via the API; the CLI doesn't surface these yet (use <code>cfcf clio projects list</code> to inspect).
+          Both refuse if any cfcf workspaces still pin the project name -- reassign each workspace via its <strong>Config</strong> tab first.
         </div>
       </section>
+
+      {editTarget && (
+        <EditProjectDialog
+          open={true}
+          onClose={() => setEditTarget(null)}
+          project={editTarget}
+          onSaved={(_p) => { reload(); onCreated(); }}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteProjectDialog
+          open={true}
+          onClose={() => setDeleteTarget(null)}
+          project={deleteTarget}
+          onDeleted={() => { reload(); onCreated(); }}
+        />
+      )}
     </div>
   );
 }

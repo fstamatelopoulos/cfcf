@@ -10,6 +10,7 @@ import {
   type ClioDocumentVersion,
 } from "../../api";
 import { Modal } from "../../components/Modal";
+import { EditDocumentDialog } from "./EditDocumentDialog";
 
 /**
  * Document detail overlay (item 6.18). Replaces the bare doc viewer
@@ -44,6 +45,7 @@ export function DocumentDetail({
   const [audit, setAudit] = useState<ClioAuditEntry[] | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -128,13 +130,22 @@ export function DocumentDetail({
               {acting ? "Restoring…" : "Restore"}
             </button>
           ) : (
-            <button
-              className="btn btn--danger"
-              disabled={acting}
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete…
-            </button>
+            <>
+              <button
+                className="btn btn--secondary"
+                disabled={acting || !content}
+                onClick={() => setEditOpen(true)}
+              >
+                Edit…
+              </button>
+              <button
+                className="btn btn--danger"
+                disabled={acting}
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete…
+              </button>
+            </>
           )}
           <button className="btn btn--secondary" onClick={onClose}>
             Close
@@ -251,6 +262,29 @@ export function DocumentDetail({
       )}
 
       {actionError && <div className="form-row__error" style={{ marginTop: "0.5rem" }}>{actionError}</div>}
+
+      {editOpen && content && doc && (
+        <EditDocumentDialog
+          open={true}
+          onClose={() => setEditOpen(false)}
+          doc={doc}
+          initialContent={content.content}
+          onSaved={() => {
+            // Re-fetch content + nudge sidebar so version count etc. refresh.
+            onChanged();
+            // Force a content reload by clearing cached state.
+            setContent(null);
+            // useEffect on documentId reloads content; bump key by re-setting
+            // documentId is overkill -- just re-trigger the fetch:
+            void fetchClioDocumentContent(documentId).then(setContent).catch((e) =>
+              setContentError(e instanceof Error ? e.message : String(e)),
+            );
+            // Reset audit + versions so the next open re-fetches them.
+            setAudit(null);
+            setVersions(null);
+          }}
+        />
+      )}
 
       {confirmDelete && doc && (
         <Modal

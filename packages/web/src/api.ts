@@ -12,10 +12,17 @@ import type {
   NotificationConfig,
 } from "./types";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /**
+     * Optional structured payload from the error response body.
+     * Routes that return additional fields beyond `error` (e.g.
+     * `dependentWorkspaces`, `documentCount`) attach them here so
+     * callers can render targeted UI.
+     */
+    public payload?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -26,7 +33,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(path, opts);
   const data = await res.json();
   if (!res.ok) {
-    throw new ApiError(res.status, (data as { error?: string }).error || res.statusText);
+    throw new ApiError(
+      res.status,
+      (data as { error?: string }).error || res.statusText,
+      data as Record<string, unknown>,
+    );
   }
   return data as T;
 }
@@ -598,6 +609,51 @@ export function createClioProject(body: { name: string; description?: string }):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function editClioProject(
+  idOrName: string,
+  edits: { name?: string; description?: string },
+): Promise<ClioProject> {
+  return request<ClioProject>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(edits),
+  });
+}
+
+export function deleteClioProject(idOrName: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Metadata-only edit (item 6.18 round-2). Routes through the existing
+ * `PATCH /api/clio/documents/:id` endpoint -- writes a single
+ * `edit-metadata` audit entry, no version snapshot. For content edits
+ * use `ingestClio` with the `documentId` field (which routes through
+ * the content-unchanged short-circuit added in the same round).
+ */
+export function editClioDocumentMetadata(
+  id: string,
+  edits: {
+    title?: string;
+    author?: string;
+    projectId?: string;
+    projectName?: string;
+    metadataSet?: Record<string, unknown>;
+    metadataUnset?: string[];
+  },
+): Promise<{ updated: boolean; document: ClioDocument }> {
+  return request<{ updated: boolean; document: ClioDocument }>(
+    `/api/clio/documents/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(edits),
+    },
+  );
 }
 
 // --- History ---
