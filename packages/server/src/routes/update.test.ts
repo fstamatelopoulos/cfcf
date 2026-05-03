@@ -47,14 +47,15 @@ describe("/api/update-status", () => {
       currentVersion: VERSION,
       latestVersion: latest,
       checkedAt: new Date().toISOString(),
-      releaseNotesUrl: `https://example.invalid/v${latest}`,
     }));
     const app = createApp();
     const res = await app.request("/api/update-status");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.latestVersion).toBe(latest);
-    expect(body.releaseNotesUrl).toContain(latest);
+    // Security: the flag file response intentionally omits any clickable
+    // URL. See update-check.ts:UpdateAvailableFile for the rationale.
+    expect(body.releaseNotesUrl).toBeUndefined();
   });
 
   it("returns 204 when the flag file is stale (latestVersion <= running)", async () => {
