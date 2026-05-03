@@ -407,7 +407,7 @@ export function ServerInfo() {
             </table>
           </FormSection>
 
-          <FormSection title="Behaviour flags (item 5.1)">
+          <FormSection title="Behaviour flags">
             <table className="project-history__table">
               <tbody>
                 <CheckboxRow
