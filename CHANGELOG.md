@@ -9,6 +9,14 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.18.0] -- 2026-05-02
+
+**Item 6.20 ships.** Adds a minimal `JobScheduler` primitive that item 6.13 (cron-like recurring execution) will extend rather than duplicate, plus the first job that uses it: a 24h `update-check` against npm that drives a web UI banner, a CLI lifecycle banner, and a `cfcf doctor` check. No auto-update — the user always runs `cfcf self-update --yes` explicitly.
+
+Minor bump because this introduces a new core module (`scheduler`) and new user-visible behaviour (the banners). Both surfaces are additive — no breaking config or API changes.
+
 ### Added — Item 6.20: minimal `JobScheduler` primitive + new-version notification
 
 A small, restart-resilient periodic-job runner (`packages/core/src/scheduler/`) plus the first job that uses it: a 24h `update-check` against the npm registry that drops a flag file at `~/.cfcf/update-available.json` when a newer release of `@cerefox/codefactory` is published. The flag file drives:
@@ -44,10 +52,6 @@ A small, restart-resilient periodic-job runner (`packages/core/src/scheduler/`) 
 ### Security — flag file carries no clickable URL
 
 `~/.cfcf/update-available.json` deliberately omits `releaseNotesUrl`. The file lives in `~/.cfcf/`, which is user-writable, so a local actor (malicious script, misbehaving install) could otherwise plant an attacker-controlled link that the web banner would render as `<a target="_blank">` — a phishing surface. The upgrade command (`cfcf self-update --yes`) is canonical and self-contained; the version number is all the surfaces need.
-
-### Changed — Version bump 0.17.1 → 0.18.0
-
-Minor bump because this introduces a new core module (`scheduler`) and new user-visible behaviour (the banners). Both surfaces are additive — no breaking config or API changes.
 
 ## [0.17.1] -- 2026-05-02
 
