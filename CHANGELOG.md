@@ -13,9 +13,12 @@ _No changes yet._
 
 ## [0.18.0] -- 2026-05-02
 
-**Item 6.20 ships.** Adds a minimal `JobScheduler` primitive that item 6.13 (cron-like recurring execution) will extend rather than duplicate, plus the first job that uses it: a 24h `update-check` against npm that drives a web UI banner, a CLI lifecycle banner, and a `cfcf doctor` check. No auto-update — the user always runs `cfcf self-update --yes` explicitly.
+**Items 6.20 + 6.12 ship.** Two coordinated additive feature drops:
 
-Minor bump because this introduces a new core module (`scheduler`) and new user-visible behaviour (the banners). Both surfaces are additive — no breaking config or API changes.
+- **6.20** — minimal `JobScheduler` primitive that item 6.13 (cron-like recurring execution) will extend rather than duplicate, plus the first job that uses it: a 24h `update-check` against npm that drives a web UI banner, a CLI lifecycle banner, and a `cfcf doctor` check. No auto-update — the user always runs `cfcf self-update --yes` explicitly.
+- **6.12** — closes every CLI ↔ web parity gap surfaced by the audit (workspace creation / deletion / Clio Project reassignment / ad-hoc Reflect / read-only Memory browser) plus a full theming pass (light / dark / auto with toggle, `color-scheme` for native widgets, dark-theme contrast bump, readability tokens, panel-surface convention).
+
+Minor bump because this introduces a new core module (`scheduler`), new user-visible behaviour (banners + theme toggle), and substantial new web surfaces (Memory page, modals, Reflect button, workspace lifecycle UI). All surfaces are additive — no breaking config or API changes.
 
 ### Added — Item 6.20: minimal `JobScheduler` primitive + new-version notification
 
@@ -52,6 +55,37 @@ A small, restart-resilient periodic-job runner (`packages/core/src/scheduler/`) 
 ### Security — flag file carries no clickable URL
 
 `~/.cfcf/update-available.json` deliberately omits `releaseNotesUrl`. The file lives in `~/.cfcf/`, which is user-writable, so a local actor (malicious script, misbehaving install) could otherwise plant an attacker-controlled link that the web banner would render as `<a target="_blank">` — a phishing surface. The upgrade command (`cfcf self-update --yes`) is canonical and self-contained; the version number is all the surfaces need.
+
+### Added — Item 6.12: close CLI ↔ web parity gaps + light/dark theme + readability pass
+
+Closes every user-facing CLI ↔ web parity gap surfaced by the audit in plan row 6.12, plus a theming pass that fell out of dogfooding the new web surfaces. Read-only Clio prototype here; item 6.18 will refine the editorial layer.
+
+**Web surfaces added:**
+
+- **+ Create workspace** button + modal on the Dashboard, replacing the redundant "server & config →" link (Settings is already in the top nav). Mirrors `cfcf workspace init` — name, absolute repo path, optional Clio Project. Components: `Modal`, `NewWorkspaceModal`.
+- **Memory page** at `/#/memory` (new top-bar nav item between Workspaces and Settings). Stats panel (doc / chunk / project counts, DB size + path, active embedder), projects sidebar (filters the rest of the page), search box (auto / fts / semantic / hybrid; results show title, project, score, heading path, snippet), documents list, read-only doc viewer. Component: `MemoryPage`.
+- **Workspace delete** (config-only; the repo folder, iteration branches, and ingested Clio docs are NEVER touched). New "Danger zone" at the bottom of the Config tab; type-the-name confirm pattern (matches the GitHub repo-deletion UX). Component: `DeleteWorkspaceDialog`.
+- **Clio Project reassignment** on the workspace Config tab (mirrors `cfcf workspace set --project`, including the migrate-history + all-in-project escalation). Picker `<select>` for existing + separate text input for "Or type a new project name" (text input wins on submit). Component: `ClioProjectDialog`.
+- **Reflect** button in `LoopControls` between Start Loop and Document (mirrors `cfcf reflect`); disabled while any agent runs; auto-switches to Logs when fired.
+
+**Theming overhaul:**
+
+- **Light / dark / auto** themes selected via `[data-theme]` on `<html>`. Toggle in Header (☾ / ☀ / ◐) cycles the three states; persists to localStorage (per-tab fast path; pre-paint script in `index.html` avoids first-paint flash) and to cfcf global config (`theme: "auto" | "dark" | "light"`, default `"auto"`). New `useTheme` hook + `ThemeToggle` component.
+- **Native widget palette** wired via CSS [`color-scheme`](https://developer.mozilla.org/en-US/docs/Web/CSS/color-scheme) so the OS-rendered `<select>` popup, scrollbars, and input spinners follow the page theme rather than the OS preference.
+- **Dark-theme contrast bump**: `--color-text` ~14:1 (was ~9:1), `--color-text-muted` ~7:1 (was scraping the 4.5:1 floor at small sizes).
+- **Readability pass** on form inputs / labels / hints (~10-15% bigger via new `--text-xs/sm/md` tokens). The html base font-size was deliberately not bumped to avoid rippling layout changes through every existing component.
+- **Panel surface convention** enforced consistently: `--color-bg` for page bg + log viewer + nested drop-one-level surfaces; `--color-surface` for panels / cards; `--color-surface-alt` for form inputs + subtle hover highlights. Memory panels switched from alt → surface; log viewer switched from hardcoded `#0a0c10` → `var(--color-bg)` so it survives a light-theme switch.
+- **Form inputs** (`<input type="text|number|search|...">`, `<select>`, `<textarea>`) get global dark-theme styling so existing pages (Settings, workspace Config) pick up the look without per-component changes. Custom CSS chevron on `<select>` for consistent dropdown widths regardless of option content. Two Clio-Project pickers swapped from `<input list>+<datalist>` to plain `<select>` matching Settings (datalist popups are browser chrome and can't be CSS-styled, leaving inconsistent widths between dialogs).
+
+**Architecture polish:**
+
+- New shared `useServerStatus` context owning a single poll cycle for health + activity + update-status (replaces `UpdateBanner`'s standalone 5-min timer; one tick covers everything at the existing 3 s active / 10 s idle cadence).
+- Backend: `theme?: "auto" | "dark" | "light"` added to `CfcfGlobalConfig` (default `"auto"`, backfilled by `validateConfig` and explicitly set in `createDefaultConfig` for new installs).
+
+**Plan additions (no code):**
+
+- **Row 6.9** appended with a follow-up note about the Clio Project namespace convention surfaced during dogfooding (system-managed projects like `cfcf-memory-pa` should be filtered or prefixed at picker sites once the convention firms up).
+- **New row 6.26**: per-role model selection — dropdowns sourced from each agent's supported-models list (replace today's free-text model field in web Settings + workspace Config + CLI init/config edit).
 
 ## [0.17.1] -- 2026-05-02
 
