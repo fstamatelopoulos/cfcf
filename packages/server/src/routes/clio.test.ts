@@ -105,6 +105,84 @@ describe("Clio HTTP: projects", () => {
     const res = await app.request("/api/clio/projects/no-such-project");
     expect(res.status).toBe(404);
   });
+
+  // ── 6.18 round-2: PATCH + DELETE /api/clio/projects/:idOrName ──
+
+  it("PATCH /api/clio/projects/:idOrName renames a project", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "old-name", description: "x" }),
+    });
+    const res = await app.request("/api/clio/projects/old-name", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "new-name", description: "y" }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await res.json();
+    expect(updated.name).toBe("new-name");
+    expect(updated.description).toBe("y");
+  });
+
+  it("PATCH returns 404 for unknown project", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/projects/no-such", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "x" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH returns 409 when renaming to a colliding name", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "alpha" }),
+    });
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "beta" }),
+    });
+    const res = await app.request("/api/clio/projects/alpha", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "beta" }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("DELETE /api/clio/projects/:idOrName deletes an empty project", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "to-delete" }),
+    });
+    const res = await app.request("/api/clio/projects/to-delete", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.deleted).toBe(true);
+  });
+
+  it("DELETE returns 409 when documents still belong to the project", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "occupied" }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "occupied", title: "x", content: "# H\n\nbody" }),
+    });
+    const res = await app.request("/api/clio/projects/occupied", { method: "DELETE" });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/document/i);
+  });
+
+  it("DELETE returns 404 for unknown project", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/projects/no-such", { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("Clio HTTP: ingest + search + get + stats", () => {

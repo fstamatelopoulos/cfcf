@@ -14,6 +14,7 @@ import {
   getWorkspace,
   findWorkspaceByName,
   updateWorkspace,
+  listWorkspaces,
   readConfig,
   type IngestRequest,
   type SearchRequest,
@@ -59,6 +60,90 @@ export function registerClioRoutes(app: Hono): void {
     const project = await backend.getProject(idOrName);
     if (!project) return c.json({ error: "Clio Project not found" }, 404);
     return c.json(project);
+  });
+
+  // PATCH /api/clio/projects/:idOrName -- rename + redescribe (item 6.18 round-2).
+  // Body: { name?: string; description?: string }
+  // Refuses to rename if any cfcf workspace pins the OLD name in its
+  // config (returns 409 with { dependentWorkspaces: [...] }). The
+  // workspace-dependent check is in the route layer because the backend
+  // doesn't know about cfcf workspaces.
+  app.patch("/api/clio/projects/:idOrName", async (c) => {
+    const idOrName = c.req.param("idOrName");
+    let body: { name?: string; description?: string };
+    try {
+      body = await c.req.json<{ name?: string; description?: string }>();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) {
+      return c.json({ error: "name must be a non-empty string" }, 400);
+    }
+    if (body.description !== undefined && typeof body.description !== "string") {
+      return c.json({ error: "description must be a string" }, 400);
+    }
+    const backend = getClioBackend();
+    const target = await backend.getProject(idOrName);
+    if (!target) return c.json({ error: "Clio Project not found" }, 404);
+
+    const renaming = body.name !== undefined && body.name.trim() !== target.name;
+
+    // Workspace-dependent check (only on rename). Look for any workspace
+    // whose `clioProject` pins the old name; if any exist, refuse with
+    // a 409 listing them so the user can reassign first.
+    if (renaming) {
+      const workspaces = await listWorkspaces();
+      const dependents = workspaces
+        .filter((w) => w.clioProject === target.name)
+        .map((w) => ({ id: w.id, name: w.name }));
+      if (dependents.length > 0) {
+        return c.json({
+          error: `Cannot rename: ${dependents.length} workspace(s) still pin "${target.name}". Reassign them first via each workspace's Config tab.`,
+          dependentWorkspaces: dependents,
+        }, 409);
+      }
+    }
+
+    try {
+      const updated = await backend.editProject(target.id, body);
+      return c.json(updated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes("already exists") ? 409 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
+  // DELETE /api/clio/projects/:idOrName -- hard-delete (item 6.18 round-2).
+  // Refuses if any workspace pins the project name in its config OR any
+  // (live or soft-deleted) documents still belong to the project.
+  app.delete("/api/clio/projects/:idOrName", async (c) => {
+    const idOrName = c.req.param("idOrName");
+    const backend = getClioBackend();
+    const target = await backend.getProject(idOrName);
+    if (!target) return c.json({ error: "Clio Project not found" }, 404);
+
+    const workspaces = await listWorkspaces();
+    const dependents = workspaces
+      .filter((w) => w.clioProject === target.name)
+      .map((w) => ({ id: w.id, name: w.name }));
+    if (dependents.length > 0) {
+      return c.json({
+        error: `Cannot delete: ${dependents.length} workspace(s) still pin "${target.name}". Reassign them first via each workspace's Config tab.`,
+        dependentWorkspaces: dependents,
+      }, 409);
+    }
+
+    try {
+      const result = await backend.deleteProject(target.id);
+      return c.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Backend's "still has N documents" message → 409 (conflict). Other
+      // failures → 400.
+      const status = /document/i.test(message) ? 409 : 400;
+      return c.json({ error: message }, status);
+    }
   });
 
   // ── Ingest ───────────────────────────────────────────────────────────
