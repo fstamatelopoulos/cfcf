@@ -45,6 +45,30 @@ export function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
 }
 
+// --- Update notification (item 6.20) ---
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string;
+  checkedAt: string;
+  releaseNotesUrl?: string;
+}
+
+/**
+ * Returns `null` when the server has nothing to surface (HTTP 204 from
+ * `/api/update-status`). Returns the parsed body when a newer release is
+ * known and the running server is older than `latestVersion`.
+ *
+ * Doesn't go through `request<T>()` because that helper assumes a JSON
+ * body on every response, but 204 has none.
+ */
+export async function fetchUpdateStatus(): Promise<UpdateStatus | null> {
+  const res = await fetch("/api/update-status");
+  if (res.status === 204) return null;
+  if (!res.ok) return null;
+  return (await res.json()) as UpdateStatus;
+}
+
 export interface ServerStatus {
   status: string;
   version: string;

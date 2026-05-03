@@ -1,4 +1,5 @@
 import { Header } from "./components/Header";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { Dashboard } from "./pages/Dashboard";
 import { WorkspaceDetail } from "./pages/WorkspaceDetail";
 import { ServerInfo } from "./pages/ServerInfo";
@@ -10,6 +11,7 @@ export function App() {
 
   return (
     <div className="app">
+      <UpdateBanner />
       <Header />
       <main className="app__content">
         {route.page === "workspace" && route.workspaceId ? (
