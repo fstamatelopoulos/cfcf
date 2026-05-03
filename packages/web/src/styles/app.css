@@ -986,7 +986,13 @@
 /* --- Log Viewer --- */
 
 .log-viewer {
-  background: #0a0c10;
+  /* Use the page background so the log surface theme-switches cleanly:
+     in dark mode it looks ~black like a terminal; in light mode it
+     becomes a light panel with dark monospace text (standard light-
+     theme log behaviour, same as GitHub Actions / GitLab CI logs).
+     Previously hardcoded #0a0c10 which would render as a black panel
+     on a white page in light mode. (item 6.12 polish.) */
+  background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   overflow: hidden;
