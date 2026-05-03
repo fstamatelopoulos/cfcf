@@ -368,7 +368,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                   {reviewState.completedAt && (
                     <span
                       className="status-panel__timestamp"
-                      style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                      style={{ fontWeight: 400, fontSize: "var(--text-sm)", marginLeft: "0.5rem" }}
                     >
                       ({new Date(reviewState.completedAt).toLocaleString()})
                     </span>
@@ -399,7 +399,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                   Product Architect session{activePaSessions.length === 1 ? "" : "s"} active
                   <span
                     className="status-panel__timestamp"
-                    style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem", color: "var(--color-info)" }}
+                    style={{ fontWeight: 400, fontSize: "var(--text-sm)", marginLeft: "0.5rem", color: "var(--color-info)" }}
                   >
                     (interactive — runs in the user's terminal)
                   </span>
@@ -430,7 +430,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                     </li>
                   ))}
                 </ul>
-                <p style={{ fontSize: "0.85rem", color: "var(--color-text-muted)", marginTop: "0.6rem" }}>
+                <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: "0.6rem" }}>
                   PA sessions write turn-by-turn to the user's local <code>.cfcf-pa/</code>; they're
                   unaffected by server restarts. To view full session detail (scratchpad, workspace
                   summary, meta.json), open the row in the History tab.
@@ -444,7 +444,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                   {lastCompletedPaSession.completedAt && (
                     <span
                       className="status-panel__timestamp"
-                      style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                      style={{ fontWeight: 400, fontSize: "var(--text-sm)", marginLeft: "0.5rem" }}
                     >
                       ({new Date(lastCompletedPaSession.completedAt).toLocaleString()})
                     </span>

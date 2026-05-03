@@ -76,7 +76,7 @@ export function DeleteWorkspaceDialog({
       <p style={{ marginTop: 0 }}>
         This removes <strong>{workspace.name}</strong> from cfcf's registry.
       </p>
-      <ul style={{ paddingLeft: "1.25rem", margin: "0.5rem 0", fontSize: "0.85rem", lineHeight: 1.55 }}>
+      <ul style={{ paddingLeft: "1.25rem", margin: "0.5rem 0", fontSize: "var(--text-sm)", lineHeight: 1.55 }}>
         <li>The repo folder at <code>{workspace.repoPath}</code> is <strong>not touched</strong>.</li>
         <li>cfcf-state files (history, signals, logs) for this workspace are removed.</li>
         <li>Iteration branches in your repo (<code>cfcf/iteration-N</code>) are <strong>not touched</strong>.</li>

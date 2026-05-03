@@ -156,7 +156,7 @@ export function LoopControls({
       {autoReviewSpecs && (
         <div
           style={{
-            fontSize: "0.8rem",
+            fontSize: "var(--text-sm)",
             color: "var(--color-text-muted)",
             marginTop: "0.5rem",
           }}

@@ -430,7 +430,7 @@ function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
     );
   } else if (event.committed === false && event.docsFileCount && event.docsFileCount > 0) {
     parts.push(
-      <span key="uncommitted" style={{ color: "var(--color-text-muted)", fontSize: "0.75rem" }}>
+      <span key="uncommitted" style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)" }}>
         {" "}(not committed)
       </span>,
     );
@@ -474,7 +474,7 @@ function ReflectionResult({ event }: { event: ReflectionHistoryEvent }) {
       )}
       {event.signals?.key_observation && (
         <div
-          style={{ color: "var(--color-text-muted)", fontSize: "0.75rem", marginTop: "0.25rem" }}
+          style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)", marginTop: "0.25rem" }}
         >
           {event.signals.key_observation}
         </div>
@@ -567,7 +567,7 @@ function LoopStoppedDetail({ event }: { event: LoopStoppedHistoryEvent }) {
         borderRadius: "4px",
       }}
     >
-      <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+      <div style={{ marginBottom: "0.5rem", fontSize: "var(--text-sm)" }}>
         <strong>Loop stopped by user</strong>
         {event.iteration ? ` after iteration ${event.iteration}` : ""}.{" "}
         {event.completedAt && (
@@ -580,7 +580,7 @@ function LoopStoppedDetail({ event }: { event: LoopStoppedHistoryEvent }) {
         <div>
           <div
             style={{
-              fontSize: "0.75rem",
+              fontSize: "var(--text-xs)",
               color: "var(--color-text-muted)",
               marginBottom: "0.25rem",
             }}
@@ -595,7 +595,7 @@ function LoopStoppedDetail({ event }: { event: LoopStoppedHistoryEvent }) {
               borderRadius: "3px",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
-              fontSize: "0.85rem",
+              fontSize: "var(--text-sm)",
               fontFamily: "inherit",
               lineHeight: 1.5,
             }}
@@ -604,7 +604,7 @@ function LoopStoppedDetail({ event }: { event: LoopStoppedHistoryEvent }) {
           </pre>
         </div>
       ) : (
-        <div style={{ fontSize: "0.85rem", color: "var(--color-text-muted)" }}>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
           (No feedback provided.)
         </div>
       )}

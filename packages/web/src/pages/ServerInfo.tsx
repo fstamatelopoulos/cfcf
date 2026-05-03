@@ -255,7 +255,7 @@ export function ServerInfo() {
           background: "color-mix(in srgb, var(--color-info) 12%, transparent)",
           borderLeft: "3px solid var(--color-info)",
           color: "var(--color-text)",
-          fontSize: "0.85rem",
+          fontSize: "var(--text-sm)",
           borderRadius: "4px",
         }}
       >
@@ -533,7 +533,7 @@ export function ServerInfo() {
                       <option value="semantic">semantic (vector only)</option>
                       <option value="hybrid">hybrid (α-weighted blend of cosine + normalised BM25)</option>
                     </select>
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Used when <code>cfcf clio search</code> is invoked without an explicit <code>--mode</code> flag (or when <code>/api/clio/search</code> is called without <code>?mode=</code>). Per-call overrides always win.
                     </div>
                   </td>
@@ -559,7 +559,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     />
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Cosine threshold for the vector-only branch of hybrid search and for every semantic result. FTS-matched chunks in hybrid mode bypass this filter. Default 0.5; lower for wider recall, higher for stricter precision. Per-call <code>--min-score</code> always wins.
                     </div>
                   </td>
@@ -585,7 +585,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     />
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Hybrid score = <code>α × cosine + (1−α) × normalised_BM25</code>. Higher α biases toward semantic similarity; lower α biases toward keyword match. Default 0.7 (Cerefox parity). Per-call <code>--alpha</code> always wins.
                     </div>
                   </td>
@@ -610,7 +610,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "8rem" }}
                     /> chars
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Documents whose total content is at most this size return the FULL document content in each search hit (small-to-big). Larger documents return the matched chunk + context window. Default 20000 (Cerefox parity). Set 0 to always use chunk + window.
                     </div>
                   </td>
@@ -636,7 +636,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     /> chunks
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       For documents larger than the small-doc threshold: how many sibling chunks to include on each side of the matched chunk. Default 1 (3-chunk window: prev + match + next). 0 returns just the matched chunk.
                     </div>
                   </td>
@@ -668,7 +668,7 @@ export function ServerInfo() {
                         border: "1px solid rgba(255, 200, 0, 0.3)",
                         padding: "0.5rem 0.6rem",
                         borderRadius: "4px",
-                        fontSize: "0.85rem",
+                        fontSize: "var(--text-sm)",
                         marginTop: "0.5rem",
                       }}>
                         ⚠ Exceeds <code>{activeEmbedder.name}</code>'s recommended max
@@ -677,7 +677,7 @@ export function ServerInfo() {
                         truncate inputs.
                       </div>
                     )}
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Target maximum size per chunk during ingest. The active embedder's recommended max acts as a safety ceiling — values above it get capped. Default 4000 (Cerefox parity).
                     </div>
                   </td>
@@ -702,7 +702,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "8rem" }}
                     /> chars
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Pieces smaller than this merge into the previous chunk during oversized-section splitting. Default 100 (Cerefox parity).
                     </div>
                   </td>
@@ -715,7 +715,7 @@ export function ServerInfo() {
                       {activeEmbedder && (
                         <> (active: <code>{activeEmbedder.name}</code>, dim={activeEmbedder.dim}, recommended max={activeEmbedder.recommendedChunkMaxChars} chars)</>
                       )}
-                      <div style={{ fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      <div style={{ fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                         Switch with <code>cfcf clio embedder set &lt;name&gt; --reindex</code>. Without <code>--reindex</code>, existing chunk embeddings become inconsistent with the new model and vector-search quality on those chunks degrades. Use <code>--force</code> only for recovery.
                       </div>
                     </td>
@@ -751,7 +751,7 @@ export function ServerInfo() {
               <span
                 style={{
                   color: "var(--color-success)",
-                  fontSize: "0.85rem",
+                  fontSize: "var(--text-sm)",
                 }}
               >
                 ✓ Saved
@@ -761,7 +761,7 @@ export function ServerInfo() {
               <span
                 style={{
                   color: "var(--color-text-muted)",
-                  fontSize: "0.8rem",
+                  fontSize: "var(--text-sm)",
                 }}
               >
                 unsaved changes
@@ -773,7 +773,7 @@ export function ServerInfo() {
             style={{
               marginTop: "1.5rem",
               color: "var(--color-text-muted)",
-              fontSize: "0.8rem",
+              fontSize: "var(--text-sm)",
             }}
           >
             Equivalent CLI: <code>cfcf config edit</code>. Changes apply to new
@@ -927,7 +927,7 @@ function ModelRegistryAdapterRow({
                   border: 0,
                   color: "var(--color-text-muted)",
                   cursor: "pointer",
-                  fontSize: "0.95rem",
+                  fontSize: "var(--text-md)",
                   lineHeight: 1,
                   padding: 0,
                 }}
@@ -993,7 +993,7 @@ function CheckboxRow({
             style={{ marginTop: "0.25rem" }}
           />
           {hint && (
-            <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
               {hint}
             </span>
           )}

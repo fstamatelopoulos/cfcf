@@ -175,7 +175,7 @@ export function JudgeDetail({
           return (
             <div
               className="architect-review__section"
-              style={{ color: "var(--color-text-muted)", fontSize: "0.85rem" }}
+              style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}
             >
               Dev self-reported <strong>{dev.self_assessment}</strong> quality ·
               status: <strong>{dev.status}</strong> · no blockers, no user input

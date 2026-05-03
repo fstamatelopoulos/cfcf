@@ -196,7 +196,7 @@ export function ConfigDisplay({
           background: "color-mix(in srgb, var(--color-info) 12%, transparent)",
           borderLeft: "3px solid var(--color-info)",
           color: "var(--color-text)",
-          fontSize: "0.85rem",
+          fontSize: "var(--text-sm)",
           borderRadius: "4px",
         }}
       >
@@ -298,7 +298,7 @@ export function ConfigDisplay({
           style={{
             marginTop: "0.75rem",
             marginBottom: 0,
-            fontSize: "0.8rem",
+            fontSize: "var(--text-sm)",
             color: "var(--color-text-muted, #888)",
             lineHeight: 1.5,
           }}
@@ -434,7 +434,7 @@ export function ConfigDisplay({
             Override global notifications for this workspace
           </label>
           {!notificationsOverridden && (
-            <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+            <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.25rem" }}>
               Currently inheriting the global notification settings.
             </div>
           )}
@@ -513,12 +513,12 @@ export function ConfigDisplay({
           Cancel
         </button>
         {savedAt && !isDirty && (
-          <span style={{ color: "var(--color-success)", fontSize: "0.85rem" }}>
+          <span style={{ color: "var(--color-success)", fontSize: "var(--text-sm)" }}>
             ✓ Saved
           </span>
         )}
         {isDirty && (
-          <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+          <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
             unsaved changes
           </span>
         )}
@@ -655,7 +655,7 @@ function CheckboxRow({
             style={{ marginTop: "0.25rem" }}
           />
           {hint && (
-            <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
               {hint}
             </span>
           )}

@@ -97,7 +97,7 @@ export function PaSessionDetail({
             Clio doc:
           </strong>
           <code style={inlineCodeStyle}>{event.clioWorkspaceMemoryDocId}</code>
-          <span style={{ marginLeft: 8, fontSize: "0.85rem", color: "var(--color-text-muted)" }}>
+          <span style={{ marginLeft: 8, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
             (workspace memory snapshot pushed to Clio)
           </span>
         </div>
@@ -166,7 +166,7 @@ function PreStateBar({ event }: { event: PaSessionHistoryEvent }) {
   ];
   return (
     <div style={preStateBarStyle}>
-      <span style={{ color: "var(--color-text-muted)", marginRight: 12, fontSize: "0.85rem" }}>
+      <span style={{ color: "var(--color-text-muted)", marginRight: 12, fontSize: "var(--text-sm)" }}>
         Pre-state:
       </span>
       {items.map((item) => (
@@ -231,7 +231,7 @@ function MetaTab({
           The agent hasn't written sync metadata yet. cfcf will create this on the
           first save.
         </p>
-        <p style={{ marginTop: 4, color: "var(--color-text-muted)", fontSize: "0.85rem" }}>
+        <p style={{ marginTop: 4, color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
           Cache path: <code style={inlineCodeStyle}>{cachePath}</code>
         </p>
       </div>
@@ -331,7 +331,7 @@ const metaGridStyle: React.CSSProperties = {
 };
 
 const metaLabelStyle: React.CSSProperties = {
-  fontSize: "0.72rem",
+  fontSize: "var(--text-xs)",
   textTransform: "uppercase",
   letterSpacing: "0.04em",
   color: "var(--color-text-muted)",
@@ -339,7 +339,7 @@ const metaLabelStyle: React.CSSProperties = {
 };
 
 const metaValueStyle: React.CSSProperties = {
-  fontSize: "0.92rem",
+  fontSize: "var(--text-md)",
   color: "var(--color-text)",
 };
 
@@ -352,7 +352,7 @@ const preStateBarStyle: React.CSSProperties = {
 };
 
 const pillStyle: React.CSSProperties = {
-  fontSize: "0.78rem",
+  fontSize: "var(--text-xs)",
   padding: "2px 8px",
   borderRadius: "999px",
   fontWeight: 500,
@@ -364,7 +364,7 @@ const outcomeStyle: React.CSSProperties = {
   padding: "8px 12px",
   borderRadius: "var(--radius)",
   margin: "0 0 10px 0",
-  fontSize: "0.95rem",
+  fontSize: "var(--text-md)",
 };
 
 const clioLinkStyle: React.CSSProperties = {
@@ -372,7 +372,7 @@ const clioLinkStyle: React.CSSProperties = {
   alignItems: "center",
   flexWrap: "wrap",
   marginBottom: "12px",
-  fontSize: "0.92rem",
+  fontSize: "var(--text-md)",
 };
 
 const tabBarStyle: React.CSSProperties = {
@@ -385,7 +385,7 @@ const tabButtonStyle: React.CSSProperties = {
   border: "none",
   borderBottom: "2px solid transparent",
   padding: "8px 14px",
-  fontSize: "0.9rem",
+  fontSize: "var(--text-sm)",
   cursor: "pointer",
   fontFamily: "inherit",
 };
@@ -406,7 +406,7 @@ const loadingStyle: React.CSSProperties = {
 };
 
 const filePathStyle: React.CSSProperties = {
-  fontSize: "0.78rem",
+  fontSize: "var(--text-xs)",
   color: "var(--color-text-muted)",
   marginBottom: "6px",
 };
@@ -415,7 +415,7 @@ const absentNoteStyle: React.CSSProperties = {
   padding: "12px",
   background: "var(--color-surface-alt)",
   borderRadius: "var(--radius)",
-  fontSize: "0.92rem",
+  fontSize: "var(--text-md)",
 };
 
 const metaPreStyle: React.CSSProperties = {
@@ -425,7 +425,7 @@ const metaPreStyle: React.CSSProperties = {
   borderRadius: "var(--radius)",
   padding: "12px",
   overflowX: "auto",
-  fontSize: "0.85rem",
+  fontSize: "var(--text-sm)",
   fontFamily: "var(--font-mono)",
 };
 
