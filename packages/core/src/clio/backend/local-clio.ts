@@ -51,6 +51,25 @@ import { statSync } from "fs";
 const DEFAULT_MATCH_COUNT = 10;
 const FTS_CANDIDATE_MULTIPLIER = 5;
 
+/**
+ * Per-column bm25() weights for clio_chunks_fts (item 6.24, Cerefox parity).
+ * Column order MUST match migration 0002's CREATE VIRTUAL TABLE statement:
+ *   0: doc_title    (document title from clio_documents.title)
+ *   1: chunk_title  (chunk heading from clio_chunks.title)
+ *   2: content      (chunk body from clio_chunks.content)
+ *
+ * Higher value = more important. Cerefox's Postgres equivalent
+ * (`setweight(..., 'A')` for titles + `'B'` for content) gives an
+ * effective ratio of 2.5× via ts_rank_cd defaults; SQLite FTS5's
+ * per-column bm25() weights are the equivalent knob. We use 4× as a
+ * slightly stronger boost so doc-title hits clearly outrank body-only
+ * hits in the dense corpora the agent roles ingest. Tunable here in
+ * one spot if the ratio needs adjusting later.
+ */
+const FTS_BM25_WEIGHT_DOC_TITLE = 4.0;
+const FTS_BM25_WEIGHT_CHUNK_TITLE = 4.0;
+const FTS_BM25_WEIGHT_CONTENT = 1.0;
+
 // UUID v4 pattern (loose). Used to distinguish "project id" from "project name".
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -1501,7 +1520,8 @@ export class LocalClio implements MemoryBackend {
 
     const sql = `
       WITH fts_results AS (
-        SELECT c.id AS chunk_id, bm25(clio_chunks_fts) AS bm25_rank
+        SELECT c.id AS chunk_id,
+               bm25(clio_chunks_fts, ${FTS_BM25_WEIGHT_DOC_TITLE}, ${FTS_BM25_WEIGHT_CHUNK_TITLE}, ${FTS_BM25_WEIGHT_CONTENT}) AS bm25_rank
           FROM clio_chunks_fts f
           JOIN clio_chunks c ON c.rowid = f.rowid
           JOIN clio_documents d ON c.document_id = d.id
@@ -1799,7 +1819,7 @@ export class LocalClio implements MemoryBackend {
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
-             bm25(clio_chunks_fts) AS bm25_rank
+             bm25(clio_chunks_fts, ${FTS_BM25_WEIGHT_DOC_TITLE}, ${FTS_BM25_WEIGHT_CHUNK_TITLE}, ${FTS_BM25_WEIGHT_CONTENT}) AS bm25_rank
         FROM clio_chunks_fts f
         JOIN clio_chunks c ON c.rowid = f.rowid
         JOIN clio_documents d ON c.document_id = d.id
