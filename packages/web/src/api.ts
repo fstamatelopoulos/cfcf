@@ -288,12 +288,31 @@ export function stopDocument(workspaceId: string): Promise<{ status: string }> {
 
 // --- Reflect (item 5.6 / web surface in 6.12) ---
 
+export interface ReflectState {
+  workspaceId: string;
+  status: "preparing" | "executing" | "collecting" | "completed" | "failed" | "stopped";
+  startedAt?: string;
+  completedAt?: string;
+  exitCode?: number;
+  logFile?: string;
+  logFileName?: string;
+  error?: string;
+}
+
 /**
  * Start an ad-hoc Reflection pass (mirrors `cfcf reflect`). `prompt` is an
  * optional free-text question for the reflection agent.
  */
 export function startReflect(workspaceId: string, prompt?: string): Promise<{ status: string }> {
   return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect`, prompt ? { prompt } : undefined);
+}
+
+export function fetchReflectStatus(workspaceId: string): Promise<ReflectState> {
+  return request<ReflectState>(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect/status`);
+}
+
+export function stopReflect(workspaceId: string): Promise<{ status: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect/stop`);
 }
 
 // --- Clio (memory) — item 6.12 prototype, 6.18 builds out the rest ---

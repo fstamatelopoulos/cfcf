@@ -5,6 +5,8 @@ import {
   fetchHistory,
   fetchReviewStatus,
   fetchDocumentStatus,
+  fetchReflectStatus,
+  type ReflectState,
 } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import { StatusBadge } from "../components/StatusBadge";
@@ -37,6 +39,7 @@ const tabs = [
 const LOOP_ACTIVE_PHASES = ["pre_loop_reviewing", "preparing", "dev_executing", "judging", "reflecting", "deciding", "documenting"];
 const REVIEW_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
 const DOCUMENT_ACTIVE_STATUSES = ["preparing", "executing"];
+const REFLECT_ACTIVE_STATUSES = ["preparing", "executing", "collecting"];
 
 export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const [activeTab, setActiveTab] = useState("status");
@@ -45,6 +48,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const [loopState, setLoopState] = useState<LoopState | null>(null);
   const [reviewState, setReviewState] = useState<ReviewState | null>(null);
   const [documentState, setDocumentState] = useState<DocumentState | null>(null);
+  const [reflectState, setReflectState] = useState<ReflectState | null>(null);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
   const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
 
@@ -87,6 +91,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     }
   }, [workspaceId]);
 
+  const refreshReflect = useCallback(async () => {
+    try {
+      const state = await fetchReflectStatus(workspaceId);
+      setReflectState(state);
+    } catch {
+      setReflectState(null);
+    }
+  }, [workspaceId]);
+
   const refreshHistory = useCallback(async () => {
     try {
       const events = await fetchHistory(workspaceId);
@@ -97,14 +110,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   }, [workspaceId]);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshWorkspace(), refreshLoop(), refreshReview(), refreshDocument(), refreshHistory()]);
-  }, [refreshWorkspace, refreshLoop, refreshReview, refreshDocument, refreshHistory]);
+    await Promise.all([refreshWorkspace(), refreshLoop(), refreshReview(), refreshDocument(), refreshReflect(), refreshHistory()]);
+  }, [refreshWorkspace, refreshLoop, refreshReview, refreshDocument, refreshReflect, refreshHistory]);
 
   // --- Derived state ---
 
   const isLoopActive = !!loopState && LOOP_ACTIVE_PHASES.includes(loopState.phase);
   const isReviewActive = !!reviewState && REVIEW_ACTIVE_STATUSES.includes(reviewState.status);
   const isDocumentActive = !!documentState && DOCUMENT_ACTIVE_STATUSES.includes(documentState.status);
+  const isReflectActive = !!reflectState && REFLECT_ACTIVE_STATUSES.includes(reflectState.status);
 
   // PA sessions are interactive — they live in the user's terminal,
   // not as server children. The Status tab learns about them through
@@ -133,7 +147,9 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       ? "review"
       : isDocumentActive
         ? "document"
-        : null;
+        : isReflectActive
+          ? "reflect"
+          : null;
 
   const hasRunningHistory = history.some((e) => e.status === "running");
   const anyAgentRunning = !!activeAgent || hasRunningHistory;
@@ -158,12 +174,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     await refreshAll();
 
     // Auto-switch to Logs tab for new agent starts
-    if (action === "review" || action === "start" || action === "resume" || action === "document") {
+    if (action === "review" || action === "start" || action === "resume" || action === "document" || action === "reflect") {
       setTimeout(async () => {
         const events = await fetchHistory(workspaceId);
         setHistory(events);
         const targetType =
-          action === "review" ? "review" : action === "document" ? "document" : "iteration";
+          action === "review" ? "review"
+            : action === "document" ? "document"
+            : action === "reflect" ? "reflection"
+            : "iteration";
         const sorted = [...events].sort(
           (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
         );
@@ -174,7 +193,9 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
               ? `Iteration ${(newest as IterationHistoryEvent).iteration} (dev)`
               : newest.type === "review"
                 ? `Review (${newest.agent})`
-                : `Document (${newest.agent})`;
+                : newest.type === "reflection"
+                  ? `Reflection (${newest.agent})`
+                  : `Document (${newest.agent})`;
           const logFile =
             newest.type === "iteration" ? (newest as IterationHistoryEvent).devLogFile : newest.logFile;
           if (logFile) {
