@@ -26,7 +26,7 @@ What it does:
 1. Scans for installed agents (Claude Code, Codex CLI) and reports what it finds
 2. Verifies git is available
 3. Asks you to choose agents for **seven roles**: five iteration roles (dev, judge, architect, reflection, documenter) plus two interactive roles (Product Architect, Help Assistant). Each prompt asks for both adapter and model.
-4. Asks for model selection per role (optional; reflection defaults to the strongest available model)
+4. Asks for model selection per role via a numbered picker driven by each adapter's bundled model registry (e.g. `opus` / `sonnet` / `haiku` for Claude Code; `gpt-5-codex` / `gpt-5` / `o3` for Codex). Pick `0` for "(use adapter default)". Edit the per-adapter model list later from the web UI's **Settings → Model registry** section; the CLI picker reads the augmented list on each subsequent run.
 5. Asks for default iteration limits (max iterations, pause cadence) and the reflection safeguard ceiling (`reflectSafeguardAfter`, default `3` -- the maximum consecutive iterations the judge may skip reflection before cfcf forces it)
 6. Asks for the pre-loop review + post-SUCCESS documenter flags (item 5.1):
    - `autoReviewSpecs` (default `false`) -- if `true`, Start Loop first runs the Solution Architect and gates on its readiness signal
