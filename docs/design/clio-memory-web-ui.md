@@ -136,11 +136,70 @@ Edit (title/content/metadata) deferred for now — it's the biggest single piece
 - **Stats panel** — unchanged from 6.12 (doc/chunk/project counts, DB size + path, active embedder)
 - **Projects panel** — unchanged. Click a project filters Browse + Search + Ingest + Audit. "(all projects)" clears.
 
-### Out of scope (deferred)
+### Round 2 additions (added 2026-05-03 after first-cut review)
+
+After landing the first cut + reviewing it, three follow-ups land in the same iteration:
+
+#### A. Project edit + delete
+
+The backend gains two new methods:
+
+- `editProject(idOrName, { name?, description? })` — rename + description edit. Refuses to rename when one or more workspace configs still pin the old name (returns a 409 with the list of dependent workspaces); a `force: true` flag override is **not** added in this cut because rewriting workspace configs from a Clio mutation is the kind of cross-cutting effect that wants a deliberate user-facing affordance, not a hidden flag. Users who genuinely want to rename should first reassign the dependent workspaces (which already has a UI in the workspace Config tab from 6.12) or do it manually.
+- `deleteProject(idOrName)` — hard-delete the project row. Refuses when either (a) any workspace pins the project name in its config OR (b) any non-soft-deleted documents still belong to the project. The error response lists the blocker so the user can act. No `force` flag in this cut for the same reason as above.
+
+New server routes (mirror the existing `POST /api/clio/projects` shape):
+
+- `PATCH /api/clio/projects/:idOrName` → `{ project: ClioProject }` on success, `409 { error, dependentWorkspaces? }` on the dependent-workspace block.
+- `DELETE /api/clio/projects/:idOrName` → `{ deleted: true }` on success, `409 { error, dependentWorkspaces?, documentCount? }` on the blocker cases.
+
+Web UI: each row on the Projects tab gains Edit + Delete buttons. Edit opens a small modal with name + description fields. Delete opens a confirm dialog that lists the doc count and any dependent workspaces; the confirm button is enabled only when the project is empty + unreferenced.
+
+The CLI surface gains parity in a follow-up commit if needed; for now the feature is web-only.
+
+#### B. Edit document (full edit)
+
+The existing API surface already supports both edit shapes:
+
+- **Metadata-only** (title / author / projectId / metadata) — `PATCH /api/clio/documents/:id`. No version snapshot, single `edit-metadata` audit entry with a before/after diff.
+- **Content** — `POST /api/clio/ingest` with `documentId: <id>`. Snapshots the outgoing content as a new version, replaces the live chunks, writes an `update-content` audit entry.
+
+The web UI work is purely client-side: Document detail overlay's footer gains an **Edit…** button that opens an `EditDocumentDialog`:
+
+- Title text input (sticky to current)
+- Project dropdown (reassignment if changed; uses the metadata PATCH path)
+- Metadata key/value rows (same component shape as IngestTab)
+- Content textarea (sticky to current; large, monospace)
+- Save button — diffs against the original. If only title/project/metadata changed: PATCH. If content changed: POST /api/clio/ingest with documentId (which routes through the no-op-on-unchanged-content optimisation below). If both changed: PATCH first, then ingest, so the metadata edit lands as its own audit entry.
+
+Cancel button discards the draft.
+
+#### C. Content-unchanged short-circuit in updateDocument (Cerefox parity)
+
+`LocalClio.updateDocument` (the path triggered by `documentId` or `updateIfExists` with title match) currently re-chunks, re-embeds, and snapshots a version unconditionally — even when the new content is byte-identical to what's already stored. Cerefox's pipeline skips entirely on `content_hash` match (`pipeline.py:188-202`, returns `action: "skipped"`).
+
+cfcf already does this dedup at the **create** path (Branch 3 of `ingest`, lines 461-472). The fix is to extend the same logic to the **update** path, with one nuance: a user may have called update specifically to change metadata while the content happens to be the same — we shouldn't silently drop a metadata change.
+
+New behaviour at the top of `updateDocument(target, req, contentHash)`:
+
+| Content | Title / author / metadata | Result | Audit entry |
+|---|---|---|---|
+| Hash matches `target.contentHash` | All match `target` | Full no-op. Return `{ action: "skipped" }`. | None |
+| Hash matches `target.contentHash` | Any differ | Metadata-only path: UPDATE `clio_documents` SET title/author/metadata, no version snapshot, no chunk re-write. | `edit-metadata` (mirrors the existing PATCH path's audit shape) |
+| Hash differs | (any) | Existing flow: snapshot + re-chunk + re-embed + replace + UPDATE row. | `update-content` |
+
+Added tests in `local-clio.test.ts`:
+
+- `updateDocument is a no-op when content + metadata are unchanged`
+- `updateDocument touches metadata only when content matches but title/author changes`
+- `updateDocument re-chunks + snapshots when content actually changes` (regression check on the existing path)
+
+This avoids unnecessary chunking + embedding work (which can be the most expensive part of an ingest when an embedder is active) and avoids polluting the version history with empty snapshots.
+
+### Out of scope (deferred — unchanged from first cut except where noted)
 
 - **File upload ingest** — text paste covers the immediate need. File upload requires either a multipart endpoint or a bigger UI for picking + previewing files; revisit.
-- **Document edit page** (full content edit) — re-ingest with `updateIfExists` is the workaround; full edit UI is a meaningful chunk of work.
-- **Project rename / delete** — server doesn't expose endpoints; CLI doesn't either. Out of scope for this PR.
+- ~~**Document edit page** (full content edit)~~ — **moved into scope as round-2 addition B above.**
+- ~~**Project rename / delete**~~ — **moved into scope as round-2 addition A above.**
 - **Trash page** — soft-deleted docs are filtered from Browse + Search by default. The server's `?deleted_only=true` query param exists but no UI consumes it yet. A "View trash" affordance somewhere on the Browse tab would be cheap; revisit if dogfooding asks for it.
 - **Analytics dashboard** — Cerefox has charts; cfcf's audit log is sufficient for the size of corpora cfcf currently sees. Defer.
 - **Metadata search page** — `POST /api/clio/metadata-search` exists but the use case is narrow (fielded queries by metadata key/value). Could add a metadata-as-filter affordance to Search later.
