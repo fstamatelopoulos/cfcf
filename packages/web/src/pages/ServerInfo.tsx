@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  fetchAgentModels,
   fetchServerStatus,
   fetchGlobalConfig,
   saveGlobalConfig,
@@ -8,6 +9,7 @@ import {
 } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import type { NotificationChannelName, NotificationEventType } from "../types";
+import { AgentModelSelect } from "../components/AgentModelSelect";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -71,6 +73,13 @@ export function ServerInfo() {
     dim: number;
     recommendedChunkMaxChars: number;
   } | null>(null);
+  // 6.26 -- per-adapter model registry. `seed` is needed by the editor's
+  // "Reset to defaults" affordance.
+  const [agentModels, setAgentModels] = useState<Record<string, string[]>>({});
+  const [seedModels, setSeedModels] = useState<Record<string, string[]>>({});
+  // Bumped after a Model registry save so dependent dropdowns + the
+  // editor refresh from the server's resolved view.
+  const [modelsRev, setModelsRev] = useState(0);
 
   // Initial + periodic fetch of read-only server status (version, uptime, etc.)
   useEffect(() => {
@@ -92,6 +101,14 @@ export function ServerInfo() {
       })
       .catch(() => { /* non-fatal; warning just won't render */ });
   }, []);
+
+  // 6.26 -- fetch the per-adapter model registry (seed + resolved
+  // override) on mount and after every save that touches `agentModels`.
+  useEffect(() => {
+    fetchAgentModels()
+      .then((r) => { setAgentModels(r.adapters); setSeedModels(r.seed); })
+      .catch(() => { setAgentModels({}); setSeedModels({}); });
+  }, [modelsRev]);
 
   // Initial fetch of the config (editable). Only fetched once; the user
   // is the source of truth while editing.
@@ -129,6 +146,36 @@ export function ServerInfo() {
     setSavedAt(null);
   }
 
+  // 6.26: per-adapter model registry edits live on draft.agentModels.
+  // The user's working draft starts from the resolved server view (so
+  // editing an unset adapter pre-populates with the seed for sane
+  // defaults). On save, an unchanged-from-seed list is dropped so we
+  // don't pin a snapshot that would silently mask future seed updates.
+  function setRegistryAdapterModels(adapter: string, models: string[]) {
+    if (!draft) return;
+    const next: Record<string, string[]> = { ...(draft.agentModels ?? {}) };
+    const cleaned = models.map((m) => m.trim()).filter((m) => m.length > 0);
+    const seedForAdapter = seedModels[adapter] ?? [];
+    const isSameAsSeed =
+      cleaned.length === seedForAdapter.length &&
+      cleaned.every((m, i) => m === seedForAdapter[i]);
+    if (cleaned.length === 0 || isSameAsSeed) {
+      delete next[adapter];
+    } else {
+      next[adapter] = cleaned;
+    }
+    setDraft({ ...draft, agentModels: Object.keys(next).length > 0 ? next : undefined });
+    setSavedAt(null);
+  }
+
+  function resetRegistryAdapter(adapter: string) {
+    if (!draft) return;
+    const next = { ...(draft.agentModels ?? {}) };
+    delete next[adapter];
+    setDraft({ ...draft, agentModels: Object.keys(next).length > 0 ? next : undefined });
+    setSavedAt(null);
+  }
+
   function updateNotificationEnabled(enabled: boolean) {
     if (!draft) return;
     const n = draft.notifications ?? { enabled: true, events: {} };
@@ -162,6 +209,10 @@ export function ServerInfo() {
       setOriginal(saved);
       setDraft(structuredClone(saved));
       setSavedAt(Date.now());
+      // 6.26: surface a refreshed model registry to the per-role
+      // pickers above (the resolved list may have changed if the user
+      // edited agentModels in the Model registry section).
+      setModelsRev((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -285,12 +336,12 @@ export function ServerInfo() {
                         </select>
                       </td>
                       <td>
-                        <input
-                          type="text"
-                          placeholder="(use adapter default)"
+                        <AgentModelSelect
+                          adapter={agent.adapter}
+                          models={agentModels[agent.adapter] ?? []}
                           value={agent.model ?? ""}
-                          onChange={(e) => updateAgent(key, "model", e.target.value)}
-                          style={{ minWidth: "12rem" }}
+                          onChange={(v) => updateAgent(key, "model", v)}
+                          minWidth="12rem"
                         />
                       </td>
                     </tr>
@@ -298,6 +349,37 @@ export function ServerInfo() {
                 })}
               </tbody>
             </table>
+          </FormSection>
+
+          <FormSection title="Model registry (item 6.26)">
+            <p style={{ margin: "0 0 0.75rem 0", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+              Models surfaced in the per-role <strong>Model</strong> dropdowns above + on each workspace's Config tab.
+              cfcf ships a <strong>seed</strong> list per agent (intentionally minimal -- generic aliases like <code>opus</code>
+              not date-bound names like <code>claude-opus-4-7</code>). Edit below to augment for your install: pin specific
+              versions, add models your agent CLI accepts that aren't in the seed, or trim to just what you actually use.
+              An empty list (or one identical to the seed) clears the override and falls back to the seed automatically.
+              The <code>(custom model name…)</code> sentinel in every picker is always available as a one-shot escape hatch.
+            </p>
+            {Array.from(new Set([
+              ...Object.keys(seedModels),
+              ...Object.keys(draft.agentModels ?? {}),
+            ])).sort().map((adapter) => {
+              const override = draft.agentModels?.[adapter];
+              const resolved = override && override.length > 0 ? override : (seedModels[adapter] ?? []);
+              const seed = seedModels[adapter] ?? [];
+              const isOverridden = !!override;
+              return (
+                <ModelRegistryAdapterRow
+                  key={adapter}
+                  adapter={adapter}
+                  resolved={resolved}
+                  seed={seed}
+                  isOverridden={isOverridden}
+                  onSet={(models) => setRegistryAdapterModels(adapter, models)}
+                  onReset={() => resetRegistryAdapter(adapter)}
+                />
+              );
+            })}
           </FormSection>
 
           <FormSection title="Iteration defaults">
@@ -762,6 +844,127 @@ function NumberRow({
         />
       </td>
     </tr>
+  );
+}
+
+/**
+ * Per-adapter row in the Model registry editor (item 6.26). Local UI
+ * state for the "add model" input + commit-on-blur drag-handle for
+ * reordering would be nice; for the prototype we keep it spartan: each
+ * model is a row with a delete button, plus an input + Add button.
+ */
+function ModelRegistryAdapterRow({
+  adapter,
+  resolved,
+  seed,
+  isOverridden,
+  onSet,
+  onReset,
+}: {
+  adapter: string;
+  resolved: string[];
+  seed: string[];
+  isOverridden: boolean;
+  onSet: (models: string[]) => void;
+  onReset: () => void;
+}) {
+  const [pending, setPending] = useState("");
+
+  function add() {
+    const trimmed = pending.trim();
+    if (!trimmed) return;
+    if (resolved.includes(trimmed)) { setPending(""); return; }
+    onSet([...resolved, trimmed]);
+    setPending("");
+  }
+
+  return (
+    <div style={{
+      border: "1px solid var(--color-border)",
+      borderRadius: 6,
+      padding: "0.6rem 0.85rem",
+      marginBottom: "0.75rem",
+      background: "var(--color-surface)",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+        <strong style={{ fontSize: "var(--text-md)" }}>{adapter}</strong>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+          {isOverridden
+            ? `${resolved.length} model${resolved.length === 1 ? "" : "s"} (custom override)`
+            : `${resolved.length} model${resolved.length === 1 ? "" : "s"} (seed)`}
+        </span>
+      </div>
+      {resolved.length === 0 ? (
+        <p className="form-row__hint" style={{ margin: "0.4rem 0" }}>
+          No models in this adapter's registry. Use the input below to add one, or rely on the
+          <code> (custom model name…) </code> picker option in the per-role dropdowns.
+        </p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: "0 0 0.5rem 0", padding: 0, display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+          {resolved.map((m) => (
+            <li
+              key={m}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.4rem",
+                padding: "0.2rem 0.45rem",
+                background: "var(--color-surface-alt)",
+                border: "1px solid var(--color-border)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--text-xs)",
+              }}
+            >
+              <span>{m}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${m}`}
+                title={`Remove ${m}`}
+                onClick={() => onSet(resolved.filter((x) => x !== m))}
+                style={{
+                  background: "transparent",
+                  border: 0,
+                  color: "var(--color-text-muted)",
+                  cursor: "pointer",
+                  fontSize: "0.95rem",
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+              >×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="form-row__inline">
+        <input
+          type="text"
+          value={pending}
+          onChange={(e) => setPending(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="Add a model name (e.g. claude-opus-4-7, o4-mini)"
+          style={{ flex: 1 }}
+        />
+        <button type="button" className="btn btn--small btn--secondary" onClick={add} disabled={!pending.trim()}>
+          Add
+        </button>
+        {isOverridden && (
+          <button
+            type="button"
+            className="btn btn--small btn--secondary"
+            onClick={onReset}
+            title={`Reset to the bundled seed (${seed.join(", ") || "no seeded models"})`}
+          >
+            Reset to seed
+          </button>
+        )}
+      </div>
+      {isOverridden && (
+        <div className="form-row__hint" style={{ marginTop: "0.4rem" }}>
+          Seed: <code>{seed.join(", ") || "(none)"}</code>
+        </div>
+      )}
+    </div>
   );
 }
 

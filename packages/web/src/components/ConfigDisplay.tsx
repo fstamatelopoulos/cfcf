@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { WorkspaceConfig } from "../types";
 import type { NotificationChannelName, NotificationEventType } from "../types";
-import { fetchGlobalConfig, saveWorkspace } from "../api";
+import { fetchAgentModels, fetchGlobalConfig, saveWorkspace } from "../api";
+import { AgentModelSelect } from "./AgentModelSelect";
 import { ClioProjectDialog } from "./ClioProjectDialog";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
 import { navigateTo } from "../hooks/useRoute";
@@ -50,6 +51,10 @@ export function ConfigDisplay({
 }) {
   const [draft, setDraft] = useState<WorkspaceConfig>(() => structuredClone(workspace));
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
+  // 6.26: per-adapter model registry, fetched once on mount. Used by
+  // AgentModelSelect to populate the model dropdown for each role's
+  // currently-chosen adapter.
+  const [agentModels, setAgentModels] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -66,6 +71,9 @@ export function ConfigDisplay({
     fetchGlobalConfig()
       .then((cfg) => setAvailableAgents(cfg.availableAgents ?? []))
       .catch(() => setAvailableAgents([]));
+    fetchAgentModels()
+      .then((res) => setAgentModels(res.adapters))
+      .catch(() => setAgentModels({}));
   }, []);
 
   const isDirty = JSON.stringify(workspace) !== JSON.stringify(draft);
@@ -273,12 +281,12 @@ export function ConfigDisplay({
                     </select>
                   </td>
                   <td>
-                    <input
-                      type="text"
-                      placeholder="(use adapter default)"
+                    <AgentModelSelect
+                      adapter={agent.adapter}
+                      models={agentModels[agent.adapter] ?? []}
                       value={agent.model ?? ""}
-                      onChange={(e) => updateAgent(key, "model", e.target.value)}
-                      style={{ minWidth: "12rem" }}
+                      onChange={(v) => updateAgent(key, "model", v)}
+                      minWidth="12rem"
                     />
                   </td>
                 </tr>

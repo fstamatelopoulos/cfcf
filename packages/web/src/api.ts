@@ -104,6 +104,11 @@ export interface GlobalConfig {
   /** Web UI theme (item 6.12). "auto" follows prefers-color-scheme. */
   theme?: "auto" | "dark" | "light";
   /**
+   * Per-adapter model registry override (item 6.26). When set + non-
+   * empty for an adapter, supersedes the bundled seed.
+   */
+  agentModels?: Record<string, string[]>;
+  /**
    * Clio (item 5.7) global config. Mirrors `ClioGlobalConfig` in
    * @cfcf/core. Per-workspace overrides live on `WorkspaceConfig.clio`.
    */
@@ -286,6 +291,19 @@ export function fetchDocumentStatus(workspaceId: string): Promise<DocumentState>
 
 export function stopDocument(workspaceId: string): Promise<{ status: string }> {
   return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/document/stop`);
+}
+
+// --- Agent model registry (item 6.26) ---
+
+export interface AgentModelsResponse {
+  /** Resolved per-adapter model list (user override else seed). */
+  adapters: Record<string, string[]>;
+  /** The bundled seed; surfaced so the Settings editor can offer "reset". */
+  seed: Record<string, string[]>;
+}
+
+export function fetchAgentModels(): Promise<AgentModelsResponse> {
+  return request<AgentModelsResponse>("/api/agents/models");
 }
 
 // --- Reflect (item 5.6 / web surface in 6.12) ---
