@@ -51,7 +51,6 @@ export interface UpdateStatus {
   currentVersion: string;
   latestVersion: string;
   checkedAt: string;
-  releaseNotesUrl?: string;
 }
 
 /**
