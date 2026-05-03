@@ -14,6 +14,7 @@ import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/cor
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { registerClioRoutes } from "./routes/clio.js";
 import { registerHelpRoutes } from "./routes/help.js";
+import { registerUpdateRoutes } from "./routes/update.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -1101,6 +1102,9 @@ export function createApp() {
   // /api/help/topics + /api/help/topics/:slug -- powers the web UI
   // Help tab. Reads from the embedded help bundle.
   registerHelpRoutes(app);
+
+  // /api/update-status -- powers the web UI top-bar update banner (item 6.20).
+  registerUpdateRoutes(app);
 
   // --- Static file serving (Web GUI) ---
   //
