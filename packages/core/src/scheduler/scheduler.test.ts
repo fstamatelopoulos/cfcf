@@ -120,6 +120,58 @@ describe("JobScheduler persistence", () => {
   });
 });
 
+describe("JobScheduler runOnStart", () => {
+  test("fires a runOnStart job at start regardless of lastRun", async () => {
+    const path = tmpStatePath();
+    // Pretend it just ran 1 second ago. With a 24h interval the regular
+    // due-tick would NOT fire it -- runOnStart bypasses that.
+    const recent = new Date(Date.now() - 1_000).toISOString();
+    writeFileSync(path, JSON.stringify({ version: 1, jobs: { boot: { lastRun: recent, lastError: null } } }));
+
+    const sched = new JobScheduler({ statePath: path, runOnStartIfDue: false });
+    let calls = 0;
+    sched.register({
+      id: "boot",
+      intervalMs: 24 * 3_600_000,
+      runOnStart: true,
+      fn: async () => { calls++; },
+    });
+    await sched.start();
+    sched.stop();
+    expect(calls).toBe(1);
+  });
+
+  test("a runOnStart job that just fired does NOT re-fire from runOnStartIfDue's tick", async () => {
+    const sched = new JobScheduler({ statePath: tmpStatePath(), runOnStartIfDue: true });
+    let calls = 0;
+    sched.register({
+      id: "boot",
+      intervalMs: 24 * 3_600_000,
+      runOnStart: true,
+      fn: async () => { calls++; },
+    });
+    await sched.start();
+    sched.stop();
+    // runOnStart fires it once; the immediate tick after sees lastRun was
+    // just bumped (well under 24h) and skips it.
+    expect(calls).toBe(1);
+  });
+
+  test("non-runOnStart jobs are not auto-fired at start", async () => {
+    const sched = new JobScheduler({ statePath: tmpStatePath(), runOnStartIfDue: false });
+    let calls = 0;
+    sched.register({
+      id: "regular",
+      intervalMs: 24 * 3_600_000,
+      fn: async () => { calls++; },
+      lastRun: new Date(Date.now() - 1000),
+    });
+    await sched.start();
+    sched.stop();
+    expect(calls).toBe(0);
+  });
+});
+
 describe("JobScheduler.register", () => {
   test("rejects duplicate ids", () => {
     const sched = new JobScheduler({ statePath: tmpStatePath() });

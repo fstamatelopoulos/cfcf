@@ -72,6 +72,14 @@ export class JobScheduler {
   async start(): Promise<void> {
     if (this.timer) return;
     await this.loadState();
+    // Opt-in "always at boot" jobs fire BEFORE the due-based tick. The
+    // due-based tick that follows naturally skips them because runJob just
+    // bumped their lastRun.
+    for (const job of this.jobs.values()) {
+      if (job.runOnStart) {
+        await this.runJob(job);
+      }
+    }
     if (this.runOnStartIfDue) {
       await this.tick();
     }

@@ -173,22 +173,22 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
     gracefulShutdown("uncaughtException", 1).catch(() => process.exit(1));
   });
 
-  // Local stale-flag GC (item 6.20 follow-up). If the user upgraded within
-  // 24h of the last update-check tick, the flag file lingers on disk until
-  // the scheduler runs again. Defensive `latestVersion <= VERSION` checks
-  // at every read site mean users never see a stale banner, but the file
-  // itself doesn't need to stick around. Pure local: no network call, the
-  // 24h scheduler tick stays the canonical "is anything newer?" check.
+  // Local stale-flag GC (item 6.20 follow-up). The scheduler's runOnStart
+  // update-check (below) does the canonical refresh + cleanup against the
+  // npm registry, but it requires network. This pure-local pass deletes a
+  // stale flag file when the running version has caught up, so users on a
+  // disconnected machine still see the banner disappear after a self-
+  // update. Defense-in-depth, sub-millisecond cost.
   try {
     const cleared = await clearStaleUpdateFlag(VERSION);
     if (cleared) console.log(`Cleared stale update-available flag (running v${VERSION} caught up to flagged version)`);
   } catch { /* best-effort */ }
 
   // Start the JobScheduler with the built-in update-check job (item 6.20).
-  // The scheduler's loadState + runOnStartIfDue catches missed-tick across
-  // server restarts, so a freshly-restarted server usually re-checks
-  // immediately. Network failures inside the job are recorded on the job's
-  // lastError -- they never crash the server.
+  // The job sets `runOnStart: true` so every server boot fires a fresh npm
+  // registry check unconditionally; the 24h interval is the safeguard
+  // cadence for long-running servers. Network failures are recorded on the
+  // job's lastError -- they never crash the server.
   try {
     scheduler = new JobScheduler();
     scheduler.register(makeUpdateCheckJob({ currentVersion: VERSION }));

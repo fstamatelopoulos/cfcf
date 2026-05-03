@@ -44,7 +44,11 @@ describe("runUpdateCheck", () => {
     expect(body.currentVersion).toBe("0.17.1");
     expect(body.latestVersion).toBe("0.18.0");
     expect(typeof body.checkedAt).toBe("string");
-    expect(body.releaseNotesUrl).toContain("0.18.0");
+    // Security: the flag file MUST NOT carry a clickable URL. It lives in
+    // ~/.cfcf/ which is user-writable; a malicious local write could
+    // otherwise plant an attacker-controlled <a target="_blank"> in the
+    // web banner. See update-check.ts:UpdateAvailableFile.
+    expect(body.releaseNotesUrl).toBeUndefined();
   });
 
   test("deletes the flag file when running matches latest", async () => {
@@ -90,17 +94,6 @@ describe("runUpdateCheck", () => {
     expect(existsSync(file)).toBe(false);
   });
 
-  test("omits releaseNotesUrl when releaseNotesUrl=null", async () => {
-    const file = tmpFile();
-    await runUpdateCheck({
-      currentVersion: "0.17.1",
-      filePath: file,
-      fetchLatest: async () => "0.18.0",
-      releaseNotesUrl: null,
-    });
-    const body = JSON.parse(readFileSync(file, "utf-8"));
-    expect(body.releaseNotesUrl).toBeUndefined();
-  });
 });
 
 describe("readUpdateAvailable", () => {

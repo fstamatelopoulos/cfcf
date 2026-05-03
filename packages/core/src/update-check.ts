@@ -28,7 +28,16 @@ const NPM_LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
 const FETCH_TIMEOUT_MS = 5_000;
 
-/** On-disk shape of `~/.cfcf/update-available.json`. */
+/**
+ * On-disk shape of `~/.cfcf/update-available.json`.
+ *
+ * Intentionally minimal -- no clickable URLs are stored here. The flag
+ * file lives in `~/.cfcf/`, which is user-writable, so a malicious local
+ * write could otherwise plant an attacker-controlled link that the web
+ * UI would render as a `<a target="_blank">`. The upgrade command
+ * (`cfcf self-update --yes`) is canonical and self-contained; it doesn't
+ * need anything more than the version number.
+ */
 export interface UpdateAvailableFile {
   /** The cfcf version that was running when the check fired. */
   currentVersion: string;
@@ -36,8 +45,6 @@ export interface UpdateAvailableFile {
   latestVersion: string;
   /** ISO timestamp of the check. */
   checkedAt: string;
-  /** GitHub release notes URL for `latestVersion` (best-effort). */
-  releaseNotesUrl?: string;
 }
 
 /**
@@ -176,7 +183,6 @@ export async function readUpdateAvailable(
       currentVersion: parsed.currentVersion,
       latestVersion: parsed.latestVersion,
       checkedAt: parsed.checkedAt,
-      releaseNotesUrl: typeof parsed.releaseNotesUrl === "string" ? parsed.releaseNotesUrl : undefined,
     };
   } catch {
     return null;
@@ -194,16 +200,7 @@ export interface UpdateCheckOptions {
   filePath?: string;
   /** Override the network fetch (for tests). Returns the latest version string. */
   fetchLatest?: () => Promise<string>;
-  /**
-   * Optional GitHub releases URL builder for `releaseNotesUrl`. Default
-   * builds `https://github.com/fstamatelopoulos/cfcf/releases/tag/v<latest>`.
-   * Set to `null` to omit the field entirely.
-   */
-  releaseNotesUrl?: ((latest: string) => string) | null;
 }
-
-const DEFAULT_RELEASE_NOTES_URL = (latest: string) =>
-  `https://github.com/fstamatelopoulos/cfcf/releases/tag/v${latest}`;
 
 /**
  * Run one update check synchronously (resolves on completion). Exported so
@@ -212,10 +209,6 @@ const DEFAULT_RELEASE_NOTES_URL = (latest: string) =>
  */
 export async function runUpdateCheck(opts: UpdateCheckOptions): Promise<void> {
   const file = opts.filePath ?? defaultUpdateFilePath();
-  const buildUrl =
-    opts.releaseNotesUrl === null
-      ? null
-      : opts.releaseNotesUrl ?? DEFAULT_RELEASE_NOTES_URL;
   const fetcher = opts.fetchLatest ?? fetchNpmLatest;
   const latest = await fetcher();
   if (compareSemver(latest, opts.currentVersion) > 0) {
@@ -223,7 +216,6 @@ export async function runUpdateCheck(opts: UpdateCheckOptions): Promise<void> {
       currentVersion: opts.currentVersion,
       latestVersion: latest,
       checkedAt: new Date().toISOString(),
-      releaseNotesUrl: buildUrl ? buildUrl(latest) : undefined,
     });
   } else {
     // We're caught up (running == latest, or somehow ahead via tag-only
@@ -235,13 +227,15 @@ export async function runUpdateCheck(opts: UpdateCheckOptions): Promise<void> {
 
 /**
  * Build the JobScheduler-registered job. The server registers this once at
- * startup; the scheduler's restart-resilient state means a fresh server
- * usually re-checks immediately (catching missed-tick across restart).
+ * startup. `runOnStart: true` is opt-in per job and means the scheduler
+ * fires this check unconditionally at boot regardless of when it last ran;
+ * the 24h interval is the safeguard cadence for long-running servers.
  */
 export function makeUpdateCheckJob(opts: UpdateCheckOptions): Job {
   return {
     id: "update-check",
     intervalMs: opts.intervalMs ?? DEFAULT_INTERVAL_MS,
+    runOnStart: true,
     fn: () => runUpdateCheck(opts),
   };
 }

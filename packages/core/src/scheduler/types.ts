@@ -22,6 +22,14 @@ export interface Job {
    * `lastRun` so a perpetually failing job doesn't hot-loop.
    */
   fn: () => Promise<void>;
+  /**
+   * If true, run this job once unconditionally at `JobScheduler.start()`,
+   * regardless of when it last ran. Opt-in per job: useful for jobs whose
+   * fresh result is worth the network/disk cost on every server boot
+   * (e.g. update-check). Most periodic jobs should leave this unset and
+   * rely on the standard interval cadence.
+   */
+  runOnStart?: boolean;
   /** Last attempted run (set + persisted by the scheduler). */
   lastRun?: Date;
   /** Last error string, if the most recent run rejected. */
