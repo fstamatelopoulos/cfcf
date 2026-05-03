@@ -15,6 +15,7 @@ import type { CfcfGlobalConfig } from "@cfcf/core";
 import { registerClioRoutes } from "./routes/clio.js";
 import { registerHelpRoutes } from "./routes/help.js";
 import { registerUpdateRoutes } from "./routes/update.js";
+import { registerAgentModelsRoutes } from "./routes/agent-models.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -1105,6 +1106,10 @@ export function createApp() {
 
   // /api/update-status -- powers the web UI top-bar update banner (item 6.20).
   registerUpdateRoutes(app);
+
+  // /api/agents/models -- per-adapter model registry for the model
+  // pickers (Settings + workspace Config). Item 6.26.
+  registerAgentModelsRoutes(app);
 
   // --- Static file serving (Web GUI) ---
   //
