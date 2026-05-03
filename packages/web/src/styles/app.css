@@ -1117,15 +1117,23 @@
   color: var(--color-text-muted);
 }
 
-.form-row input[type="text"],
-.form-row input[type="number"],
-.form-row input[type="search"],
-.form-row select,
-.form-row textarea,
-.memory-search__form input[type="text"],
-.memory-search__form select {
-  width: 100%;
-  box-sizing: border-box;
+/*
+ * GLOBAL dark-theme styling for form inputs (item 6.12 polish).
+ * Applies everywhere: modals, ServerInfo (Settings), workspace Config tab,
+ * Memory page. Component-specific classes like `.feedback-form__input`
+ * still win via class specificity if they want to override.
+ *
+ * Excludes input[type="checkbox" | "radio" | "range" | "color"] which
+ * have their own native rendering we don't want to clobber.
+ */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="email"],
+input[type="url"],
+input[type="password"],
+select,
+textarea {
   padding: 0.45rem 0.55rem;
   background: var(--color-surface-alt);
   border: 1px solid var(--color-border);
@@ -1133,30 +1141,34 @@
   color: var(--color-text);
   font-size: 0.9rem;
   font-family: inherit;
+  box-sizing: border-box;
 }
 
-.form-row input[type="text"]:focus,
-.form-row input[type="number"]:focus,
-.form-row input[type="search"]:focus,
-.form-row select:focus,
-.form-row textarea:focus,
-.memory-search__form input[type="text"]:focus,
-.memory-search__form select:focus {
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus,
+input[type="email"]:focus,
+input[type="url"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
-.form-row input[type="text"]::placeholder,
-.form-row input[type="number"]::placeholder,
-.form-row textarea::placeholder,
-.memory-search__form input[type="text"]::placeholder {
+input[type="text"]::placeholder,
+input[type="number"]::placeholder,
+input[type="search"]::placeholder,
+input[type="email"]::placeholder,
+input[type="url"]::placeholder,
+input[type="password"]::placeholder,
+textarea::placeholder {
   color: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
 }
 
-/* Native select arrow follows the dark theme. */
-.form-row select,
-.memory-search__form select {
+/* Native select chevron in a dark-theme-friendly form. */
+select {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
@@ -1171,14 +1183,24 @@
   padding-right: 1.75rem;
 }
 
-.memory-search__form select {
-  width: auto;
-  min-width: 6.5rem;
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-primary);
 }
 
-/* Checkboxes inherit the page text color for the inline label. */
-.form-row input[type="checkbox"] {
-  accent-color: var(--color-primary);
+/* Form-row layout helper still owns full-width behaviour for inputs
+   inside vertical label/input/hint stacks. Memory search keeps its
+   existing flex behaviour. */
+.form-row input[type="text"],
+.form-row input[type="number"],
+.form-row input[type="search"],
+.form-row select,
+.form-row textarea {
+  width: 100%;
+}
+
+.memory-search__form select {
+  min-width: 6.5rem;
 }
 
 .form-row__hint {
