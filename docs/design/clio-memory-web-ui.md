@@ -181,11 +181,13 @@ cfcf already does this dedup at the **create** path (Branch 3 of `ingest`, lines
 
 New behaviour at the top of `updateDocument(target, req, contentHash)`:
 
-| Content | Title / author / metadata | Result | Audit entry |
+| New content vs stored | Other doc fields differ from stored? | Result | Audit entry |
 |---|---|---|---|
-| Hash matches `target.contentHash` | All match `target` | Full no-op. Return `{ action: "skipped" }`. | None |
-| Hash matches `target.contentHash` | Any differ | Metadata-only path: UPDATE `clio_documents` SET title/author/metadata, no version snapshot, no chunk re-write. | `edit-metadata` (mirrors the existing PATCH path's audit shape) |
+| Hash matches `target.contentHash` | None of title / author / metadata changed | Full no-op. Return `{ action: "skipped" }`. | None |
+| Hash matches `target.contentHash` | Any of title / author / metadata changed | Metadata-only path: UPDATE `clio_documents` SET title/author/metadata, no version snapshot, no chunk re-write. | `edit-metadata` (mirrors the existing PATCH path's audit shape) |
 | Hash differs | (any) | Existing flow: snapshot + re-chunk + re-embed + replace + UPDATE row. | `update-content` |
+
+**Note on the `author` field**: this is a stamp on the doc recording who last touched it (`agent` / `user` / `claude-code` / etc.) — it does **not** imply any access control. Clio is shared memory; any agent or the user can update any document. The "author differs from stored" branch in the table above just means a write where the new request explicitly changed the stamp, e.g. the same content re-saved but now attributed to `user` instead of `agent`.
 
 Added tests in `local-clio.test.ts`:
 
