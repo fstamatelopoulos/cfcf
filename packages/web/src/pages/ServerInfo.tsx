@@ -270,7 +270,7 @@ export function ServerInfo() {
 
       {/* Server status (truly read-only runtime info) */}
       <section className="architect-review" style={{ marginBottom: "1.5rem" }}>
-        <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+        <h3 className="section-title" style={{ fontSize: "1rem" }}>
           Server
         </h3>
         {status ? (
@@ -351,14 +351,14 @@ export function ServerInfo() {
             </table>
           </FormSection>
 
-          <FormSection title="Model registry (item 6.26)">
+          <FormSection title="Model registry">
             <p style={{ margin: "0 0 0.75rem 0", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
-              Models surfaced in the per-role <strong>Model</strong> dropdowns above + on each workspace's Config tab.
-              cfcf ships a <strong>seed</strong> list per agent (intentionally minimal -- generic aliases like <code>opus</code>
-              not date-bound names like <code>claude-opus-4-7</code>). Edit below to augment for your install: pin specific
-              versions, add models your agent CLI accepts that aren't in the seed, or trim to just what you actually use.
-              An empty list (or one identical to the seed) clears the override and falls back to the seed automatically.
-              The <code>(custom model name…)</code> sentinel in every picker is always available as a one-shot escape hatch.
+              Models offered in the per-role <strong>Model</strong> dropdowns above and on each workspace's Config tab.
+              cfcf ships a <strong>seed</strong> list per agent (intentionally minimal — generic aliases like <code>opus</code>
+              rather than date-bound names like <code>claude-opus-4-7</code>). Add entries here to pin specific versions or
+              surface models your agent CLI accepts that aren't in the seed; remove entries to trim a list to just what you
+              actually use. An empty list (or one identical to the seed) clears the override and falls back to the seed
+              automatically — so future seed updates flow through after a cfcf upgrade.
             </p>
             {Array.from(new Set([
               ...Object.keys(seedModels),
@@ -807,7 +807,7 @@ function FormSection({
 }) {
   return (
     <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-      <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+      <h3 className="section-title" style={{ fontSize: "1rem" }}>
         {title}
       </h3>
       {children}

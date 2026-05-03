@@ -211,7 +211,7 @@ export function ConfigDisplay({
 
       {/* Identity + runtime (read-only, except Clio Project which is changed via a dedicated dialog) */}
       <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-        <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+        <h3 className="section-title" style={{ fontSize: "1rem" }}>
           Identity
         </h3>
         <table className="config-display__table">
@@ -375,7 +375,7 @@ export function ConfigDisplay({
       </FormSection>
 
       {/* Behaviour flags (item 5.1) */}
-      <FormSection title="Behaviour flags (item 5.1)">
+      <FormSection title="Behaviour flags">
         <table className="config-display__table">
           <tbody>
             <CheckboxRow
@@ -592,7 +592,7 @@ function FormSection({
 }) {
   return (
     <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-      <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+      <h3 className="section-title" style={{ fontSize: "1rem" }}>
         {title}
       </h3>
       {children}

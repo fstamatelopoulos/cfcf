@@ -753,6 +753,16 @@
   color: var(--color-info);
 }
 
+/* Static section titles (FormSection, Memory page panels). Reuses the
+   same visual rhythm as architect-review__summary but WITHOUT the
+   cursor + hover that signals interactivity -- non-clickable headings
+   shouldn't look clickable. */
+.section-title {
+  font-weight: 500;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
 .architect-review__count {
   color: var(--color-text-muted);
   font-weight: 400;
