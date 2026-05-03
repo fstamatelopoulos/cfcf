@@ -4,6 +4,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { WorkspaceDetail } from "./pages/WorkspaceDetail";
 import { ServerInfo } from "./pages/ServerInfo";
 import { HelpPage } from "./pages/Help";
+import { MemoryPage } from "./pages/Memory";
 import { useRoute } from "./hooks/useRoute";
 import { ServerStatusProvider } from "./hooks/useServerStatus";
 
@@ -22,6 +23,8 @@ export function App() {
             <ServerInfo />
           ) : route.page === "help" ? (
             <HelpPage />
+          ) : route.page === "memory" ? (
+            <MemoryPage />
           ) : (
             <Dashboard />
           )}

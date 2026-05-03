@@ -38,7 +38,7 @@ const healthColor: Record<IterationHealth, string> = {
   stable: "var(--color-info)",
   stalled: "var(--color-warning)",
   diverging: "var(--color-error)",
-  inconclusive: "var(--color-subtle, #888)",
+  inconclusive: "var(--color-text-subtle)",
 };
 
 function formatTime(iso: string): string {

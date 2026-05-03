@@ -122,6 +122,8 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     availableAgents,
     permissionsAcknowledged: false,
     notifications: defaultNotifications,
+    notifyUpdates: true,   // item 6.20
+    theme: "auto",         // item 6.12 -- follow OS prefers-color-scheme until the user picks a theme via the web toggle
   };
 }
 
@@ -195,6 +197,11 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   // 0.18.0 without needing a config edit.
   if (typeof config.notifyUpdates !== "boolean") {
     config.notifyUpdates = true;
+  }
+  // item 6.12 -- web UI theme. Default "auto" so existing installs follow
+  // the user's OS preference until they pick a theme explicitly.
+  if (config.theme !== "dark" && config.theme !== "light" && config.theme !== "auto") {
+    config.theme = "auto";
   }
   return config;
 }

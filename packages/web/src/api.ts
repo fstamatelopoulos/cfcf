@@ -101,6 +101,8 @@ export interface GlobalConfig {
   autoDocumenter?: boolean;
   readinessGate?: "never" | "blocked" | "needs_refinement_or_blocked";
   notifications?: NotificationConfig;
+  /** Web UI theme (item 6.12). "auto" follows prefers-color-scheme. */
+  theme?: "auto" | "dark" | "light";
   /**
    * Clio (item 5.7) global config. Mirrors `ClioGlobalConfig` in
    * @cfcf/core. Per-workspace overrides live on `WorkspaceConfig.clio`.
@@ -145,6 +147,59 @@ export function fetchWorkspaces(): Promise<WorkspaceConfig[]> {
 
 export function fetchWorkspace(id: string): Promise<WorkspaceConfig> {
   return request<WorkspaceConfig>(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Create a new workspace (item 6.12). Mirrors `cfcf workspace init` --
+ * server resolves agent role defaults from the global config when fields
+ * are omitted.
+ */
+export interface CreateWorkspaceRequest {
+  name: string;
+  repoPath: string;
+  clioProject?: string;
+  devAgent?: { adapter: string; model?: string };
+  judgeAgent?: { adapter: string; model?: string };
+  architectAgent?: { adapter: string; model?: string };
+  documenterAgent?: { adapter: string; model?: string };
+  maxIterations?: number;
+  pauseEvery?: number;
+}
+
+export function createWorkspace(body: CreateWorkspaceRequest): Promise<WorkspaceConfig> {
+  return request<WorkspaceConfig>("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Delete a workspace (config-only; the underlying repo folder is NEVER
+ * touched). Returns the server's `{ deleted: true }` ack.
+ */
+export function deleteWorkspace(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Reassign a workspace to a different Clio Project (mirrors `cfcf
+ * workspace set <name> --project <p>`). The server auto-creates the
+ * project if it doesn't exist. `migrateHistory` rekeys this workspace's
+ * existing docs to the new project; `allInProject` extends that to every
+ * doc in the old project (use with care).
+ */
+export function setWorkspaceClioProject(
+  workspaceId: string,
+  body: { project: string; migrateHistory?: boolean; allInProject?: boolean },
+): Promise<{ workspaceId: string; clioProject: string; migrated: number }> {
+  return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/clio-project`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /**
@@ -231,6 +286,152 @@ export function fetchDocumentStatus(workspaceId: string): Promise<DocumentState>
 
 export function stopDocument(workspaceId: string): Promise<{ status: string }> {
   return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/document/stop`);
+}
+
+// --- Reflect (item 5.6 / web surface in 6.12) ---
+
+export interface ReflectState {
+  workspaceId: string;
+  status: "preparing" | "executing" | "collecting" | "completed" | "failed" | "stopped";
+  startedAt?: string;
+  completedAt?: string;
+  exitCode?: number;
+  logFile?: string;
+  logFileName?: string;
+  error?: string;
+}
+
+/**
+ * Start an ad-hoc Reflection pass (mirrors `cfcf reflect`). `prompt` is an
+ * optional free-text question for the reflection agent.
+ */
+export function startReflect(workspaceId: string, prompt?: string): Promise<{ status: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect`, prompt ? { prompt } : undefined);
+}
+
+export function fetchReflectStatus(workspaceId: string): Promise<ReflectState> {
+  return request<ReflectState>(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect/status`);
+}
+
+export function stopReflect(workspaceId: string): Promise<{ status: string }> {
+  return post(`/api/workspaces/${encodeURIComponent(workspaceId)}/reflect/stop`);
+}
+
+// --- Clio (memory) — item 6.12 prototype, 6.18 builds out the rest ---
+
+export interface ClioStats {
+  dbPath: string;
+  dbSizeBytes: number;
+  projectCount: number;
+  documentCount: number;
+  chunkCount: number;
+  migrations: string[];
+  activeEmbedder: { name: string; dim: number; recommendedChunkMaxChars?: number } | null;
+}
+
+export function fetchClioStats(): Promise<ClioStats> {
+  return request<ClioStats>("/api/clio/stats");
+}
+
+export interface ClioProject {
+  id: string;
+  name: string;
+  description?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  documentCount?: number;
+}
+
+export function fetchClioProjects(): Promise<ClioProject[]> {
+  return request<{ projects: ClioProject[] }>("/api/clio/projects").then((r) => r.projects);
+}
+
+export interface ClioDocument {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  title: string;
+  source: string;
+  author: string;
+  contentHash: string;
+  metadata: Record<string, unknown>;
+  reviewStatus: "approved" | "pending_review";
+  chunkCount: number;
+  totalChars: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  versionCount?: number;
+}
+
+export function fetchClioDocuments(
+  opts: { project?: string; limit?: number; offset?: number } = {},
+): Promise<ClioDocument[]> {
+  const params = new URLSearchParams();
+  if (opts.project) params.set("project", opts.project);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return request<{ documents: ClioDocument[] }>(
+    `/api/clio/documents${qs ? `?${qs}` : ""}`,
+  ).then((r) => r.documents);
+}
+
+export interface ClioDocumentContent {
+  document: ClioDocument;
+  content: string;
+  chunkCount: number;
+  totalChars: number;
+  versionId: string | null;
+}
+
+export function fetchClioDocumentContent(id: string): Promise<ClioDocumentContent> {
+  return request<ClioDocumentContent>(`/api/clio/documents/${encodeURIComponent(id)}/content`);
+}
+
+export type ClioSearchMode = "auto" | "fts" | "semantic" | "hybrid";
+
+/** Document-level search hit (server's default `?by=doc`). */
+export interface ClioDocumentSearchHit {
+  documentId: string;
+  docTitle: string;
+  docSource: string;
+  docAuthor: string;
+  docProjectId: string;
+  docProjectName: string;
+  docMetadata: Record<string, unknown>;
+  chunkCount: number;
+  totalChars: number;
+  versionCount: number;
+  matchingChunks: number;
+  bestScore: number;
+  bestChunkHeadingPath: string[];
+  bestChunkHeadingLevel: number | null;
+  bestChunkTitle: string | null;
+  bestChunkContent: string;
+  bestChunkId: string;
+  bestChunkIndex: number;
+  createdAt: string;
+  updatedAt: string;
+  isPartial: boolean;
+}
+
+export interface ClioDocumentSearchResponse {
+  hits: ClioDocumentSearchHit[];
+  mode: "fts" | "hybrid" | "semantic";
+  totalMatches?: number;
+}
+
+export function searchClio(
+  query: string,
+  opts: { mode?: ClioSearchMode; project?: string; matchCount?: number } = {},
+): Promise<ClioDocumentSearchResponse> {
+  const params = new URLSearchParams({ q: query });
+  if (opts.mode && opts.mode !== "auto") params.set("mode", opts.mode);
+  if (opts.project) params.set("project", opts.project);
+  if (opts.matchCount) params.set("match_count", String(opts.matchCount));
+  return request<ClioDocumentSearchResponse>(`/api/clio/search?${params.toString()}`);
 }
 
 // --- History ---

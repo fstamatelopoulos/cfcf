@@ -2,16 +2,17 @@ import { useState } from "react";
 import type { LoopPhase } from "../types";
 import * as api from "../api";
 
-export type AgentAction = "review" | "start" | "resume" | "stop" | "document" | "stopReview" | "stopDocument";
+export type AgentAction = "review" | "start" | "resume" | "stop" | "document" | "stopReview" | "stopDocument" | "reflect";
 
 /**
  * Which agent is currently active (running).
  * - "loop": the dev/judge/decide/documenting cycle is running
  * - "review": the architect is running
  * - "document": the documenter is running (standalone, not in-loop)
+ * - "reflect": the reflection agent is running standalone (item 6.12)
  * - null: nothing is running
  */
-export type ActiveAgent = "loop" | "review" | "document" | null;
+export type ActiveAgent = "loop" | "review" | "document" | "reflect" | null;
 
 export function LoopControls({
   workspaceId,
@@ -110,6 +111,24 @@ export function LoopControls({
             an action (defaulting server-side to "continue") or stopLoop
             (skipping the audit-feedback capture path) — both are wrong
             routing surfaces while the FeedbackForm is showing. */}
+
+        {/* Reflect button (item 6.12): ad-hoc cross-iteration analysis,
+            outside the loop. In-loop reflection (consult_reflection) is
+            covered by the FeedbackForm at pause time; this button covers
+            the standalone "I want a reflection right now" case. Disabled
+            while ANY agent is running so we don't compete for stdout/the
+            log surface. Hidden while paused -- the FeedbackForm's
+            consult_reflection action is the right routing surface there. */}
+        {!isPaused && (
+          <button
+            className="btn btn--primary"
+            disabled={loading !== null || isBusy}
+            onClick={() => doAction("reflect", () => api.startReflect(workspaceId))}
+            title="Run an ad-hoc Reflection pass over the workspace's history (mirrors `cfcf reflect`)."
+          >
+            {loading === "reflect" ? "Starting reflect..." : "Reflect"}
+          </button>
+        )}
 
         {/* Document button: visible when loop is NOT paused (post-loop
             manual run is a sensible action). When paused, "Finish loop"

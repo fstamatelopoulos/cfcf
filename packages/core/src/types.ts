@@ -132,6 +132,17 @@ export interface CfcfGlobalConfig {
    */
   notifyUpdates?: boolean;
   /**
+   * Web UI colour theme (item 6.12 polish). One of:
+   *   - "auto" (default): follow the OS `prefers-color-scheme` preference
+   *   - "dark": force dark theme regardless of system setting
+   *   - "light": force light theme regardless of system setting
+   *
+   * The web app also mirrors the choice into `localStorage` so the theme
+   * applies before React mounts (no flash). The config is the durable
+   * cross-device source of truth; localStorage is the per-tab fast path.
+   */
+  theme?: "auto" | "dark" | "light";
+  /**
    * Default for new workspaces' `cleanupMergedBranches`. When true, merged
    * iteration branches are deleted after a successful auto-merge. Default
    * false (keep for audit). (item 5.2)

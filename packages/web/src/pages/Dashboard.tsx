@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { usePolling } from "../hooks/usePolling";
 import { fetchWorkspaces } from "../api";
 import { WorkspaceCard } from "../components/WorkspaceCard";
+import { NewWorkspaceModal } from "../components/NewWorkspaceModal";
 import { navigateTo } from "../hooks/useRoute";
 
-function DashboardHeader() {
+function DashboardHeader({ onCreate }: { onCreate: () => void }) {
   return (
     <div
       style={{
@@ -17,18 +19,19 @@ function DashboardHeader() {
         Workspaces
       </h2>
       <button
-        className="btn btn--small btn--secondary"
-        onClick={() => navigateTo("/server")}
-        title="View server status and global config"
+        className="btn btn--small btn--primary"
+        onClick={onCreate}
+        title="Create a new workspace (mirrors `cfcf workspace init`)"
       >
-        server & config →
+        + Create workspace
       </button>
     </div>
   );
 }
 
 export function Dashboard() {
-  const { data: workspaces, error, loading } = usePolling(fetchWorkspaces, 5000);
+  const { data: workspaces, error, loading, refresh } = usePolling(fetchWorkspaces, 5000);
+  const [createOpen, setCreateOpen] = useState(false);
 
   if (loading && !workspaces) {
     return <div className="dashboard__loading">Loading workspaces...</div>;
@@ -38,27 +41,34 @@ export function Dashboard() {
     return <div className="dashboard__error">Error: {error}</div>;
   }
 
-  if (!workspaces || workspaces.length === 0) {
-    return (
-      <div className="dashboard">
-        <DashboardHeader />
-        <div className="dashboard__empty">
-          <h2>No workspaces</h2>
-          <p>Create a workspace with the CLI:</p>
-          <code>cfcf workspace init --repo &lt;path&gt; --name &lt;name&gt;</code>
-        </div>
-      </div>
-    );
-  }
+  const empty = !workspaces || workspaces.length === 0;
 
   return (
     <div className="dashboard">
-      <DashboardHeader />
-      <div className="dashboard__grid">
-        {workspaces.map((w) => (
-          <WorkspaceCard key={w.id} workspace={w} />
-        ))}
-      </div>
+      <DashboardHeader onCreate={() => setCreateOpen(true)} />
+      {empty ? (
+        <div className="dashboard__empty">
+          <h2>No workspaces</h2>
+          <p>
+            Click <strong>+ Create workspace</strong> above, or use the CLI:
+          </p>
+          <code>cfcf workspace init --repo &lt;path&gt; --name &lt;name&gt;</code>
+        </div>
+      ) : (
+        <div className="dashboard__grid">
+          {workspaces.map((w) => (
+            <WorkspaceCard key={w.id} workspace={w} />
+          ))}
+        </div>
+      )}
+      <NewWorkspaceModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(w) => {
+          refresh();
+          navigateTo(`/workspaces/${w.id}`);
+        }}
+      />
     </div>
   );
 }
