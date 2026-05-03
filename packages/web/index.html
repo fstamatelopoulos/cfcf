@@ -27,6 +27,24 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>cf² -- Cerefox Code Factory</title>
+    <!--
+      Theme pre-paint (item 6.12). Reads localStorage BEFORE React mounts
+      and sets `data-theme` on <html> so the page renders in the correct
+      theme on first paint -- no flash of opposite theme. The useTheme
+      hook later syncs from cfcf global config and writes back if
+      different. "auto" deliberately leaves data-theme unset so the CSS
+      `prefers-color-scheme` media query controls the page.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("cfcf:theme");
+          if (t === "dark" || t === "light") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

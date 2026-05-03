@@ -1,6 +1,7 @@
 import { type ActivityItem } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import { useServerStatus } from "../hooks/useServerStatus";
+import { ThemeToggle } from "./ThemeToggle";
 
 /**
  * Label the current iteration phase in a compact, human-readable form.
@@ -95,6 +96,7 @@ export function Header() {
           </span>
         </span>
       )}
+      <ThemeToggle />
       <span className="header__status">
         {health ? (
           <>
