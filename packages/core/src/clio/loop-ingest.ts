@@ -18,6 +18,7 @@ import type { WorkspaceConfig, JudgeSignals, ReflectionSignals } from "../types.
 import type { MemoryBackend } from "./backend/types.js";
 import type { IngestResult } from "./types.js";
 import { readConfig } from "../config.js";
+import { DEFAULT_PROJECT } from "./system-projects.js";
 
 export type IngestPolicy = "off" | "summaries-only" | "all";
 
@@ -34,11 +35,11 @@ export async function resolveIngestPolicy(workspace: WorkspaceConfig): Promise<I
 
 /**
  * Resolve the Clio Project to ingest into. Uses the workspace's
- * `clioProject` when set; otherwise the named "default" Project (auto-
- * created by the backend on first ingest).
+ * `clioProject` when set; otherwise the named system fallback Project
+ * (auto-created by the backend on first ingest).
  */
 function resolveClioProject(workspace: WorkspaceConfig): string {
-  return workspace.clioProject?.trim() || "default";
+  return workspace.clioProject?.trim() || DEFAULT_PROJECT;
 }
 
 // ── Shared metadata builder ───────────────────────────────────────────────

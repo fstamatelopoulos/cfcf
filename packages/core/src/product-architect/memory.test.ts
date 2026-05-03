@@ -3,7 +3,7 @@
  *
  * Mocks the MemoryBackend to verify the read patterns:
  *   - readWorkspaceMemory uses metadataSearch with workspace_id filter
- *   - readGlobalMemory uses findDocumentByTitle on cfcf-memory-global
+ *   - readGlobalMemory uses findDocumentByTitle on cf-system-memory-global
  *   - readOtherRoleMemory iterates the standardised read-only projects
  *   - All readers are best-effort (errors → empty snapshots)
  *
@@ -173,9 +173,9 @@ describe("ensurePaClioProjects", () => {
     const { ensurePaClioProjects } = await import("./memory.js");
     await ensurePaClioProjects(backend);
     expect(calls).toHaveLength(2);
-    expect(calls[0].name).toBe("cfcf-memory-pa");
+    expect(calls[0].name).toBe("cf-system-pa-memory");
     expect(calls[0].createIfMissing).toBe(true);
-    expect(calls[1].name).toBe("cfcf-memory-global");
+    expect(calls[1].name).toBe("cf-system-memory-global");
     expect(calls[1].createIfMissing).toBe(true);
   });
 
@@ -236,9 +236,9 @@ describe("formatMemoryInventory", () => {
       global: { documentId: null, updatedAt: null, content: null },
       sessionArchives: [],
       otherRoles: [
-        { project: "cfcf-memory-reflection", docs: [] },
-        { project: "cfcf-memory-architect", docs: [] },
-        { project: "cfcf-memory-ha", docs: [] },
+        { project: "cf-system-reflection-memory", docs: [] },
+        { project: "cf-system-architect-memory", docs: [] },
+        { project: "cf-system-ha-memory", docs: [] },
       ],
     });
     expect(out).toContain("no workspace memory yet");
@@ -268,7 +268,7 @@ describe("formatMemoryInventory", () => {
       sessionArchives: [],
       otherRoles: [
         {
-          project: "cfcf-memory-reflection",
+          project: "cf-system-reflection-memory",
           docs: [makeDoc("ref-1", "Iteration 3 reflection", "x")],
         },
       ],

@@ -8,11 +8,11 @@ export {
   assembleHelpAssistantPrompt,
   type AssembleOptions,
 } from "./prompt-assembler.js";
-export {
-  loadMemoryInventory,
-  HA_MEMORY_PROJECT,
-  GLOBAL_MEMORY_PROJECT,
-} from "./memory.js";
+export { loadMemoryInventory } from "./memory.js";
+// HA_MEMORY_PROJECT + GLOBAL_MEMORY_PROJECT are exported from
+// clio/system-projects (the canonical location). Import via
+// `import { HA_MEMORY_PROJECT } from "@cfcf/core"` -- still works the
+// same way, just sourced from one place now.
 export {
   buildLaunchArgs,
   launchHelpAssistant,

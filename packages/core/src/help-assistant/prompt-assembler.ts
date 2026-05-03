@@ -41,7 +41,7 @@ export interface AssembleOptions {
   /**
    * Role-specific Clio memory inventory: a flat list of doc summaries
    * (slug + title + first-N-chars). The launcher reads
-   * `cfcf-memory-ha` + `cfcf-memory-global` and formats each into a
+   * `cf-system-ha-memory` + `cf-system-memory-global` and formats each into a
    * short blurb. Empty array on first-run (memory projects don't
    * exist yet).
    */
@@ -132,18 +132,18 @@ function memorySection(inventory: string[]): string {
 
 Two Clio Projects you can read + (with user approval) write:
 
-  \`cfcf-memory-ha\`       -- preferences/lessons specific to your role
-  \`cfcf-memory-global\`   -- preferences/lessons across all cf² roles
+  \`cf-system-ha-memory\`       -- preferences/lessons specific to your role
+  \`cf-system-memory-global\`   -- preferences/lessons across all cf² roles
 
 Pull specific entries via \`cfcf clio docs get <id>\` when relevant. Run
-new searches with \`cfcf clio search "<query>" --project cfcf-memory-ha\`
-or \`--project cfcf-memory-global\`.
+new searches with \`cfcf clio search "<query>" --project cf-system-ha-memory\`
+or \`--project cf-system-memory-global\`.
 
 When writing memory:
   - "Always TypeScript" / "Pacific time zone" / "prefer pytest over
-    unittest" -> write to \`cfcf-memory-global\`
+    unittest" -> write to \`cf-system-memory-global\`
   - "User wants the HA to skip the welcome message" -> write to
-    \`cfcf-memory-ha\`
+    \`cf-system-ha-memory\`
   - When unsure -> ask the user
 
 Always prompt the user before writing memory. Use:

@@ -12,6 +12,7 @@
 import { randomUUID, createHash } from "crypto";
 import type { Database } from "bun:sqlite";
 import { openClioDb, listAppliedMigrations } from "../db.js";
+import { isSystemProject } from "../system-projects.js";
 import { chunkMarkdown } from "../chunking/markdown.js";
 import type {
   ClioProject,
@@ -374,6 +375,23 @@ export class LocalClio implements MemoryBackend {
     const target = await this.getProject(idOrName);
     if (!target) throw new Error(`Clio Project "${idOrName}" not found`);
 
+    // 6.18 round-2: reject mutations on system-managed projects. The
+    // single source of truth is system-projects.ts; this guard catches
+    // any code path (web UI, CLI, direct API) that tries to edit one.
+    // Renaming OUT (current name is system) is blocked because agent
+    // prompts hardcode the system name. Renaming INTO a system name is
+    // blocked because that would let a user squat on a reserved name.
+    if (isSystemProject(target.name)) {
+      throw new Error(
+        `Clio Project "${target.name}" is system-managed and cannot be edited. cfcf code hardcodes this name; renaming would orphan the agent prompts that look it up.`,
+      );
+    }
+    if (edits.name && isSystemProject(edits.name.trim())) {
+      throw new Error(
+        `"${edits.name.trim()}" is a reserved system-project name (cf-system-*). Pick a different name.`,
+      );
+    }
+
     const newName = edits.name?.trim();
     const newDescription = edits.description;
     // Both omitted (or name unchanged + description omitted) is a no-op.
@@ -413,6 +431,14 @@ export class LocalClio implements MemoryBackend {
   async deleteProject(idOrName: string): Promise<{ deleted: true }> {
     const target = await this.getProject(idOrName);
     if (!target) throw new Error(`Clio Project "${idOrName}" not found`);
+
+    // 6.18 round-2: reject deletes on system-managed projects. Same
+    // rationale as editProject -- agent prompts hardcode the names.
+    if (isSystemProject(target.name)) {
+      throw new Error(
+        `Clio Project "${target.name}" is system-managed and cannot be deleted. cfcf code hardcodes this name; deleting would break the agent prompts that look it up.`,
+      );
+    }
 
     // Refuse if any documents still belong to the project. The
     // clio_documents.project_id FK is ON DELETE RESTRICT, so the SQL

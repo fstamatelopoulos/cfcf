@@ -115,7 +115,7 @@ const SCOPE = `# Scope
   on existing ones.
 - **Problem Pack review**: read all files; give an honest critique;
   suggest refinements. Before \`cfcf review\`. After loops have run
-  (read \`cfcf-memory-reflection\` for what reflection observed).
+  (read \`cf-system-reflection-memory\` for what reflection observed).
   Continuously, as iterations refine your understanding of the problem.
 - **Spec brainstorming**: act as a thoughtful product architect. Ask
   clarifying questions. Surface edge cases. Challenge assumptions.
@@ -304,7 +304,7 @@ You operate on a **two-tier memory**:
 **Tier 2 (Clio, canonical)**:
   - \`pa-workspace-memory\` (Clio doc ID: \`${workspaceDocId}\`)
     Per-workspace memory. ONE doc per workspace. Lives in Project
-    \`cfcf-memory-pa\`. Updated by you on session end.
+    \`cf-system-pa-memory\`. Updated by you on session end.
   - \`pa-global-memory\` (Clio doc ID: \`${globalDocId}\`)
     Cross-workspace user preferences. ONE doc, lives ONLY in Clio
     (no local cache). Updated when cross-cutting preferences emerge.
@@ -388,7 +388,7 @@ test framework, anything spanning projects) — update Clio's
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${globalDocId} \\
-    --title pa-global-memory --project cfcf-memory-global \\
+    --title pa-global-memory --project cf-system-memory-global \\
     --metadata '{"role":"pa","artifact_type":"global-memory"}' --stdin
 \`\`\`
 
@@ -414,7 +414,7 @@ afterwards so future sessions can use \`--document-id\`.
 
 \`\`\`
 cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
-    --title pa-session-${sessionId} --project cfcf-memory-pa \\
+    --title pa-session-${sessionId} --project cf-system-pa-memory \\
     --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}'
 \`\`\`
 
@@ -422,7 +422,7 @@ cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
-    --title pa-workspace-memory --project cfcf-memory-pa \\
+    --title pa-workspace-memory --project cf-system-pa-memory \\
     --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' --stdin
 \`\`\`
 
@@ -521,7 +521,7 @@ the distinction before doing any memory ops:
     These are the canonical full history. The Memory Inventory
     above lists titles + outcomeSummaries; retrieve full content
     via \`cfcf clio docs get <id>\` or
-    \`cfcf clio search "<query>" --project cfcf-memory-pa\`.
+    \`cfcf clio search "<query>" --project cf-system-pa-memory\`.
 
 The disk \`.cfcf-pa/session-*.md\` files are the LOCAL copy of
 those same archives, written turn-by-turn during the session.
@@ -565,7 +565,7 @@ If the user says yes:
      - "## Decisions / Rejections / Preferences (cumulative)" —
        deduped + grouped
   4. Push the compacted version to Clio with
-     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cfcf-memory-pa\`.
+     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cf-system-pa-memory\`.
   5. Log the compaction in the current session file.
   6. **NEVER touch \`pa-session-*\` archives or
      \`.cfcf-pa/session-*.md\` disk files.** Those are the full
@@ -584,7 +584,7 @@ session from last Tuesday"), retrieve full detail from one of:
   - **Clio archive doc** (multi-device durable):
       \`cfcf clio docs get <pa-session-...id>\` — the inventory
       above lists IDs.
-      \`cfcf clio search "<query>" --project cfcf-memory-pa\` —
+      \`cfcf clio search "<query>" --project cf-system-pa-memory\` —
       FTS + semantic search across all archives + the digest.
   - **Local disk file** (immediate, no network):
       \`cat .cfcf-pa/session-<sessionId>.md\` — the working
@@ -600,13 +600,13 @@ disk file isn't present (e.g. user moved to a different machine).
 ## Doc location: WRITE TO THE RIGHT PROJECT
 
 When you ingest \`pa-workspace-memory\` to Clio, ALWAYS pass
-\`--project cfcf-memory-pa\`. cfcf pre-created this Project at your
+\`--project cf-system-pa-memory\`. cfcf pre-created this Project at your
 launch, so the project always exists. **Never let ingest auto-route
 to \`default\`** — that breaks cfcf's reads (cfcf searches for the
 doc by metadata, but the discrepancy reports look weird if Clio's
 project assignment is unexpected).
 
-Same rule for \`pa-global-memory\`: ALWAYS \`--project cfcf-memory-global\`.
+Same rule for \`pa-global-memory\`: ALWAYS \`--project cf-system-memory-global\`.
 
 If the doc IDs in the snippets above are \`<none-yet>\`, the doc
 hasn't been created yet — your first ingest creates it. cfcf will

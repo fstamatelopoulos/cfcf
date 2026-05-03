@@ -7,26 +7,27 @@
  * during the session.
  *
  * Two standardised Clio docs:
- *   - `pa-workspace-memory` in Project `cfcf-memory-pa`
+ *   - `pa-workspace-memory` in Project `cf-system-pa-memory`
  *     ONE doc per workspace (identified by metadata `workspace_id`).
  *     Contains workspace summary + chronological session entries +
  *     decisions inline. Updated by PA on each session end.
- *   - `pa-global-memory` in Project `cfcf-memory-global`
+ *   - `pa-global-memory` in Project `cf-system-memory-global`
  *     ONE doc cross-workspace. User preferences spanning all
  *     workspaces. Lives ONLY in Clio (no local cache). Updated by PA
  *     when cross-cutting preferences emerge.
  *
  * Plus read-only access to other roles' Clio Projects for context
  * (filtered by `workspace_id`):
- *   - cfcf-memory-reflection
- *   - cfcf-memory-architect
- *   - cfcf-memory-ha
+ *   - cf-system-reflection-memory
+ *   - cf-system-architect-memory
+ *   - cf-system-ha-memory
  *
  * Plan item 5.14. Design: docs/research/product-architect-design.md
  * §"Memory protocol".
  */
 import type { MemoryBackend } from "../clio/backend/types.js";
 import type { ClioDocument } from "../clio/types.js";
+import { PA_MEMORY_PROJECT, GLOBAL_MEMORY_PROJECT, HA_MEMORY_PROJECT } from "../clio/system-projects.js";
 
 // ── Standardised doc titles ──────────────────────────────────────────
 //
@@ -34,10 +35,10 @@ import type { ClioDocument } from "../clio/types.js";
 // the system prompt so PA can use --document-id ingest semantics for
 // guaranteed update-not-create behaviour.
 
-/** Per-workspace PA memory doc. Lives in cfcf-memory-pa Project. */
+/** Per-workspace PA memory doc. Lives in cf-system-pa-memory Project. */
 export const PA_WORKSPACE_MEMORY_TITLE = "pa-workspace-memory";
 
-/** Cross-workspace PA memory doc. Lives in cfcf-memory-global Project. */
+/** Cross-workspace PA memory doc. Lives in cf-system-memory-global Project. */
 export const PA_GLOBAL_MEMORY_TITLE = "pa-global-memory";
 
 /**
@@ -52,15 +53,20 @@ export const PA_GLOBAL_MEMORY_TITLE = "pa-global-memory";
 export const PA_SESSION_ARCHIVE_TITLE_PREFIX = "pa-session-";
 
 // ── Standardised Project names ───────────────────────────────────────
+//
+// Re-exports from `clio/system-projects` so the cfcf-owned set stays
+// in one place (item 6.18 round-2). The `cf-system-*` naming
+// convention replaces the prior `cfcf-memory-*` names; see the
+// CHANGELOG for the migration note.
 
-export const PA_PROJECT = "cfcf-memory-pa";
-export const GLOBAL_PROJECT = "cfcf-memory-global";
+export const PA_PROJECT = PA_MEMORY_PROJECT;
+export const GLOBAL_PROJECT = GLOBAL_MEMORY_PROJECT;
 
 /** Other roles' Clio Projects PA reads (READ-ONLY) for cross-role context. */
 export const READONLY_OTHER_ROLE_PROJECTS = [
-  "cfcf-memory-reflection",
-  "cfcf-memory-architect",
-  "cfcf-memory-ha",
+  "cf-system-reflection-memory",
+  "cf-system-architect-memory",
+  HA_MEMORY_PROJECT,
 ] as const;
 
 /** How many recent docs to surface per other-role project. */
@@ -87,7 +93,7 @@ export interface GlobalMemorySnapshot {
 }
 
 export interface OtherRoleMemoryEntry {
-  /** Project name (e.g. cfcf-memory-reflection). */
+  /** Project name (e.g. cf-system-reflection-memory). */
   project: string;
   /** Most-recent docs scoped to the workspace (or all if workspaceId is null). */
   docs: ClioDocument[];
@@ -128,14 +134,14 @@ export interface MemoryInventory {
  * Why metadata-only (not project-scoped): the metadata triple
  * (`role`, `artifact_type`, `workspace_id`) uniquely identifies PA's
  * per-workspace memory across the whole Clio DB. Pre-v2.1 the search
- * was scoped to `cfcf-memory-pa`, but if the agent's ingest landed
- * in a different project (e.g. `default` because cfcf-memory-pa
+ * was scoped to `cf-system-pa-memory`, but if the agent's ingest landed
+ * in a different project (e.g. `default` because cf-system-pa-memory
  * didn't exist at write time), this scoped search missed the doc
  * entirely — producing the "Clio says no memory" / "disk has memory"
  * discrepancy users hit in dogfood. Metadata-only search is robust
  * to that mismatch.
  *
- * The launcher pre-creates `cfcf-memory-pa` Project at every PA
+ * The launcher pre-creates `cf-system-pa-memory` Project at every PA
  * launch so future writes land in the right place; this dropped
  * scope is mostly a backstop for already-misplaced docs (and any
  * future schema drift).
@@ -314,9 +320,9 @@ export async function readMemoryInventory(
 }
 
 /**
- * Ensure the two PA Clio Projects (`cfcf-memory-pa`, `cfcf-memory-global`)
+ * Ensure the two PA Clio Projects (`cf-system-pa-memory`, `cf-system-memory-global`)
  * exist before the agent runs. Without this, the agent's ingest with
- * `--project cfcf-memory-pa` may auto-route to the `default` Project
+ * `--project cf-system-pa-memory` may auto-route to the `default` Project
  * (cfcf's auto-route-on-missing semantics), producing the discrepancy
  * we hit in dogfood: doc-in-Clio-but-wrong-project.
  *
@@ -386,14 +392,14 @@ export function formatMemoryInventory(inv: MemoryInventory): string {
   }
   sections.push("");
 
-  sections.push("## Per-session archives (`pa-session-<sessionId>` docs in `cfcf-memory-pa`)");
+  sections.push("## Per-session archives (`pa-session-<sessionId>` docs in `cf-system-pa-memory`)");
   sections.push("");
   if (inv.sessionArchives.length === 0) {
     sections.push("_(no archives yet — the first session save creates the first archive)_");
   } else {
     sections.push(
       `${inv.sessionArchives.length} archived session${inv.sessionArchives.length === 1 ? "" : "s"} (full transcripts; immutable; never compacted). ` +
-      `Use \`cfcf clio docs get <id>\` to retrieve any in full, or \`cfcf clio search "<query>" --project cfcf-memory-pa\` to grep across archives:`,
+      `Use \`cfcf clio docs get <id>\` to retrieve any in full, or \`cfcf clio search "<query>" --project cf-system-pa-memory\` to grep across archives:`,
     );
     sections.push("");
     for (const a of inv.sessionArchives) {
@@ -453,5 +459,6 @@ export async function loadMemoryInventory(
   return [markdown];
 }
 
-export const PA_MEMORY_PROJECT = PA_PROJECT;
-export const GLOBAL_MEMORY_PROJECT = GLOBAL_PROJECT;
+// PA_MEMORY_PROJECT + GLOBAL_MEMORY_PROJECT are re-exported via the
+// import + the PA_PROJECT / GLOBAL_PROJECT aliases above. After 6.18
+// round-2 the canonical names live in clio/system-projects.

@@ -274,6 +274,50 @@ describe("LocalClio.search (FTS)", () => {
   });
 });
 
+// ── 6.18 round-2: system-project guard ────────────────────────────────────
+
+describe("LocalClio editProject + deleteProject system-project guard", () => {
+  it("editProject refuses to mutate cf-system-default", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "cf-system-default", description: "fallback" });
+    await expect(clio.editProject("cf-system-default", { description: "new" }))
+      .rejects.toThrow(/system-managed/);
+    await clio.close();
+  });
+
+  it("editProject refuses to mutate cf-system-pa-memory", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "cf-system-pa-memory" });
+    await expect(clio.editProject("cf-system-pa-memory", { name: "renamed-by-user" }))
+      .rejects.toThrow(/system-managed/);
+    await clio.close();
+  });
+
+  it("editProject refuses to RENAME a user project INTO a reserved cf-system-* name", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "my-project" });
+    await expect(clio.editProject("my-project", { name: "cf-system-memory-global" }))
+      .rejects.toThrow(/reserved system-project name/);
+    await clio.close();
+  });
+
+  it("deleteProject refuses to drop cf-system-default", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "cf-system-default" });
+    await expect(clio.deleteProject("cf-system-default")).rejects.toThrow(/system-managed/);
+    await clio.close();
+  });
+
+  it("non-system projects pass through unchanged", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "user-project" });
+    const renamed = await clio.editProject("user-project", { name: "user-project-renamed" });
+    expect(renamed.name).toBe("user-project-renamed");
+    await clio.deleteProject("user-project-renamed");
+    await clio.close();
+  });
+});
+
 // ── 6.18 round-2: editProject + deleteProject ─────────────────────────────
 
 describe("LocalClio.editProject", () => {

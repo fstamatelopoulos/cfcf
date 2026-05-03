@@ -252,7 +252,7 @@ function registerUnder(root: Command): void {
       "Ingest a Markdown document into Clio. Pass a file path, or use --stdin to pipe via stdin.",
     )
     .option("--stdin", "Read content from stdin instead of a file")
-    .option("-p, --project <name>", "Clio Project to ingest into (auto-created if missing)", "default")
+    .option("-p, --project <name>", "Clio Project to ingest into (auto-created if missing)", "cf-system-default")
     .option("-t, --title <title>", "Document title. Defaults to the file name (or 'stdin' for piped)")
     .option("--source <src>", "Free-text origin hint (default: file path or 'stdin')")
     .option(

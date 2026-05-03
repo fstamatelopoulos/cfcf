@@ -21,8 +21,8 @@ describe("assembleHelpAssistantPrompt", () => {
 
   it("declares both Clio memory projects in the Memory section", () => {
     const prompt = assembleHelpAssistantPrompt();
-    expect(prompt).toContain("`cfcf-memory-ha`");
-    expect(prompt).toContain("`cfcf-memory-global`");
+    expect(prompt).toContain("`cf-system-ha-memory`");
+    expect(prompt).toContain("`cf-system-memory-global`");
   });
 
   it("notes empty memory inventory when no entries provided", () => {
@@ -32,7 +32,7 @@ describe("assembleHelpAssistantPrompt", () => {
 
   it("inlines the provided memory inventory verbatim", () => {
     const inv = [
-      "### Project: `cfcf-memory-global` (1 doc)\n- **always TS** (`abc-123`)\n  user prefers TypeScript",
+      "### Project: `cf-system-memory-global` (1 doc)\n- **always TS** (`abc-123`)\n  user prefers TypeScript",
     ];
     const prompt = assembleHelpAssistantPrompt({ memoryInventory: inv });
     expect(prompt).toContain("always TS");

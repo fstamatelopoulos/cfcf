@@ -2,26 +2,28 @@
  * Help-Assistant Clio-memory reader.
  *
  * Reads short doc summaries from the two HA-relevant Clio Projects
- * (`cfcf-memory-ha` + `cfcf-memory-global`) so the system prompt can
- * include an inventory the agent uses to bootstrap its understanding
- * of the user's preferences. Best-effort: if either Project is empty
- * or doesn't exist yet, we just return an empty list -- the HA's
- * system prompt explicitly handles the "memory is empty" case.
+ * (`cf-system-ha-memory` + `cf-system-memory-global`) so the system
+ * prompt can include an inventory the agent uses to bootstrap its
+ * understanding of the user's preferences. Best-effort: if either
+ * Project is empty or doesn't exist yet, we just return an empty
+ * list -- the HA's system prompt explicitly handles the "memory is
+ * empty" case.
  *
  * Plan item 5.8 PR4. See `docs/research/help-assistant.md` §"Clio
  * memory schema".
+ *
+ * Project name constants are re-exported from `clio/system-projects`
+ * (item 6.18 round-2) so the system-managed set stays in one place.
  */
 
 import type { MemoryBackend } from "../clio/backend/types.js";
+import { HA_MEMORY_PROJECT, GLOBAL_MEMORY_PROJECT } from "../clio/system-projects.js";
 
-/**
- * Project names that scope HA memory. Convention recorded in
- * decisions-log.md (2026-04-27, brand-naming entry adjacent) and the
- * help-assistant.md design doc. Other roles use parallel naming
- * (`cfcf-memory-pa`, `cfcf-memory-dev`, etc.) when iter-6 lands.
- */
-export const HA_MEMORY_PROJECT = "cfcf-memory-ha";
-export const GLOBAL_MEMORY_PROJECT = "cfcf-memory-global";
+// HA_MEMORY_PROJECT + GLOBAL_MEMORY_PROJECT are the canonical exports
+// from `clio/system-projects` (the single source of truth for cfcf-
+// owned Clio Project names). They're imported here for use by the HA
+// memory reader below; consumers should import them directly from
+// `@cfcf/core` (which re-exports clio/system-projects).
 
 /**
  * Maximum chars per doc body included in the inventory. Each
