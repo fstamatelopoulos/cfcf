@@ -79,9 +79,32 @@ function readFlagSync(): UpdateAvailableLite | null {
 }
 
 /**
+ * Detect whether stderr can render ANSI color escapes. Conservative: only
+ * colorize when stderr is a real TTY AND the user hasn't opted out via
+ * NO_COLOR (the de-facto cross-tool standard, https://no-color.org) AND
+ * the terminal isn't the legacy "dumb" type. When in doubt, skip colors --
+ * scripted users (`cfcf status 2>&1 | tee log`) get clean text.
+ *
+ * Exported for unit tests.
+ */
+export function stderrSupportsColor(
+  env: NodeJS.ProcessEnv = process.env,
+  isTTY: boolean = !!process.stderr.isTTY,
+): boolean {
+  if (!isTTY) return false;
+  if (env.NO_COLOR) return false;
+  if (env.TERM === "dumb") return false;
+  return true;
+}
+
+/**
  * Pure formatter so the test layer doesn't need to capture stderr or fake
  * `getConfigPath` / FS state. Returns the line to print, or `null` if no
  * banner should be shown for the given inputs.
+ *
+ * `withColor` controls ANSI escape rendering: bold + bright yellow on the
+ * banner so a TTY user sees it clearly above the verb's own output, plain
+ * text when the destination doesn't support colors.
  *
  * Exported for unit tests.
  */
@@ -90,12 +113,16 @@ export function formatBannerLine(
   flag: UpdateAvailableLite | null,
   runningVersion: string,
   optedOut: boolean,
+  withColor: boolean = false,
 ): string | null {
   if (!isLifecycleInvocation(argv)) return null;
   if (optedOut) return null;
   if (!flag) return null;
   if (compareSemver(flag.latestVersion, runningVersion) <= 0) return null;
-  return `⏫ cfcf v${flag.latestVersion} available; run \`cfcf self-update --yes\``;
+  const text = `⏫ cfcf v${flag.latestVersion} available; run \`cfcf self-update --yes\``;
+  if (!withColor) return text;
+  // ESC[1m  = bold; ESC[33m = yellow; ESC[0m = reset.
+  return `\x1b[1;33m${text}\x1b[0m`;
 }
 
 /**
@@ -108,7 +135,7 @@ export function maybePrintUpdateBanner(): void {
     if (!isLifecycleInvocation(process.argv)) return;
     if (userOptedOut()) return;
     const flag = readFlagSync();
-    const line = formatBannerLine(process.argv, flag, VERSION, false);
+    const line = formatBannerLine(process.argv, flag, VERSION, false, stderrSupportsColor());
     if (line) {
       process.stderr.write(line + "\n");
     }
