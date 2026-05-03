@@ -1345,15 +1345,19 @@ input[type="radio"] {
   gap: 0.75rem;
 }
 
+/* Match the rest of the app's panel styling (e.g. .architect-review used
+   on Settings + workspace Config tabs) so /#/memory and /#/server feel
+   like the same surface. --color-surface is the panel level;
+   --color-surface-alt is reserved for inputs / secondary surfaces. */
 .memory-stats,
 .memory-projects,
 .memory-search,
 .memory-docs,
 .memory-doc-viewer {
-  background: var(--color-surface-alt);
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  padding: 0.75rem 0.85rem;
+  padding: 0.75rem 1rem;
 }
 
 .memory-stats__row {
