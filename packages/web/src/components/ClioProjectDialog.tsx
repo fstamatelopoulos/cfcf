@@ -104,7 +104,15 @@ export function ClioProjectDialog({
         />
         <datalist id="clio-project-list">
           {projects.map((p) => (
-            <option key={p.id} value={p.name} />
+            // Include the doc count as inner text so the browser-rendered
+            // <datalist> popup auto-sizes to a useful width AND so users
+            // see "how big is each project" while picking. Keeps width
+            // parity with NewWorkspaceModal's project picker. Browsers
+            // render the inner text as a secondary description next to
+            // the value.
+            <option key={p.id} value={p.name}>
+              {p.documentCount !== undefined ? `${p.documentCount} docs` : ""}
+            </option>
           ))}
         </datalist>
         <span className="form-row__hint">
