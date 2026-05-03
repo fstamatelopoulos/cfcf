@@ -33,7 +33,8 @@ export function ClioProjectDialog({
   workspace: WorkspaceConfig;
   onSaved: (newProject: string, migrated: number) => void;
 }) {
-  const [project, setProject] = useState("");
+  const [pickedProject, setPickedProject] = useState("");
+  const [newProject, setNewProject] = useState("");
   const [projects, setProjects] = useState<ClioProject[]>([]);
   const [migrateHistory, setMigrateHistory] = useState(false);
   const [allInProject, setAllInProject] = useState(false);
@@ -42,7 +43,8 @@ export function ClioProjectDialog({
 
   useEffect(() => {
     if (!open) return;
-    setProject(workspace.clioProject ?? "");
+    setPickedProject(workspace.clioProject ?? "");
+    setNewProject("");
     setMigrateHistory(false);
     setAllInProject(false);
     setError(null);
@@ -50,7 +52,9 @@ export function ClioProjectDialog({
     fetchClioProjects().then(setProjects).catch(() => setProjects([]));
   }, [open, workspace.clioProject]);
 
-  const trimmed = project.trim();
+  // The text input wins if filled (lets users type a brand-new project
+  // name that the server will auto-create); otherwise the select wins.
+  const trimmed = newProject.trim() || pickedProject.trim();
   const isUnchanged = trimmed === (workspace.clioProject ?? "");
 
   async function submit() {
@@ -93,31 +97,41 @@ export function ClioProjectDialog({
       }
     >
       <div className="form-row">
-        <label htmlFor="clio-project-input">Project name</label>
-        <input
-          id="clio-project-input"
-          type="text"
-          value={project}
-          onChange={(e) => setProject(e.target.value)}
-          list="clio-project-list"
+        <label htmlFor="clio-project-pick">Pick an existing project</label>
+        {/* `<select>` (not `<input list>` + `<datalist>`) so the dropdown
+            looks identical to Settings → Agent Roles → Adapter. The
+            datalist popup is browser-chrome and varies in width across
+            dialogs; <select> uses our themed CSS chevron consistently. */}
+        <select
+          id="clio-project-pick"
+          value={pickedProject}
+          onChange={(e) => { setPickedProject(e.target.value); setNewProject(""); }}
           autoFocus
-        />
-        <datalist id="clio-project-list">
+        >
+          <option value="">(unchanged)</option>
           {projects.map((p) => (
-            // Include the doc count as inner text so the browser-rendered
-            // <datalist> popup auto-sizes to a useful width AND so users
-            // see "how big is each project" while picking. Keeps width
-            // parity with NewWorkspaceModal's project picker. Browsers
-            // render the inner text as a secondary description next to
-            // the value.
             <option key={p.id} value={p.name}>
-              {p.documentCount !== undefined ? `${p.documentCount} docs` : ""}
+              {p.name}
+              {p.documentCount !== undefined ? ` — ${p.documentCount} docs` : ""}
             </option>
           ))}
-        </datalist>
+        </select>
         <span className="form-row__hint">
-          Pick an existing project or type a new name (auto-created on save). Currently:{" "}
-          <strong>{workspace.clioProject ?? "(none)"}</strong>.
+          Currently: <strong>{workspace.clioProject ?? "(none)"}</strong>.
+        </span>
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="clio-project-new">Or type a new project name</label>
+        <input
+          id="clio-project-new"
+          type="text"
+          value={newProject}
+          onChange={(e) => setNewProject(e.target.value)}
+          placeholder="auto-created on save"
+        />
+        <span className="form-row__hint">
+          Wins over the picker above if filled. Server auto-creates the project.
         </span>
       </div>
 

@@ -126,23 +126,28 @@ export function NewWorkspaceModal({
 
         <div className="form-row">
           <label htmlFor="new-ws-project">Clio Project (optional)</label>
-          <input
+          {/* `<select>` (not `<input list>` + `<datalist>`) so the dropdown
+              looks identical to Settings → Agent Roles → Adapter. The
+              datalist popup is browser-chrome and varies in width across
+              dialogs; <select> uses our themed CSS chevron consistently.
+              New-project creation isn't supported here -- leave blank to
+              auto-create from the workspace name; create new projects
+              from the Memory page (or via `cfcf clio projects create`). */}
+          <select
             id="new-ws-project"
-            type="text"
             value={clioProject}
             onChange={(e) => setClioProject(e.target.value)}
-            placeholder="(defaults to the workspace name)"
-            list="new-ws-project-list"
-          />
-          <datalist id="new-ws-project-list">
+          >
+            <option value="">(auto: defaults to workspace name)</option>
             {projects.map((p) => (
               <option key={p.id} value={p.name}>
-                {p.documentCount !== undefined ? `${p.documentCount} docs` : ""}
+                {p.name}
+                {p.documentCount !== undefined ? ` — ${p.documentCount} docs` : ""}
               </option>
             ))}
-          </datalist>
+          </select>
           <span className="form-row__hint">
-            Cross-workspace memory bucket. Pick an existing project to share docs with other workspaces, or leave blank for a fresh per-workspace project.
+            Cross-workspace memory bucket. Pick an existing project to share docs with other workspaces, or leave on auto for a fresh per-workspace project.
           </span>
         </div>
 
