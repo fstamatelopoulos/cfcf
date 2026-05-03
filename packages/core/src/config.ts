@@ -122,6 +122,8 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     availableAgents,
     permissionsAcknowledged: false,
     notifications: defaultNotifications,
+    notifyUpdates: true,   // item 6.20
+    theme: "auto",         // item 6.12 -- follow OS prefers-color-scheme until the user picks a theme via the web toggle
   };
 }
 
