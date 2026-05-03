@@ -203,6 +203,26 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   if (config.theme !== "dark" && config.theme !== "light" && config.theme !== "auto") {
     config.theme = "auto";
   }
+  // item 6.26 -- per-adapter model override. Coerce malformed entries to
+  // a no-op (drop the field rather than throw); the seed list is the
+  // safe fallback. Strict shape: Record<string, string[]> with all-
+  // string array members; anything else is silently ignored so a
+  // hand-edited config can't break startup.
+  if (config.agentModels !== undefined) {
+    if (typeof config.agentModels !== "object" || Array.isArray(config.agentModels)) {
+      delete config.agentModels;
+    } else {
+      const cleaned: Record<string, string[]> = {};
+      for (const [adapter, models] of Object.entries(config.agentModels)) {
+        if (typeof adapter !== "string" || !Array.isArray(models)) continue;
+        const filtered = models
+          .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
+          .map((m) => m.trim());
+        if (filtered.length > 0) cleaned[adapter] = filtered;
+      }
+      config.agentModels = Object.keys(cleaned).length > 0 ? cleaned : undefined;
+    }
+  }
   return config;
 }
 

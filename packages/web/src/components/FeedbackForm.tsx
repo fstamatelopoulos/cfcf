@@ -136,7 +136,7 @@ export function FeedbackForm({
         style={{
           marginTop: "0.5rem",
           marginBottom: 0,
-          fontSize: "0.75rem",
+          fontSize: "var(--text-xs)",
           color: "var(--color-text-muted, #888)",
           lineHeight: 1.4,
         }}

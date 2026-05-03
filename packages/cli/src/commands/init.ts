@@ -21,6 +21,7 @@ import {
   findEmbedderEntry,
   isEmbedderCached,
   LocalClio,
+  resolveModelsForAdapter,
 } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { createInterface } from "readline";
@@ -210,40 +211,66 @@ export function registerInitCommand(program: Command): void {
         config.productArchitectAgent = { adapter: available[0] };
       }
 
-      // Model selection per role
+      // Model selection per role (item 6.26 -- numbered picker driven
+      // by the per-adapter registry: cfcf seed merged with the user's
+      // optional override on `agentModels`).
       console.log();
-      console.log("Model selection (optional -- leave empty for agent default):");
-      console.log("  Examples: opus, sonnet, o3, gpt-4o");
+      console.log("Model selection per role:");
+      console.log("  Pick from the adapter's registry, or 0 to use the agent's default.");
+      console.log("  To add or remove models from a list, edit the Model registry");
+      console.log("  in the web Settings page (or hand-edit `agentModels` in the config).");
       console.log();
 
-      // Model prompts default to the existing per-role model when set
-      // (so re-running init keeps the user's pick on Enter). Empty
-      // input clears the override; an explicit value wins.
-      const devModel = await prompt("Dev agent model", config.devAgent.model ?? "");
-      config.devAgent.model = devModel || undefined;
+      // Pick a model for a role by number against the resolved registry
+      // for the role's selected adapter. Mirrors `pickAgent` above.
+      // Layout:
+      //   0. (adapter default)
+      //   1..N. registry entries
+      //   [+N+1. <currentModel> (custom)]   -- only when the existing
+      //     per-role model is a hand-edited value not in the registry,
+      //     so re-running init doesn't silently lose it
+      // Pressing Enter keeps the existing per-role model when set.
+      async function pickModel(roleLabel: string, adapterName: string, currentModel: string): Promise<string | undefined> {
+        const models = resolveModelsForAdapter(adapterName, config);
+        const customPreserved = currentModel !== "" && !models.includes(currentModel);
+        const customIdx = customPreserved ? models.length + 1 : -1;
+        const maxIdx = customPreserved ? customIdx : models.length;
+        const defaultIdx = currentModel === ""
+          ? 0
+          : models.indexOf(currentModel) >= 0
+            ? models.indexOf(currentModel) + 1
+            : customIdx; // customPreserved is true here
+        console.log(`${roleLabel} model (adapter: ${adapterName}):`);
+        console.log(`  0. (use adapter default)`);
+        models.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
+        if (customPreserved) {
+          console.log(`  ${customIdx}. ${currentModel} (custom — from existing config)`);
+        }
+        while (true) {
+          const raw = await prompt("Choose", String(defaultIdx));
+          const n = parseInt(raw, 10);
+          if (Number.isNaN(n) || n < 0 || n > maxIdx) {
+            console.log(`  Invalid choice "${raw}". Enter 0-${maxIdx}.`);
+            continue;
+          }
+          if (n === 0) return undefined;
+          if (customPreserved && n === customIdx) return currentModel;
+          return models[n - 1];
+        }
+      }
 
-      const judgeModel = await prompt("Judge agent model", config.judgeAgent.model ?? "");
-      config.judgeAgent.model = judgeModel || undefined;
-
-      const architectModel = await prompt("Architect agent model", config.architectAgent.model ?? "");
-      config.architectAgent.model = architectModel || undefined;
-
-      const documenterModel = await prompt("Documenter agent model", config.documenterAgent.model ?? "");
-      config.documenterAgent.model = documenterModel || undefined;
-
-      // Reflection + Help Assistant model overrides. Both are optional;
-      // empty input leaves the role on its agent's default model.
+      config.devAgent.model = await pickModel("Dev", config.devAgent.adapter, config.devAgent.model ?? "");
+      config.judgeAgent.model = await pickModel("Judge", config.judgeAgent.adapter, config.judgeAgent.model ?? "");
+      config.architectAgent.model = await pickModel("Architect", config.architectAgent.adapter, config.architectAgent.model ?? "");
+      config.documenterAgent.model = await pickModel("Documenter", config.documenterAgent.adapter, config.documenterAgent.model ?? "");
       if (config.reflectionAgent) {
-        const reflectionModel = await prompt("Reflection agent model", config.reflectionAgent.model ?? "");
-        config.reflectionAgent.model = reflectionModel || undefined;
+        config.reflectionAgent.model = await pickModel("Reflection", config.reflectionAgent.adapter, config.reflectionAgent.model ?? "");
       }
       if (config.helpAssistantAgent) {
-        const haModel = await prompt("Help Assistant model", config.helpAssistantAgent.model ?? "");
-        config.helpAssistantAgent.model = haModel || undefined;
+        config.helpAssistantAgent.model = await pickModel("Help Assistant", config.helpAssistantAgent.adapter, config.helpAssistantAgent.model ?? "");
       }
       if (config.productArchitectAgent) {
-        const paModel = await prompt("Product Architect model", config.productArchitectAgent.model ?? "");
-        config.productArchitectAgent.model = paModel || undefined;
+        config.productArchitectAgent.model = await pickModel("Product Architect", config.productArchitectAgent.adapter, config.productArchitectAgent.model ?? "");
       }
 
       console.log();

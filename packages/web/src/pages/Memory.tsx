@@ -66,7 +66,7 @@ export function MemoryPage() {
     <div>
       <div style={{ marginBottom: "1rem" }}>
         <h2 style={{ margin: 0 }}>Memory</h2>
-        <p style={{ marginTop: "0.25rem", marginBottom: 0, fontSize: "0.85rem", color: "var(--color-text-muted)" }}>
+        <p style={{ marginTop: "0.25rem", marginBottom: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
           Browse + search Clio, the cross-workspace knowledge layer.
           Item 6.18 will add editing, version history, and admin tools.
         </p>
@@ -113,7 +113,7 @@ export function MemoryPage() {
 function StatsPanel({ stats, error }: { stats: ClioStats | null; error: string | null }) {
   return (
     <section className="memory-stats">
-      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "0.95rem" }}>Stats</h3>
+      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "var(--text-md)" }}>Stats</h3>
       {error ? (
         <div className="form-row__error">{error}</div>
       ) : !stats ? (
@@ -168,7 +168,7 @@ function ProjectsPanel({
 }) {
   return (
     <section className="memory-projects">
-      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "0.95rem" }}>Projects</h3>
+      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "var(--text-md)" }}>Projects</h3>
       <ul className="memory-projects__list">
         <li
           className={`memory-projects__item ${activeProject === null ? "memory-projects__item--active" : ""}`}
@@ -233,7 +233,7 @@ function SearchPanel({
 
   return (
     <section className="memory-search">
-      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "0.95rem" }}>
+      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "var(--text-md)" }}>
         Search {activeProject && <span style={{ fontWeight: 400, color: "var(--color-text-muted)" }}>in {activeProject}</span>}
       </h3>
       <form className="memory-search__form" onSubmit={submit}>
@@ -309,7 +309,7 @@ function DocumentsPanel({
 }) {
   return (
     <section className="memory-docs">
-      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "0.95rem" }}>
+      <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "var(--text-md)" }}>
         Documents {project && <span style={{ fontWeight: 400, color: "var(--color-text-muted)" }}>in {project}</span>}
       </h3>
       {loading && <div className="form-row__hint">loading…</div>}
@@ -363,7 +363,7 @@ function DocViewer({
   return (
     <section className="memory-doc-viewer">
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-        <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "0.95rem" }}>
+        <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "var(--text-md)" }}>
           {content?.document.title ?? "loading…"}
         </h3>
         <button className="btn btn--small btn--secondary" onClick={onClose}>Close</button>

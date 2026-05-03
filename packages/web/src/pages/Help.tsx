@@ -381,7 +381,7 @@ const asideStyle: React.CSSProperties = {
   paddingRight: "12px",
 };
 const asideHeadingStyle: React.CSSProperties = {
-  fontSize: "0.95rem",
+  fontSize: "var(--text-md)",
   margin: "0 0 12px 0",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
@@ -404,18 +404,18 @@ const topicButtonStyle = (active: boolean): React.CSSProperties => ({
   background: active ? "color-mix(in srgb, var(--color-primary) 18%, transparent)" : "transparent",
   color: active ? "var(--color-primary-hover)" : "var(--color-text)",
   fontFamily: "inherit",
-  fontSize: "0.95rem",
+  fontSize: "var(--text-md)",
 });
 const slugStyle: React.CSSProperties = {
   display: "block",
-  fontSize: "0.8rem",
+  fontSize: "var(--text-sm)",
   color: "var(--color-text-muted)",
   fontFamily: "var(--font-mono)",
   marginTop: "2px",
 };
 const tipStyle: React.CSSProperties = {
   marginTop: "20px",
-  fontSize: "0.85rem",
+  fontSize: "var(--text-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -424,7 +424,7 @@ const articleStyle: React.CSSProperties = {
   paddingLeft: "8px",
 };
 const metaStyle: React.CSSProperties = {
-  fontSize: "0.85rem",
+  fontSize: "var(--text-sm)",
   color: "var(--color-text-muted)",
   marginBottom: "16px",
   display: "flex",
@@ -458,7 +458,7 @@ const preStyle: React.CSSProperties = {
   borderRadius: "var(--radius)",
   padding: "12px 14px",
   margin: "10px 0 14px 0",
-  fontSize: "0.85rem",
+  fontSize: "var(--text-sm)",
   fontFamily: "var(--font-mono)",
   color: "var(--color-text)",
   overflowX: "auto",

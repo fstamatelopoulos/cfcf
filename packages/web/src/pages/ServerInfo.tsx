@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  fetchAgentModels,
   fetchServerStatus,
   fetchGlobalConfig,
   saveGlobalConfig,
@@ -8,6 +9,7 @@ import {
 } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 import type { NotificationChannelName, NotificationEventType } from "../types";
+import { AgentModelSelect } from "../components/AgentModelSelect";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -71,6 +73,13 @@ export function ServerInfo() {
     dim: number;
     recommendedChunkMaxChars: number;
   } | null>(null);
+  // 6.26 -- per-adapter model registry. `seed` is needed by the editor's
+  // "Reset to defaults" affordance.
+  const [agentModels, setAgentModels] = useState<Record<string, string[]>>({});
+  const [seedModels, setSeedModels] = useState<Record<string, string[]>>({});
+  // Bumped after a Model registry save so dependent dropdowns + the
+  // editor refresh from the server's resolved view.
+  const [modelsRev, setModelsRev] = useState(0);
 
   // Initial + periodic fetch of read-only server status (version, uptime, etc.)
   useEffect(() => {
@@ -92,6 +101,14 @@ export function ServerInfo() {
       })
       .catch(() => { /* non-fatal; warning just won't render */ });
   }, []);
+
+  // 6.26 -- fetch the per-adapter model registry (seed + resolved
+  // override) on mount and after every save that touches `agentModels`.
+  useEffect(() => {
+    fetchAgentModels()
+      .then((r) => { setAgentModels(r.adapters); setSeedModels(r.seed); })
+      .catch(() => { setAgentModels({}); setSeedModels({}); });
+  }, [modelsRev]);
 
   // Initial fetch of the config (editable). Only fetched once; the user
   // is the source of truth while editing.
@@ -129,6 +146,36 @@ export function ServerInfo() {
     setSavedAt(null);
   }
 
+  // 6.26: per-adapter model registry edits live on draft.agentModels.
+  // The user's working draft starts from the resolved server view (so
+  // editing an unset adapter pre-populates with the seed for sane
+  // defaults). On save, an unchanged-from-seed list is dropped so we
+  // don't pin a snapshot that would silently mask future seed updates.
+  function setRegistryAdapterModels(adapter: string, models: string[]) {
+    if (!draft) return;
+    const next: Record<string, string[]> = { ...(draft.agentModels ?? {}) };
+    const cleaned = models.map((m) => m.trim()).filter((m) => m.length > 0);
+    const seedForAdapter = seedModels[adapter] ?? [];
+    const isSameAsSeed =
+      cleaned.length === seedForAdapter.length &&
+      cleaned.every((m, i) => m === seedForAdapter[i]);
+    if (cleaned.length === 0 || isSameAsSeed) {
+      delete next[adapter];
+    } else {
+      next[adapter] = cleaned;
+    }
+    setDraft({ ...draft, agentModels: Object.keys(next).length > 0 ? next : undefined });
+    setSavedAt(null);
+  }
+
+  function resetRegistryAdapter(adapter: string) {
+    if (!draft) return;
+    const next = { ...(draft.agentModels ?? {}) };
+    delete next[adapter];
+    setDraft({ ...draft, agentModels: Object.keys(next).length > 0 ? next : undefined });
+    setSavedAt(null);
+  }
+
   function updateNotificationEnabled(enabled: boolean) {
     if (!draft) return;
     const n = draft.notifications ?? { enabled: true, events: {} };
@@ -162,6 +209,10 @@ export function ServerInfo() {
       setOriginal(saved);
       setDraft(structuredClone(saved));
       setSavedAt(Date.now());
+      // 6.26: surface a refreshed model registry to the per-role
+      // pickers above (the resolved list may have changed if the user
+      // edited agentModels in the Model registry section).
+      setModelsRev((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -204,7 +255,7 @@ export function ServerInfo() {
           background: "color-mix(in srgb, var(--color-info) 12%, transparent)",
           borderLeft: "3px solid var(--color-info)",
           color: "var(--color-text)",
-          fontSize: "0.85rem",
+          fontSize: "var(--text-sm)",
           borderRadius: "4px",
         }}
       >
@@ -219,7 +270,7 @@ export function ServerInfo() {
 
       {/* Server status (truly read-only runtime info) */}
       <section className="architect-review" style={{ marginBottom: "1.5rem" }}>
-        <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+        <h3 className="section-title" style={{ fontSize: "1rem" }}>
           Server
         </h3>
         {status ? (
@@ -285,12 +336,12 @@ export function ServerInfo() {
                         </select>
                       </td>
                       <td>
-                        <input
-                          type="text"
-                          placeholder="(use adapter default)"
+                        <AgentModelSelect
+                          adapter={agent.adapter}
+                          models={agentModels[agent.adapter] ?? []}
                           value={agent.model ?? ""}
-                          onChange={(e) => updateAgent(key, "model", e.target.value)}
-                          style={{ minWidth: "12rem" }}
+                          onChange={(v) => updateAgent(key, "model", v)}
+                          minWidth="12rem"
                         />
                       </td>
                     </tr>
@@ -298,6 +349,37 @@ export function ServerInfo() {
                 })}
               </tbody>
             </table>
+          </FormSection>
+
+          <FormSection title="Model registry">
+            <p style={{ margin: "0 0 0.75rem 0", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+              Models offered in the per-role <strong>Model</strong> dropdowns above and on each workspace's Config tab.
+              cfcf ships a <strong>seed</strong> list per agent (intentionally minimal — generic aliases like <code>opus</code>
+              rather than date-bound names like <code>claude-opus-4-7</code>). Add entries here to pin specific versions or
+              surface models your agent CLI accepts that aren't in the seed; remove entries to trim a list to just what you
+              actually use. An empty list (or one identical to the seed) clears the override and falls back to the seed
+              automatically — so future seed updates flow through after a cfcf upgrade.
+            </p>
+            {Array.from(new Set([
+              ...Object.keys(seedModels),
+              ...Object.keys(draft.agentModels ?? {}),
+            ])).sort().map((adapter) => {
+              const override = draft.agentModels?.[adapter];
+              const resolved = override && override.length > 0 ? override : (seedModels[adapter] ?? []);
+              const seed = seedModels[adapter] ?? [];
+              const isOverridden = !!override;
+              return (
+                <ModelRegistryAdapterRow
+                  key={adapter}
+                  adapter={adapter}
+                  resolved={resolved}
+                  seed={seed}
+                  isOverridden={isOverridden}
+                  onSet={(models) => setRegistryAdapterModels(adapter, models)}
+                  onReset={() => resetRegistryAdapter(adapter)}
+                />
+              );
+            })}
           </FormSection>
 
           <FormSection title="Iteration defaults">
@@ -325,7 +407,7 @@ export function ServerInfo() {
             </table>
           </FormSection>
 
-          <FormSection title="Behaviour flags (item 5.1)">
+          <FormSection title="Behaviour flags">
             <table className="project-history__table">
               <tbody>
                 <CheckboxRow
@@ -451,7 +533,7 @@ export function ServerInfo() {
                       <option value="semantic">semantic (vector only)</option>
                       <option value="hybrid">hybrid (α-weighted blend of cosine + normalised BM25)</option>
                     </select>
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Used when <code>cfcf clio search</code> is invoked without an explicit <code>--mode</code> flag (or when <code>/api/clio/search</code> is called without <code>?mode=</code>). Per-call overrides always win.
                     </div>
                   </td>
@@ -477,7 +559,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     />
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Cosine threshold for the vector-only branch of hybrid search and for every semantic result. FTS-matched chunks in hybrid mode bypass this filter. Default 0.5; lower for wider recall, higher for stricter precision. Per-call <code>--min-score</code> always wins.
                     </div>
                   </td>
@@ -503,7 +585,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     />
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Hybrid score = <code>α × cosine + (1−α) × normalised_BM25</code>. Higher α biases toward semantic similarity; lower α biases toward keyword match. Default 0.7 (Cerefox parity). Per-call <code>--alpha</code> always wins.
                     </div>
                   </td>
@@ -528,7 +610,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "8rem" }}
                     /> chars
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Documents whose total content is at most this size return the FULL document content in each search hit (small-to-big). Larger documents return the matched chunk + context window. Default 20000 (Cerefox parity). Set 0 to always use chunk + window.
                     </div>
                   </td>
@@ -554,7 +636,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "5rem" }}
                     /> chunks
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       For documents larger than the small-doc threshold: how many sibling chunks to include on each side of the matched chunk. Default 1 (3-chunk window: prev + match + next). 0 returns just the matched chunk.
                     </div>
                   </td>
@@ -586,7 +668,7 @@ export function ServerInfo() {
                         border: "1px solid rgba(255, 200, 0, 0.3)",
                         padding: "0.5rem 0.6rem",
                         borderRadius: "4px",
-                        fontSize: "0.85rem",
+                        fontSize: "var(--text-sm)",
                         marginTop: "0.5rem",
                       }}>
                         ⚠ Exceeds <code>{activeEmbedder.name}</code>'s recommended max
@@ -595,7 +677,7 @@ export function ServerInfo() {
                         truncate inputs.
                       </div>
                     )}
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Target maximum size per chunk during ingest. The active embedder's recommended max acts as a safety ceiling — values above it get capped. Default 4000 (Cerefox parity).
                     </div>
                   </td>
@@ -620,7 +702,7 @@ export function ServerInfo() {
                       }}
                       style={{ width: "8rem" }}
                     /> chars
-                    <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                    <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                       Pieces smaller than this merge into the previous chunk during oversized-section splitting. Default 100 (Cerefox parity).
                     </div>
                   </td>
@@ -633,7 +715,7 @@ export function ServerInfo() {
                       {activeEmbedder && (
                         <> (active: <code>{activeEmbedder.name}</code>, dim={activeEmbedder.dim}, recommended max={activeEmbedder.recommendedChunkMaxChars} chars)</>
                       )}
-                      <div style={{ fontSize: "0.8rem", marginTop: "0.35rem" }}>
+                      <div style={{ fontSize: "var(--text-sm)", marginTop: "0.35rem" }}>
                         Switch with <code>cfcf clio embedder set &lt;name&gt; --reindex</code>. Without <code>--reindex</code>, existing chunk embeddings become inconsistent with the new model and vector-search quality on those chunks degrades. Use <code>--force</code> only for recovery.
                       </div>
                     </td>
@@ -669,7 +751,7 @@ export function ServerInfo() {
               <span
                 style={{
                   color: "var(--color-success)",
-                  fontSize: "0.85rem",
+                  fontSize: "var(--text-sm)",
                 }}
               >
                 ✓ Saved
@@ -679,7 +761,7 @@ export function ServerInfo() {
               <span
                 style={{
                   color: "var(--color-text-muted)",
-                  fontSize: "0.8rem",
+                  fontSize: "var(--text-sm)",
                 }}
               >
                 unsaved changes
@@ -691,7 +773,7 @@ export function ServerInfo() {
             style={{
               marginTop: "1.5rem",
               color: "var(--color-text-muted)",
-              fontSize: "0.8rem",
+              fontSize: "var(--text-sm)",
             }}
           >
             Equivalent CLI: <code>cfcf config edit</code>. Changes apply to new
@@ -725,7 +807,7 @@ function FormSection({
 }) {
   return (
     <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-      <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+      <h3 className="section-title" style={{ fontSize: "1rem" }}>
         {title}
       </h3>
       {children}
@@ -765,6 +847,127 @@ function NumberRow({
   );
 }
 
+/**
+ * Per-adapter row in the Model registry editor (item 6.26). Local UI
+ * state for the "add model" input + commit-on-blur drag-handle for
+ * reordering would be nice; for the prototype we keep it spartan: each
+ * model is a row with a delete button, plus an input + Add button.
+ */
+function ModelRegistryAdapterRow({
+  adapter,
+  resolved,
+  seed,
+  isOverridden,
+  onSet,
+  onReset,
+}: {
+  adapter: string;
+  resolved: string[];
+  seed: string[];
+  isOverridden: boolean;
+  onSet: (models: string[]) => void;
+  onReset: () => void;
+}) {
+  const [pending, setPending] = useState("");
+
+  function add() {
+    const trimmed = pending.trim();
+    if (!trimmed) return;
+    if (resolved.includes(trimmed)) { setPending(""); return; }
+    onSet([...resolved, trimmed]);
+    setPending("");
+  }
+
+  return (
+    <div style={{
+      border: "1px solid var(--color-border)",
+      borderRadius: 6,
+      padding: "0.6rem 0.85rem",
+      marginBottom: "0.75rem",
+      background: "var(--color-surface)",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+        <strong style={{ fontSize: "var(--text-md)" }}>{adapter}</strong>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+          {isOverridden
+            ? `${resolved.length} model${resolved.length === 1 ? "" : "s"} (custom override)`
+            : `${resolved.length} model${resolved.length === 1 ? "" : "s"} (seed)`}
+        </span>
+      </div>
+      {resolved.length === 0 ? (
+        <p className="form-row__hint" style={{ margin: "0.4rem 0" }}>
+          No models in this adapter's registry. Use the input below to add one, or rely on the
+          <code> (custom model name…) </code> picker option in the per-role dropdowns.
+        </p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: "0 0 0.5rem 0", padding: 0, display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+          {resolved.map((m) => (
+            <li
+              key={m}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.4rem",
+                padding: "0.2rem 0.45rem",
+                background: "var(--color-surface-alt)",
+                border: "1px solid var(--color-border)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--text-xs)",
+              }}
+            >
+              <span>{m}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${m}`}
+                title={`Remove ${m}`}
+                onClick={() => onSet(resolved.filter((x) => x !== m))}
+                style={{
+                  background: "transparent",
+                  border: 0,
+                  color: "var(--color-text-muted)",
+                  cursor: "pointer",
+                  fontSize: "var(--text-md)",
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+              >×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="form-row__inline">
+        <input
+          type="text"
+          value={pending}
+          onChange={(e) => setPending(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="Add a model name (e.g. claude-opus-4-7, o4-mini)"
+          style={{ flex: 1 }}
+        />
+        <button type="button" className="btn btn--small btn--secondary" onClick={add} disabled={!pending.trim()}>
+          Add
+        </button>
+        {isOverridden && (
+          <button
+            type="button"
+            className="btn btn--small btn--secondary"
+            onClick={onReset}
+            title={`Reset to the bundled seed (${seed.join(", ") || "no seeded models"})`}
+          >
+            Reset to seed
+          </button>
+        )}
+      </div>
+      {isOverridden && (
+        <div className="form-row__hint" style={{ marginTop: "0.4rem" }}>
+          Seed: <code>{seed.join(", ") || "(none)"}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CheckboxRow({
   label,
   hint,
@@ -790,7 +993,7 @@ function CheckboxRow({
             style={{ marginTop: "0.25rem" }}
           />
           {hint && (
-            <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
               {hint}
             </span>
           )}

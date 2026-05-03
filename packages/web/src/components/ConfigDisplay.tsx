@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { WorkspaceConfig } from "../types";
 import type { NotificationChannelName, NotificationEventType } from "../types";
-import { fetchGlobalConfig, saveWorkspace } from "../api";
+import { fetchAgentModels, fetchGlobalConfig, saveWorkspace } from "../api";
+import { AgentModelSelect } from "./AgentModelSelect";
 import { ClioProjectDialog } from "./ClioProjectDialog";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
 import { navigateTo } from "../hooks/useRoute";
@@ -50,6 +51,10 @@ export function ConfigDisplay({
 }) {
   const [draft, setDraft] = useState<WorkspaceConfig>(() => structuredClone(workspace));
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
+  // 6.26: per-adapter model registry, fetched once on mount. Used by
+  // AgentModelSelect to populate the model dropdown for each role's
+  // currently-chosen adapter.
+  const [agentModels, setAgentModels] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -66,6 +71,9 @@ export function ConfigDisplay({
     fetchGlobalConfig()
       .then((cfg) => setAvailableAgents(cfg.availableAgents ?? []))
       .catch(() => setAvailableAgents([]));
+    fetchAgentModels()
+      .then((res) => setAgentModels(res.adapters))
+      .catch(() => setAgentModels({}));
   }, []);
 
   const isDirty = JSON.stringify(workspace) !== JSON.stringify(draft);
@@ -188,7 +196,7 @@ export function ConfigDisplay({
           background: "color-mix(in srgb, var(--color-info) 12%, transparent)",
           borderLeft: "3px solid var(--color-info)",
           color: "var(--color-text)",
-          fontSize: "0.85rem",
+          fontSize: "var(--text-sm)",
           borderRadius: "4px",
         }}
       >
@@ -203,7 +211,7 @@ export function ConfigDisplay({
 
       {/* Identity + runtime (read-only, except Clio Project which is changed via a dedicated dialog) */}
       <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-        <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+        <h3 className="section-title" style={{ fontSize: "1rem" }}>
           Identity
         </h3>
         <table className="config-display__table">
@@ -273,12 +281,12 @@ export function ConfigDisplay({
                     </select>
                   </td>
                   <td>
-                    <input
-                      type="text"
-                      placeholder="(use adapter default)"
+                    <AgentModelSelect
+                      adapter={agent.adapter}
+                      models={agentModels[agent.adapter] ?? []}
                       value={agent.model ?? ""}
-                      onChange={(e) => updateAgent(key, "model", e.target.value)}
-                      style={{ minWidth: "12rem" }}
+                      onChange={(v) => updateAgent(key, "model", v)}
+                      minWidth="12rem"
                     />
                   </td>
                 </tr>
@@ -290,7 +298,7 @@ export function ConfigDisplay({
           style={{
             marginTop: "0.75rem",
             marginBottom: 0,
-            fontSize: "0.8rem",
+            fontSize: "var(--text-sm)",
             color: "var(--color-text-muted, #888)",
             lineHeight: 1.5,
           }}
@@ -367,7 +375,7 @@ export function ConfigDisplay({
       </FormSection>
 
       {/* Behaviour flags (item 5.1) */}
-      <FormSection title="Behaviour flags (item 5.1)">
+      <FormSection title="Behaviour flags">
         <table className="config-display__table">
           <tbody>
             <CheckboxRow
@@ -426,7 +434,7 @@ export function ConfigDisplay({
             Override global notifications for this workspace
           </label>
           {!notificationsOverridden && (
-            <div style={{ color: "var(--color-text-muted)", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+            <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", marginTop: "0.25rem" }}>
               Currently inheriting the global notification settings.
             </div>
           )}
@@ -505,12 +513,12 @@ export function ConfigDisplay({
           Cancel
         </button>
         {savedAt && !isDirty && (
-          <span style={{ color: "var(--color-success)", fontSize: "0.85rem" }}>
+          <span style={{ color: "var(--color-success)", fontSize: "var(--text-sm)" }}>
             ✓ Saved
           </span>
         )}
         {isDirty && (
-          <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+          <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
             unsaved changes
           </span>
         )}
@@ -584,7 +592,7 @@ function FormSection({
 }) {
   return (
     <section className="architect-review" style={{ marginBottom: "1.25rem" }}>
-      <h3 className="architect-review__summary" style={{ fontSize: "1rem" }}>
+      <h3 className="section-title" style={{ fontSize: "1rem" }}>
         {title}
       </h3>
       {children}
@@ -647,7 +655,7 @@ function CheckboxRow({
             style={{ marginTop: "0.25rem" }}
           />
           {hint && (
-            <span style={{ color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
               {hint}
             </span>
           )}

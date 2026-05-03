@@ -132,6 +132,19 @@ export interface CfcfGlobalConfig {
    */
   notifyUpdates?: boolean;
   /**
+   * Per-adapter model registry override (item 6.26).
+   *
+   * When set + non-empty for a given adapter name, supersedes the seed
+   * registry shipped in `packages/core/src/adapters/seed-models.ts`. The
+   * web Settings → Model registry editor manages this; users add models
+   * their installed agent CLI accepts that aren't in the cfcf seed (or
+   * trim the seed to just what they actually want to surface).
+   *
+   * Resolved at every picker open via `resolveModelsForAdapter()` so a
+   * Settings edit is reflected in subsequent dropdowns immediately.
+   */
+  agentModels?: Record<string, string[]>;
+  /**
    * Web UI colour theme (item 6.12 polish). One of:
    *   - "auto" (default): follow the OS `prefers-color-scheme` preference
    *   - "dark": force dark theme regardless of system setting

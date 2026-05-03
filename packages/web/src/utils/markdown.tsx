@@ -242,7 +242,7 @@ const preStyle: React.CSSProperties = {
   borderRadius: "var(--radius)",
   padding: "12px",
   overflowX: "auto",
-  fontSize: "0.85rem",
+  fontSize: "var(--text-sm)",
   fontFamily: "var(--font-mono)",
   margin: "12px 0",
 };
