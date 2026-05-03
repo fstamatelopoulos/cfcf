@@ -21,6 +21,7 @@ import {
   EMBEDDER_CATALOGUE,
   findEmbedderEntry,
   LocalClio,
+  isSystemProject,
 } from "@cfcf/core";
 
 export function registerClioRoutes(app: Hono): void {
@@ -29,7 +30,14 @@ export function registerClioRoutes(app: Hono): void {
   app.get("/api/clio/projects", async (c) => {
     const backend = getClioBackend();
     const projects = await backend.listProjects();
-    return c.json({ projects });
+    // 6.18 round-2: stamp each project with `isSystem` so the web UI
+    // can hide the Edit / Delete affordances for system-managed
+    // projects without needing to ship the SYSTEM_PROJECTS set down to
+    // the client. The CLI path uses the exported `isSystemProject`
+    // helper directly.
+    return c.json({
+      projects: projects.map((p) => ({ ...p, isSystem: isSystemProject(p.name) })),
+    });
   });
 
   app.post("/api/clio/projects", async (c) => {

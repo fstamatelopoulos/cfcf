@@ -81,8 +81,22 @@ export function MemorySidebar({
               key={p.id}
               className={`memory-projects__item ${activeProject === p.name ? "memory-projects__item--active" : ""}`}
               onClick={() => onSelectProject(p.name)}
+              title={p.isSystem ? "System-managed Clio Project (cfcf-owned)" : undefined}
             >
-              <span>{p.name}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                {p.name}
+                {p.isSystem && (
+                  <span
+                    style={{
+                      fontSize: "var(--text-xs)",
+                      color: "var(--color-info)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    sys
+                  </span>
+                )}
+              </span>
               {p.documentCount !== undefined && (
                 <span className="memory-projects__count">{p.documentCount}</span>
               )}

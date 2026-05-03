@@ -370,6 +370,12 @@ export interface ClioProject {
   createdAt: string;
   updatedAt: string;
   documentCount?: number;
+  /**
+   * True when this project is system-managed (cf-system-* convention).
+   * Web UI uses this to hide Edit / Delete affordances and show a
+   * "(system)" badge. Stamped server-side in the projects list response.
+   */
+  isSystem?: boolean;
 }
 
 export function fetchClioProjects(): Promise<ClioProject[]> {

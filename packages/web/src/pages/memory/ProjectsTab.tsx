@@ -129,27 +129,49 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.id} className="project-history__row">
-                  <td><strong>{p.name}</strong></td>
+                  <td>
+                    <strong>{p.name}</strong>
+                    {p.isSystem && (
+                      <span
+                        title="System-managed by cfcf — agent prompts hardcode this name. Renaming or deleting is blocked."
+                        style={{
+                          marginLeft: "0.5rem",
+                          padding: "0.05rem 0.4rem",
+                          fontSize: "var(--text-xs)",
+                          background: "color-mix(in srgb, var(--color-info) 18%, transparent)",
+                          color: "var(--color-info)",
+                          borderRadius: 3,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        system
+                      </span>
+                    )}
+                  </td>
                   <td>{p.documentCount ?? "—"}</td>
                   <td>{p.description ?? <span className="form-row__hint">—</span>}</td>
                   <td className="project-history__time">{p.createdAt}</td>
                   <td>
-                    <div style={{ display: "flex", gap: "0.4rem" }}>
-                      <button
-                        className="btn btn--small btn--secondary"
-                        onClick={() => setEditTarget(p)}
-                        title="Rename or re-describe this project"
-                      >
-                        Edit…
-                      </button>
-                      <button
-                        className="btn btn--small btn--danger"
-                        onClick={() => setDeleteTarget(p)}
-                        title="Delete this project (server refuses if any docs/workspaces still reference it)"
-                      >
-                        Delete…
-                      </button>
-                    </div>
+                    {p.isSystem ? (
+                      <span className="form-row__hint">— system —</span>
+                    ) : (
+                      <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <button
+                          className="btn btn--small btn--secondary"
+                          onClick={() => setEditTarget(p)}
+                          title="Rename or re-describe this project"
+                        >
+                          Edit…
+                        </button>
+                        <button
+                          className="btn btn--small btn--danger"
+                          onClick={() => setDeleteTarget(p)}
+                          title="Delete this project (server refuses if any docs/workspaces still reference it)"
+                        >
+                          Delete…
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
