@@ -33,6 +33,29 @@ export interface MemoryBackend {
    * unknown project name.
    */
   resolveProject(nameOrId: string, opts?: { createIfMissing?: boolean; description?: string }): Promise<ClioProject>;
+  /**
+   * Rename / re-describe a Clio Project (item 6.18 round-2). Either
+   * field is optional; passing neither is a no-op that returns the
+   * existing project. Throws if `name` collides with another project.
+   *
+   * **The backend does NOT check for workspaces that pin the old
+   * name** — that's a cfcf-server concern (workspace state lives
+   * outside Clio). The server route layer (`PATCH /api/clio/projects/
+   * :idOrName`) does the workspace-dependent check before calling
+   * this method.
+   */
+  editProject(idOrName: string, edits: { name?: string; description?: string }): Promise<ClioProject>;
+  /**
+   * Hard-delete a Clio Project (item 6.18 round-2). Refuses (throws)
+   * when any non-soft-deleted documents still belong to the project;
+   * the error message includes the document count.
+   *
+   * **The backend does NOT check for workspaces that pin the project
+   * name** — same reason as `editProject`. The server route layer
+   * (`DELETE /api/clio/projects/:idOrName`) does the workspace-
+   * dependent check before calling this method.
+   */
+  deleteProject(idOrName: string): Promise<{ deleted: true }>;
 
   // ── Documents ─────────────────────────────────────────────────────────
   ingest(req: IngestRequest): Promise<IngestResult>;

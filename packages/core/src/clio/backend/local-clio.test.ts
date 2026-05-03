@@ -274,6 +274,198 @@ describe("LocalClio.search (FTS)", () => {
   });
 });
 
+// ── 6.18 round-2: editProject + deleteProject ─────────────────────────────
+
+describe("LocalClio.editProject", () => {
+  it("renames a project + updates its description", async () => {
+    const clio = makeClio();
+    const created = await clio.createProject({ name: "old-name", description: "old desc" });
+    const renamed = await clio.editProject(created.id, { name: "new-name", description: "new desc" });
+    expect(renamed.name).toBe("new-name");
+    expect(renamed.description).toBe("new desc");
+    // Lookup by old name fails; lookup by new name succeeds.
+    expect(await clio.getProject("old-name")).toBeNull();
+    expect((await clio.getProject("new-name"))?.id).toBe(created.id);
+    await clio.close();
+  });
+
+  it("description-only edit leaves the name alone", async () => {
+    const clio = makeClio();
+    const created = await clio.createProject({ name: "stable", description: "" });
+    const updated = await clio.editProject("stable", { description: "now described" });
+    expect(updated.name).toBe("stable");
+    expect(updated.description).toBe("now described");
+    await clio.close();
+  });
+
+  it("name-only edit leaves the description alone", async () => {
+    const clio = makeClio();
+    const created = await clio.createProject({ name: "before", description: "preserved" });
+    const updated = await clio.editProject(created.id, { name: "after" });
+    expect(updated.name).toBe("after");
+    expect(updated.description).toBe("preserved");
+    await clio.close();
+  });
+
+  it("rejects rename collisions with another project", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "alpha" });
+    await clio.createProject({ name: "beta" });
+    await expect(clio.editProject("alpha", { name: "beta" })).rejects.toThrow(/already exists/);
+    await clio.close();
+  });
+
+  it("returns the existing project unchanged when nothing differs", async () => {
+    const clio = makeClio();
+    const created = await clio.createProject({ name: "noop", description: "x" });
+    const same = await clio.editProject("noop", { name: "noop", description: "x" });
+    expect(same.id).toBe(created.id);
+    await clio.close();
+  });
+
+  it("throws for a non-existent project", async () => {
+    const clio = makeClio();
+    await expect(clio.editProject("missing", { description: "x" })).rejects.toThrow(/not found/);
+    await clio.close();
+  });
+});
+
+describe("LocalClio.deleteProject", () => {
+  it("hard-deletes an empty project", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "to-go" });
+    expect(await clio.getProject("to-go")).not.toBeNull();
+    const result = await clio.deleteProject("to-go");
+    expect(result.deleted).toBe(true);
+    expect(await clio.getProject("to-go")).toBeNull();
+    await clio.close();
+  });
+
+  it("refuses when live documents still belong to the project", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "occupied" });
+    await clio.ingest({ project: "occupied", title: "doc1", content: "# Hi\n\nbody" });
+    await expect(clio.deleteProject("occupied")).rejects.toThrow(/1 live document/);
+    await clio.close();
+  });
+
+  it("refuses when only soft-deleted documents remain", async () => {
+    const clio = makeClio();
+    await clio.createProject({ name: "tombstones" });
+    const r = await clio.ingest({ project: "tombstones", title: "doc", content: "# Hi\n\nbody" });
+    await clio.deleteDocument(r.id);
+    // Still refuses -- soft-delete keeps the FK reference alive.
+    await expect(clio.deleteProject("tombstones")).rejects.toThrow(/soft-deleted/);
+    await clio.close();
+  });
+
+  it("throws for a non-existent project", async () => {
+    const clio = makeClio();
+    await expect(clio.deleteProject("missing")).rejects.toThrow(/not found/);
+    await clio.close();
+  });
+});
+
+// ── 6.18 round-2: content-unchanged short-circuit (Cerefox parity) ────────
+
+describe("LocalClio.ingest content-unchanged short-circuit (item 6.18)", () => {
+  it("re-ingesting identical content via documentId is a no-op (action=skipped, no version snapshot)", async () => {
+    const clio = makeClio();
+    const first = await clio.ingest({
+      project: "p",
+      title: "Doc",
+      content: "# Header\n\nstable body",
+    });
+    const second = await clio.ingest({
+      project: "p",
+      title: "Doc",
+      content: "# Header\n\nstable body",
+      documentId: first.id,
+    });
+    expect(second.action).toBe("skipped");
+    expect(second.versionId).toBeUndefined();
+    // No version snapshot was taken.
+    const versions = await clio.listDocumentVersions(first.id);
+    expect(versions).toEqual([]);
+    await clio.close();
+  });
+
+  it("identical content + new title takes the metadata-only path (no version snapshot, edit-metadata audit)", async () => {
+    const clio = makeClio();
+    const first = await clio.ingest({
+      project: "p",
+      title: "Original",
+      content: "# Header\n\nstable body",
+    });
+    const second = await clio.ingest({
+      project: "p",
+      title: "Renamed",
+      content: "# Header\n\nstable body",
+      documentId: first.id,
+    });
+    expect(second.action).toBe("updated");
+    expect(second.versionId).toBeUndefined(); // metadata-only path, no snapshot
+    expect(second.note).toMatch(/content unchanged/);
+
+    // Doc reflects the new title.
+    const reread = await clio.getDocument(first.id);
+    expect(reread?.title).toBe("Renamed");
+
+    // Versions list is empty (no snapshot).
+    const versions = await clio.listDocumentVersions(first.id);
+    expect(versions).toEqual([]);
+
+    // Audit log records `edit-metadata`, not `update-content`.
+    const audit = await clio.getAuditLog({ documentId: first.id });
+    const events = audit.map((e) => e.eventType);
+    expect(events).toContain("create");
+    expect(events).toContain("edit-metadata");
+    expect(events).not.toContain("update-content");
+    await clio.close();
+  });
+
+  it("changed content snapshots a version + writes update-content audit (regression on existing path)", async () => {
+    const clio = makeClio();
+    const first = await clio.ingest({
+      project: "p",
+      title: "Doc",
+      content: "# v1\n\noriginal body",
+    });
+    const second = await clio.ingest({
+      project: "p",
+      title: "Doc",
+      content: "# v2\n\nrewritten body",
+      documentId: first.id,
+    });
+    expect(second.action).toBe("updated");
+    expect(second.versionId).toBeDefined();
+
+    const versions = await clio.listDocumentVersions(first.id);
+    expect(versions.length).toBe(1);
+
+    const audit = await clio.getAuditLog({ documentId: first.id });
+    const events = audit.map((e) => e.eventType);
+    expect(events).toContain("update-content");
+    await clio.close();
+  });
+
+  it("identical content via updateIfExists short-circuits + writes no version", async () => {
+    const clio = makeClio();
+    await clio.ingest({ project: "p", title: "By title", content: "# Hi\n\nbody" });
+    const second = await clio.ingest({
+      project: "p",
+      title: "By title",
+      content: "# Hi\n\nbody",
+      updateIfExists: true,
+    });
+    expect(second.action).toBe("skipped");
+    expect(second.versionId).toBeUndefined();
+    const versions = await clio.listDocumentVersions(second.id);
+    expect(versions).toEqual([]);
+    await clio.close();
+  });
+});
+
 // ── 6.24: FTS title boosting (Cerefox parity) ─────────────────────────────
 
 describe("LocalClio.search title boosting (item 6.24)", () => {

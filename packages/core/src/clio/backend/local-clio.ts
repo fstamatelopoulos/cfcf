@@ -367,6 +367,79 @@ export class LocalClio implements MemoryBackend {
     return this.createProject({ name: nameOrId, description: opts.description });
   }
 
+  async editProject(
+    idOrName: string,
+    edits: { name?: string; description?: string },
+  ): Promise<ClioProject> {
+    const target = await this.getProject(idOrName);
+    if (!target) throw new Error(`Clio Project "${idOrName}" not found`);
+
+    const newName = edits.name?.trim();
+    const newDescription = edits.description;
+    // Both omitted (or name unchanged + description omitted) is a no-op.
+    const nameChanged = newName !== undefined && newName !== target.name;
+    const descChanged = newDescription !== undefined && newDescription !== (target.description ?? "");
+    if (!nameChanged && !descChanged) return target;
+
+    if (nameChanged) {
+      if (!newName) {
+        throw new Error("editProject: name cannot be empty");
+      }
+      // Reject collisions with another project (case-insensitive, mirrors
+      // createProject's uniqueness check).
+      const collide = await this.getProject(newName);
+      if (collide && collide.id !== target.id) {
+        throw new Error(`Clio Project "${newName}" already exists`);
+      }
+    }
+
+    this.db.prepare(`
+      UPDATE clio_projects
+         SET name = COALESCE(?, name),
+             description = CASE WHEN ?2 IS NULL THEN description ELSE ?2 END,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE id = ?
+    `).run(
+      nameChanged ? newName! : null,
+      descChanged ? (newDescription ?? null) : null,
+      target.id,
+    );
+
+    const updated = await this.getProject(target.id);
+    if (!updated) throw new Error("editProject: post-update lookup failed (internal error)");
+    return updated;
+  }
+
+  async deleteProject(idOrName: string): Promise<{ deleted: true }> {
+    const target = await this.getProject(idOrName);
+    if (!target) throw new Error(`Clio Project "${idOrName}" not found`);
+
+    // Refuse if any documents still belong to the project. The
+    // clio_documents.project_id FK is ON DELETE RESTRICT, so the SQL
+    // DELETE would fail anyway -- this check just gives the caller a
+    // friendly message that distinguishes live vs. soft-deleted docs
+    // (the user might not realise tombstones still pin the project).
+    const counts = this.db.query<{ live: number; deleted: number }, [string]>(
+      `SELECT
+         SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS live,
+         SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted
+       FROM clio_documents WHERE project_id = ?`,
+    ).get(target.id);
+    const live = counts?.live ?? 0;
+    const tombstones = counts?.deleted ?? 0;
+    if (live + tombstones > 0) {
+      const parts: string[] = [];
+      if (live > 0) parts.push(`${live} live document${live === 1 ? "" : "s"}`);
+      if (tombstones > 0) parts.push(`${tombstones} soft-deleted (recoverable) document${tombstones === 1 ? "" : "s"}`);
+      throw new Error(
+        `Clio Project "${target.name}" still has ${parts.join(" + ")}; reassign or remove them first.`,
+      );
+    }
+
+    this.db.prepare(`DELETE FROM clio_projects WHERE id = ?`).run(target.id);
+    return { deleted: true };
+  }
+
   // ── Documents ──────────────────────────────────────────────────────────
 
   async ingest(req: IngestRequest): Promise<IngestResult> {
@@ -404,20 +477,42 @@ export class LocalClio implements MemoryBackend {
       if (req.updateIfExists) {
         result.note = "documentId provided; updateIfExists flag was overridden";
       }
-      this.writeAudit({
-        eventType: "update-content",
-        actor,
-        projectId: result.document.projectId,
-        documentId: result.id,
-        metadata: {
-          version_id: result.versionId,
-          version_number: result.versionNumber,
-          chunks: result.chunksInserted,
-          total_chars: result.document.totalChars,
-          title_preserved: req.title === undefined,
-          author_preserved: req.author === undefined,
-        },
-      });
+      // 6.18 round-2: pick the audit event type based on what
+      // updateDocument actually did. content-unchanged-and-no-meta-change
+      // skips entirely; content-unchanged-with-meta-change writes
+      // `edit-metadata`; content-changed writes `update-content`.
+      if (result.action === "skipped") {
+        // Full no-op: no audit row (mirrors the create-path dedup).
+      } else if (!result.versionId) {
+        // Metadata-only path: no version snapshot was taken.
+        this.writeAudit({
+          eventType: "edit-metadata",
+          actor,
+          projectId: result.document.projectId,
+          documentId: result.id,
+          metadata: {
+            via: "ingest-with-document-id",
+            content_unchanged: true,
+            title_preserved: req.title === undefined,
+            author_preserved: req.author === undefined,
+          },
+        });
+      } else {
+        this.writeAudit({
+          eventType: "update-content",
+          actor,
+          projectId: result.document.projectId,
+          documentId: result.id,
+          metadata: {
+            version_id: result.versionId,
+            version_number: result.versionNumber,
+            chunks: result.chunksInserted,
+            total_chars: result.document.totalChars,
+            title_preserved: req.title === undefined,
+            author_preserved: req.author === undefined,
+          },
+        });
+      }
       return result;
     }
 
@@ -434,19 +529,36 @@ export class LocalClio implements MemoryBackend {
       const existing = await this.findDocumentByTitle(project.id, req.title);
       if (existing) {
         const result = await this.updateDocument(existing, req, contentHash);
-        this.writeAudit({
-          eventType: "update-content",
-          actor,
-          projectId: result.document.projectId,
-          documentId: result.id,
-          metadata: {
-            version_id: result.versionId,
-            version_number: result.versionNumber,
-            chunks: result.chunksInserted,
-            total_chars: result.document.totalChars,
-            matched_by: "title",
-          },
-        });
+        // 6.18 round-2: same audit-shape branching as Branch 1.
+        if (result.action === "skipped") {
+          // Full no-op: no audit row.
+        } else if (!result.versionId) {
+          this.writeAudit({
+            eventType: "edit-metadata",
+            actor,
+            projectId: result.document.projectId,
+            documentId: result.id,
+            metadata: {
+              via: "ingest-update-if-exists",
+              content_unchanged: true,
+              matched_by: "title",
+            },
+          });
+        } else {
+          this.writeAudit({
+            eventType: "update-content",
+            actor,
+            projectId: result.document.projectId,
+            documentId: result.id,
+            metadata: {
+              version_id: result.versionId,
+              version_number: result.versionNumber,
+              chunks: result.chunksInserted,
+              total_chars: result.document.totalChars,
+              matched_by: "title",
+            },
+          });
+        }
         return result;
       }
       // Fall through to create.
@@ -597,6 +709,63 @@ export class LocalClio implements MemoryBackend {
     const titlePreserved = req.title === undefined;
     const newAuthor = req.author?.trim() ? req.author.trim() : target.author;
     const authorPreserved = req.author === undefined;
+
+    // ── 6.18 round-2: content-unchanged short-circuit (Cerefox parity) ─
+    //
+    // If the new content is byte-identical to what's already stored, skip
+    // the chunking + embedding + version-snapshot work entirely. Mirrors
+    // Cerefox's pipeline.py:188-202 ("Document already ingested (hash
+    // match)") which returns action="skipped".
+    //
+    // One nuance: a user may have called update with the same content but
+    // a different title / author / metadata. Don't silently drop a
+    // metadata change. Three branches:
+    //   - all unchanged                  → full no-op (action="skipped")
+    //   - content unchanged + meta diff  → metadata-only path; UPDATE
+    //                                       row; no version snapshot
+    //   - content changed                → fall through to existing flow
+    if (target.contentHash === contentHash) {
+      const newMetadataJson = req.metadata !== undefined ? JSON.stringify(req.metadata) : null;
+      const oldMetadataJson = JSON.stringify(target.metadata ?? {});
+      const metaChanged = newMetadataJson !== null && newMetadataJson !== oldMetadataJson;
+      const titleChanged = !titlePreserved && resolvedTitle !== target.title;
+      const authorChanged = !authorPreserved && newAuthor !== target.author;
+
+      if (!metaChanged && !titleChanged && !authorChanged) {
+        // Full no-op. No DB writes, no audit row.
+        return {
+          id: target.id,
+          action: "skipped",
+          created: false,
+          document: target,
+          chunksInserted: 0,
+        };
+      }
+
+      // Metadata-only path. UPDATE the row in place, no version snapshot,
+      // no chunk re-write. The audit entry mirrors what the PATCH path
+      // writes for an `edit-metadata` event so the audit log reads
+      // consistently regardless of which path the caller used.
+      const now = new Date().toISOString();
+      const finalMetadata = req.metadata ?? target.metadata;
+      this.db.prepare(`
+        UPDATE clio_documents
+           SET title = ?, author = ?, metadata = ?, updated_at = ?
+         WHERE id = ?
+      `).run(resolvedTitle, newAuthor, JSON.stringify(finalMetadata), now, target.id);
+
+      const reread = await this.getDocument(target.id);
+      if (!reread) throw new Error("updateDocument: post-meta-update lookup failed");
+      return {
+        id: target.id,
+        action: "updated",
+        created: false,
+        document: reread,
+        chunksInserted: 0,
+        note: "content unchanged; metadata-only update (no version snapshot)",
+      };
+    }
+
     const resolvedMetadata = req.metadata ?? target.metadata;
 
     const embedder = await this.getEmbedder();
