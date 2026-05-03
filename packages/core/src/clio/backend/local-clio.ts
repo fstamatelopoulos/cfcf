@@ -58,16 +58,17 @@ const FTS_CANDIDATE_MULTIPLIER = 5;
  *   1: chunk_title  (chunk heading from clio_chunks.title)
  *   2: content      (chunk body from clio_chunks.content)
  *
- * Higher value = more important. Cerefox's Postgres equivalent
- * (`setweight(..., 'A')` for titles + `'B'` for content) gives an
- * effective ratio of 2.5× via ts_rank_cd defaults; SQLite FTS5's
- * per-column bm25() weights are the equivalent knob. We use 4× as a
- * slightly stronger boost so doc-title hits clearly outrank body-only
- * hits in the dense corpora the agent roles ingest. Tunable here in
- * one spot if the ratio needs adjusting later.
+ * Higher value = more important. **Matches Cerefox parity**: their
+ * Postgres `setweight(..., 'A')` for titles + `'B'` for content yields
+ * an effective ratio of 1.0:0.4 = 2.5× via ts_rank_cd's default weight
+ * table {D:0.1, C:0.2, B:0.4, A:1.0}. SQLite FTS5's per-column bm25()
+ * weights are the equivalent knob. Tunable here in one spot if the
+ * ratio needs adjusting; the underlying ranker (BM25) is necessarily
+ * different from Postgres's ts_rank_cd but the title-boost ratio is
+ * what affects user-visible ordering most.
  */
-const FTS_BM25_WEIGHT_DOC_TITLE = 4.0;
-const FTS_BM25_WEIGHT_CHUNK_TITLE = 4.0;
+const FTS_BM25_WEIGHT_DOC_TITLE = 2.5;
+const FTS_BM25_WEIGHT_CHUNK_TITLE = 2.5;
 const FTS_BM25_WEIGHT_CONTENT = 1.0;
 
 // UUID v4 pattern (loose). Used to distinguish "project id" from "project name".

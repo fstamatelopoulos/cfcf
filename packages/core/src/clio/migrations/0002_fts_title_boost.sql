@@ -2,12 +2,12 @@
 --
 -- Replaces the 2-column clio_chunks_fts (chunk_title + content) with a
 -- 3-column version (doc_title + chunk_title + content). searchFts() then
--- calls bm25(clio_chunks_fts, 4.0, 4.0, 1.0) so a query term that
+-- calls bm25(clio_chunks_fts, 2.5, 2.5, 1.0) so a query term that
 -- matches a document title or a chunk heading outranks a body-only
--- match. Mirrors Cerefox's setweight A/B pattern -- their A:B ratio is
--- 2.5× via Postgres ts_rank_cd defaults; SQLite FTS5's per-column
--- bm25() weights are the equivalent knob (we use 4× as a slightly
--- stronger boost; tunable in searchFts()).
+-- match. Mirrors Cerefox's setweight A/B pattern -- their A:B ratio
+-- is 2.5× via Postgres ts_rank_cd defaults; SQLite FTS5's per-column
+-- bm25() weights are the equivalent knob, set to the same 2.5× ratio
+-- here for parity.
 --
 -- The doc_title column comes from clio_documents.title via JOINs in the
 -- triggers below. Three trigger flows handle every path the index has
