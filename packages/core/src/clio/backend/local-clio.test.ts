@@ -274,6 +274,145 @@ describe("LocalClio.search (FTS)", () => {
   });
 });
 
+// ── 6.24: FTS title boosting (Cerefox parity) ─────────────────────────────
+
+describe("LocalClio.search title boosting (item 6.24)", () => {
+  it("title-only matches outrank body-only matches for the same query", async () => {
+    // Two docs in the same project. Doc A has "octopus" ONLY in the
+    // title; Doc B has "octopus" ONLY in the body. With per-column bm25
+    // weights (4× for doc_title vs 1× for content), Doc A should rank
+    // higher for the query "octopus" -- mirrors Cerefox's setweight A
+    // behaviour.
+    const clio = makeClio();
+    await clio.ingest({
+      project: "p",
+      title: "Octopus migrations",
+      content: "# Strategy\n\nUse phased rollouts when changing schemas. Discuss tradeoffs with the team.",
+    });
+    await clio.ingest({
+      project: "p",
+      title: "Database notes",
+      content: "# Strategy\n\nWhen running an octopus migration, prefer phased rollouts over big-bang deploys.",
+    });
+    const r = await clio.search({ query: "octopus" });
+    expect(r.hits.length).toBeGreaterThanOrEqual(2);
+    // First hit is the title-bearing doc (A); body-only doc comes after.
+    expect(r.hits[0].docTitle).toBe("Octopus migrations");
+    const bIdx = r.hits.findIndex((h) => h.docTitle === "Database notes");
+    expect(bIdx).toBeGreaterThan(0);
+    await clio.close();
+  });
+
+  it("chunk-heading matches outrank body-only matches", async () => {
+    // Both docs have neutral titles. Doc A has "octopus" in a heading
+    // (which becomes the chunk_title); Doc B has it only in body. The
+    // chunk_title column carries the same 4× bm25 weight as doc_title,
+    // so A should rank higher.
+    const clio = makeClio();
+    await clio.ingest({
+      project: "p",
+      title: "Notes A",
+      content: "# Octopus rollout\n\nPhased schema changes only.",
+    });
+    await clio.ingest({
+      project: "p",
+      title: "Notes B",
+      content: "# Strategy\n\nPhased schema rollouts mention octopus deployments in passing.",
+    });
+    const r = await clio.search({ query: "octopus" });
+    expect(r.hits.length).toBeGreaterThanOrEqual(2);
+    expect(r.hits[0].docTitle).toBe("Notes A");
+    await clio.close();
+  });
+
+  it("renaming a document refreshes the FTS doc_title for all current chunks", async () => {
+    // Insert a doc with a neutral title; the search term is in neither
+    // title nor body. Rename the doc to include the search term -- the
+    // doc-title trigger should refresh FTS so the search now finds it.
+    const clio = makeClio();
+    const ingested = await clio.ingest({
+      project: "p",
+      title: "Misnamed doc",
+      content: "# Section\n\nUnrelated body content about pancakes.",
+    });
+
+    // First search: "octopus" matches nothing.
+    const before = await clio.search({ query: "octopus" });
+    expect(before.hits).toEqual([]);
+
+    // Rename the doc title to include "octopus". The migration's
+    // clio_documents_fts_title_au trigger refreshes FTS for all live
+    // chunks of this doc.
+    const renamed = await clio.editDocument(ingested.id, { title: "Octopus migrations" });
+    expect(renamed.title).toBe("Octopus migrations");
+
+    // Same query now finds it.
+    const after = await clio.search({ query: "octopus" });
+    expect(after.hits.length).toBeGreaterThan(0);
+    expect(after.hits[0].docTitle).toBe("Octopus migrations");
+    await clio.close();
+  });
+
+  it("title-rename trigger doesn't blow away the FTS for unrelated docs", async () => {
+    // Two docs in the same project. Renaming doc A should not affect
+    // doc B's searchability. Catches a class of bug where the trigger
+    // accidentally targets the wrong scope.
+    const clio = makeClio();
+    const a = await clio.ingest({ project: "p", title: "Alpha", content: "# Note\n\napple" });
+    await clio.ingest({ project: "p", title: "Beta", content: "# Note\n\nbanana" });
+
+    await clio.editDocument(a.id, { title: "Alpha renamed" });
+
+    const ra = await clio.search({ query: "apple" });
+    const rb = await clio.search({ query: "banana" });
+    expect(ra.hits.map((h) => h.docTitle)).toContain("Alpha renamed");
+    expect(rb.hits.map((h) => h.docTitle)).toContain("Beta");
+    await clio.close();
+  });
+
+  it("soft-delete removes a document from search results (existing JOIN-level filter)", async () => {
+    // Soft-delete is the user-facing delete path. searchFts already
+    // filters `d.deleted_at IS NULL` at the JOIN, so the doc disappears
+    // from search the moment it's tombstoned -- doesn't depend on the
+    // new triggers but worth verifying the title-boost migration didn't
+    // accidentally break this path.
+    const clio = makeClio();
+    const ingested = await clio.ingest({
+      project: "p",
+      title: "About octopuses",
+      content: "# Habitat\n\nOctopuses live in oceans.",
+    });
+    let r = await clio.search({ query: "octopuses" });
+    expect(r.hits.length).toBeGreaterThan(0);
+
+    await clio.deleteDocument(ingested.id);
+
+    r = await clio.search({ query: "octopuses" });
+    expect(r.hits).toEqual([]);
+    await clio.close();
+  });
+
+  it("title-boost backfill: existing pre-migration chunks pick up doc_title", async () => {
+    // The migration's INSERT...SELECT backfill repopulates FTS from
+    // current chunks with doc_title joined in. We can't easily simulate
+    // a "pre-migration" DB in a unit test (the DB is created fresh with
+    // both migrations applied), but we can verify that ingested chunks
+    // are searchable by doc_title -- which is exactly the property the
+    // backfill restores. This serves as an end-to-end check that
+    // doc_title makes it into the index.
+    const clio = makeClio();
+    await clio.ingest({
+      project: "p",
+      title: "UniqueTitleWord",
+      content: "# Section\n\nBody mentions nothing related.",
+    });
+    const r = await clio.search({ query: "UniqueTitleWord" });
+    expect(r.hits.length).toBeGreaterThan(0);
+    expect(r.hits[0].docTitle).toBe("UniqueTitleWord");
+    await clio.close();
+  });
+});
+
 // ── 5.12: doc-level search dedup ───────────────────────────────────────────
 
 describe("LocalClio.searchDocuments (5.12, Cerefox parity)", () => {

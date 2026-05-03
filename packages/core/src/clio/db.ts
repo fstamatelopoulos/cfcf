@@ -31,6 +31,7 @@ import { mkdirSync, existsSync } from "fs";
 // migration file. Future schema changes get their own NEW migration
 // file (0002_*.sql, 0003_*.sql, ...) -- don't edit 0001 in place.
 import migration_0001_initial from "./migrations/0001_initial.sql" with { type: "text" };
+import migration_0002_fts_title_boost from "./migrations/0002_fts_title_boost.sql" with { type: "text" };
 
 export interface ClioMigration {
   /** Filename used as a unique key in the `clio_migrations` tracking table. */
@@ -41,6 +42,7 @@ export interface ClioMigration {
 
 const MIGRATIONS: ClioMigration[] = [
   { filename: "0001_initial.sql", sql: migration_0001_initial },
+  { filename: "0002_fts_title_boost.sql", sql: migration_0002_fts_title_boost },
 ];
 
 /**
