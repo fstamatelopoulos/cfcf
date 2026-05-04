@@ -13,9 +13,48 @@ _No changes yet._
 
 ## [0.19.0] -- 2026-05-03
 
-**Item 6.24 ships.** First feature drop in 0.19.0; more iter-6 work (6.18 web Clio tab + others) will land under the same minor before this gets cut to npm.
+**Items 6.24 + 6.18 ship.** Feature drops in 0.19.0; one more iter-6 item (6.9 -- rationalise Clio usage across agent roles) will land under the same minor before this gets cut to npm.
 
-Minor bump because the migration changes the on-disk FTS schema. Reading + writing remain backward compatible (the migration is automatic, runs on first Clio touch after upgrade, and is wrapped in `BEGIN IMMEDIATE; ...; COMMIT` so partial failures roll back cleanly). No API or config breaking changes.
+Minor bump because 6.24's migration changes the on-disk FTS schema. Reading + writing remain backward compatible (the migration is automatic, runs on first Clio touch after upgrade, and is wrapped in `BEGIN IMMEDIATE; ...; COMMIT` so partial failures roll back cleanly). 6.18 is purely additive (new web surface + new actor-stamp metadata + system-project guards); no API or config breaking changes.
+
+### Added — Item 6.18: web Clio Memory page (full editorial layer)
+
+Replaces the read-only Clio prototype shipped in 6.12 with a full-featured Memory page (`/#/memory`). Three rounds of iteration landed on the branch:
+
+**Round 1 — tabbed page + persistent sidebar.**
+
+- Five tabs: **Search** (auto / fts / semantic / hybrid; per-call `--alpha` / `--small-doc-threshold` / `--context-window` knobs), **Browse** (filterable doc list with project + metadata facets), **Ingest** (paste-or-upload + metadata editor), **Audit** (mutation history with before/after diffs for `edit-metadata`), **Projects** (CRUD).
+- Persistent sidebar: **Stats** (docs / chunks / projects / DB size + location / active embedder) + **Project filter** (clicking a project scopes every tab's query).
+- Hash routing: `#/memory?tab=...&doc=...` so deep links + browser back/forward work.
+- Document detail overlay: metadata / versions / audit / content sections with Edit / Delete / Restore actions.
+
+**Round 2 — project edit/delete + document edit + content-unchanged short-circuit.**
+
+- `LocalClio.editProject` / `deleteProject` with workspace-dependency checks (refuses delete if any cfcf workspace still pins the project).
+- `PATCH` / `DELETE /api/clio/projects/:idOrName` with structured 409 responses (`{dependentWorkspaces: [...], docCount: N}` so the dialog can render a precise refusal).
+- `updateDocument` content-unchanged short-circuit: 3-branch logic (full skip when nothing changed / metadata-only with one `edit-metadata` audit entry / full re-chunk + version snapshot when content moved). Avoids a stale-version proliferation bug surfaced during round-2 dogfooding.
+- Web dialogs: `EditProjectDialog`, `DeleteProjectDialog` (type-the-name confirm), `EditDocumentDialog` (diffs draft vs original, routes through `PATCH` for metadata-only and/or `POST /api/clio/ingest` with `documentId` for content updates).
+
+**Round 3 — system projects + actor stamp + sidebar polish.**
+
+- **System-managed Clio Projects** (`packages/core/src/clio/system-projects.ts`): single source of truth for the four cf-system-* projects (`cf-system-default`, `cf-system-memory-global`, `cf-system-pa-memory`, `cf-system-ha-memory`). Locked from rename/delete at the backend layer (`editProject` + `deleteProject` throw on a system-project name) so the lock holds across web UI + CLI + any future surface. Doc ingest into a system project is **allowed** — only the project itself (rename / delete / re-describe) is locked.
+- **Boot-time `ensureSystemProjects()`** called from `start.ts` on every server start so the projects appear in listings before any agent has written to one. Idempotent; best-effort (failures don't block boot, the auto-create-on-first-use path is still in place). Deliberately **not** seeded via SQL migrations (migrations are immutable; this stays in TypeScript so adding a new system project is a single edit that always runs in sync with the constants).
+- **Clio actor / author convention** (`packages/core/src/clio/actor.ts`): every Clio mutation now stamps a structured `<role>|<agent>|<model>` identifier (e.g. `dev|claude-code|sonnet`, `product-architect|codex|gpt-5`). The audit log + future analytics filter on this stamp; missing or inconsistent stamps make writes invisible to those filters. Threaded through:
+  - `loop-ingest.ts` — `actorForRole(workspace, role)` helper passes `author: <stamp>` to all 5 auto-ingest sites (reflection / architect / decision-log / iteration-summary / raw artifacts).
+  - PA + HA prompt-assemblers — render a "Clio actor stamp" subsection inside Memory + pre-fill `--author "<stamp>"` / `--actor "<stamp>"` on every `cfcf clio docs ingest` / `delete` / `restore` / `edit` example.
+  - `cfcf spec` + `cfcf help assistant` launchers — compute the actor at launch from the resolved AgentConfig and pass it to the assembler.
+  - Iteration-role `clio-guide.md` template — brief author convention section so dev / judge / architect / reflection / documenter use the right stamp on direct writes too.
+
+  The stamp is **metadata, not access control** — any role can write to any doc; this is shared memory across the user + every agent in the cf² ecosystem. Mirrors Cerefox's actor-stamp convention so a future swap-in to a Cerefox-backed Clio doesn't break audit-log filters or analytics.
+- **Web UX polish**: Memory sidebar Stats panel (long values were left-aligned and wrapping awkwardly because the dl flex row had no `min-width: 0` / `text-align` on `dd`); DB location moved into the dl as a normal row instead of a separate hint; (system) badge moved from the Name column to the Actions column on `ProjectsTab` (replaces the "— system —" label, reads more naturally as "this is what stands in for Edit/Delete").
+
+**Cerefox interface parity** is now a durable rule in `CLAUDE.md`: Clio is the local-memory migration of Cerefox, and the long-term vision is to swap in a real `CerefoxRemote` backend behind the existing Clio API without changing the CLI verbs, web UI flows, or response shapes. Internal stack differences (SQLite/FTS5 vs Postgres/tsvector + pgvector; per-column `bm25()` weights vs `setweight` tsvector composition) are stack-driven implementation choices and they're fine; what must stay compatible is endpoint shapes / query parameter names + semantics / response field names + shapes / CLI verb structure.
+
+**Read-audit gap** (captured as a 6.9 follow-up): cfcf's audit log captures mutations only. Cerefox additionally maintains a `usage_log` for reads (each `search` / `docs get` records the requestor + query). Likely yes for cfcf parity for the same actor-convention reason; needs a privacy review (does logging every search query risk capturing prompt-leakage if the agent quotes problem.md content into a query?). Tracked in `docs/plan.md` row 6.9.
+
+**Files added**: `packages/core/src/clio/{actor,system-projects}.ts`; `packages/web/src/pages/memory/{AuditTab,BrowseTab,DeleteProjectDialog,DocumentDetail,EditDocumentDialog,EditProjectDialog,IngestTab,MemorySidebar,ProjectsTab,SearchTab}.tsx`; `packages/web/src/hooks/useRoute.{ts,test.ts}`; `docs/design/clio-memory-web-ui.md`.
+
+**Tests added**: 8 to `local-clio.test.ts` (project edit/delete with dependent-workspace check; content-unchanged short-circuit branches; system-project guard); 4 to `clio.test.ts` (PATCH/DELETE routes); HA + PA prompt-assembler tests for the actor stamp; useRoute hook tests.
 
 ### Added — Item 6.24: Clio FTS title boosting (Cerefox parity)
 
