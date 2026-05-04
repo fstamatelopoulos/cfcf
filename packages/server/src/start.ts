@@ -22,6 +22,8 @@ import {
   JobScheduler,
   makeUpdateCheckJob,
   clearStaleUpdateFlag,
+  ensureSystemProjects,
+  getClioBackend,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -172,6 +174,18 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
     console.error("Uncaught exception:", err);
     gracefulShutdown("uncaughtException", 1).catch(() => process.exit(1));
   });
+
+  // 6.18 round-3: pre-create system-managed Clio Projects so they're
+  // visible in the web UI + CLI listings even before any agent has
+  // written to one. Best-effort -- a failure here doesn't block boot
+  // because the auto-create-on-first-use path is still in place.
+  try {
+    await ensureSystemProjects(getClioBackend());
+  } catch (err) {
+    console.warn(
+      `ensureSystemProjects failed at boot (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // Local stale-flag GC (item 6.20 follow-up). The scheduler's runOnStart
   // update-check (below) does the canonical refresh + cleanup against the
