@@ -21,8 +21,8 @@ describe("assembleHelpAssistantPrompt", () => {
 
   it("declares both Clio memory projects in the Memory section", () => {
     const prompt = assembleHelpAssistantPrompt();
-    expect(prompt).toContain("`cfcf-memory-ha`");
-    expect(prompt).toContain("`cfcf-memory-global`");
+    expect(prompt).toContain("`cf-system-ha-memory`");
+    expect(prompt).toContain("`cf-system-memory-global`");
   });
 
   it("notes empty memory inventory when no entries provided", () => {
@@ -32,7 +32,7 @@ describe("assembleHelpAssistantPrompt", () => {
 
   it("inlines the provided memory inventory verbatim", () => {
     const inv = [
-      "### Project: `cfcf-memory-global` (1 doc)\n- **always TS** (`abc-123`)\n  user prefers TypeScript",
+      "### Project: `cf-system-memory-global` (1 doc)\n- **always TS** (`abc-123`)\n  user prefers TypeScript",
     ];
     const prompt = assembleHelpAssistantPrompt({ memoryInventory: inv });
     expect(prompt).toContain("always TS");
@@ -94,6 +94,22 @@ describe("assembleHelpAssistantPrompt", () => {
     const prompt = assembleHelpAssistantPrompt();
     expect(prompt.length).toBeGreaterThan(100_000);
     expect(prompt.length).toBeLessThan(500_000); // sanity ceiling
+  });
+
+  it("renders the Clio actor stamp section with a placeholder when clioActor is omitted", () => {
+    const prompt = assembleHelpAssistantPrompt();
+    expect(prompt).toContain("## Clio actor stamp");
+    expect(prompt).toContain("help-assistant|<adapter>|<model>");
+  });
+
+  it("threads the clioActor verbatim into the Clio actor stamp section", () => {
+    const prompt = assembleHelpAssistantPrompt({
+      clioActor: "help-assistant|claude-code|haiku",
+    });
+    expect(prompt).toContain("## Clio actor stamp");
+    expect(prompt).toContain("help-assistant|claude-code|haiku");
+    expect(prompt).toContain(`--author "help-assistant|claude-code|haiku"`);
+    expect(prompt).not.toContain("help-assistant|<adapter>|<model>");
   });
 
   it("declares the HA's behavior contract in the closing notes", () => {

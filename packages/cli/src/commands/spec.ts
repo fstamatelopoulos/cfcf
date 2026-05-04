@@ -37,6 +37,8 @@ import {
   launchProductArchitect,
   assessState,
   readMemoryInventory,
+  formatClioActor,
+  ROLE_PRODUCT_ARCHITECT,
   type AgentConfig,
 } from "@cfcf/core";
 
@@ -127,6 +129,7 @@ async function runSpec(opts: SpecOptions): Promise<void> {
     state,
     memory,
     initialTask: opts.initialTask,
+    clioActor: formatClioActor(ROLE_PRODUCT_ARCHITECT, agent.adapter, agent.model),
   });
 
   // 4b. Compute the first user message (Flavour A — agent self-introduces

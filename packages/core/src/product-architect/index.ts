@@ -39,7 +39,8 @@ export {
   // Backwards-compat alias for v1 callers.
   loadMemoryInventory as loadPaMemoryInventory,
   PA_PROJECT,
-  PA_MEMORY_PROJECT,
+  // PA_MEMORY_PROJECT is canonical from clio/system-projects;
+  // re-exported via @cfcf/core. Don't re-export it here too -- ambiguity.
   PA_WORKSPACE_MEMORY_TITLE,
   PA_GLOBAL_MEMORY_TITLE,
   READONLY_OTHER_ROLE_PROJECTS,

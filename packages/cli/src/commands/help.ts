@@ -30,6 +30,8 @@ import {
   assembleHelpAssistantPrompt,
   launchHelpAssistant,
   loadMemoryInventory,
+  formatClioActor,
+  ROLE_HELP_ASSISTANT,
   type AgentConfig,
 } from "@cfcf/core";
 
@@ -255,6 +257,7 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
   const systemPrompt = assembleHelpAssistantPrompt({
     workspace: workspaceCtx,
     memoryInventory,
+    clioActor: formatClioActor(ROLE_HELP_ASSISTANT, agent.adapter, agent.model),
   });
 
   // 5. --print-prompt escape hatch: emit the prompt + exit.

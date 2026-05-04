@@ -206,7 +206,7 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
   await mkdir(paCachePath, { recursive: true });
 
   // Pre-create the PA + global Clio Projects so the agent's
-  // `cfcf clio docs ingest --project cfcf-memory-pa` command lands in
+  // `cfcf clio docs ingest --project cf-system-pa-memory` command lands in
   // the right place. Without this the auto-route-on-missing semantics
   // would push the doc into the `default` Project, which produces the
   // "Clio says no memory but disk has memory" discrepancy users hit

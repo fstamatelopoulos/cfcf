@@ -4,6 +4,21 @@ Clio is cf²'s **cross-workspace memory layer**. Every role agent (dev, judge, a
 
 This quickstart covers Clio as it stands on the iteration-5 work (items 5.7 + 5.11 + 5.12 + 5.13). Originally shipped in v0.9.0 (item 5.7) as three logical sub-PRs: PR1 (FTS + chunker + CRUD + CLI), PR2 (embedders + hybrid search), PR3 (iteration-loop auto-ingest + context preload). Iter-5 follow-ups added: update-doc API + version snapshots (5.11), agent-parity API surface (5.12, including doc-level search default + Cerefox-style alpha-weighted hybrid), audit log + soft-delete (5.13).
 
+## Two surfaces: CLI for agents, web UI for humans
+
+Two ways to interact with Clio depending on who you are:
+
+- **`cfcf clio …` CLI** — the agents' primary R/W interface during loop execution. Deterministic, fast, scriptable. Documented later in this file (`Search`, `Update an existing document`, etc.).
+- **Web UI Memory page** at `http://localhost:7233/#/memory` — the human surface. Five tabs covering everything a person typically wants to do interactively:
+  - **Search** — query box with mode picker (`auto` / `fts` / `semantic` / `hybrid`) + result-type picker (`documents` for the doc-level small-to-big shape agents use; `chunks` for raw section-level inspection) + project filter + match count. Click a hit opens the Document detail overlay.
+  - **Browse** — paginated documents list scoped to the sidebar's selected project (or "all projects"). Same click-to-open behaviour.
+  - **Ingest** — paste a document's content into a textarea, set title + project + author + metadata key/value pairs, optionally toggle "update if a doc with this title exists". The CLI complement is `cfcf clio ingest` (which also handles file paths + stdin).
+  - **Audit** — global audit log with filters (event type, actor, since, document id). Same data the CLI's `cfcf clio docs audit` exposes.
+  - **Projects** — list with doc counts + a create form. (Rename / delete are deferred — neither the API nor the CLI surface them today.)
+- A persistent left sidebar shows DB stats (doc / chunk / project counts, DB size + path, active embedder) and a clickable project filter that scopes Search / Browse / Ingest / Audit to one project at a time.
+
+The web UI is intentionally not a 1:1 mirror of the CLI — it's tailored for human visibility + occasional curation. The CLI stays the canonical interface for agents and scripts.
+
 ## Mental model
 
 - **cf² workspace** = one managed git repo (same as today).

@@ -18,6 +18,30 @@ import type { WorkspaceConfig, JudgeSignals, ReflectionSignals } from "../types.
 import type { MemoryBackend } from "./backend/types.js";
 import type { IngestResult } from "./types.js";
 import { readConfig } from "../config.js";
+import { DEFAULT_PROJECT } from "./system-projects.js";
+import { formatClioActor } from "./actor.js";
+
+/**
+ * Resolve the canonical Clio actor stamp for a role-tagged auto-ingest
+ * (item 6.18 round-3). Maps the role name to the workspace's per-role
+ * AgentConfig and formats `<role>|<adapter>|<model>`. For roles
+ * without a per-workspace agent config (e.g. "cfcf" itself for
+ * iteration-summary writes, or arbitrary decision-log roles), falls
+ * back to `<role>|cfcf|system` so the audit-log still distinguishes
+ * cfcf-system writes from agent writes.
+ */
+function actorForRole(workspace: WorkspaceConfig, role: string): string {
+  switch (role) {
+    case "dev":         return formatClioActor(role, workspace.devAgent.adapter,        workspace.devAgent.model);
+    case "judge":       return formatClioActor(role, workspace.judgeAgent.adapter,      workspace.judgeAgent.model);
+    case "architect":   return formatClioActor(role, workspace.architectAgent.adapter,  workspace.architectAgent.model);
+    case "documenter":  return formatClioActor(role, workspace.documenterAgent.adapter, workspace.documenterAgent.model);
+    case "reflection":
+      if (workspace.reflectionAgent) return formatClioActor(role, workspace.reflectionAgent.adapter, workspace.reflectionAgent.model);
+      return formatClioActor(role, workspace.architectAgent.adapter, workspace.architectAgent.model); // backfill match
+    default: return `${role}|cfcf|system`;
+  }
+}
 
 export type IngestPolicy = "off" | "summaries-only" | "all";
 
@@ -34,11 +58,11 @@ export async function resolveIngestPolicy(workspace: WorkspaceConfig): Promise<I
 
 /**
  * Resolve the Clio Project to ingest into. Uses the workspace's
- * `clioProject` when set; otherwise the named "default" Project (auto-
- * created by the backend on first ingest).
+ * `clioProject` when set; otherwise the named system fallback Project
+ * (auto-created by the backend on first ingest).
  */
 function resolveClioProject(workspace: WorkspaceConfig): string {
-  return workspace.clioProject?.trim() || "default";
+  return workspace.clioProject?.trim() || DEFAULT_PROJECT;
 }
 
 // ── Shared metadata builder ───────────────────────────────────────────────
@@ -84,6 +108,7 @@ export async function ingestReflectionAnalysis(
       project: resolveClioProject(workspace),
       title: `${workspace.name}: reflection iter ${iteration}`,
       content,
+      author: actorForRole(workspace, "reflection"),
       source: `cfcf-auto:reflection-analysis:iter-${iteration}`,
       metadata: baseMetadata(workspace, {
         role: "reflection",
@@ -123,6 +148,7 @@ export async function ingestArchitectReview(
       project: resolveClioProject(workspace),
       title: `${workspace.name}: architect review (${readiness ?? "unknown"})`,
       content,
+      author: actorForRole(workspace, "architect"),
       source: `cfcf-auto:architect-review:${trigger}`,
       metadata: baseMetadata(workspace, {
         role: "architect",
@@ -234,6 +260,7 @@ export async function ingestDecisionLogEntries(
         project: resolveClioProject(workspace),
         title: `${workspace.name}: decision-log ${e.category} (iter ${iteration}, ${e.role})`,
         content: body,
+        author: actorForRole(workspace, e.role),
         source: `cfcf-auto:decision-log:iter-${iteration}:${e.timestamp}`,
         metadata: baseMetadata(workspace, {
           role: e.role,
@@ -321,6 +348,7 @@ export async function ingestIterationSummary(
       project: resolveClioProject(input.workspace),
       title: `${input.workspace.name}: iteration ${input.iteration} summary`,
       content,
+      author: actorForRole(input.workspace, "cfcf"), // → cfcf|system
       source: `cfcf-auto:iteration-summary:iter-${input.iteration}`,
       metadata: baseMetadata(input.workspace, {
         role: "cfcf",
@@ -380,6 +408,9 @@ export async function ingestRawIterationArtifacts(
         project: resolveClioProject(workspace),
         title: t.title,
         content,
+        // Each `targets` entry has metadata.role identifying the
+        // role-bound artifact (dev/judge/architect/reflection/...).
+        author: actorForRole(workspace, String(t.metadata.role ?? "cfcf")),
         source: t.source,
         metadata: baseMetadata(workspace, t.metadata),
       });

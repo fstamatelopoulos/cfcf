@@ -55,6 +55,17 @@ export interface AssembleOptions {
    * prompt body.
    */
   initialTask?: string;
+  /**
+   * Canonical Clio actor stamp for THIS PA session, in the form
+   * `product-architect|<adapter>|<model>` (item 6.18 round-3). Computed
+   * by the launcher from the resolved `productArchitectAgent` config
+   * + injected into the prompt verbatim so the agent can pass it to
+   * every Clio mutation (`--author "<actor>"` on ingest /
+   * `--actor "<actor>"` on edit). Audit-log filters + future read
+   * usage analytics + Cerefox-style activity views all key off this
+   * stamp.
+   */
+  clioActor: string;
 }
 
 export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
@@ -67,7 +78,7 @@ export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
   sections.push(INTERFACES);
   sections.push(formatAssessedState(opts.state));
   sections.push(formatMemoryInventory(opts.memory));
-  sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId));
+  sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId, opts.clioActor));
   sections.push(PERMISSION_MODEL);
   sections.push(SESSION_START_BEHAVIOUR);
   sections.push(HANDOFF_GUIDANCE);
@@ -115,7 +126,7 @@ const SCOPE = `# Scope
   on existing ones.
 - **Problem Pack review**: read all files; give an honest critique;
   suggest refinements. Before \`cfcf review\`. After loops have run
-  (read \`cfcf-memory-reflection\` for what reflection observed).
+  (read \`cf-system-reflection-memory\` for what reflection observed).
   Continuously, as iterations refine your understanding of the problem.
 - **Spec brainstorming**: act as a thoughtful product architect. Ask
   clarifying questions. Surface edge cases. Challenge assumptions.
@@ -284,11 +295,35 @@ function memoryProtocolSection(
   sessionId: string,
   memory: MemoryInventory,
   workspaceId: string | null,
+  clioActor: string,
 ): string {
   const workspaceDocId = memory.workspace.documentId ?? "<none-yet>";
   const globalDocId = memory.global.documentId ?? "<none-yet>";
   const workspaceIdLabel = workspaceId ?? "<not-yet-registered>";
   return `# Memory protocol — disk + Clio hybrid
+
+## Clio actor stamp (use on every Clio mutation)
+
+When you write to Clio, identify yourself as:
+
+    ${clioActor}
+
+That string is your canonical stamp for THIS session: \`<role>|<agent>|<model>\`.
+cfcf computes it from your role + the AgentConfig the user picked. Pass it as:
+
+  - \`cfcf clio docs ingest --author "${clioActor}" ...\`     — sets both the
+    doc's \`author\` field AND the audit row's actor.
+  - \`cfcf clio docs delete --author "${clioActor}" <id>\`    — audit attribution.
+  - \`cfcf clio docs restore --author "${clioActor}" <id>\`   — audit attribution.
+  - \`cfcf clio docs edit --actor "${clioActor}" ... <id>\`   — audit attribution
+    for a metadata-only edit (the doc's \`--author\` field is preserved
+    unless you explicitly change it).
+
+Every \`cfcf clio docs ingest\` example below already includes \`--author "${clioActor}"\`
+— don't drop it. The audit log + future analytics filter on the actor
+stamp; missing or inconsistent stamps make your writes invisible to
+those filters.
+
 
 You operate on a **two-tier memory**:
 
@@ -304,7 +339,7 @@ You operate on a **two-tier memory**:
 **Tier 2 (Clio, canonical)**:
   - \`pa-workspace-memory\` (Clio doc ID: \`${workspaceDocId}\`)
     Per-workspace memory. ONE doc per workspace. Lives in Project
-    \`cfcf-memory-pa\`. Updated by you on session end.
+    \`cf-system-pa-memory\`. Updated by you on session end.
   - \`pa-global-memory\` (Clio doc ID: \`${globalDocId}\`)
     Cross-workspace user preferences. ONE doc, lives ONLY in Clio
     (no local cache). Updated when cross-cutting preferences emerge.
@@ -388,8 +423,9 @@ test framework, anything spanning projects) — update Clio's
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${globalDocId} \\
-    --title pa-global-memory --project cfcf-memory-global \\
-    --metadata '{"role":"pa","artifact_type":"global-memory"}' --stdin
+    --title pa-global-memory --project cf-system-memory-global \\
+    --metadata '{"role":"pa","artifact_type":"global-memory"}' \\
+    --author "${clioActor}" --stdin
 \`\`\`
 
 If it doesn't exist yet, omit \`--document-id\` and \`--update-if-exists\`;
@@ -414,16 +450,18 @@ afterwards so future sessions can use \`--document-id\`.
 
 \`\`\`
 cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
-    --title pa-session-${sessionId} --project cfcf-memory-pa \\
-    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}'
+    --title pa-session-${sessionId} --project cf-system-pa-memory \\
+    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
+    --author "${clioActor}"
 \`\`\`
 
     5. Push \`workspace-summary.md\` to Clio:
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
-    --title pa-workspace-memory --project cfcf-memory-pa \\
-    --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' --stdin
+    --title pa-workspace-memory --project cf-system-pa-memory \\
+    --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' \\
+    --author "${clioActor}" --stdin
 \`\`\`
 
     6. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the
@@ -521,7 +559,7 @@ the distinction before doing any memory ops:
     These are the canonical full history. The Memory Inventory
     above lists titles + outcomeSummaries; retrieve full content
     via \`cfcf clio docs get <id>\` or
-    \`cfcf clio search "<query>" --project cfcf-memory-pa\`.
+    \`cfcf clio search "<query>" --project cf-system-pa-memory\`.
 
 The disk \`.cfcf-pa/session-*.md\` files are the LOCAL copy of
 those same archives, written turn-by-turn during the session.
@@ -565,7 +603,7 @@ If the user says yes:
      - "## Decisions / Rejections / Preferences (cumulative)" —
        deduped + grouped
   4. Push the compacted version to Clio with
-     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cfcf-memory-pa\`.
+     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cf-system-pa-memory\`.
   5. Log the compaction in the current session file.
   6. **NEVER touch \`pa-session-*\` archives or
      \`.cfcf-pa/session-*.md\` disk files.** Those are the full
@@ -584,7 +622,7 @@ session from last Tuesday"), retrieve full detail from one of:
   - **Clio archive doc** (multi-device durable):
       \`cfcf clio docs get <pa-session-...id>\` — the inventory
       above lists IDs.
-      \`cfcf clio search "<query>" --project cfcf-memory-pa\` —
+      \`cfcf clio search "<query>" --project cf-system-pa-memory\` —
       FTS + semantic search across all archives + the digest.
   - **Local disk file** (immediate, no network):
       \`cat .cfcf-pa/session-<sessionId>.md\` — the working
@@ -600,13 +638,13 @@ disk file isn't present (e.g. user moved to a different machine).
 ## Doc location: WRITE TO THE RIGHT PROJECT
 
 When you ingest \`pa-workspace-memory\` to Clio, ALWAYS pass
-\`--project cfcf-memory-pa\`. cfcf pre-created this Project at your
+\`--project cf-system-pa-memory\`. cfcf pre-created this Project at your
 launch, so the project always exists. **Never let ingest auto-route
 to \`default\`** — that breaks cfcf's reads (cfcf searches for the
 doc by metadata, but the discrepancy reports look weird if Clio's
 project assignment is unexpected).
 
-Same rule for \`pa-global-memory\`: ALWAYS \`--project cfcf-memory-global\`.
+Same rule for \`pa-global-memory\`: ALWAYS \`--project cf-system-memory-global\`.
 
 If the doc IDs in the snippets above are \`<none-yet>\`, the doc
 hasn't been created yet — your first ingest creates it. cfcf will

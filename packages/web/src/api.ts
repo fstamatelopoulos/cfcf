@@ -12,10 +12,17 @@ import type {
   NotificationConfig,
 } from "./types";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /**
+     * Optional structured payload from the error response body.
+     * Routes that return additional fields beyond `error` (e.g.
+     * `dependentWorkspaces`, `documentCount`) attach them here so
+     * callers can render targeted UI.
+     */
+    public payload?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -26,7 +33,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(path, opts);
   const data = await res.json();
   if (!res.ok) {
-    throw new ApiError(res.status, (data as { error?: string }).error || res.statusText);
+    throw new ApiError(
+      res.status,
+      (data as { error?: string }).error || res.statusText,
+      data as Record<string, unknown>,
+    );
   }
   return data as T;
 }
@@ -359,6 +370,12 @@ export interface ClioProject {
   createdAt: string;
   updatedAt: string;
   documentCount?: number;
+  /**
+   * True when this project is system-managed (cf-system-* convention).
+   * Web UI uses this to hide Edit / Delete affordances and show a
+   * "(system)" badge. Stamped server-side in the projects list response.
+   */
+  isSystem?: boolean;
 }
 
 export function fetchClioProjects(): Promise<ClioProject[]> {
@@ -450,6 +467,199 @@ export function searchClio(
   if (opts.project) params.set("project", opts.project);
   if (opts.matchCount) params.set("match_count", String(opts.matchCount));
   return request<ClioDocumentSearchResponse>(`/api/clio/search?${params.toString()}`);
+}
+
+/** Chunk-level search hit (server's `?by=chunk`). */
+export interface ClioChunkSearchHit {
+  chunkId: string;
+  documentId: string;
+  chunkIndex: number;
+  title: string | null;
+  content: string;
+  headingPath: string[];
+  headingLevel: number | null;
+  score: number;
+  docTitle: string;
+  docSource: string;
+  docAuthor: string;
+  docProjectId: string;
+  docProjectName: string;
+  docMetadata: Record<string, unknown>;
+}
+
+export interface ClioChunkSearchResponse {
+  hits: ClioChunkSearchHit[];
+  mode: "fts" | "hybrid" | "semantic";
+  totalMatches?: number;
+}
+
+export function searchClioChunks(
+  query: string,
+  opts: { mode?: ClioSearchMode; project?: string; matchCount?: number } = {},
+): Promise<ClioChunkSearchResponse> {
+  const params = new URLSearchParams({ q: query, by: "chunk" });
+  if (opts.mode && opts.mode !== "auto") params.set("mode", opts.mode);
+  if (opts.project) params.set("project", opts.project);
+  if (opts.matchCount) params.set("match_count", String(opts.matchCount));
+  return request<ClioChunkSearchResponse>(`/api/clio/search?${params.toString()}`);
+}
+
+// --- Clio mutations + admin (item 6.18) ---
+
+export interface ClioIngestRequest {
+  project: string;
+  title: string;
+  content: string;
+  source?: string;
+  author?: string;
+  metadata?: Record<string, unknown>;
+  updateIfExists?: boolean;
+}
+
+export interface ClioIngestResult {
+  id: string;
+  action: "created" | "updated";
+  versionId?: string;
+  versionNumber?: number;
+  note?: string;
+  document: ClioDocument;
+}
+
+export function ingestClio(body: ClioIngestRequest): Promise<ClioIngestResult> {
+  return request<ClioIngestResult>("/api/clio/ingest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteClioDocument(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/clio/documents/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function restoreClioDocument(id: string): Promise<{ restored: boolean; document: ClioDocument }> {
+  return request<{ restored: boolean; document: ClioDocument }>(
+    `/api/clio/documents/${encodeURIComponent(id)}/restore`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+}
+
+export interface ClioDocumentVersion {
+  id: string;
+  documentId: string;
+  versionNumber: number;
+  createdAt: string;
+  source: string | null;
+  totalChars: number;
+  chunkCount: number;
+  archived?: boolean;
+}
+
+export function fetchClioDocumentVersions(id: string): Promise<ClioDocumentVersion[]> {
+  return request<{ versions: ClioDocumentVersion[] }>(
+    `/api/clio/documents/${encodeURIComponent(id)}/versions`,
+  ).then((r) => r.versions);
+}
+
+export interface ClioAuditEntry {
+  id: number;
+  timestamp: string;
+  eventType: "create" | "update-content" | "edit-metadata" | "delete" | "restore" | "migrate-project";
+  actor: string | null;
+  projectId: string | null;
+  documentId: string | null;
+  query: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export function fetchClioAuditLog(
+  opts: {
+    eventType?: string;
+    actor?: string;
+    project?: string;
+    documentId?: string;
+    since?: string;
+    limit?: number;
+  } = {},
+): Promise<ClioAuditEntry[]> {
+  const params = new URLSearchParams();
+  if (opts.eventType) params.set("event_type", opts.eventType);
+  if (opts.actor) params.set("actor", opts.actor);
+  if (opts.project) params.set("project", opts.project);
+  if (opts.documentId) params.set("document_id", opts.documentId);
+  if (opts.since) params.set("since", opts.since);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<{ entries: ClioAuditEntry[] }>(`/api/clio/audit-log${qs ? `?${qs}` : ""}`).then(
+    (r) => r.entries,
+  );
+}
+
+export interface ClioMetadataKey {
+  key: string;
+  count: number;
+  /** A few sample values from real documents. */
+  sampleValues: (string | number | boolean)[];
+}
+
+export function fetchClioMetadataKeys(project?: string): Promise<ClioMetadataKey[]> {
+  const params = project ? `?project=${encodeURIComponent(project)}` : "";
+  return request<{ keys: ClioMetadataKey[] }>(`/api/clio/metadata-keys${params}`).then((r) => r.keys);
+}
+
+export function createClioProject(body: { name: string; description?: string }): Promise<ClioProject> {
+  return request<ClioProject>("/api/clio/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function editClioProject(
+  idOrName: string,
+  edits: { name?: string; description?: string },
+): Promise<ClioProject> {
+  return request<ClioProject>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(edits),
+  });
+}
+
+export function deleteClioProject(idOrName: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Metadata-only edit (item 6.18 round-2). Routes through the existing
+ * `PATCH /api/clio/documents/:id` endpoint -- writes a single
+ * `edit-metadata` audit entry, no version snapshot. For content edits
+ * use `ingestClio` with the `documentId` field (which routes through
+ * the content-unchanged short-circuit added in the same round).
+ */
+export function editClioDocumentMetadata(
+  id: string,
+  edits: {
+    title?: string;
+    author?: string;
+    projectId?: string;
+    projectName?: string;
+    metadataSet?: Record<string, unknown>;
+    metadataUnset?: string[];
+  },
+): Promise<{ updated: boolean; document: ClioDocument }> {
+  return request<{ updated: boolean; document: ClioDocument }>(
+    `/api/clio/documents/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(edits),
+    },
+  );
 }
 
 // --- History ---
