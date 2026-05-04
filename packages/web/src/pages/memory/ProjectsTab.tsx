@@ -131,11 +131,16 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
                 <tr key={p.id} className="project-history__row">
                   <td>
                     <strong>{p.name}</strong>
-                    {p.isSystem && (
+                  </td>
+                  <td>{p.documentCount ?? "—"}</td>
+                  <td>{p.description ?? <span className="form-row__hint">—</span>}</td>
+                  <td className="project-history__time">{p.createdAt}</td>
+                  <td>
+                    {p.isSystem ? (
                       <span
-                        title="System-managed by cfcf — agent prompts hardcode this name. Renaming or deleting is blocked."
+                        title="System-managed by cfcf — agent prompts hardcode this name. Renaming or deleting is blocked. Doc ingest is allowed."
                         style={{
-                          marginLeft: "0.5rem",
+                          display: "inline-block",
                           padding: "0.05rem 0.4rem",
                           fontSize: "var(--text-xs)",
                           background: "color-mix(in srgb, var(--color-info) 18%, transparent)",
@@ -146,14 +151,6 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
                       >
                         system
                       </span>
-                    )}
-                  </td>
-                  <td>{p.documentCount ?? "—"}</td>
-                  <td>{p.description ?? <span className="form-row__hint">—</span>}</td>
-                  <td className="project-history__time">{p.createdAt}</td>
-                  <td>
-                    {p.isSystem ? (
-                      <span className="form-row__hint">— system —</span>
                     ) : (
                       <div style={{ display: "flex", gap: "0.4rem" }}>
                         <button

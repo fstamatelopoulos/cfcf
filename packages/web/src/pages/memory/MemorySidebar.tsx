@@ -56,12 +56,8 @@ export function MemorySidebar({
               label="Embedder"
               value={stats.activeEmbedder ? `${stats.activeEmbedder.name} (dim ${stats.activeEmbedder.dim})` : "(FTS-only)"}
             />
+            {stats.dbPath && <Row label="DB location" value={stats.dbPath} />}
           </dl>
-        )}
-        {stats?.dbPath && (
-          <div className="form-row__hint" style={{ marginTop: "0.4rem", wordBreak: "break-all" }}>
-            {stats.dbPath}
-          </div>
         )}
       </section>
 
