@@ -11,3 +11,4 @@ export * from "./singleton.js";
 export * from "./loop-ingest.js";
 export * from "./embedders/index.js";
 export * from "./system-projects.js";
+export * from "./actor.js";

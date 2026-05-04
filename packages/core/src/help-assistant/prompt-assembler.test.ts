@@ -96,6 +96,22 @@ describe("assembleHelpAssistantPrompt", () => {
     expect(prompt.length).toBeLessThan(500_000); // sanity ceiling
   });
 
+  it("renders the Clio actor stamp section with a placeholder when clioActor is omitted", () => {
+    const prompt = assembleHelpAssistantPrompt();
+    expect(prompt).toContain("## Clio actor stamp");
+    expect(prompt).toContain("help-assistant|<adapter>|<model>");
+  });
+
+  it("threads the clioActor verbatim into the Clio actor stamp section", () => {
+    const prompt = assembleHelpAssistantPrompt({
+      clioActor: "help-assistant|claude-code|haiku",
+    });
+    expect(prompt).toContain("## Clio actor stamp");
+    expect(prompt).toContain("help-assistant|claude-code|haiku");
+    expect(prompt).toContain(`--author "help-assistant|claude-code|haiku"`);
+    expect(prompt).not.toContain("help-assistant|<adapter>|<model>");
+  });
+
   it("declares the HA's behavior contract in the closing notes", () => {
     const prompt = assembleHelpAssistantPrompt();
     expect(prompt).toContain("greet the user briefly");

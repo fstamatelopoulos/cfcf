@@ -75,6 +75,22 @@ It is also populated by the user (via `cfcf clio docs ingest`) with design guide
 | `workspace_id` | cf² workspace id |
 | `workspace_name` | cf² workspace name |
 
+## Author / actor convention (when you DO write)
+
+You normally don't ingest anything yourself — cf² auto-ingests iteration outputs (with the right author stamp) after each phase commits. But if the user explicitly asks you to write or mutate a Clio doc, identify yourself as:
+
+```
+<role>|<agent>|<model>
+```
+
+…where `<role>` is your iteration role (`dev` / `judge` / `architect` / `reflection` / `documenter`), `<agent>` is the adapter spawning you (`claude-code` / `codex`), and `<model>` is the model name (or `default` if unset). Examples:
+
+- `dev|claude-code|sonnet`
+- `judge|codex|gpt-5`
+- `reflection|claude-code|opus`
+
+Pass it as `--author "<stamp>"` on every `cfcf clio docs ingest` call, and `--actor "<stamp>"` on `cfcf clio docs delete/restore/edit`. The audit log + future analytics filter on this stamp; missing or inconsistent stamps make your writes invisible to those filters. (The stamp is metadata, not access control — any role can write to any doc.)
+
 ## What you do NOT need to do
 
 - You do **not** need to ingest anything yourself. cf² auto-ingests iteration outputs after each phase commits.

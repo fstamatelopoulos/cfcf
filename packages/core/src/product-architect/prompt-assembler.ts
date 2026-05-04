@@ -55,6 +55,17 @@ export interface AssembleOptions {
    * prompt body.
    */
   initialTask?: string;
+  /**
+   * Canonical Clio actor stamp for THIS PA session, in the form
+   * `product-architect|<adapter>|<model>` (item 6.18 round-3). Computed
+   * by the launcher from the resolved `productArchitectAgent` config
+   * + injected into the prompt verbatim so the agent can pass it to
+   * every Clio mutation (`--author "<actor>"` on ingest /
+   * `--actor "<actor>"` on edit). Audit-log filters + future read
+   * usage analytics + Cerefox-style activity views all key off this
+   * stamp.
+   */
+  clioActor: string;
 }
 
 export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
@@ -67,7 +78,7 @@ export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
   sections.push(INTERFACES);
   sections.push(formatAssessedState(opts.state));
   sections.push(formatMemoryInventory(opts.memory));
-  sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId));
+  sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId, opts.clioActor));
   sections.push(PERMISSION_MODEL);
   sections.push(SESSION_START_BEHAVIOUR);
   sections.push(HANDOFF_GUIDANCE);
@@ -284,11 +295,35 @@ function memoryProtocolSection(
   sessionId: string,
   memory: MemoryInventory,
   workspaceId: string | null,
+  clioActor: string,
 ): string {
   const workspaceDocId = memory.workspace.documentId ?? "<none-yet>";
   const globalDocId = memory.global.documentId ?? "<none-yet>";
   const workspaceIdLabel = workspaceId ?? "<not-yet-registered>";
   return `# Memory protocol — disk + Clio hybrid
+
+## Clio actor stamp (use on every Clio mutation)
+
+When you write to Clio, identify yourself as:
+
+    ${clioActor}
+
+That string is your canonical stamp for THIS session: \`<role>|<agent>|<model>\`.
+cfcf computes it from your role + the AgentConfig the user picked. Pass it as:
+
+  - \`cfcf clio docs ingest --author "${clioActor}" ...\`     — sets both the
+    doc's \`author\` field AND the audit row's actor.
+  - \`cfcf clio docs delete --author "${clioActor}" <id>\`    — audit attribution.
+  - \`cfcf clio docs restore --author "${clioActor}" <id>\`   — audit attribution.
+  - \`cfcf clio docs edit --actor "${clioActor}" ... <id>\`   — audit attribution
+    for a metadata-only edit (the doc's \`--author\` field is preserved
+    unless you explicitly change it).
+
+Every \`cfcf clio docs ingest\` example below already includes \`--author "${clioActor}"\`
+— don't drop it. The audit log + future analytics filter on the actor
+stamp; missing or inconsistent stamps make your writes invisible to
+those filters.
+
 
 You operate on a **two-tier memory**:
 
@@ -389,7 +424,8 @@ test framework, anything spanning projects) — update Clio's
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${globalDocId} \\
     --title pa-global-memory --project cf-system-memory-global \\
-    --metadata '{"role":"pa","artifact_type":"global-memory"}' --stdin
+    --metadata '{"role":"pa","artifact_type":"global-memory"}' \\
+    --author "${clioActor}" --stdin
 \`\`\`
 
 If it doesn't exist yet, omit \`--document-id\` and \`--update-if-exists\`;
@@ -415,7 +451,8 @@ afterwards so future sessions can use \`--document-id\`.
 \`\`\`
 cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
     --title pa-session-${sessionId} --project cf-system-pa-memory \\
-    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}'
+    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
+    --author "${clioActor}"
 \`\`\`
 
     5. Push \`workspace-summary.md\` to Clio:
@@ -423,7 +460,8 @@ cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
     --title pa-workspace-memory --project cf-system-pa-memory \\
-    --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' --stdin
+    --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' \\
+    --author "${clioActor}" --stdin
 \`\`\`
 
     6. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the

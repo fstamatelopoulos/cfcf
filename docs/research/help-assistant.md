@@ -70,8 +70,8 @@ Example flows v1 should handle:
 - **Q&A**: "Why does `cfcf clio search` return nothing?" — agent reads `cfcf clio stats`, sees `documentCount: 0`, explains.
 - **Diagnose**: "My iteration is stuck" — agent runs `cfcf doctor`, reads the output, suggests fixes.
 - **Configure**: "I want to switch the dev agent to codex" — agent shows the current config, asks permission to run `cfcf config edit`, walks the user through.
-- **Recall preferences** (Clio memory): on session start, agent reads `cfcf clio search --project cfcf-memory-global …` for the user's stored preferences and incorporates them into responses.
-- **Persist preferences** (with permission): user says "remember I always want pytest"; agent asks permission to run `cfcf clio docs ingest --project cfcf-memory-global …` with the new preference doc.
+- **Recall preferences** (Clio memory): on session start, agent reads `cfcf clio search --project cf-system-memory-global …` for the user's stored preferences and incorporates them into responses.
+- **Persist preferences** (with permission): user says "remember I always want pytest"; agent asks permission to run `cfcf clio docs ingest --project cf-system-memory-global …` with the new preference doc.
 
 ## Architecture
 
@@ -96,7 +96,7 @@ The agent role config has the same shape as every other role: `{ adapter: "claud
 
 1. Resolve `config.helpAssistantAgent` (or `--agent` override)
 2. Read the embedded help bundle (the same one that powers `cfcf help <topic>`) into a string
-3. Read role-relevant Clio memory (`cfcf-memory-ha` Project + `cfcf-memory-global` Project, top-N hits matched against any seed query — for v1, just dump everything in those two projects up to a token cap)
+3. Read role-relevant Clio memory (`cf-system-ha-memory` Project + `cf-system-memory-global` Project, top-N hits matched against any seed query — for v1, just dump everything in those two projects up to a token cap)
 4. Optionally read workspace state if `--workspace` is set
 5. Compose the system prompt (see §4)
 6. Write the prompt to a tempfile (it's ~200KB; CLI flag length limits don't permit inline)
@@ -151,24 +151,24 @@ User-confirmed convention (2026-04-27): use Clio Projects as memory namespaces. 
 
 | Project name | Scope | Who reads | Who writes |
 |---|---|---|---|
-| `cfcf-memory-global` | Cross-role: things every role should know about this user (e.g. "always TypeScript", "Pacific time zone") | All cf²-managed agent roles | All cf²-managed agent roles |
-| `cfcf-memory-ha` | HA-specific: lessons / preferences only relevant to help-assistant operation | HA | HA |
-| `cfcf-memory-pa` (iter-6) | PA-specific: spec-iteration history, problem-decomposition patterns | PA | PA |
-| `cfcf-memory-architect` (future) | Architect-role-specific | Architect | Architect |
-| `cfcf-memory-dev` (future) | Dev-role-specific | Dev | Dev |
-| `cfcf-memory-judge` (future) | Judge-role-specific | Judge | Judge |
-| `cfcf-memory-documenter` (future) | Documenter-role-specific | Documenter | Documenter |
-| `cfcf-memory-reflection` (future) | Reflection-role-specific | Reflection | Reflection |
+| `cf-system-memory-global` | Cross-role: things every role should know about this user (e.g. "always TypeScript", "Pacific time zone") | All cf²-managed agent roles | All cf²-managed agent roles |
+| `cf-system-ha-memory` | HA-specific: lessons / preferences only relevant to help-assistant operation | HA | HA |
+| `cf-system-pa-memory` (iter-6) | PA-specific: spec-iteration history, problem-decomposition patterns | PA | PA |
+| `cf-system-architect-memory` (future) | Architect-role-specific | Architect | Architect |
+| `cf-system-dev-memory` (future) | Dev-role-specific | Dev | Dev |
+| `cf-system-judge-memory` (future) | Judge-role-specific | Judge | Judge |
+| `cf-system-documenter-memory` (future) | Documenter-role-specific | Documenter | Documenter |
+| `cf-system-reflection-memory` (future) | Reflection-role-specific | Reflection | Reflection |
 
 The `cfcf-memory-` prefix groups them when the user runs `cfcf clio projects` and visually distinguishes them from user-defined Clio Projects (which typically have domain names like `backend-services`, `cf-ecosystem`, etc.).
 
 ### Read scope per role
 
-A role on session start reads two Clio Projects: its own (`cfcf-memory-<role>`) plus the global (`cfcf-memory-global`). Reading is via `cfcf clio search` — the agent decides what to query based on the user's question.
+A role on session start reads two Clio Projects: its own (`cfcf-memory-<role>`) plus the global (`cf-system-memory-global`). Reading is via `cfcf clio search` — the agent decides what to query based on the user's question.
 
 For v1 (HA only), the system prompt instructs:
-- On session start: run `cfcf clio docs list --project cfcf-memory-ha` and `cfcf clio docs list --project cfcf-memory-global` to get an inventory; pull specific docs as relevant via `cfcf clio docs get <id>`.
-- During the session: run `cfcf clio search "<query>" --project cfcf-memory-ha,cfcf-memory-global` (multi-project search — TODO: confirm whether the current Clio search supports comma-separated projects; if not, two queries).
+- On session start: run `cfcf clio docs list --project cf-system-ha-memory` and `cfcf clio docs list --project cf-system-memory-global` to get an inventory; pull specific docs as relevant via `cfcf clio docs get <id>`.
+- During the session: run `cfcf clio search "<query>" --project cf-system-ha-memory,cf-system-memory-global` (multi-project search — TODO: confirm whether the current Clio search supports comma-separated projects; if not, two queries).
 
 ### Write scope (v1: read-only by user-approval default)
 
@@ -176,15 +176,15 @@ The HA can propose to write to memory but every write requires user approval via
 
 Writing is via `cfcf clio docs ingest --project <memory-project> --title "..." --metadata '{...}' < content`. The agent decides which project (HA-specific vs global) based on:
 
-- "Does this preference apply across cf²?" → `cfcf-memory-global`
-- "Is this lesson only relevant when answering help questions?" → `cfcf-memory-ha`
+- "Does this preference apply across cf²?" → `cf-system-memory-global`
+- "Is this lesson only relevant when answering help questions?" → `cf-system-ha-memory`
 - When in doubt → ask the user
 
 The system prompt includes a decision tree for this. The user can always override.
 
 ### Bootstrapping
 
-On first `cfcf help assistant` invocation, the memory projects don't exist. The agent creates them on first write (`cfcf clio projects create cfcf-memory-global --description "..."`). v1 doesn't pre-create them.
+On first `cfcf help assistant` invocation, the memory projects don't exist. The agent creates them on first write (`cfcf clio projects create cf-system-memory-global --description "..."`). v1 doesn't pre-create them.
 
 ## System prompt
 
@@ -246,21 +246,21 @@ git rev-parse + cross-reference with cfcf workspace list.
 
 Two Clio Projects you can read + write:
 
-  cfcf-memory-ha       -- preferences/lessons specific to your role
-  cfcf-memory-global   -- preferences/lessons across all cf² roles
+  cf-system-ha-memory       -- preferences/lessons specific to your role
+  cf-system-memory-global   -- preferences/lessons across all cf² roles
 
 On session start, list both projects:
 
-  cfcf clio docs list --project cfcf-memory-ha    --json
-  cfcf clio docs list --project cfcf-memory-global --json
+  cfcf clio docs list --project cf-system-ha-memory    --json
+  cfcf clio docs list --project cf-system-memory-global --json
 
 Pull specific entries via cfcf clio docs get when relevant.
 
 When writing memory:
   - "Always TypeScript" / "Pacific time zone" / "prefer pytest over
-    unittest" -- write to cfcf-memory-global
+    unittest" -- write to cf-system-memory-global
   - "User wants the HA to skip the welcome message" -- write to
-    cfcf-memory-ha
+    cf-system-ha-memory
   - When unsure -- ask the user.
 
 Always prompt the user before writing memory.

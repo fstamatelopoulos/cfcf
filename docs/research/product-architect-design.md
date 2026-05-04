@@ -206,8 +206,8 @@ Recovery (Ctrl-D without saving):
 
 | Doc title | Project | Metadata | Updated by |
 |---|---|---|---|
-| **`pa-workspace-memory`** | `cfcf-memory-pa` | `{role:"pa", artifact_type:"workspace-memory", workspace_id:"<id>", session_id:"<latest>", session_count:N}` | PA, on each session end (or recovery sync) |
-| **`pa-global-memory`** | `cfcf-memory-global` (shared with HA) | `{role:"pa", artifact_type:"global-memory"}` | PA, when cross-cutting preferences emerge |
+| **`pa-workspace-memory`** | `cf-system-pa-memory` | `{role:"pa", artifact_type:"workspace-memory", workspace_id:"<id>", session_id:"<latest>", session_count:N}` | PA, on each session end (or recovery sync) |
+| **`pa-global-memory`** | `cf-system-memory-global` (shared with HA) | `{role:"pa", artifact_type:"global-memory"}` | PA, when cross-cutting preferences emerge |
 
 Document titles are **standardised** by cfcf — PA always reads/writes to these exact titles. The launcher injects the resolved Clio doc IDs into PA's system prompt at launch (after lookup) so PA can ingest with `--document-id` for guaranteed update-not-create semantics.
 
@@ -309,9 +309,9 @@ The instruction layer is what makes this work — Clio writes don't happen autom
 
 PA reads (but never writes to) other roles' Clio Projects for context:
 
-- `cfcf-memory-reflection` (filtered by `workspace_id`) — what reflection observed across iterations
-- `cfcf-memory-architect` (filtered by `workspace_id`) — what Solution Architect noted in past reviews
-- `cfcf-memory-ha` (filtered by `workspace_id`) — what HA captured in support sessions for this workspace
+- `cf-system-reflection-memory` (filtered by `workspace_id`) — what reflection observed across iterations
+- `cf-system-architect-memory` (filtered by `workspace_id`) — what Solution Architect noted in past reviews
+- `cf-system-ha-memory` (filtered by `workspace_id`) — what HA captured in support sessions for this workspace
 
 cfcf injects a summary of these (recent docs, top-N by recency) into PA's system prompt at launch. PA does not write to these — that would muddy the role boundary.
 
@@ -372,7 +372,7 @@ PA's bread and butter. Don't push back; just help.
   - On an existing project: PA reviews what's there, suggests improvements, helps refine
 - **Problem Pack review**:
   - Before the user runs `cfcf review`: PA reads the four files, gives an honest critique, suggests refinements
-  - After a loop has run: PA can re-review based on what the loop discovered (via `cfcf-memory-reflection`)
+  - After a loop has run: PA can re-review based on what the loop discovered (via `cf-system-reflection-memory`)
   - Iterating across loops: PA helps refine specs based on iteration outcomes
 - **Spec brainstorming**: PA acts as a thoughtful product architect — proposes ideas, surfaces edge cases, challenges assumptions, asks "what does success look like for this?"
 - **Memory hygiene**: writing observations + decisions to disk + Clio per the memory protocol

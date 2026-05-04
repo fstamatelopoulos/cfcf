@@ -46,6 +46,15 @@ export interface AssembleOptions {
    * exist yet).
    */
   memoryInventory?: string[];
+  /**
+   * Canonical Clio actor stamp for THIS HA session, in the form
+   * `help-assistant|<adapter>|<model>` (item 6.18 round-3). Computed
+   * by the launcher from the resolved `helpAssistantAgent` config +
+   * injected into the prompt verbatim so the agent passes it to every
+   * Clio mutation. Optional only because pre-6.18 callers exist; new
+   * call sites should always pass it.
+   */
+  clioActor?: string;
 }
 
 export function assembleHelpAssistantPrompt(opts: AssembleOptions = {}): string {
@@ -55,7 +64,7 @@ export function assembleHelpAssistantPrompt(opts: AssembleOptions = {}): string 
   sections.push(SCOPE);
   sections.push(PERMISSION_MODEL);
   sections.push(LOCAL_ENVIRONMENT);
-  sections.push(memorySection(opts.memoryInventory ?? []));
+  sections.push(memorySection(opts.memoryInventory ?? [], opts.clioActor));
   if (opts.workspace) {
     sections.push(workspaceSection(opts.workspace));
   }
@@ -123,10 +132,12 @@ const LOCAL_ENVIRONMENT = `# Local environment
 The user's current pwd may or may not be a workspace's repo. Check via
 \`git rev-parse\` + cross-reference with \`cfcf workspace list\`.`;
 
-function memorySection(inventory: string[]): string {
+function memorySection(inventory: string[], clioActor?: string): string {
   const inventoryText = inventory.length === 0
     ? "(empty -- memory Projects don't exist yet, or no docs in them)"
     : inventory.join("\n");
+
+  const actor = clioActor ?? "help-assistant|<adapter>|<model>";
 
   return `# Memory
 
@@ -139,6 +150,18 @@ Pull specific entries via \`cfcf clio docs get <id>\` when relevant. Run
 new searches with \`cfcf clio search "<query>" --project cf-system-ha-memory\`
 or \`--project cf-system-memory-global\`.
 
+## Clio actor stamp (use on every Clio mutation)
+
+When you write to Clio, identify yourself as:
+
+    ${actor}
+
+That string is your canonical stamp for THIS session: \`<role>|<agent>|<model>\`.
+Pass it as \`--author "${actor}"\` on every \`cfcf clio docs ingest\` call,
+and \`--actor "${actor}"\` on \`cfcf clio docs delete/restore/edit\`. The
+audit log + future analytics filter on the actor stamp; missing or
+inconsistent stamps make your writes invisible to those filters.
+
 When writing memory:
   - "Always TypeScript" / "Pacific time zone" / "prefer pytest over
     unittest" -> write to \`cf-system-memory-global\`
@@ -149,10 +172,8 @@ When writing memory:
 Always prompt the user before writing memory. Use:
 
   \`cfcf clio docs ingest --stdin --project <project> --title "<short title>" \\
-       --metadata '{"role":"ha","artifact_type":"user-preference"}' --author <name>\`
-
-(Substitute \`pa\` / \`architect\` / \`dev\` / etc. for the role field
-when you're writing on behalf of another role -- but for HA, always \`ha\`.)
+       --metadata '{"role":"ha","artifact_type":"user-preference"}' \\
+       --author "${actor}"\`
 
 ## Memory inventory (snapshot at session start)
 
