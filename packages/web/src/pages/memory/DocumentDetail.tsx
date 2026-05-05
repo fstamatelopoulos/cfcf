@@ -4,6 +4,7 @@ import {
   fetchClioAuditLog,
   fetchClioDocumentContent,
   fetchClioDocumentVersions,
+  purgeClioDocument,
   restoreClioDocument,
   type ClioAuditEntry,
   type ClioDocumentContent,
@@ -110,6 +111,25 @@ export function DocumentDetail({
     }
   }
 
+  async function handlePurge() {
+    if (!doc) return;
+    if (!window.confirm(
+      `Permanently delete "${doc.title}"?\n\n` +
+      `This cannot be undone. Chunks + version history will be lost. ` +
+      `An audit-log entry recording the purge will remain.`,
+    )) return;
+    setActing(true);
+    setActionError(null);
+    try {
+      await purgeClioDocument(documentId);
+      onChanged();
+      onClose();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      setActing(false);
+    }
+  }
+
   const doc = content?.document;
   const isDeleted = !!doc?.deletedAt;
 
@@ -122,13 +142,23 @@ export function DocumentDetail({
       footer={
         <>
           {isDeleted ? (
-            <button
-              className="btn btn--primary"
-              disabled={acting}
-              onClick={handleRestore}
-            >
-              {acting ? "Restoring…" : "Restore"}
-            </button>
+            <>
+              <button
+                className="btn btn--danger"
+                disabled={acting}
+                onClick={handlePurge}
+                title="Permanently delete (cannot be undone). Chunks + versions removed; audit-log entry retained."
+              >
+                {acting ? "…" : "Purge…"}
+              </button>
+              <button
+                className="btn btn--primary"
+                disabled={acting}
+                onClick={handleRestore}
+              >
+                {acting ? "Restoring…" : "Restore"}
+              </button>
+            </>
           ) : (
             <>
               <button

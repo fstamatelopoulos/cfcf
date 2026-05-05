@@ -88,4 +88,12 @@ describe("parseRouteHash", () => {
       memoryDocId: "foo/bar",
     });
   });
+
+  test("/memory?tab=trash → memory page with trash tab (item 6.18 round-4)", () => {
+    expect(parseRouteHash("/memory?tab=trash")).toEqual({
+      page: "memory",
+      memoryTab: "trash",
+      memoryDocId: undefined,
+    });
+  });
 });

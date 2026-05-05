@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-export type MemoryTab = "search" | "browse" | "ingest" | "audit" | "projects";
+export type MemoryTab = "search" | "browse" | "ingest" | "audit" | "projects" | "trash";
 
 interface Route {
   page: "dashboard" | "workspace" | "server" | "help" | "memory";
@@ -44,7 +44,7 @@ function parseHashImpl(hash: string): Route {
     const qIdx = hash.indexOf("?");
     const params = qIdx >= 0 ? new URLSearchParams(hash.slice(qIdx + 1)) : new URLSearchParams();
     const tabRaw = params.get("tab");
-    const validTabs: MemoryTab[] = ["search", "browse", "ingest", "audit", "projects"];
+    const validTabs: MemoryTab[] = ["search", "browse", "ingest", "audit", "projects", "trash"];
     const memoryTab = tabRaw && (validTabs as string[]).includes(tabRaw)
       ? (tabRaw as MemoryTab)
       : undefined;
