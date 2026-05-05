@@ -96,3 +96,7 @@ Pass it as `--author "<stamp>"` on every `cfcf clio docs ingest` call, and `--ac
 - You do **not** need to ingest anything yourself. cf² auto-ingests iteration outputs after each phase commits.
 - You do **not** need to handle deduplication — Clio dedups by sha256 of the full content.
 - You do **not** need to know the embedder or chunking details — just search.
+
+## What you MUST NEVER do
+
+- **NEVER purge documents.** When you need to remove a doc, use **only** `cfcf clio docs delete <id>` (soft-delete). Soft-delete is reversible — the doc moves to a trash bin and can be restored with `cfcf clio docs restore <id>`. Hard-delete (purge) is irreversible: chunks + version history are dropped. Purge is reserved for user-initiated surfaces (the web UI's Trash tab) so accidental agent deletes are always recoverable. The server enforces this at the API layer — purge requests with an agent actor stamp are rejected — but you should not attempt them in the first place.

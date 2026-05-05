@@ -625,6 +625,117 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(bogus.status).toBe(404);
   });
 
+  // ── 6.18 round-4: purge endpoint + include_deleted on search ────────
+  it("POST /api/clio/documents/:id/purge refuses on a live doc; succeeds after soft-delete; cascade + audit row survives", async () => {
+    const app = createApp();
+    const r = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "ToPurge", content: "body" }),
+    });
+    const { id } = await r.json();
+
+    // Refuses on live.
+    const live = await app.request(`/api/clio/documents/${id}/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "user|cli|test" }),
+    });
+    expect(live.status).toBe(400);
+    expect((await live.json()).error).toMatch(/not soft-deleted/i);
+
+    // Soft-delete first, then purge.
+    await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+    const purge = await app.request(`/api/clio/documents/${id}/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "user|cli|test" }),
+    });
+    expect(purge.status).toBe(200);
+    expect((await purge.json()).purged).toBe(true);
+
+    // Doc gone for good.
+    const gone = await app.request(`/api/clio/documents/${id}`);
+    expect(gone.status).toBe(404);
+
+    // Even with include_deleted/deleted_only, the doc is gone.
+    const trash = await app.request(`/api/clio/documents?deleted_only=true`);
+    expect((await trash.json()).documents.length).toBe(0);
+
+    // Audit row for the purge survives.
+    const audit = await app.request(`/api/clio/audit-log?document_id=${id}`);
+    const auditBody = await audit.json();
+    const purgeRow = (auditBody.entries as { eventType: string }[]).find(
+      (e) => e.eventType === "purge",
+    );
+    expect(purgeRow).toBeDefined();
+  });
+
+  it("POST /api/clio/documents/:id/purge returns 404 when doc doesn't exist (with user actor)", async () => {
+    const app = createApp();
+    const res = await app.request(
+      `/api/clio/documents/00000000-0000-4000-8000-000000000000/purge`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "user|cli|test" }),
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /api/clio/documents/:id/purge refuses a non-user actor (agent / default body)", async () => {
+    const app = createApp();
+    const ing = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Hold on", content: "body" }),
+    });
+    const { id } = await ing.json();
+    await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+
+    // Empty body → backend defaults to "agent" → blocked.
+    const noActor = await app.request(`/api/clio/documents/${id}/purge`, { method: "POST" });
+    expect(noActor.status).toBe(400);
+    expect((await noActor.json()).error).toMatch(/not a user actor/i);
+
+    // Agent role stamp → also blocked.
+    const agentActor = await app.request(`/api/clio/documents/${id}/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "dev|claude-code|sonnet" }),
+    });
+    expect(agentActor.status).toBe(400);
+    expect((await agentActor.json()).error).toMatch(/not a user actor/i);
+
+    // Doc remains in the trash, not purged.
+    const trash = await app.request(`/api/clio/documents?deleted_only=true`);
+    expect((await trash.json()).documents.length).toBe(1);
+  });
+
+  it("GET /api/clio/search?include_deleted=true surfaces deleted hits with deletedAt set", async () => {
+    const app = createApp();
+    const ing = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Findme", content: "# x\nsearchable phrase" }),
+    });
+    const { id } = await ing.json();
+    await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+
+    // Default search excludes.
+    const live = await app.request("/api/clio/search?q=searchable");
+    expect((await live.json()).hits.length).toBe(0);
+
+    // include_deleted=true surfaces it.
+    const all = await app.request("/api/clio/search?q=searchable&include_deleted=true");
+    const body = await all.json();
+    expect(body.hits.length).toBeGreaterThan(0);
+    const hit = body.hits[0];
+    expect(hit.documentId).toBe(id);
+    expect(typeof hit.deletedAt).toBe("string");
+  });
+
   // ── 5.12: metadata-search + metadata-keys + author surfaced ────────
   it("POST /api/clio/metadata-search filters by metadata + updatedSince", async () => {
     const app = createApp();

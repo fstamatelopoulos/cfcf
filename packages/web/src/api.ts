@@ -401,12 +401,22 @@ export interface ClioDocument {
 }
 
 export function fetchClioDocuments(
-  opts: { project?: string; limit?: number; offset?: number } = {},
+  opts: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    /** Show live + soft-deleted side-by-side (Browse "Show deleted" toggle). */
+    includeDeleted?: boolean;
+    /** Trash-bin view: only soft-deleted docs. Wins over `includeDeleted`. */
+    deletedOnly?: boolean;
+  } = {},
 ): Promise<ClioDocument[]> {
   const params = new URLSearchParams();
   if (opts.project) params.set("project", opts.project);
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.offset) params.set("offset", String(opts.offset));
+  if (opts.deletedOnly) params.set("deleted_only", "true");
+  else if (opts.includeDeleted) params.set("include_deleted", "true");
   const qs = params.toString();
   return request<{ documents: ClioDocument[] }>(
     `/api/clio/documents${qs ? `?${qs}` : ""}`,
@@ -450,6 +460,8 @@ export interface ClioDocumentSearchHit {
   createdAt: string;
   updatedAt: string;
   isPartial: boolean;
+  /** ISO timestamp when the doc was soft-deleted, or null if live. */
+  deletedAt: string | null;
 }
 
 export interface ClioDocumentSearchResponse {
@@ -460,12 +472,19 @@ export interface ClioDocumentSearchResponse {
 
 export function searchClio(
   query: string,
-  opts: { mode?: ClioSearchMode; project?: string; matchCount?: number } = {},
+  opts: {
+    mode?: ClioSearchMode;
+    project?: string;
+    matchCount?: number;
+    /** Surface soft-deleted hits with `deletedAt` set (Search "Show deleted" toggle). */
+    includeDeleted?: boolean;
+  } = {},
 ): Promise<ClioDocumentSearchResponse> {
   const params = new URLSearchParams({ q: query });
   if (opts.mode && opts.mode !== "auto") params.set("mode", opts.mode);
   if (opts.project) params.set("project", opts.project);
   if (opts.matchCount) params.set("match_count", String(opts.matchCount));
+  if (opts.includeDeleted) params.set("include_deleted", "true");
   return request<ClioDocumentSearchResponse>(`/api/clio/search?${params.toString()}`);
 }
 
@@ -485,6 +504,8 @@ export interface ClioChunkSearchHit {
   docProjectId: string;
   docProjectName: string;
   docMetadata: Record<string, unknown>;
+  /** ISO timestamp when the doc was soft-deleted, or null if live. */
+  deletedAt: string | null;
 }
 
 export interface ClioChunkSearchResponse {
@@ -495,12 +516,18 @@ export interface ClioChunkSearchResponse {
 
 export function searchClioChunks(
   query: string,
-  opts: { mode?: ClioSearchMode; project?: string; matchCount?: number } = {},
+  opts: {
+    mode?: ClioSearchMode;
+    project?: string;
+    matchCount?: number;
+    includeDeleted?: boolean;
+  } = {},
 ): Promise<ClioChunkSearchResponse> {
   const params = new URLSearchParams({ q: query, by: "chunk" });
   if (opts.mode && opts.mode !== "auto") params.set("mode", opts.mode);
   if (opts.project) params.set("project", opts.project);
   if (opts.matchCount) params.set("match_count", String(opts.matchCount));
+  if (opts.includeDeleted) params.set("include_deleted", "true");
   return request<ClioChunkSearchResponse>(`/api/clio/search?${params.toString()}`);
 }
 
@@ -543,6 +570,31 @@ export function restoreClioDocument(id: string): Promise<{ restored: boolean; do
   return request<{ restored: boolean; document: ClioDocument }>(
     `/api/clio/documents/${encodeURIComponent(id)}/restore`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+}
+
+/**
+ * Hard-delete a soft-deleted document (Cerefox parity:
+ * `cerefox_purge_document`). Server refuses if the doc is currently
+ * live — caller must `deleteClioDocument` first. Cascade drops
+ * chunks + version snapshots; the audit row written before the
+ * cascade survives.
+ *
+ * Stamps the actor as `user|web|local` (per the cf² actor convention
+ * `<role>|<agent>|<model>`). Backend's user-only guardrail refuses
+ * purge from any actor that doesn't start with `user|`, so an agent
+ * hitting this HTTP route directly with its own role stamp is
+ * blocked at the backend layer — not just by the absence of a CLI
+ * verb. Web users always identify as `user|web|local`.
+ */
+export function purgeClioDocument(id: string): Promise<{ purged: boolean; documentId: string }> {
+  return request<{ purged: boolean; documentId: string }>(
+    `/api/clio/documents/${encodeURIComponent(id)}/purge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "user|web|local" }),
+    },
   );
 }
 

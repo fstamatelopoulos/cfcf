@@ -112,6 +112,7 @@ interface VectorCandidateRow {
   doc_project_id: string;
   doc_project_name: string;
   doc_metadata: string;
+  doc_deleted_at: string | null;
   bm25_rank: number;
 }
 
@@ -1254,6 +1255,72 @@ export class LocalClio implements MemoryBackend {
     });
   }
 
+  async purgeDocument(id: string, opts: { actor?: string } = {}): Promise<void> {
+    // Cerefox parity: refuses on a live doc (`cerefox_purge_document`
+    // checks `deleted_at IS NOT NULL`). Caller's flow is "soft-delete
+    // via `deleteDocument`, then optionally purge via this verb."
+    //
+    // **User-only guardrail (item 6.18 round-4):** purge is irreversible
+    // (chunks + version history are dropped; only the audit row
+    // survives). Soft-delete already gives users the recovery path
+    // we want for accidental agent deletes — purge bypasses that.
+    // We require the actor stamp to start with `user|` (per the
+    // <role>|<agent>|<model> convention from item 6.18 round-3) so
+    // only user-initiated surfaces (web UI, future CLI-with-explicit-
+    // user-confirm) can purge. Agents calling the HTTP API directly,
+    // including a hypothetical `dev|claude-code|sonnet` doing
+    // `curl -X POST .../purge`, are blocked here regardless of which
+    // surface they used to reach the route. The web UI stamps
+    // `user|web|local`; an agent's request stamps its own role and
+    // therefore fails this check.
+    const actor = opts.actor?.trim() || "agent";
+    if (!actor.startsWith("user|")) {
+      throw new Error(
+        `purgeDocument: actor "${actor}" is not a user actor. ` +
+        `Purge is restricted to user-initiated surfaces; agents must ` +
+        `use deleteDocument (soft-delete) instead. Pass an actor stamp ` +
+        `starting with "user|" (e.g. "user|web|local") to override.`,
+      );
+    }
+    const target = this.db.query<{
+      id: string;
+      project_id: string;
+      title: string;
+      deleted_at: string | null;
+      chunk_count: number;
+      total_chars: number;
+    }, [string]>(
+      `SELECT id, project_id, title, deleted_at, chunk_count, total_chars
+         FROM clio_documents WHERE id = ? LIMIT 1`,
+    ).get(id);
+    if (!target) throw new Error(`purgeDocument: document "${id}" not found`);
+    if (!target.deleted_at) {
+      throw new Error(
+        `purgeDocument: document "${id}" is not soft-deleted; ` +
+        `call deleteDocument first to move it to the trash, then purge.`,
+      );
+    }
+
+    // Audit FIRST so the row survives the cascade delete. clio_audit_log
+    // has no FK to clio_documents (intentional — see migration 0001),
+    // so the row remains queryable + the documentId column is preserved
+    // even though the doc itself is gone.
+    this.writeAudit({
+      eventType: "purge", actor,
+      projectId: target.project_id, documentId: id,
+      metadata: {
+        title: target.title,
+        deletedAt: target.deleted_at,
+        chunkCount: target.chunk_count,
+        totalChars: target.total_chars,
+      },
+    });
+
+    // Hard delete. CASCADE drops clio_chunks + clio_document_versions
+    // automatically (FKs declared in migration 0001).
+    this.db.prepare(`DELETE FROM clio_documents WHERE id = ?`).run(id);
+  }
+
   async editDocument(
     id: string,
     edits: EditDocumentRequest,
@@ -1568,6 +1635,7 @@ export class LocalClio implements MemoryBackend {
       version_count: number;
       created_at: string;
       updated_at: string;
+      deleted_at: string | null;
     }>();
     if (docIds.length > 0) {
       const placeholders = docIds.map(() => "?").join(",");
@@ -1578,8 +1646,9 @@ export class LocalClio implements MemoryBackend {
         version_count: number;
         created_at: string;
         updated_at: string;
+        deleted_at: string | null;
       }, string[]>(
-        `SELECT d.id, d.chunk_count, d.total_chars, d.created_at, d.updated_at,
+        `SELECT d.id, d.chunk_count, d.total_chars, d.created_at, d.updated_at, d.deleted_at,
                 (SELECT COUNT(*) FROM clio_document_versions v WHERE v.document_id = d.id) AS version_count
            FROM clio_documents d
           WHERE d.id IN (${placeholders})`,
@@ -1591,6 +1660,7 @@ export class LocalClio implements MemoryBackend {
           version_count: r.version_count,
           created_at: r.created_at,
           updated_at: r.updated_at,
+          deleted_at: r.deleted_at,
         });
       }
     }
@@ -1678,6 +1748,7 @@ export class LocalClio implements MemoryBackend {
         createdAt: meta?.created_at ?? "",
         updatedAt: meta?.updated_at ?? "",
         isPartial,
+        deletedAt: meta?.deleted_at ?? h.deletedAt ?? null,
       };
     });
 
@@ -1714,6 +1785,11 @@ export class LocalClio implements MemoryBackend {
     }
     const metaWhere = metaClauses.length ? ` AND ${metaClauses.join(" AND ")}` : "";
 
+    // Soft-delete filter: default excludes deleted docs (matches Cerefox's
+    // hard filter on every search RPC). Web UI's "Show deleted" toggle on
+    // the Search tab opts in via SearchRequest.includeDeleted.
+    const deletedClause = req.includeDeleted ? "" : "AND d.deleted_at IS NULL";
+
     const sql = `
       WITH fts_results AS (
         SELECT c.id AS chunk_id,
@@ -1723,7 +1799,7 @@ export class LocalClio implements MemoryBackend {
           JOIN clio_documents d ON c.document_id = d.id
          WHERE clio_chunks_fts MATCH ?
            AND c.version_id IS NULL
-           AND d.deleted_at IS NULL
+           ${deletedClause}
            ${projectFilterId ? "AND d.project_id = ?" : ""}
            ${metaWhere}
          ORDER BY bm25_rank ASC
@@ -1742,7 +1818,8 @@ export class LocalClio implements MemoryBackend {
              d.author AS doc_author,
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
-             d.metadata AS doc_metadata
+             d.metadata AS doc_metadata,
+             d.deleted_at AS doc_deleted_at
         FROM fts_results f
         JOIN clio_chunks c ON c.id = f.chunk_id
         JOIN clio_documents d ON c.document_id = d.id
@@ -1773,6 +1850,7 @@ export class LocalClio implements MemoryBackend {
         doc_project_id: string;
         doc_project_name: string;
         doc_metadata: string;
+        doc_deleted_at: string | null;
       },
       (string | number | boolean)[]
     >(sql).all(...bindings);
@@ -1794,6 +1872,7 @@ export class LocalClio implements MemoryBackend {
       docProjectId: r.doc_project_id,
       docProjectName: r.doc_project_name,
       docMetadata: parseJsonObject(r.doc_metadata),
+      deletedAt: r.doc_deleted_at,
     }));
 
     return { hits, mode: "fts", totalMatches: hits.length };
@@ -1999,6 +2078,7 @@ export class LocalClio implements MemoryBackend {
   ): VectorCandidateRow[] {
     const matchExpr = buildFtsMatchExpression(req.query);
     const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
+    const deletedClause = req.includeDeleted ? "" : "AND d.deleted_at IS NULL";
 
     const sql = `
       SELECT c.id AS chunk_id,
@@ -2015,6 +2095,7 @@ export class LocalClio implements MemoryBackend {
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
+             d.deleted_at AS doc_deleted_at,
              bm25(clio_chunks_fts, ${FTS_BM25_WEIGHT_DOC_TITLE}, ${FTS_BM25_WEIGHT_CHUNK_TITLE}, ${FTS_BM25_WEIGHT_CONTENT}) AS bm25_rank
         FROM clio_chunks_fts f
         JOIN clio_chunks c ON c.rowid = f.rowid
@@ -2022,7 +2103,7 @@ export class LocalClio implements MemoryBackend {
         JOIN clio_projects p ON d.project_id = p.id
        WHERE clio_chunks_fts MATCH ?
          AND c.version_id IS NULL
-         AND d.deleted_at IS NULL
+         ${deletedClause}
          ${projectFilterId ? "AND d.project_id = ?" : ""}
          ${metaWhere}
        ORDER BY bm25_rank ASC
@@ -2048,6 +2129,7 @@ export class LocalClio implements MemoryBackend {
     embedder: Embedder,
   ): VectorCandidateRow[] {
     const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
+    const deletedClause = req.includeDeleted ? "" : "AND d.deleted_at IS NULL";
 
     const sql = `
       SELECT c.id AS chunk_id,
@@ -2064,12 +2146,13 @@ export class LocalClio implements MemoryBackend {
              d.project_id AS doc_project_id,
              p.name AS doc_project_name,
              d.metadata AS doc_metadata,
+             d.deleted_at AS doc_deleted_at,
              0 AS bm25_rank
         FROM clio_chunks c
         JOIN clio_documents d ON c.document_id = d.id
         JOIN clio_projects p ON d.project_id = p.id
        WHERE c.version_id IS NULL
-         AND d.deleted_at IS NULL
+         ${deletedClause}
          AND c.embedding IS NOT NULL
          AND c.embedder = ?
          ${projectFilterId ? "AND d.project_id = ?" : ""}
@@ -2114,6 +2197,7 @@ export class LocalClio implements MemoryBackend {
       docProjectId: row.doc_project_id,
       docProjectName: row.doc_project_name,
       docMetadata: parseJsonObject(row.doc_metadata),
+      deletedAt: row.doc_deleted_at,
     };
   }
 

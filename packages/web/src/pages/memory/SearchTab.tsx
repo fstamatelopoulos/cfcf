@@ -6,6 +6,7 @@ import {
   type ClioDocumentSearchHit,
   type ClioSearchMode,
 } from "../../api";
+import { DeletedBadge } from "./DeletedBadge";
 
 type ResultType = "documents" | "chunks";
 
@@ -35,6 +36,7 @@ export function SearchTab({
   const [mode, setMode] = useState<ClioSearchMode>("auto");
   const [resultType, setResultType] = useState<ResultType>("documents");
   const [matchCount, setMatchCount] = useState(10);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
   const [docHits, setDocHits] = useState<ClioDocumentSearchHit[]>([]);
   const [chunkHits, setChunkHits] = useState<ClioChunkSearchHit[]>([]);
   const [running, setRunning] = useState(false);
@@ -53,6 +55,7 @@ export function SearchTab({
           mode,
           project: activeProject ?? undefined,
           matchCount,
+          includeDeleted,
         });
         setDocHits(res.hits);
         setChunkHits([]);
@@ -62,6 +65,7 @@ export function SearchTab({
           mode,
           project: activeProject ?? undefined,
           matchCount,
+          includeDeleted,
         });
         setChunkHits(res.hits);
         setDocHits([]);
@@ -128,6 +132,25 @@ export function SearchTab({
         <button type="submit" className="btn btn--primary btn--small" disabled={running || !query.trim()}>
           {running ? "…" : "Search"}
         </button>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            fontSize: "var(--text-sm)",
+            color: "var(--color-text-muted)",
+            cursor: "pointer",
+            marginLeft: "0.25rem",
+          }}
+          title="When on, soft-deleted documents are eligible for results (with a (deleted) badge). Default off — matches the default agent search semantics + Cerefox parity."
+        >
+          <input
+            type="checkbox"
+            checked={includeDeleted}
+            onChange={(e) => setIncludeDeleted(e.target.checked)}
+          />
+          Show deleted
+        </label>
       </form>
 
       {error && <div className="form-row__error" style={{ marginTop: "0.5rem" }}>{error}</div>}
@@ -164,7 +187,9 @@ function DocResultCard({ hit, onOpen }: { hit: ClioDocumentSearchHit; onOpen: ()
     <div className="memory-search__hit" onClick={onOpen}>
       <div className="memory-search__hit-meta">
         <span>
-          <strong>{hit.docTitle}</strong> — {hit.docProjectName}
+          <strong>{hit.docTitle}</strong>
+          {hit.deletedAt && <DeletedBadge deletedAt={hit.deletedAt} />}
+          {" — "}{hit.docProjectName}
         </span>
         <span>
           score {hit.bestScore.toFixed(3)}
@@ -193,7 +218,9 @@ function ChunkResultCard({ hit, onOpen }: { hit: ClioChunkSearchHit; onOpen: () 
     <div className="memory-search__hit" onClick={onOpen}>
       <div className="memory-search__hit-meta">
         <span>
-          <strong>{hit.docTitle}</strong> — {hit.docProjectName}
+          <strong>{hit.docTitle}</strong>
+          {hit.deletedAt && <DeletedBadge deletedAt={hit.deletedAt} />}
+          {" — "}{hit.docProjectName}
         </span>
         <span>score {hit.score.toFixed(3)}</span>
       </div>

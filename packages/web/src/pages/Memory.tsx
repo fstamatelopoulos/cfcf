@@ -7,6 +7,7 @@ import { BrowseTab } from "./memory/BrowseTab";
 import { IngestTab } from "./memory/IngestTab";
 import { AuditTab } from "./memory/AuditTab";
 import { ProjectsTab } from "./memory/ProjectsTab";
+import { TrashTab } from "./memory/TrashTab";
 import { DocumentDetail } from "./memory/DocumentDetail";
 
 const TABS: { key: MemoryTab; label: string }[] = [
@@ -15,6 +16,7 @@ const TABS: { key: MemoryTab; label: string }[] = [
   { key: "ingest", label: "Ingest" },
   { key: "audit", label: "Audit" },
   { key: "projects", label: "Projects" },
+  { key: "trash", label: "Trash" },
 ];
 
 /**
@@ -30,16 +32,19 @@ const TABS: { key: MemoryTab; label: string }[] = [
  * overlay on top of whichever tab is active. Both are reflected in
  * the URL so deep links + browser-back work.
  *
- * Ingest tracking: the sidebar's stats panel is keyed off a
- * `sidebarRefreshTick` so an ingest / project-create bumps the tick
- * and the sidebar re-fetches. Browse + Audit tabs don't share that
- * tick because they re-fetch on filter changes naturally.
+ * Ingest tracking: a single `corpusRefreshTick` keys both the sidebar's
+ * stats panel + listings (Browse, Trash) on every corpus mutation
+ * (ingest, edit, soft-delete, restore, purge, project CRUD). The
+ * Memory page bumps the tick from one place — children just consume
+ * it. Round-4 of 6.18 added the Trash tab + delete refresh into this
+ * model so the list always reflects the latest server state without a
+ * full page reload.
  */
 export function MemoryPage() {
   const route = useRoute();
   const activeTab: MemoryTab = route.memoryTab ?? "search";
   const [activeProject, setActiveProject] = useState<string | null>(null);
-  const [sidebarRefreshTick, setSidebarRefreshTick] = useState(0);
+  const [corpusRefreshTick, setCorpusRefreshTick] = useState(0);
 
   function navigateToTab(tab: MemoryTab) {
     const docPart = route.memoryDocId ? `&doc=${encodeURIComponent(route.memoryDocId)}` : "";
@@ -54,8 +59,8 @@ export function MemoryPage() {
     window.location.hash = `/memory?tab=${activeTab}`;
   }
 
-  function bumpSidebar() {
-    setSidebarRefreshTick((n) => n + 1);
+  function bumpCorpus() {
+    setCorpusRefreshTick((n) => n + 1);
   }
 
   return (
@@ -72,7 +77,7 @@ export function MemoryPage() {
         <MemorySidebar
           activeProject={activeProject}
           onSelectProject={setActiveProject}
-          refreshTick={sidebarRefreshTick}
+          refreshTick={corpusRefreshTick}
         />
 
         <main className="memory-page__main">
@@ -86,19 +91,31 @@ export function MemoryPage() {
               <SearchTab activeProject={activeProject} onOpenDoc={openDoc} />
             )}
             {activeTab === "browse" && (
-              <BrowseTab project={activeProject} onSelect={openDoc} />
+              <BrowseTab
+                project={activeProject}
+                onSelect={openDoc}
+                refreshTick={corpusRefreshTick}
+              />
             )}
             {activeTab === "ingest" && (
               <IngestTab
                 activeProject={activeProject}
-                onIngested={(id) => { bumpSidebar(); openDoc(id); }}
+                onIngested={(id) => { bumpCorpus(); openDoc(id); }}
               />
             )}
             {activeTab === "audit" && (
               <AuditTab activeProject={activeProject} />
             )}
             {activeTab === "projects" && (
-              <ProjectsTab onCreated={bumpSidebar} />
+              <ProjectsTab onCreated={bumpCorpus} />
+            )}
+            {activeTab === "trash" && (
+              <TrashTab
+                project={activeProject}
+                onSelect={openDoc}
+                refreshTick={corpusRefreshTick}
+                onChanged={bumpCorpus}
+              />
             )}
           </div>
         </main>
@@ -108,7 +125,7 @@ export function MemoryPage() {
         <DocumentDetail
           documentId={route.memoryDocId}
           onClose={closeDoc}
-          onChanged={bumpSidebar}
+          onChanged={bumpCorpus}
         />
       )}
     </div>
