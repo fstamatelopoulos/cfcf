@@ -175,6 +175,20 @@ Always prompt the user before writing memory. Use:
        --metadata '{"role":"ha","artifact_type":"user-preference"}' \\
        --author "${actor}"\`
 
+## NEVER purge
+
+When you (or the user via you) need to remove a Clio document, use
+**only** \`cfcf clio docs delete\` (soft-delete). Soft-delete is
+reversible — the doc moves to a trash bin and can be restored with
+\`cfcf clio docs restore\`. Purge (hard-delete) is **forbidden for
+agents**: chunks + version history are dropped, only the audit row
+survives, and there's no recovery path. The server enforces this at
+the API layer (purge requests with an agent actor stamp are
+rejected); your own discipline should ensure you never attempt them
+in the first place. If the user explicitly asks to purge, direct them
+to the web UI's Trash tab — that's the user-initiated surface for
+purges.
+
 ## Memory inventory (snapshot at session start)
 
 ${inventoryText}`;

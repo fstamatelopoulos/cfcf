@@ -671,13 +671,46 @@ describe("Clio HTTP: ingest + search + get + stats", () => {
     expect(purgeRow).toBeDefined();
   });
 
-  it("POST /api/clio/documents/:id/purge returns 404 when doc doesn't exist", async () => {
+  it("POST /api/clio/documents/:id/purge returns 404 when doc doesn't exist (with user actor)", async () => {
     const app = createApp();
     const res = await app.request(
       `/api/clio/documents/00000000-0000-4000-8000-000000000000/purge`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "user|cli|test" }),
+      },
     );
     expect(res.status).toBe(404);
+  });
+
+  it("POST /api/clio/documents/:id/purge refuses a non-user actor (agent / default body)", async () => {
+    const app = createApp();
+    const ing = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p1", title: "Hold on", content: "body" }),
+    });
+    const { id } = await ing.json();
+    await app.request(`/api/clio/documents/${id}`, { method: "DELETE" });
+
+    // Empty body → backend defaults to "agent" → blocked.
+    const noActor = await app.request(`/api/clio/documents/${id}/purge`, { method: "POST" });
+    expect(noActor.status).toBe(400);
+    expect((await noActor.json()).error).toMatch(/not a user actor/i);
+
+    // Agent role stamp → also blocked.
+    const agentActor = await app.request(`/api/clio/documents/${id}/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "dev|claude-code|sonnet" }),
+    });
+    expect(agentActor.status).toBe(400);
+    expect((await agentActor.json()).error).toMatch(/not a user actor/i);
+
+    // Doc remains in the trash, not purged.
+    const trash = await app.request(`/api/clio/documents?deleted_only=true`);
+    expect((await trash.json()).documents.length).toBe(1);
   });
 
   it("GET /api/clio/search?include_deleted=true surfaces deleted hits with deletedAt set", async () => {

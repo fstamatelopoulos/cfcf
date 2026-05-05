@@ -1377,19 +1377,38 @@ describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentCont
     await clio.close();
   });
 
+  it("purgeDocument refuses without a user actor (agent / default)", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Doomed", content: "x" });
+    await clio.deleteDocument(r.id);
+
+    // Default actor → "agent" → blocked.
+    await expect(clio.purgeDocument(r.id))
+      .rejects.toThrow(/not a user actor/i);
+    // Agent role stamp also blocked.
+    await expect(clio.purgeDocument(r.id, { actor: "dev|claude-code|sonnet" }))
+      .rejects.toThrow(/not a user actor/i);
+    // Doc still soft-deleted, not gone.
+    const stillThere = await clio.getDocument(r.id);
+    expect(stillThere).not.toBeNull();
+    expect(stillThere!.deletedAt).not.toBeNull();
+    await clio.close();
+  });
+
   it("purgeDocument refuses on a live doc (Cerefox parity)", async () => {
     const clio = makeClio();
     const r = await clio.ingest({ project: "p1", title: "Live one", content: "x" });
-    await expect(clio.purgeDocument(r.id))
+    // User actor passes the role guard, but the live-doc check still blocks.
+    await expect(clio.purgeDocument(r.id, { actor: "user|cli|test" }))
       .rejects.toThrow(/not soft-deleted/i);
     // Doc still exists.
     expect(await clio.getDocument(r.id)).not.toBeNull();
     await clio.close();
   });
 
-  it("purgeDocument throws when the doc doesn't exist", async () => {
+  it("purgeDocument throws when the doc doesn't exist (with user actor)", async () => {
     const clio = makeClio();
-    await expect(clio.purgeDocument("00000000-0000-4000-8000-000000000000"))
+    await expect(clio.purgeDocument("00000000-0000-4000-8000-000000000000", { actor: "user|cli|test" }))
       .rejects.toThrow(/not found/);
     await clio.close();
   });

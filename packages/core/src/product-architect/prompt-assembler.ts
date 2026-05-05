@@ -324,6 +324,19 @@ Every \`cfcf clio docs ingest\` example below already includes \`--author "${cli
 stamp; missing or inconsistent stamps make your writes invisible to
 those filters.
 
+## NEVER purge
+
+When you need to remove a Clio document, use **only** \`cfcf clio docs
+delete\` (soft-delete). Soft-delete is reversible — the doc moves to a
+trash bin and can be restored with \`cfcf clio docs restore\`. Purge
+(hard-delete) is **forbidden for agents**: chunks + version history
+are dropped, only the audit row survives, and there's no recovery
+path. The server enforces this at the API layer (purge requests with
+an agent actor stamp are rejected with \`not a user actor\`); your
+own discipline should ensure you never attempt them in the first
+place. Purge is reserved for user-initiated surfaces (the web UI's
+Trash tab).
+
 
 You operate on a **two-tier memory**:
 

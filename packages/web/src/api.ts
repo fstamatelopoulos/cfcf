@@ -579,11 +579,22 @@ export function restoreClioDocument(id: string): Promise<{ restored: boolean; do
  * live — caller must `deleteClioDocument` first. Cascade drops
  * chunks + version snapshots; the audit row written before the
  * cascade survives.
+ *
+ * Stamps the actor as `user|web|local` (per the cf² actor convention
+ * `<role>|<agent>|<model>`). Backend's user-only guardrail refuses
+ * purge from any actor that doesn't start with `user|`, so an agent
+ * hitting this HTTP route directly with its own role stamp is
+ * blocked at the backend layer — not just by the absence of a CLI
+ * verb. Web users always identify as `user|web|local`.
  */
 export function purgeClioDocument(id: string): Promise<{ purged: boolean; documentId: string }> {
   return request<{ purged: boolean; documentId: string }>(
     `/api/clio/documents/${encodeURIComponent(id)}/purge`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "user|web|local" }),
+    },
   );
 }
 

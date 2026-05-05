@@ -1259,7 +1259,29 @@ export class LocalClio implements MemoryBackend {
     // Cerefox parity: refuses on a live doc (`cerefox_purge_document`
     // checks `deleted_at IS NOT NULL`). Caller's flow is "soft-delete
     // via `deleteDocument`, then optionally purge via this verb."
+    //
+    // **User-only guardrail (item 6.18 round-4):** purge is irreversible
+    // (chunks + version history are dropped; only the audit row
+    // survives). Soft-delete already gives users the recovery path
+    // we want for accidental agent deletes — purge bypasses that.
+    // We require the actor stamp to start with `user|` (per the
+    // <role>|<agent>|<model> convention from item 6.18 round-3) so
+    // only user-initiated surfaces (web UI, future CLI-with-explicit-
+    // user-confirm) can purge. Agents calling the HTTP API directly,
+    // including a hypothetical `dev|claude-code|sonnet` doing
+    // `curl -X POST .../purge`, are blocked here regardless of which
+    // surface they used to reach the route. The web UI stamps
+    // `user|web|local`; an agent's request stamps its own role and
+    // therefore fails this check.
     const actor = opts.actor?.trim() || "agent";
+    if (!actor.startsWith("user|")) {
+      throw new Error(
+        `purgeDocument: actor "${actor}" is not a user actor. ` +
+        `Purge is restricted to user-initiated surfaces; agents must ` +
+        `use deleteDocument (soft-delete) instead. Pass an actor stamp ` +
+        `starting with "user|" (e.g. "user|web|local") to override.`,
+      );
+    }
     const target = this.db.query<{
       id: string;
       project_id: string;
