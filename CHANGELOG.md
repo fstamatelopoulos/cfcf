@@ -11,11 +11,11 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
-## [0.19.0] -- 2026-05-03
+## [0.19.0] -- 2026-05-04
 
-**Items 6.24 + 6.18 ship.** Feature drops in 0.19.0; one more iter-6 item (6.9 -- rationalise Clio usage across agent roles) will land under the same minor before this gets cut to npm.
+**Items 6.24 + 6.18 ship.** Two iter-6 items in 0.19.0: 6.24 (Clio FTS title boosting) and the four rounds of 6.18 (web Clio Memory page → editorial layer → system projects + actor stamp → Trash bin + purge with safety net). Remaining iter-6 items (6.9 — rationalise Clio usage across agent roles; 6.27 — skills repository, accepted scope after this release) move to a future minor.
 
-Minor bump because 6.24's migration changes the on-disk FTS schema. Reading + writing remain backward compatible (the migration is automatic, runs on first Clio touch after upgrade, and is wrapped in `BEGIN IMMEDIATE; ...; COMMIT` so partial failures roll back cleanly). 6.18 is purely additive (new web surface + new actor-stamp metadata + system-project guards); no API or config breaking changes.
+Minor bump because 6.24's migration changes the on-disk FTS schema. Reading + writing remain backward compatible (the migration is automatic, runs on first Clio touch after upgrade, and is wrapped in `BEGIN IMMEDIATE; ...; COMMIT` so partial failures roll back cleanly). 6.18 is purely additive (new web surface + new actor-stamp metadata + system-project guards + Trash bin + purge route with user-only guardrail); no API or config breaking changes.
 
 ### Added — Item 6.18: web Clio Memory page (full editorial layer)
 
@@ -52,9 +52,27 @@ Replaces the read-only Clio prototype shipped in 6.12 with a full-featured Memor
 
 **Read-audit gap** (captured as a 6.9 follow-up): cfcf's audit log captures mutations only. Cerefox additionally maintains a `usage_log` for reads (each `search` / `docs get` records the requestor + query). Likely yes for cfcf parity for the same actor-convention reason; needs a privacy review (does logging every search query risk capturing prompt-leakage if the agent quotes problem.md content into a query?). Tracked in `docs/plan.md` row 6.9.
 
-**Files added**: `packages/core/src/clio/{actor,system-projects}.ts`; `packages/web/src/pages/memory/{AuditTab,BrowseTab,DeleteProjectDialog,DocumentDetail,EditDocumentDialog,EditProjectDialog,IngestTab,MemorySidebar,ProjectsTab,SearchTab}.tsx`; `packages/web/src/hooks/useRoute.{ts,test.ts}`; `docs/design/clio-memory-web-ui.md`.
+**Round 4 — Trash bin + Show-deleted toggles + Browse refresh + purge with safety net.**
 
-**Tests added**: 8 to `local-clio.test.ts` (project edit/delete with dependent-workspace check; content-unchanged short-circuit branches; system-project guard); 4 to `clio.test.ts` (PATCH/DELETE routes); HA + PA prompt-assembler tests for the actor stamp; useRoute hook tests.
+Closes the omissions surfaced during round-3 dogfooding:
+
+- **Bug fix — Browse list refresh-on-mutate.** Reproduced by deleting a doc from the detail overlay → going back to the Browse list → still shows the deleted doc until manual reload. Memory.tsx now routes every corpus mutation through a single `corpusRefreshTick` that BrowseTab + TrashTab + the sidebar all key their fetches on. Doc-detail's `onChanged` callback bumps the tick after every mutation it owns. No more "deleted but still there" UX.
+- **Trash tab** on the Memory page (sixth tab). Lists soft-deleted docs (via the existing `?deleted_only=true` server flag) with per-row Restore + Purge actions. Mirrors Cerefox's `/trash` page surface. Window.confirm gate on Purge (action is already gated to soft-deleted docs + the user has already expressed delete intent once; per-row dialog overkill, Cerefox does the same).
+- **"Show deleted" toggles** on Browse + Search tabs. Default off (matches Cerefox + agent-search semantics). When on, deleted docs appear inline with a red `(deleted)` badge — new shared `<DeletedBadge>` component mirrors the `(system)` badge from ProjectsTab (error palette instead of info). Browse passes `?include_deleted=true`; Search threads `includeDeleted: true` through the new `SearchRequest.includeDeleted` field, which `searchFts` / `searchSemantic` / `searchHybrid` honour at the SQL level.
+- **Hard-delete (`purge`) — Cerefox parity.** New `LocalClio.purgeDocument` + `POST /api/clio/documents/:id/purge` route. Refuses on a live doc (caller must soft-delete first); cascade drops chunks + version snapshots; the `purge` audit-log entry written before the cascade survives (`clio_audit_log` has no FK to `clio_documents` — intentional). New `purge` value added to the `ClioAuditEntry.eventType` vocabulary.
+- **User-only guardrail on purge** — agents must never purge. Two layers of defence:
+  1. **Backend check**: `LocalClio.purgeDocument` rejects any actor stamp that doesn't start with `user|`. Web UI passes `user|web|local`; an agent calling the HTTP route directly with its own role stamp (`dev|claude-code|sonnet`, etc.) is blocked by the backend with `not a user actor`. Default actor `agent` (no override) is also rejected.
+  2. **Agent-template instruction**: the iteration-role `clio-guide.md` template + PA + HA prompt assemblers now contain an explicit "NEVER purge" rule. Agents use `cfcf clio docs delete` (soft-delete, reversible); if the user explicitly asks for a purge, agents direct them to the web UI's Trash tab.
+
+The cfcf CLI deliberately has no `cfcf clio docs purge` verb — soft-delete is the agent's safety net against accidental data loss, and the verb's absence is a feature. The web UI's Trash tab is the only purge surface.
+
+**Cerefox interface-parity check:** every new endpoint shape and response field has a Cerefox equivalent (`cerefox_purge_document` RPC, `?include_deleted` semantics, `deletedAt` on search hits map cleanly). No divergence introduced.
+
+**Files added**: `packages/core/src/clio/{actor,system-projects}.ts`; `packages/web/src/pages/memory/{AuditTab,BrowseTab,DeleteProjectDialog,DeletedBadge,DocumentDetail,EditDocumentDialog,EditProjectDialog,IngestTab,MemorySidebar,ProjectsTab,SearchTab,TrashTab}.tsx`; `packages/web/src/hooks/useRoute.{ts,test.ts}`; `docs/design/clio-memory-web-ui.md`.
+
+**Tests added (round-4)**: 5 to `local-clio.test.ts` (search excludes deleted by default + `deletedAt:null` on hits; search with `includeDeleted` returns deleted hits with `deletedAt:string`; `searchDocuments` propagates `deletedAt`; `purgeDocument` refuses non-user actors and live docs; end-to-end purge cascade with audit-row survival). 5 to `clio.test.ts` (purge route refuses non-user actors; purge succeeds with user actor + audit row survives; purge 404s on missing doc; `?include_deleted=true` surfaces deleted hits; route accepts the `user|cli|test` actor stamp). 1 to `useRoute.test.ts` (new `trash` tab parsed correctly).
+
+**Total tests added across all four rounds**: 8 (round-2 short-circuit + project edit/delete) + actor-stamp + useRoute (round-3) + 11 (round-4) = ~24 new tests on top of 6.18's baseline.
 
 ### Added — Item 6.24: Clio FTS title boosting (Cerefox parity)
 
@@ -76,7 +94,13 @@ Brings Clio's FTS ranking up to Cerefox parity for title-boosted search: query t
 
 ### Fixed
 
+- **Workspace Config edits clobbered by polling refresh.** Reproduced by unchecking `autoReviewSpecs` (or any other behaviour flag / model picker / agent-role) on the Workspace Config tab — the checkbox would "immediately revert" within seconds. Root cause: `WorkspaceDetail` polls every 3-10s and calls `setWorkspace(freshObject)` regardless of whether the data changed, producing a new object reference each tick; `ConfigDisplay`'s "sync draft on workspace prop change" effect depended on the prop reference, so it fired every poll cycle and overwrote in-flight unsaved edits. Fix: depend on `JSON.stringify(workspace)` so the effect only re-syncs on actual data changes (preserves user edits across same-data polls; a real external mutation by another surface still propagates in). Same class of bug would have affected any unsaved field on the tab — `autoReviewSpecs` was just where it surfaced.
 - **Stale `releaseNotesUrl` assertion in `update.test.ts`** (6.20 follow-up). The v0.18.0 review pass removed `releaseNotesUrl` from the flag-file shape for security reasons (the file lives in `~/.cfcf/`, user-writable; an attacker-controlled link rendered as `<a target="_blank">` would be a phishing surface), but the corresponding test still asserted on the field's presence and was quietly failing. Replaced the contains-URL check with a `toBeUndefined` check that locks in the security property.
+
+### Documentation
+
+- **Decisions log** gains three 2026-05-03 entries that capture the durable lessons from 6.18 round-3: the Clio author/actor convention; system-managed Clio Projects (cf-system-* prefix, locked at backend layer, boot-time ensure not migrations); Cerefox interface parity as a load-bearing constraint with the meta-rule "could a future Cerefox-backed swap-in still serve this same call?"
+- **Plan item 6.27** added to the iter-6 table as ❌ (not started) — Skills Repository + Workspace-Scoped Skill Activation. Full design captured in `docs/design/skills-repository.md` (subset-vs-superset analysis against Anthropic's official Claude skill spec, deterministic-activation model, role-routing logic, Cerefox-parity question, eight open design questions). Implementation deferred to a future minor.
 
 ## [0.18.0] -- 2026-05-02
 
