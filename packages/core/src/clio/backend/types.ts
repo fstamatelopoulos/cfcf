@@ -156,6 +156,21 @@ export interface MemoryBackend {
    * doesn't exist. Mirrors Cerefox `cerefox_restore_document`. 5.11.
    */
   restoreDocument(id: string, opts?: { author?: string }): Promise<void>;
+  /**
+   * Hard-delete a soft-deleted document. Removes the document row, its
+   * chunks (current + versioned), its version snapshots, and its
+   * audit-log entries' link via FK CASCADE. This is irreversible.
+   *
+   * Refuses to act on a live document — Cerefox parity (`cerefox_purge_
+   * document` raises if `deleted_at IS NULL`). Callers must
+   * `deleteDocument` first; the typical flow is "user views the trash
+   * bin, picks an item, confirms purge."
+   *
+   * Writes a `purge` audit-log entry BEFORE the delete (so it survives
+   * the cascade) so the audit trail records what was lost. Throws if
+   * the doc doesn't exist or is currently live.
+   */
+  purgeDocument(id: string, opts?: { actor?: string }): Promise<void>;
 
   // ── Search ────────────────────────────────────────────────────────────
   /**

@@ -1328,6 +1328,107 @@ describe("LocalClio.findDocumentByTitle / listDocumentVersions / getDocumentCont
     await clio.close();
   });
 
+  // ── 6.18 round-4: includeDeleted in search + purgeDocument ──────────
+  it("search excludes soft-deleted docs by default + carries deletedAt:null on hits", async () => {
+    const clio = makeClio();
+    const live = await clio.ingest({ project: "p1", title: "Live doc", content: "# x\nfindable" });
+    const dead = await clio.ingest({ project: "p1", title: "Dead doc", content: "# x\nfindable other" });
+    await clio.deleteDocument(dead.id);
+
+    const r = await clio.search({ query: "findable" });
+    const titles = r.hits.map((h) => h.docTitle);
+    expect(titles).toContain("Live doc");
+    expect(titles).not.toContain("Dead doc");
+    // Live hits get deletedAt:null (not undefined) so the UI can branch on it.
+    const liveHit = r.hits.find((h) => h.docTitle === "Live doc")!;
+    expect(liveHit.deletedAt).toBeNull();
+    void live;
+    await clio.close();
+  });
+
+  it("search with includeDeleted:true returns deleted hits + sets hit.deletedAt", async () => {
+    const clio = makeClio();
+    const dead = await clio.ingest({ project: "p1", title: "Dead doc", content: "# x\nfindable other" });
+    await clio.deleteDocument(dead.id);
+
+    const r = await clio.search({ query: "findable", includeDeleted: true });
+    const hit = r.hits.find((h) => h.documentId === dead.id);
+    expect(hit).toBeDefined();
+    expect(typeof hit!.deletedAt).toBe("string"); // ISO timestamp
+    await clio.close();
+  });
+
+  it("searchDocuments propagates deletedAt to DocumentSearchHit when includeDeleted is set", async () => {
+    const clio = makeClio();
+    const dead = await clio.ingest({
+      project: "p1",
+      title: "Dead body",
+      content: "# x\nsomething specific to find",
+    });
+    await clio.deleteDocument(dead.id);
+
+    const liveOnly = await clio.searchDocuments({ query: "specific" });
+    expect(liveOnly.hits.find((h) => h.documentId === dead.id)).toBeUndefined();
+
+    const all = await clio.searchDocuments({ query: "specific", includeDeleted: true });
+    const hit = all.hits.find((h) => h.documentId === dead.id);
+    expect(hit).toBeDefined();
+    expect(typeof hit!.deletedAt).toBe("string");
+    await clio.close();
+  });
+
+  it("purgeDocument refuses on a live doc (Cerefox parity)", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({ project: "p1", title: "Live one", content: "x" });
+    await expect(clio.purgeDocument(r.id))
+      .rejects.toThrow(/not soft-deleted/i);
+    // Doc still exists.
+    expect(await clio.getDocument(r.id)).not.toBeNull();
+    await clio.close();
+  });
+
+  it("purgeDocument throws when the doc doesn't exist", async () => {
+    const clio = makeClio();
+    await expect(clio.purgeDocument("00000000-0000-4000-8000-000000000000"))
+      .rejects.toThrow(/not found/);
+    await clio.close();
+  });
+
+  it("purgeDocument hard-deletes a soft-deleted doc + cascades chunks/versions + audit row survives", async () => {
+    const clio = makeClio();
+    const r = await clio.ingest({
+      project: "p1",
+      title: "Doomed",
+      content: "# part1\nbody one\n\n# part2\nbody two",
+    });
+    // Update once so a version snapshot exists, exercising the
+    // clio_document_versions cascade alongside clio_chunks.
+    await clio.ingest({
+      project: "p1", title: "Doomed", documentId: r.id,
+      content: "# part1\nupdated body",
+      updateIfExists: true,
+    });
+    await clio.deleteDocument(r.id);
+
+    // Sanity: a version snapshot was taken, chunks exist.
+    expect((await clio.listDocumentVersions(r.id)).length).toBeGreaterThan(0);
+
+    await clio.purgeDocument(r.id, { actor: "user|cli|test" });
+
+    // Doc + chunks + versions all gone.
+    expect(await clio.getDocument(r.id)).toBeNull();
+    expect((await clio.listDocumentVersions(r.id)).length).toBe(0);
+
+    // Audit row for the purge survives the cascade (clio_audit_log
+    // has no FK to clio_documents).
+    const audit = await clio.getAuditLog({ documentId: r.id });
+    const purgeRow = audit.find((e) => e.eventType === "purge");
+    expect(purgeRow).toBeDefined();
+    expect(purgeRow!.actor).toBe("user|cli|test");
+    expect(purgeRow!.metadata.title).toBe("Doomed");
+    await clio.close();
+  });
+
   // ── 5.12: author field + metadata-search + metadata-keys ────────────
   it("ingest persists `author` on creates and updates", async () => {
     const clio = makeClio();

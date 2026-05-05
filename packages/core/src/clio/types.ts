@@ -234,6 +234,11 @@ export interface EditDocumentRequest {
  *                       `metadata` JSON. 5.13 follow-up.
  *   - "delete"        : soft-delete (deleted_at set)
  *   - "restore"       : soft-delete cleared
+ *   - "purge"         : hard-delete of an already-soft-deleted doc.
+ *                       Mirrors Cerefox `cerefox_purge_document` audit.
+ *                       The purge audit row is written BEFORE the
+ *                       cascade so it survives; on read the
+ *                       `documentId` will not resolve to a live doc.
  *   - "migrate-project": doc(s) re-keyed from one Clio Project to another
  */
 export interface ClioAuditEntry {
@@ -245,6 +250,7 @@ export interface ClioAuditEntry {
     | "edit-metadata"
     | "delete"
     | "restore"
+    | "purge"
     | "migrate-project";
   /**
    * Who/what triggered this event. Defaults to "agent" for ingest paths
@@ -347,6 +353,14 @@ export interface SearchRequest {
    * over `clio.contextWindow`; absent both, default 1.
    */
   contextWindow?: number;
+  /**
+   * When `true`, soft-deleted documents are eligible for results. Defaults
+   * to `false` (live docs only — matches Cerefox's hard-filter on every
+   * search RPC). Doc-level + chunk-level paths both honour this. Useful
+   * for the web "Show deleted" toggle on the Search tab; agents normally
+   * never want this.
+   */
+  includeDeleted?: boolean;
 }
 
 export interface SearchHit {
@@ -367,6 +381,14 @@ export interface SearchHit {
   docProjectId: string;
   docProjectName: string;
   docMetadata: Record<string, unknown>;
+  /**
+   * ISO-8601 soft-delete timestamp on the underlying document, or
+   * `null` if the doc is live. Search hits only carry a non-null
+   * `deletedAt` when the caller passed `includeDeleted: true`. Lets
+   * the UI render a `(deleted)` badge inline without a follow-up
+   * fetch per hit.
+   */
+  deletedAt: string | null;
 }
 
 export interface SearchResponse {
@@ -435,6 +457,11 @@ export interface DocumentSearchHit {
    * `cerefox_search_docs.is_partial`. 5.12 follow-up.
    */
   isPartial: boolean;
+  /**
+   * ISO-8601 soft-delete timestamp, or `null` when the doc is live.
+   * Only non-null when the caller passed `includeDeleted: true`.
+   */
+  deletedAt: string | null;
 }
 
 export interface DocumentSearchResponse {
