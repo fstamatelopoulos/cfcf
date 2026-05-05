@@ -351,11 +351,16 @@ export function registerClioRoutes(app: Hono): void {
     if (smallDocThreshold === undefined) smallDocThreshold = 20000;
     if (contextWindow === undefined) contextWindow = 1;
 
+    // Soft-delete handling: default excludes deleted (matches Cerefox
+    // hard-filter). `?include_deleted=true` opts into showing deleted
+    // hits — used by the web "Show deleted" toggle on the Search tab.
+    const includeDeleted = c.req.query("include_deleted") === "true";
+
     try {
       const backend = getClioBackend();
       const reqShape: SearchRequest = {
         query: q, project, matchCount, mode, metadata, minScore,
-        alpha, smallDocThreshold, contextWindow,
+        alpha, smallDocThreshold, contextWindow, includeDeleted,
       };
       const res = by === "doc"
         ? await backend.searchDocuments(reqShape)
@@ -541,6 +546,28 @@ export function registerClioRoutes(app: Hono): void {
       await backend.deleteDocument(id, body);
       const doc = await backend.getDocument(id);
       return c.json({ deleted: true, document: doc }, 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes("not found") ? 404 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
+  // Hard-delete a soft-deleted doc (Cerefox parity:
+  // `cerefox_purge_document`). Refuses if the doc is currently live --
+  // caller must soft-delete first (the typical flow is "open the trash
+  // bin, pick a doc, confirm purge"). Cascade drops chunks + version
+  // snapshots; the audit row written before the cascade survives.
+  // Returns 200 with purged=true on success; 404 if the doc doesn't
+  // exist; 400 if the doc is live.
+  app.post("/api/clio/documents/:id/purge", async (c) => {
+    const id = c.req.param("id");
+    let body: { actor?: string } = {};
+    try { body = await c.req.json<{ actor?: string }>(); } catch { /* empty body OK */ }
+    const backend = getClioBackend();
+    try {
+      await backend.purgeDocument(id, body);
+      return c.json({ purged: true, documentId: id }, 200);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const status = message.includes("not found") ? 404 : 400;
