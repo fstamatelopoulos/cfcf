@@ -61,11 +61,24 @@ export function ConfigDisplay({
   const [clioDialogOpen, setClioDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
-  // Sync draft when the upstream workspace prop changes (e.g. after external refresh)
+  // Sync draft when the upstream workspace prop **content** changes (e.g.
+  // after external refresh, server-side mutation by another surface).
+  //
+  // Why depend on the stringified value instead of the prop reference: the
+  // parent (`WorkspaceDetail`) polls the workspace every 3-10s and calls
+  // `setWorkspace(freshObject)` regardless of whether anything changed. That
+  // creates a new object reference on every tick. If we depend on the
+  // reference, this effect fires every poll cycle and clobbers any in-flight
+  // unsaved edit (e.g. you uncheck `autoReviewSpecs`, the next poll tick
+  // resets the draft to the still-unsaved server value, and the checkbox
+  // appears to "revert"). Stringifying gives us a stable dep that only
+  // changes when the data actually changes — preserves user edits across
+  // same-data polls, but a real external mutation still propagates in.
   useEffect(() => {
     setDraft(structuredClone(workspace));
     setSavedAt(null);
-  }, [workspace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(workspace)]);
 
   useEffect(() => {
     fetchGlobalConfig()
