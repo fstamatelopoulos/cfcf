@@ -13,6 +13,96 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-03 — Clio author/actor convention: `<role>|<agent>|<model>` stamp on every write
+
+**Context.** Item 6.18 round-3 surfaced a recurring question: when an agent (or the iteration loop, or the user via the CLI / web UI) writes to Clio, who is doing the write — and how do we make the audit log + future analytics able to tell? Pre-6.18-round-3 the answer was inconsistent: the iteration loop's auto-ingest paths sometimes set `author: "agent"` (a meaningless catch-all), the PA + HA prompt examples didn't pin a stamp at all, and the user-facing CLI defaulted to `"mcp-agent"` or whatever the caller passed. Result: the audit log records mutations, but you can't filter to "all writes by the dev role under claude-code" because the dimension wasn't being captured.
+
+This isn't an access-control problem — Clio is **shared memory across all agents and the user in the cf² ecosystem**, by design. Anyone can write to anything. The question is identity attribution, not authorisation.
+
+**Options considered.**
+
+1. **Free-text author per call.** Status quo. Each call site picks its own string. Worst case the audit log has dozens of variants of "the dev agent" — `"dev"`, `"dev-agent"`, `"claude"`, `"claude-code dev"` — none of which are filterable.
+2. **A single canonical role string per call site** (`"dev"`, `"judge"`, etc.). Better than free text, but loses the "which adapter under which model" axis. When two workspaces both ran the dev role but one used Claude Code and the other used Codex, the audit log can't distinguish them.
+3. **Structured three-part stamp: `<role>|<agent>|<model>`** (e.g. `dev|claude-code|sonnet`, `product-architect|codex|gpt-5`, `user|cli|default`). Mirrors Cerefox's existing actor convention exactly so a future swap-in to a Cerefox-backed Clio doesn't break audit-log filters or analytics. Selected.
+
+**Decided** — option 3. Specifically:
+
+- **Format**: `<role>|<agent>|<model>`. `role` ∈ `{dev, judge, architect, reflection, documenter, product-architect, help-assistant, user}`. `agent` is the AgentAdapter name (`claude-code` / `codex`). `model` is the resolved model alias or `"default"` when no override was set. Pipe separator chosen to match Cerefox's existing convention; not parsed (it's an opaque identifier from the audit log's perspective), but legible enough that humans reading audit rows can decode roles + adapters at a glance.
+- **Single source of truth**: `formatClioActor(role, agent, model)` in `packages/core/src/clio/actor.ts` + `ROLE_*` constants. Every call site imports the helper rather than templating the stamp inline.
+- **Threaded through every write site**: (a) `loop-ingest.ts` has an `actorForRole(workspace, role)` helper that maps role → workspace's per-role AgentConfig and passes `author: <stamp>` to all 5 auto-ingest sites (reflection / architect / decision-log / iteration-summary / raw artifacts). (b) PA + HA prompt-assemblers render a "Clio actor stamp" subsection inside Memory + pre-fill `--author "<stamp>"` / `--actor "<stamp>"` on every `cfcf clio docs ingest` / `delete` / `restore` / `edit` example so the agent uses the right stamp on direct writes. (c) `cfcf spec` + `cfcf help assistant` launchers compute the actor at launch from the resolved AgentConfig and pass it to the assembler. (d) Iteration-role `clio-guide.md` template gained a brief author-convention section so dev / judge / architect / reflection / documenter follow the same convention when asked to write directly.
+- **The stamp is metadata, not access control.** Documented explicitly in the actor.ts module docstring + CLAUDE.md + the system-projects entry below. Any role can write to any doc; missing or inconsistent stamps just make writes invisible to audit-log filters, they don't refuse the write.
+
+**Read-audit gap (deferred to 6.9).** Cerefox additionally maintains a separate `usage_log` for read operations (each `search` / `docs get` records the requestor + query). cfcf's audit log captures mutations only today. Likely we want parity for the same actor-convention reason (so analytics can answer "which roles search Clio most often?", "which queries return zero hits?"), but it requires (a) new event type(s) + a new SQL table or column, (b) a CLI surface (`cfcf clio audit --reads`), and (c) a privacy review (does logging every search query risk capturing prompt-leakage if the agent quotes `problem.md` content into a query?). Captured in `docs/plan.md` row 6.9.
+
+**Lessons.**
+
+1. **Identity is a metadata problem in shared memory; access control is a different problem.** Don't conflate them. Once you accept that "anyone can write to anything", the audit-log dimension matters more than per-write authorisation. Cerefox got this right and it scales nicely.
+2. **A single source of truth for an identifier format pays off the moment you have three+ call sites.** The `formatClioActor` helper costs ~10 lines and lets every PR that touches a write site stay consistent without each author re-deriving the convention from prose docs.
+3. **Mirror upstream conventions before inventing your own.** Cerefox's actor stamp pre-existed; copying it (rather than inventing a parallel cfcf-flavoured one) means any future CerefoxRemote backend swap-in keeps audit-log queries working unchanged. This is the same principle as the wrapper-layer-invariants lesson from 2026-04-25 — port the convention, not just the engine.
+
+**Cross-refs.** `packages/core/src/clio/actor.ts`; `packages/core/src/clio/loop-ingest.ts` (actorForRole helper + 5 auto-ingest sites); `packages/core/src/{product-architect,help-assistant}/prompt-assembler.ts` (actor-stamp subsection); `packages/core/src/templates/clio-guide.md` (iteration-role guidance); CLAUDE.md "Clio author / actor convention" entry.
+
+---
+
+## 2026-05-03 — System-managed Clio Projects: `cf-system-*` convention, lock at backend, boot-time ensure (NOT migrations)
+
+**Context.** Across iter-5 + iter-6 a small handful of Clio Projects accreted that were **owned by cfcf code, not the user** — agent prompts hardcoded the project names, the iteration loop auto-routed to them, the PA/HA paths read + wrote them. Names varied historically (`default`, `cfcf-memory-pa`, `cfcf-memory-global`) without a unifying convention. Two related risks:
+
+1. **User renames or deletes a system project via the web UI**, the next agent run silently auto-creates a replacement under the original name (via `resolveProject({createIfMissing: true})`), and the user's edits are orphaned — looks like cfcf "lost" their data.
+2. **Without pre-creation**, system projects only appear in the web UI's project picker after their first auto-ingest. New users see an empty Projects tab and reach for "Create project" before realising the system bucket they want already has a canonical name.
+
+**Decisions.**
+
+1. **Naming convention: `cf-system-*` prefix.** Four projects today (`cf-system-default`, `cf-system-memory-global`, `cf-system-pa-memory`, `cf-system-ha-memory`). Future per-role memory projects (`cf-system-reflection-memory`, etc.) join the set as their roles wire up. Single mechanical rule; no judgement calls about what's "system" vs "user".
+2. **Single source of truth in TypeScript** (`packages/core/src/clio/system-projects.ts`): per-name constants + a `SYSTEM_PROJECTS` Set + `isSystemProject(name)` helper. Every cfcf module that writes to a system project imports the constant rather than hardcoding the string.
+3. **Locked at the backend layer, not the UI.** `LocalClio.editProject` + `deleteProject` throw if the target is in `SYSTEM_PROJECTS`. The lock therefore holds across web UI + CLI + any future surface (a third-party tool that hits the API directly couldn't bypass it). The web UI's hide-the-button behaviour is layered defence, not the primary mechanism.
+4. **Doc ingest into a system project IS allowed.** Only the project itself (rename / delete / re-describe) is locked. This keeps Clio's "shared memory across all agents and the user" model intact — users + agents can still pin notes into any system bucket — while protecting the canonical project names that agent prompts hardcode.
+5. **Pre-creation at server boot** via `ensureSystemProjects()` called from `start.ts`. Idempotent (calls `getProject` first, no-ops if present) + best-effort (failures don't block boot, the `resolveProject({createIfMissing: true})` auto-create path is still in place as defence-in-depth).
+6. **NOT seeded via SQL migrations.** Tempting alternative: a `0003_seed_system_projects.sql` that INSERTs the four system rows. Rejected — migrations are immutable (you can't edit a shipped one), so adding a new system project later would mean a fresh migration, and the code-side `SYSTEM_PROJECTS` constants would have to stay in lockstep. Putting the seeding in `ensureSystemProjects()` means a single edit to the TS file is enough; the function runs every boot and stays in sync with the constants by construction.
+
+**Lessons.**
+
+1. **Pre-existing data under old names becomes a back-compat tax the moment you rename.** When we renamed `cfcf-memory-pa` → `cf-system-pa-memory` we couldn't drop the old project (users had docs in it). It's reachable via the web UI's Projects tab; users migrate manually via per-doc project reassignment. Lesson for next time: lock the convention before docs accumulate under the legacy name.
+2. **Boot-time invariants belong in code, not migrations, when they need to evolve.** Migrations are great for schema changes (immutable, deterministic, version-tagged). They're a poor fit for "make sure these N rows exist" when N grows over time and the rows are tied to TypeScript constants. The boot-time ensure pattern is mechanically simpler and lets the source-of-truth live where it's read from.
+3. **Lock at the layer that all surfaces share.** Hiding the Edit/Delete buttons in the web UI is a UX nicety; throwing in `editProject` / `deleteProject` is the actual lock. If we'd only done the UI hide, a CLI command (`cfcf clio projects delete cf-system-pa-memory`) or a direct API call would still let it through.
+
+**Cross-refs.** `packages/core/src/clio/system-projects.ts`; `packages/server/src/start.ts` (boot-time ensure); `packages/web/src/pages/memory/ProjectsTab.tsx` (UI badge in Actions column); CLAUDE.md "System-managed Clio Projects" entry.
+
+---
+
+## 2026-05-03 — Cerefox interface parity for Clio is load-bearing; document divergences explicitly
+
+**Context.** The 2026-04-25 entry above committed cfcf-Clio to parity with Cerefox at the `MemoryBackend` boundary. Iter-6's web Clio Memory page (item 6.18) added a richer surface — project edit / delete, document edit / restore, content-unchanged short-circuit on re-ingest, the `(system)` badge — which raised the question for every PR: **what counts as a "parity-required" surface, and what's "stack-driven divergence we should document"**? Without a sharper rule, every Clio change risks either over-conservatism (refusing useful local-only features) or drift (silently adding behaviours that won't survive a future `CerefoxRemote` swap-in).
+
+**Decided — promote the parity rule to a load-bearing constraint and codify the question.**
+
+- **What MUST stay compatible** (the "could a future Cerefox-backed swap-in still serve this same call?" test):
+  - Endpoint shapes (`/api/clio/*`).
+  - Query parameter names + semantics (search modes, `?by=doc` / `?by=chunk`, project filter, metadata filter, match count, small-to-big knobs).
+  - Response field names + shapes (`DocumentSearchHit`, `ClioAuditEntry`, etc.).
+  - CLI verb structure (`cfcf clio search/ingest/docs/projects/audit/...`).
+- **What's allowed to diverge** (stack-driven implementation choices, not surface contracts):
+  - SQLite/FTS5 vs Postgres/tsvector + pgvector internals.
+  - Per-column `bm25(...)` weights vs `setweight` tsvector composition.
+  - FTS5's lack of a built-in stop-word list vs Postgres's English stop-word default.
+  - SQLite's `bm25()` returning negative values requiring per-pool min-max renormalisation vs Postgres `ts_rank_cd` already being roughly `[0, 1]`.
+- **When stack constraints force a divergence**, document it in the design doc + decisions log so the integration plan can address it (e.g. "Clio uses 3-column FTS5 with weights `(2.5, 2.5, 1.0)` to match Cerefox's effective A:B = 2.5× from `ts_rank_cd`; the underlying ranker differs but the title-boost ratio is the user-visible knob both sides expose").
+
+The question to ask, codified for every Clio surface change: **"could a future Cerefox-backed swap-in still serve this same call?"**
+
+**Why this matters now.** Iter-6's Memory page added several new surfaces that touched the boundary: `PATCH/DELETE /api/clio/projects/:idOrName` (new endpoint shapes), workspace-dependency check returning `409 + {dependentWorkspaces, docCount}` (new response shape), content-unchanged short-circuit splitting `updateDocument` into 3 branches (full skip / metadata-only / full re-chunk) with corresponding audit event types. Each of these passed the parity test — Cerefox's RPCs already exposed equivalent endpoints + response shapes, including the metadata-only-edit branch (Cerefox's `cerefox_update_document_metadata` was the prior art). Without the rule, we might've made up new endpoint shapes and locked ourselves out of the swap-in path.
+
+**Lessons.**
+
+1. **A meta-rule that fits in one sentence is more useful than a list of dos-and-don'ts.** "Could a future Cerefox-backed swap-in still serve this same call?" is the actual question on every PR. Maintaining a long compatibility checklist would atrophy; a single question becomes muscle memory.
+2. **Internal stack divergence is fine and expected.** SQLite isn't Postgres. FTS5 isn't tsvector. Trying to make them identical at the implementation layer is a fool's errand — what matters is that the user-visible knobs (search modes, parameter names, response shapes) compose the same way. The 2.5× title-boost ratio is the user-visible knob; the per-column `bm25()` weights are the implementation. Both sides expose the same knob; the implementation underneath is each stack's business.
+3. **Capture each documented divergence in the decisions log when it happens.** "We diverge on X because Y" is a durable artifact; a year from now when a CerefoxRemote PR is being designed, the integration team can read this log + the per-divergence design-doc notes and know what they signed up for. No surprises.
+4. **The content-unchanged short-circuit is a worked example of the rule paying off.** Round-2 of 6.18 added a 3-branch logic to `updateDocument` (full skip / metadata-only / full re-chunk) with corresponding audit event types. Cerefox already had the metadata-only path (`cerefox_update_document_metadata`); cfcf's mirror keeps the swap-in compatible while solving a real correctness bug (stale-version proliferation when round-tripping unchanged docs). Parity + correctness, not parity vs correctness.
+
+**Cross-refs.** CLAUDE.md "Cerefox interface parity is a load-bearing constraint" entry; `docs/design/clio-memory-web-ui.md`; the 2026-04-25 entry on `MemoryBackend` boundary parity (the precursor to this one).
+
+---
+
 ## 2026-05-02 — Post-6.25 UX iteration: history-row rendering, pause message wording, paused-state control-surface deduplication
 
 **Context.** Three small UX gaps surfaced during the first round of dogfooding the structured pause actions (item 6.25, shipped via PR #27 a few hours earlier). Each was a discrete defect with its own root cause; together they're a useful study of "what kinds of things go wrong when you ship a feature that introduces a new event type + a new control surface." Captured as one entry because the lessons compound.
