@@ -13,6 +13,55 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-08 — `cfcf clio docs ingest/edit --project X` was silently absorbed by parent option (commander.js shadowing)
+
+**Context.** A Product Architect session (calc workspace, 2026-05-08) reported: PA passed `--project cf-system-pa-memory` on `cfcf clio docs ingest`, but both ingested docs (`pa-workspace-memory` + `pa-session-pa-...`) ended up in `cf-system-default`. PA then ran `cfcf clio docs edit <id> --project cf-system-pa-memory` to migrate them and reported it "silently no-op-ed" the project move while still applying any `--set-meta` change.
+
+Reproduction confirmed against the user's actual Clio DB:
+- `cfcf clio docs edit <id> --project cf-system-pa-memory` → "Nothing to edit. Pass at least one of --title, --author, --project, --set-meta, --unset-meta." (action's payload-empty guard fired even though `--project` WAS passed)
+- `cfcf clio docs edit <id> --project cf-system-pa-memory --set-meta debug=test` → "Updated document …" but the doc remained in `cf-system-default`; the audit-log diff showed only `metadata` changed, no `projectId`.
+- `cfcf clio docs ingest /tmp/x.md --project cf-system-pa-memory` → ingest's child-default `cf-system-default` won.
+
+**Root cause.** commander.js's option-resolution rule when the same long-name option exists on both a parent and a child command: **the parent's option absorbs the value, leaving the child's `opts` field undefined**. The CLI code at [`packages/cli/src/commands/clio.ts`](../../packages/cli/src/commands/clio.ts) had defined `-p, --project` directly on the `docsCmd` parent (for its default-list action), AND each child subcommand (`ingest`, `edit`, etc.) had its own `--project`. When the user typed `--project X`, commander attached `X` to the parent's hidden opts; the child's action handler saw `opts.project === undefined`.
+
+For ingest, the child had a default of `"cf-system-default"`, so the un-set value silently fell back — no error, just the wrong project. For edit, the child had no default, so the action's "is anything to edit?" guard fired with the misleading "Nothing to edit" message. When the user added `--set-meta` to bypass the guard, the metadata change went through but the project change still didn't.
+
+**Options considered.**
+
+1. **Rename one of the `--project` flags** (e.g. parent → `--scope-project`, child → `--target-project`). Functional but breaks the symmetric CLI naming + bloats the user-facing surface. Rejected.
+2. **Read `opts.project` from both child and parent in each action handler** (`opts.project ?? cmd.parent?.opts().project`). Hacky; every command that nests under `docs` would need this fallback. Rejected.
+3. **Remove the parent-level options on `docsCmd`** so the children's `--project` reach their action handlers cleanly. The cost: `cfcf clio docs` (no subcommand) used to act as a default `list` with `--project`/`--limit` options; after the fix, it prints help and users invoke `cfcf clio docs list ...` explicitly. **Selected.**
+
+**Decided** — option 3. `docsCmd`'s `.option(...).action(listDocs)` block was removed; the explicit `docsCmd.command("list")` (which had the same options redundantly) is now the only way to list. Default-action behaviour for the `cfcf clio docs` parent now falls through to commander's help.
+
+The fix is verified end-to-end against the user's real Clio DB:
+
+```
+$ cfcf clio docs edit <id> --project cf-system-pa-memory
+Updated document <id>
+  project: dbb42f29-820b-4f59-9514-0045fee2081f   ← cf-system-pa-memory uuid
+$ sqlite3 ~/.cfcf/clio.db "SELECT (SELECT name FROM clio_projects WHERE id=d.project_id) FROM clio_documents d WHERE d.id='<id>';"
+cf-system-pa-memory                                ← moved correctly
+```
+
+Audit log now shows the `projectId` diff:
+
+```
+edit-metadata|agent|{"diff":{"projectId":{"before":"<old-uuid>","after":"<new-uuid>"}}}
+```
+
+**Lessons.**
+
+1. **commander.js parent-vs-child option shadowing is a real footgun.** The library matches a long-name option to a command in its lookup chain; if the parent matches first, the parent gets the value. There's no warning, no error — the child's action handler just sees `undefined`. When you add an option to a child and a same-named option already exists on a parent, you've silently changed semantics. **Rule we're adopting**: treat parent-level options as *exclusive* to commands that have no children with overlapping names. Either move the option to the children explicitly, or rename it to avoid the clash.
+
+2. **Default-action subcommand patterns interact badly with shadowing.** The `parent.option(...).action(listAction)` pattern (parent doubles as a default-list action) made the parent define options that any subcommand would also need, creating clashes by construction. The cleaner pattern is: parent has NO action (commander prints help), explicit `.command("list")` carries the list options. Default actions are convenient but expensive to keep correct as the subcommand tree grows.
+
+3. **"Silent no-op" reports deserve hard reproduction before believing the symptom.** PA's report was correct on the failure mode but identified the wrong root cause (claimed it was a "workspace auto-route" overriding the explicit flag). Running the actual command sequence in a debug shell, watching the audit log, and checking commander's parsed-opts shape pinpointed the real issue in ~10 minutes. Don't accept "this command silently no-ops" without seeing what payload actually reaches the server.
+
+**Cross-refs.** Commit ships in iter-6 6.28's debug pass. Regression test at [`packages/cli/src/commands/clio-option-parsing.test.ts`](../../packages/cli/src/commands/clio-option-parsing.test.ts) pins the option-parsing invariants (4 tests covering edit/ingest with and without `--project`).
+
+---
+
 ## 2026-05-07 — Anthropic's third-party-harness policy → adapter expansion via `ollama launch` (item 6.28)
 
 **Context.** Anthropic's Jan→Apr 2026 clarification on subscription OAuth tokens (Consumer Terms §3.7 + the February 2026 written clarification: *"Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted"* + Boris Cherny's 2026-04-04 X post tying subscription limits exclusively to interactive use) made cfcf's unattended iteration loop a textbook violation pattern when running under a Pro/Max subscription. The rule targets the **credential** (subscription OAuth token in any third-party tool / harness / Agent SDK), not the headless-vs-interactive pattern per se — but in practice the unattended `claude -p` path used by cfcf's dev / judge / reflection / documenter roles maps onto exactly that violation. Carve-outs — interactive `claude` CLI, Anthropic's first-party Routines, CI on the user's own repo with `CLAUDE_CODE_OAUTH_TOKEN`, Agent SDK with API-key auth — don't cover the cfcf use case.
