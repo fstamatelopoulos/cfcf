@@ -29,5 +29,6 @@ export * from "./scheduler/index.js";
 export * from "./update-check.js";
 export * from "./agent-models.js";
 export * from "./ollama-detection.js";
+export * from "./orphan-reaper.js";
 export { SEED_MODELS, getSeedModels } from "./adapters/seed-models.js";
 export type { SeedModelMap } from "./adapters/seed-models.js";

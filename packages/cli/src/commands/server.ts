@@ -3,10 +3,30 @@
  */
 
 import type { Command } from "commander";
+import { createInterface } from "readline";
 import { homedir } from "node:os";
 import { DEFAULT_PORT, VERSION, getLogsDir } from "@cfcf/core";
 import { readPidFile, isProcessRunning, removePidFile, writePidFile } from "@cfcf/core";
+import {
+  findOrphanAgentProcesses,
+  reapOrphans,
+  formatOrphanLine,
+} from "@cfcf/core";
 import { get, isServerReachable, post } from "../client.js";
+
+/**
+ * Read a single line from stdin. Used for the `cfcf server reap` y/N
+ * confirmation. Returns the empty string on EOF or non-TTY input.
+ */
+function readLine(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
 
 /**
  * Replace a leading `$HOME` path prefix with `~` so paths read more
@@ -187,6 +207,45 @@ export function registerServerCommands(program: Command): void {
       }
 
       console.log("cfcf server is not running.");
+    });
+
+  server
+    .command("reap")
+    .description("Detect + interactively kill orphan agent processes left by a crashed server")
+    .option("-y, --yes", "Kill without prompting (non-interactive use)")
+    .action(async (opts) => {
+      // Pure system call — does NOT require the cfcf server to be
+      // running. Boot-time auto-reap handles the common case; this is
+      // for ad-hoc cleanup if a hard-crashed server left orphans
+      // behind without restarting the server (or for the user who
+      // wants to verify there's nothing stale before launching a loop).
+      const orphans = await findOrphanAgentProcesses();
+      if (orphans.length === 0) {
+        console.log("No zombie agent processes detected.");
+        return;
+      }
+
+      console.log(`Found ${orphans.length} potentially orphan agent process(es):`);
+      for (const o of orphans) {
+        console.log(`  ${formatOrphanLine(o)}`);
+      }
+      console.log();
+
+      let proceed = false;
+      if (opts.yes) {
+        proceed = true;
+      } else {
+        const answer = await readLine(`Kill these ${orphans.length} process(es)? [y/N]: `);
+        proceed = /^y(es)?$/i.test(answer);
+      }
+
+      if (!proceed) {
+        console.log("Aborted. No processes killed.");
+        return;
+      }
+
+      const result = await reapOrphans(orphans);
+      console.log(`Reap complete: ${result.killed} signaled, ${result.failed} failed.`);
     });
 
   server

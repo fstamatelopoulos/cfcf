@@ -24,6 +24,9 @@ import {
   clearStaleUpdateFlag,
   ensureSystemProjects,
   getClioBackend,
+  findOrphanAgentProcesses,
+  reapOrphans,
+  formatOrphanLine,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -151,6 +154,35 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   );
   if (staleLoopCount > 0) {
     console.log(`Marked ${staleLoopCount} stale active loop(s) as failed`);
+  }
+
+  // Orphan reaper (item 6.31 sub-(b)). The graceful-shutdown path
+  // already kills active processes cleanly via process-group SIGTERM
+  // when the server gets SIGINT/SIGTERM. This boot-time scan closes
+  // the *hard-crash* hole: when the previous server died via SIGKILL
+  // or an OS panic, its agent children get reparented to PID 1 and
+  // keep running. They tie up resources (notably ollama's model
+  // runner) and silently starve the next loop's API queue.
+  //
+  // Best-effort: a failure here never blocks server boot.
+  try {
+    const orphans = await findOrphanAgentProcesses();
+    if (orphans.length > 0) {
+      console.log(
+        `[server] Reaping ${orphans.length} stale agent process(es) from a previous server PID:`,
+      );
+      for (const o of orphans) {
+        console.log(`  ${formatOrphanLine(o)}`);
+      }
+      const result = await reapOrphans(orphans);
+      console.log(
+        `[server] Reap complete: ${result.killed} signaled, ${result.failed} failed`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[server] Orphan-process scan failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   serverInstance = Bun.serve({
