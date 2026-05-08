@@ -134,6 +134,7 @@ bun run dev:cli -- <command>
 For changes that touch the install flow (`scripts/install.sh`, `scripts/build-cli.sh`, post-install banners, `cfcf self-update`, etc.), the canonical local-test workflow is:
 
 ```bash
+bun install                            # one-time, on a fresh clone (populates node_modules/.bin so the build's `tsc -b && vite build` step finds its tools)
 ./scripts/local-install.sh             # builds, installs, verifies — same flow an end user gets via curl-bash
 cfcf self-update --yes                 # restores the published version when you're done
 ```
