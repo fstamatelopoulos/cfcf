@@ -76,7 +76,7 @@ export const claudeCodeOllamaAdapter: AgentAdapter = {
     model?: string,
   ): { command: string; args: string[] } {
     // ollama launch claude --model <local-model> --yes -- \
-    //   --dangerously-skip-permissions --verbose [--model <local-model>] -p "<prompt>"
+    //   --dangerously-skip-permissions --verbose --output-format stream-json -p "<prompt>"
     //
     // The `--yes` is mandatory for unattended runs (skips interactive
     // selector prompts ollama would otherwise show). The `--` separator
@@ -84,15 +84,22 @@ export const claudeCodeOllamaAdapter: AgentAdapter = {
     // (e.g. `gemma4:31b`), NOT an Anthropic model name — claude itself
     // doesn't see this; it's how ollama picks which local model to load
     // and translate Anthropic-shape requests against.
+    //
+    // Pass-through flags mirror `claude-code.ts` (kept in sync) — see
+    // that adapter for why `--output-format stream-json` is now used
+    // instead of `--verbose` alone (the verbose-only mode still buffers
+    // stdout despite the Apr-17 commit's claim; decisions-log 2026-05-08).
     const ollamaArgs: string[] = ["launch", "claude"];
     if (model) {
       ollamaArgs.push("--model", model);
     }
     ollamaArgs.push("--yes", "--");
 
-    // Pass-through to claude. Mirrors `claude-code.ts`'s flag set so the
-    // wrapped invocation behaves identically inside the launched process.
-    const claudeArgs: string[] = ["--dangerously-skip-permissions", "--verbose"];
+    const claudeArgs: string[] = [
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--output-format", "stream-json",
+    ];
     claudeArgs.push("-p", prompt);
 
     return { command: "ollama", args: [...ollamaArgs, ...claudeArgs] };

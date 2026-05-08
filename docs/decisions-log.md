@@ -13,6 +13,34 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-08 — `claude -p --verbose` buffers stdout despite the Apr-17 commit's "live progress" claim; switch to `--output-format stream-json` for live JSONL events
+
+**Context.** Commit `bb92921` (2026-04-17, *"fix: add --verbose to Claude Code invocation for live log progress"*) added `--verbose` to the claude-code adapter's `buildCommand`. The commit message claimed: *"--verbose shows turn-by-turn text output so users can watch progress, matching Codex's verbose-by-default behavior."* That claim was untested against a long-running prompt; subsequent quick prompts completed in <1s, so the silence was masked.
+
+Dogfooding 2026-05-08 against a 30B local model (`claude-code-ollama` driving `qwen3-coder:latest` through `ollama launch claude`) revealed the truth: **claude `-p --verbose` still buffers stdout to the end.** The dev iteration log file stayed at 0 bytes for ~3 minutes while ollama's own log showed dozens of `/v1/messages?beta=true` POSTs flowing through (each a real turn). Claude was making real progress; the harness saw nothing until the agent exited.
+
+Confirmed via process inspection: 3 claude PIDs alive, ollama runner at 0% CPU between turns, log file unchanged. After agent exit, the buffered output dumped all at once.
+
+**Why the Apr-17 claim turned out to be wrong.** Without seeing the source, the most plausible explanation is that claude's `-p` mode has always been a "single-completion" contract — it returns one final text response when the agent finishes its work, regardless of `--verbose`. `--verbose` adds metadata + warnings to that final response; it doesn't change the streaming contract. The streaming output mode is `--output-format stream-json` (a separate flag, structured JSONL events for each turn). The Claude Code desktop app uses `--output-format stream-json --verbose --input-format stream-json` (visible in `ps` output of an interactive session) — that's the proper streaming invocation.
+
+**Decided** — switch the `claude-code` and `claude-code-ollama` adapters to `--dangerously-skip-permissions --verbose --output-format stream-json -p "<prompt>"`. Trade-off:
+
+- *Win*: Live turn-by-turn progress in the log file (one JSONL event per assistant text chunk, per tool call, per tool result). Useful for tailing during long iterations on local models.
+- *Cost*: The log file is now JSONL instead of plain text. Casual `tail -f` shows structured noise (one JSON object per line) rather than narrative. A future log-viewer formatter can render the stream as readable text on demand; for now `cat` / `tail` work but require a JSONL eye to read.
+- *No change to signal-file output*: Judge / architect / reflection consume `cfcf-iteration-signals.json` from disk, which the agent writes via `Edit`/`Write` tool calls. Stdout format change doesn't affect signal-file parsing.
+
+**Lessons.**
+
+1. **A "fix: …live progress…" commit deserves a long-running test before claiming success.** The Apr-17 fix was likely tested against a quick "say hello" prompt that completed in <1s — too fast to tell streaming from buffering apart. Future "live log" claims need a multi-minute agent run as the verification path.
+
+2. **Read the upstream protocol surface, not the surface flag.** `--verbose` *sounds* like it should make output verbose-and-streamy. `--output-format stream-json` is the actual streaming contract per Anthropic's CLI design. Generic-name flags (`--verbose`) are usually about quantity of output, not streaming semantics.
+
+3. **`ps`-output of a known-streaming peer is a good ground truth.** Once the user's interactive Claude Code session was visible via `ps` running `--output-format stream-json --verbose --input-format stream-json`, the right answer was obvious. Whenever an upstream tool's flag behaviour is murky, look at how its first-party UI invokes it.
+
+**Cross-refs.** [`packages/core/src/adapters/claude-code.ts`](../../packages/core/src/adapters/claude-code.ts), [`packages/core/src/adapters/claude-code-ollama.ts`](../../packages/core/src/adapters/claude-code-ollama.ts) — both pass `--output-format stream-json --verbose`. Tests in [`packages/core/src/adapters/adapters.test.ts`](../../packages/core/src/adapters/adapters.test.ts) pin the flag.
+
+---
+
 ## 2026-05-08 — `cfcf clio docs ingest/edit --project X` was silently absorbed by parent option (commander.js shadowing)
 
 **Context.** A Product Architect session (calc workspace, 2026-05-08) reported: PA passed `--project cf-system-pa-memory` on `cfcf clio docs ingest`, but both ingested docs (`pa-workspace-memory` + `pa-session-pa-...`) ended up in `cf-system-default`. PA then ran `cfcf clio docs edit <id> --project cf-system-pa-memory` to migrate them and reported it "silently no-op-ed" the project move while still applying any `--set-meta` change.
