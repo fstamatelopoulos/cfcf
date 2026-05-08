@@ -30,6 +30,20 @@
 
 import type { AgentAdapter, AgentAvailability } from "../types.js";
 
+type ProbeResult = { ok: true; version: string } | { ok: false };
+
+async function probeBinary(bin: string): Promise<ProbeResult> {
+  try {
+    const proc = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "pipe" });
+    const exit = await proc.exited;
+    if (exit !== 0) return { ok: false };
+    const out = await new Response(proc.stdout).text();
+    return { ok: true, version: out.trim() };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export const claudeCodeOllamaAdapter: AgentAdapter = {
   name: "claude-code-ollama",
   displayName: "Claude Code (via ollama)",
@@ -39,28 +53,25 @@ export const claudeCodeOllamaAdapter: AgentAdapter = {
   async checkAvailability(): Promise<AgentAvailability> {
     // Both binaries must be present. We report the failure of whichever
     // is missing (or both), so the user sees a useful message.
-    const probeOllama = Bun.spawn(["ollama", "--version"], { stdout: "pipe", stderr: "pipe" });
-    const probeClaude = Bun.spawn(["claude", "--version"], { stdout: "pipe", stderr: "pipe" });
-    const [ollamaExit, claudeExit] = await Promise.all([
-      probeOllama.exited.catch(() => -1),
-      probeClaude.exited.catch(() => -1),
-    ]);
+    //
+    // Note: `Bun.spawn` throws synchronously when the binary isn't on
+    // PATH (ENOENT before the subprocess handle returns), so each probe
+    // must be wrapped individually — `.exited.catch(...)` does not catch
+    // that throw.
+    const ollamaProbe = await probeBinary("ollama");
+    const claudeProbe = await probeBinary("claude");
 
-    if (ollamaExit !== 0 && claudeExit !== 0) {
+    if (!ollamaProbe.ok && !claudeProbe.ok) {
       return { available: false, error: "neither ollama nor claude CLI found on PATH" };
     }
-    if (ollamaExit !== 0) {
+    if (!ollamaProbe.ok) {
       return { available: false, error: "ollama CLI not found on PATH" };
     }
-    if (claudeExit !== 0) {
+    if (!claudeProbe.ok) {
       return { available: false, error: "claude CLI not found on PATH" };
     }
 
-    const [ollamaOut, claudeOut] = await Promise.all([
-      new Response(probeOllama.stdout).text(),
-      new Response(probeClaude.stdout).text(),
-    ]);
-    const version = `${ollamaOut.trim()} + ${claudeOut.trim()}`;
+    const version = `${ollamaProbe.version} + ${claudeProbe.version}`;
     return { available: true, version };
   },
 

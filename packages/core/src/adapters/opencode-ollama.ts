@@ -22,6 +22,20 @@
 
 import type { AgentAdapter, AgentAvailability } from "../types.js";
 
+type ProbeResult = { ok: true; version: string } | { ok: false };
+
+async function probeBinary(bin: string): Promise<ProbeResult> {
+  try {
+    const proc = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "pipe" });
+    const exit = await proc.exited;
+    if (exit !== 0) return { ok: false };
+    const out = await new Response(proc.stdout).text();
+    return { ok: true, version: out.trim() };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export const opencodeOllamaAdapter: AgentAdapter = {
   name: "opencode-ollama",
   displayName: "Opencode (via ollama)",
@@ -29,28 +43,22 @@ export const opencodeOllamaAdapter: AgentAdapter = {
   modelSource: "ollama",
 
   async checkAvailability(): Promise<AgentAvailability> {
-    const probeOllama = Bun.spawn(["ollama", "--version"], { stdout: "pipe", stderr: "pipe" });
-    const probeOpencode = Bun.spawn(["opencode", "--version"], { stdout: "pipe", stderr: "pipe" });
-    const [ollamaExit, opencodeExit] = await Promise.all([
-      probeOllama.exited.catch(() => -1),
-      probeOpencode.exited.catch(() => -1),
-    ]);
+    // `Bun.spawn` throws synchronously on missing binaries — must wrap
+    // each probe individually (see claude-code-ollama.ts for context).
+    const ollamaProbe = await probeBinary("ollama");
+    const opencodeProbe = await probeBinary("opencode");
 
-    if (ollamaExit !== 0 && opencodeExit !== 0) {
+    if (!ollamaProbe.ok && !opencodeProbe.ok) {
       return { available: false, error: "neither ollama nor opencode CLI found on PATH" };
     }
-    if (ollamaExit !== 0) {
+    if (!ollamaProbe.ok) {
       return { available: false, error: "ollama CLI not found on PATH" };
     }
-    if (opencodeExit !== 0) {
+    if (!opencodeProbe.ok) {
       return { available: false, error: "opencode CLI not found on PATH" };
     }
 
-    const [ollamaOut, opencodeOut] = await Promise.all([
-      new Response(probeOllama.stdout).text(),
-      new Response(probeOpencode.stdout).text(),
-    ]);
-    const version = `${ollamaOut.trim()} + ${opencodeOut.trim()}`;
+    const version = `${ollamaProbe.version} + ${opencodeProbe.version}`;
     return { available: true, version };
   },
 
