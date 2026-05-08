@@ -13,6 +13,11 @@ export const claudeCodeAdapter: AgentAdapter = {
   instructionFilename: "CLAUDE.md",
 
   async checkAvailability(): Promise<AgentAvailability> {
+    // Pre-check with Bun.which to avoid the noisy ENOENT message Bun
+    // prints to its own stderr on missing binaries.
+    if (!Bun.which("claude")) {
+      return { available: false, error: "Claude Code CLI not found on PATH" };
+    }
     try {
       const proc = Bun.spawn(["claude", "--version"], {
         stdout: "pipe",

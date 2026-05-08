@@ -18,6 +18,12 @@ export const codexAdapter: AgentAdapter = {
   instructionFilename: "AGENTS.md",
 
   async checkAvailability(): Promise<AgentAvailability> {
+    // Pre-check with Bun.which to avoid the noisy ENOENT message Bun
+    // prints to its own stderr on missing binaries (the throw IS caught,
+    // but Bun logs before throwing — pollutes CI test output).
+    if (!Bun.which("codex")) {
+      return { available: false, error: "Codex CLI not found on PATH" };
+    }
     try {
       const proc = Bun.spawn(["codex", "--version"], {
         stdout: "pipe",

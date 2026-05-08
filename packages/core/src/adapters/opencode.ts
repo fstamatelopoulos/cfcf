@@ -30,6 +30,11 @@ export const opencodeAdapter: AgentAdapter = {
   modelSource: "custom",
 
   async checkAvailability(): Promise<AgentAvailability> {
+    // Pre-check with Bun.which to avoid the noisy ENOENT message Bun
+    // prints to its own stderr on missing binaries.
+    if (!Bun.which("opencode")) {
+      return { available: false, error: "Opencode CLI not found on PATH" };
+    }
     try {
       const proc = Bun.spawn(["opencode", "--version"], {
         stdout: "pipe",

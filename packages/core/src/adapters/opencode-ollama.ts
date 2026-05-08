@@ -25,6 +25,10 @@ import type { AgentAdapter, AgentAvailability } from "../types.js";
 type ProbeResult = { ok: true; version: string } | { ok: false };
 
 async function probeBinary(bin: string): Promise<ProbeResult> {
+  // Pre-check with Bun.which to avoid the noisy ENOENT message Bun
+  // prints to its own stderr when spawn is given a missing binary
+  // (see claude-code-ollama.ts for context).
+  if (!Bun.which(bin)) return { ok: false };
   try {
     const proc = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "pipe" });
     const exit = await proc.exited;
