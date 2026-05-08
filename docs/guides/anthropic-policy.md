@@ -153,6 +153,47 @@ cfcf config show
 
 ---
 
+## ⚠ Gotcha: `ollama launch claude` writes to `~/.claude/settings.json`
+
+`ollama launch claude --model <X>` has an undocumented side-effect: it persists `<X>` as the default model in `~/.claude/settings.json`'s `model` field. From that point on, **any direct `claude` invocation** — whether from cfcf's `claude-code` adapter, your terminal, or any other tool — uses `<X>` as the model.
+
+If `<X>` is an ollama-flavoured name (e.g. `gemma4:31b`, `qwen3-coder:latest`), direct `claude` invocations break because Anthropic's API rejects unknown model names with "There's an issue with the selected model (X). It may not exist or you may not have access to it."
+
+This bites when you mix `claude-code` and `claude-code-ollama` in the same setup — for example, Product Architect on `claude-code` (per the recommended interactive-role mapping above) but dev/judge on `claude-code-ollama`. The first time you run an unattended role through `ollama launch claude`, your settings.json gets the ollama model name, and the next interactive PA run fails because `claude` (without the ollama wrapper) can't use it.
+
+### Detection
+
+`cfcf doctor` checks for this and warns:
+
+```
+⚠ Claude Code's ~/.claude/settings.json model field  -- ~/.claude/settings.json
+   has model="gemma4:31b" — looks like an ollama model name. `ollama launch claude
+   --model X` writes X to that file as a side-effect, which then breaks direct
+   `claude` invocations …
+```
+
+Heuristic: any model name containing `:` (the ollama tag separator) is flagged. Anthropic aliases (`opus` / `sonnet` / `haiku`) and full names (`claude-sonnet-4-7`) don't contain `:`, so the check has no false positives on intentional Claude Code model overrides.
+
+### Fix
+
+Two options:
+
+```bash
+# Option 1 — clear the model field, claude reverts to its built-in default
+jq 'del(.model)' ~/.claude/settings.json > /tmp/claude-settings.json && mv /tmp/claude-settings.json ~/.claude/settings.json
+
+# Option 2 — set a valid Anthropic alias explicitly
+jq '.model = "sonnet"' ~/.claude/settings.json > /tmp/claude-settings.json && mv /tmp/claude-settings.json ~/.claude/settings.json
+```
+
+After the fix, direct `claude` invocations use either Anthropic's built-in default (option 1) or the alias you picked (option 2). `ollama launch claude --model <X>` runs continue to use `<X>` regardless — the launch wrapper still routes them to ollama via `ANTHROPIC_BASE_URL` and bypasses the `model` field in settings.json.
+
+### Why this matters more than it looks
+
+If `cfcf doctor` doesn't surface this, the failure mode is hard to diagnose. cfcf's architect-runner spawns `claude` with no `--model` flag (since the workspace's architectAgent has no model override), so the error manifests as "the model `gemma4:31b` doesn't exist" — which looks like a bug in cfcf even though the actual misconfiguration is in `~/.claude/settings.json` written by ollama. Surfaced 2026-05-08 during iter-6 dogfooding.
+
+---
+
 ## What cfcf does NOT do
 
 - **cfcf does not install or manage ollama.** That stays your responsibility — install via brew/script, pull models, keep the daemon running. cfcf consumes whatever's on PATH.

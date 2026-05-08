@@ -374,6 +374,62 @@ async function checkOllama(): Promise<CheckResult> {
 }
 
 /**
+ * Check for the `ollama launch claude` settings.json side-effect (item 6.28).
+ *
+ * `ollama launch claude --model <X>` persists the chosen model into
+ * `~/.claude/settings.json` as a side-effect. After that, ANY direct
+ * `claude` invocation (cfcf's claude-code adapter, terminal use, etc.)
+ * defaults to that model. If the model is an ollama-flavoured name
+ * (e.g. `gemma4:31b`) and the user runs claude WITHOUT the ollama
+ * launch wrapper, claude tries to send the ollama model name to
+ * Anthropic's real API and fails with "There's an issue with the
+ * selected model".
+ *
+ * This check reads the file, looks at the `model` field, and warns if
+ * the value contains `:` (the ollama tag separator) — that's a quick
+ * heuristic that catches every real ollama model name without false
+ * positives on Anthropic's aliases (`opus` / `sonnet` / `haiku` etc.).
+ *
+ * Surfaced 2026-05-08 — user hit this exact failure mode running calc
+ * loop against a misconfigured ~/.claude/settings.json.
+ */
+function checkClaudeSettingsModel(): CheckResult {
+  const name = "Claude Code's ~/.claude/settings.json model field";
+  const path = join(homedir(), ".claude", "settings.json");
+  if (!existsSync(path)) {
+    return { name, status: "ok", detail: "no settings.json (claude uses its built-in default)" };
+  }
+  try {
+    const raw = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(raw) as { model?: unknown };
+    const model = typeof parsed.model === "string" ? parsed.model : undefined;
+    if (!model) {
+      return { name, status: "ok", detail: "no model override in ~/.claude/settings.json" };
+    }
+    // Heuristic: ollama model names contain `:` (e.g. `gemma4:31b`,
+    // `qwen3-coder:latest`); Anthropic aliases + full names don't.
+    if (model.includes(":")) {
+      return {
+        name,
+        status: "warn",
+        detail: `~/.claude/settings.json has model="${model}" — looks like an ollama model name. ` +
+                `\`ollama launch claude --model X\` writes X to that file as a side-effect, which then ` +
+                `breaks direct \`claude\` invocations (Anthropic's API rejects ollama-flavoured names). ` +
+                `Fix: \`jq 'del(.model)' ~/.claude/settings.json | sponge ~/.claude/settings.json\` ` +
+                `(or set it to a valid Anthropic alias like "sonnet").`,
+      };
+    }
+    return { name, status: "ok", detail: `model="${model}" (looks like an Anthropic alias)` };
+  } catch (err) {
+    return {
+      name,
+      status: "warn",
+      detail: `couldn't parse ~/.claude/settings.json: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
  * Surface the per-role harness-risk status (item 6.28). Reads the
  * configured per-role adapter from the user's saved config and warns
  * when claude-code is picked for any unattended role (dev / judge /
@@ -753,6 +809,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(...checkRuntimeDeps());
       results.push(...checkAgentClis());
       results.push(await checkOllama());
+      results.push(checkClaudeSettingsModel());
       results.push(await checkHarnessPolicy());
       results.push(checkClioDb());
       results.push(checkHelpContent());
