@@ -96,6 +96,25 @@ describe("config", () => {
       const config = createDefaultConfig(["claude-code", "codex"]);
       expect(config.availableAgents).toEqual(["claude-code", "codex"]);
     });
+
+    // item 6.28 — ollama models snapshot.
+    it("records availableOllamaModels when passed a non-empty list", () => {
+      const config = createDefaultConfig(
+        ["claude-code", "claude-code-ollama"],
+        ["gemma4:31b", "qwen2.5-coder:32b"],
+      );
+      expect(config.availableOllamaModels).toEqual(["gemma4:31b", "qwen2.5-coder:32b"]);
+    });
+
+    it("leaves availableOllamaModels undefined when no ollama models are passed", () => {
+      const config = createDefaultConfig(["claude-code"]);
+      expect(config.availableOllamaModels).toBeUndefined();
+    });
+
+    it("normalises an empty ollama models list to undefined", () => {
+      const config = createDefaultConfig(["claude-code"], []);
+      expect(config.availableOllamaModels).toBeUndefined();
+    });
   });
 
   describe("writeConfig", () => {

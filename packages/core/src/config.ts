@@ -65,8 +65,16 @@ export async function writeConfig(config: CfcfGlobalConfig): Promise<void> {
 
 /**
  * Create a default config populated with detected agents.
+ *
+ * `availableOllamaModels` is optional (item 6.28) — when ollama isn't
+ * detected at first-run time, callers pass undefined or an empty array
+ * and the config field stays unset. The model picker for `*-ollama`
+ * adapters falls back to its empty-list path.
  */
-export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig {
+export function createDefaultConfig(
+  availableAgents: string[],
+  availableOllamaModels?: string[],
+): CfcfGlobalConfig {
   // Pick dev agent: prefer claude-code if available, then codex
   const devAdapter =
     availableAgents.includes("claude-code")
@@ -120,6 +128,9 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
+    availableOllamaModels: Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0
+      ? [...availableOllamaModels]
+      : undefined,
     permissionsAcknowledged: false,
     notifications: defaultNotifications,
     notifyUpdates: true,   // item 6.20
@@ -202,6 +213,20 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   // the user's OS preference until they pick a theme explicitly.
   if (config.theme !== "dark" && config.theme !== "light" && config.theme !== "auto") {
     config.theme = "auto";
+  }
+  // item 6.28 -- ollama models snapshot from `ollama list` at init time.
+  // Coerce malformed entries to undefined so a hand-edited config can't
+  // break startup. An empty array gets normalised to undefined too —
+  // there's no observable difference downstream.
+  if (config.availableOllamaModels !== undefined) {
+    if (!Array.isArray(config.availableOllamaModels)) {
+      delete config.availableOllamaModels;
+    } else {
+      const filtered = config.availableOllamaModels
+        .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
+        .map((m) => m.trim());
+      config.availableOllamaModels = filtered.length > 0 ? filtered : undefined;
+    }
   }
   // item 6.26 -- per-adapter model override. Coerce malformed entries to
   // a no-op (drop the field rather than throw); the seed list is the

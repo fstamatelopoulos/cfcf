@@ -20,12 +20,25 @@
  */
 
 import { SEED_MODELS, getSeedModels } from "./adapters/seed-models.js";
+import { getAdapter } from "./adapters/index.js";
 import type { CfcfGlobalConfig } from "./types.js";
 
 /**
  * Resolve the model list to surface in pickers for the given adapter.
  *
- * Order: user override (if present + non-empty) → seed → empty array.
+ * Routing depends on the adapter's `modelSource` (item 6.28):
+ *   - "ollama":  pull from `config.availableOllamaModels` — the user's
+ *                locally-pulled ollama models snapshot. Used by
+ *                `claude-code-ollama` and `opencode-ollama`.
+ *   - "custom":  return [] — no list. The picker still surfaces the
+ *                "(adapter default)" + custom-model-name sentinel
+ *                options so the user can always type a value. Used by
+ *                `opencode` (direct), where the model is whatever the
+ *                user authed via `opencode auth login`.
+ *   - "seed" / unset:  the historical 6.26 path — user override on
+ *                `agentModels[adapter]` if non-empty, else the seed
+ *                from `seed-models.ts`. Used by `claude-code` + `codex`.
+ *
  * An empty array is a valid result; the picker still renders "(adapter
  * default)" + "(custom model name…)" so the user can always proceed.
  */
@@ -33,6 +46,22 @@ export function resolveModelsForAdapter(
   adapterName: string,
   config: CfcfGlobalConfig | null,
 ): string[] {
+  const adapter = getAdapter(adapterName);
+  const source = adapter?.modelSource ?? "seed";
+
+  if (source === "ollama") {
+    const models = config?.availableOllamaModels;
+    if (Array.isArray(models) && models.length > 0) {
+      return models.filter((m) => typeof m === "string" && m.trim().length > 0);
+    }
+    return [];
+  }
+
+  if (source === "custom") {
+    return [];
+  }
+
+  // "seed" — preserve the 6.26 user-override-then-seed precedence.
   const override = config?.agentModels?.[adapterName];
   if (Array.isArray(override) && override.length > 0) {
     return override.filter((m) => typeof m === "string" && m.trim().length > 0);

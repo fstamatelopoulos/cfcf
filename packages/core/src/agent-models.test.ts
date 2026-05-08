@@ -54,6 +54,75 @@ describe("resolveModelsForAdapter", () => {
     expect(resolveModelsForAdapter("claude-code", cfg)).toEqual(["custom-only"]);
     expect(resolveModelsForAdapter("codex", cfg)).toEqual(SEED_MODELS["codex"]);
   });
+
+  // item 6.28 — modelSource routing for the new adapters.
+
+  test("opencode (modelSource=custom) returns []", () => {
+    // The picker still surfaces (adapter default) + custom-name sentinel,
+    // so an empty list is the right answer here.
+    expect(resolveModelsForAdapter("opencode", null)).toEqual([]);
+    const cfg = configWith({});
+    expect(resolveModelsForAdapter("opencode", cfg)).toEqual([]);
+  });
+
+  test("opencode ignores any agentModels override (modelSource=custom)", () => {
+    // Even if a user adds models under `opencode` in agentModels, the
+    // picker shouldn't show them — opencode's models come from its own
+    // provider auth config which cfcf doesn't see. Allowing the override
+    // to leak through would mislead the user.
+    const cfg = configWith({ opencode: ["anthropic/claude-3-5-sonnet"] });
+    expect(resolveModelsForAdapter("opencode", cfg)).toEqual([]);
+  });
+
+  test("claude-code-ollama (modelSource=ollama) sources from availableOllamaModels", () => {
+    const cfg: CfcfGlobalConfig = {
+      ...configWith({}),
+      availableOllamaModels: ["gemma4:31b", "qwen2.5-coder:32b"],
+    };
+    expect(resolveModelsForAdapter("claude-code-ollama", cfg)).toEqual([
+      "gemma4:31b",
+      "qwen2.5-coder:32b",
+    ]);
+  });
+
+  test("opencode-ollama (modelSource=ollama) sources from availableOllamaModels", () => {
+    const cfg: CfcfGlobalConfig = {
+      ...configWith({}),
+      availableOllamaModels: ["gemma4:31b"],
+    };
+    expect(resolveModelsForAdapter("opencode-ollama", cfg)).toEqual(["gemma4:31b"]);
+  });
+
+  test("ollama adapters return [] when availableOllamaModels is missing", () => {
+    expect(resolveModelsForAdapter("claude-code-ollama", null)).toEqual([]);
+    expect(resolveModelsForAdapter("opencode-ollama", null)).toEqual([]);
+    const cfg = configWith({});
+    expect(resolveModelsForAdapter("claude-code-ollama", cfg)).toEqual([]);
+    expect(resolveModelsForAdapter("opencode-ollama", cfg)).toEqual([]);
+  });
+
+  test("ollama adapters ignore agentModels override (source comes from availableOllamaModels)", () => {
+    // A user override on agentModels for an ollama adapter would be
+    // misleading — the actual source is `ollama list`. The override is
+    // silently ignored.
+    const cfg: CfcfGlobalConfig = {
+      ...configWith({ "claude-code-ollama": ["sonnet", "opus"] }),
+      availableOllamaModels: ["gemma4:31b"],
+    };
+    expect(resolveModelsForAdapter("claude-code-ollama", cfg)).toEqual(["gemma4:31b"]);
+  });
+
+  test("filters out blank/non-string entries in availableOllamaModels", () => {
+    const cfg: CfcfGlobalConfig = {
+      ...configWith({}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      availableOllamaModels: ["gemma4:31b", "", "  ", null as any, "qwen2.5-coder:32b"],
+    };
+    expect(resolveModelsForAdapter("claude-code-ollama", cfg)).toEqual([
+      "gemma4:31b",
+      "qwen2.5-coder:32b",
+    ]);
+  });
 });
 
 describe("resolveAllModels", () => {
