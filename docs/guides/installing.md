@@ -15,6 +15,75 @@ cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com
 
 **Prerequisites** — `git`. Bun + npm are bootstrapped by the installer if missing.
 
+## Installing the AI agent CLIs cf² drives
+
+cf² needs **at least one** AI coding agent on PATH; `cfcf init` only offers adapters whose underlying CLI it can detect. Per the policy + log-visibility note above, **`claude-code` alone is not a complete setup** if you plan to run unattended loops — those need a non-Anthropic-OAuth path. **Recommended minimum** for typical use:
+
+- **`claude-code`** (Anthropic) — for the interactive roles (PA / HA / manual SA). Optional if you don't use those.
+- **One of**: `codex` / `opencode` / `ollama` — for the unattended roles (dev / judge / reflection / documenter / auto-architect).
+
+Mix as you like; cf² surfaces a warning at `cfcf init` if your unattended-role adapter choices conflict with the policy. The full role-to-adapter mapping table lives in [`anthropic-policy.md`](anthropic-policy.md).
+
+### Claude Code (Anthropic)
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude --version    # confirm install
+claude              # first run prompts for Anthropic OAuth login (browser)
+```
+
+Recommended for: **Product Architect (`cfcf spec`)**, **Help Assistant (`cfcf help assistant`)**, **manually-invoked Solution Architect (`cfcf review`)** — the interactive roles where Claude Code's TUI takes over your shell. Anthropic's third-party-harness policy restricts subscription OAuth to interactive use, so cf²'s automated dev / judge / reflection / documenter loop should NOT use direct `claude-code` (use `claude-code-ollama` or another adapter instead — see below).
+
+### Codex CLI (OpenAI)
+
+```bash
+npm install -g @openai/codex
+codex --version     # confirm install
+codex auth login    # ChatGPT account OR API key — pick whichever fits your billing
+```
+
+Recommended for: **unattended roles default**. Codex's `exec` mode streams progress live to log files (you watch the agent work). OpenAI's policy explicitly endorses the API-key path for "automation in shared environments like CI", so this is the cleanest unattended-role choice today.
+
+### Opencode (sst.dev)
+
+```bash
+npm install -g opencode-ai
+opencode --version
+opencode auth login   # interactive picker for Anthropic API / OpenAI / OpenRouter / etc.
+```
+
+Recommended for: **alternative to Codex for unattended roles**. Opencode is provider-agnostic — you authenticate with any provider it supports (Anthropic API, OpenAI, OpenRouter, ollama). Policy-clean by construction: no Anthropic OAuth subscription token involved, just direct API-key auth against whichever provider you picked. Streams progress live to log files.
+
+### Ollama (local model server)
+
+```bash
+brew install ollama                                 # macOS
+curl -fsSL https://ollama.com/install.sh | sh       # Linux
+ollama --version
+
+# Pull at least one coder-tuned model that works well as an iteration driver:
+ollama pull qwen2.5-coder:32b      # ~19 GB, mid-size — works for dev / reflection
+ollama pull qwen2.5-coder:14b      # ~9 GB, faster — works for judge / documenter
+ollama pull deepseek-coder-v2:16b  # ~9 GB, alternative
+
+ollama list   # confirm what's pulled
+```
+
+Optional, but enables two additional adapters: `claude-code-ollama` (drives Claude Code against a local model via `ollama launch claude`) and `opencode-ollama` (same for opencode). Policy-clean — local model means no Anthropic / OpenAI credential in the loop.
+
+> ⚠ Two caveats specific to ollama-routed paths (full discussion in [`anthropic-policy.md`](anthropic-policy.md)):
+> - **`claude-code-ollama` still buffers stdout.** Same `claude -p` behaviour as direct `claude-code` — the log file stays silent during the run and dumps at exit. If you want live progress, use `codex` / `opencode-ollama` instead.
+> - **`ollama launch claude` writes to `~/.claude/settings.json`.** Specifically the `model` field gets set to the ollama model name. After that, direct `claude` invocations (interactive PA / HA) fail because Anthropic's API doesn't recognise the ollama-shaped name. Fix: `jq 'del(.model)' ~/.claude/settings.json | sponge ~/.claude/settings.json`. `cfcf doctor` checks for this and warns.
+
+### Verifying after install
+
+```bash
+cfcf doctor   # confirms which adapter CLIs are reachable + ollama state + per-role policy compliance
+cfcf init     # interactive setup; only offers adapters whose CLI is on PATH
+```
+
+`cfcf init` also surfaces the role-to-adapter recommendation matrix and a warning if you've picked `claude-code` for an unattended role.
+
 ## Recommended: one-liner
 
 ```bash
