@@ -115,6 +115,65 @@ export async function resetArchitectSignals(repoPath: string): Promise<void> {
 }
 
 /**
+ * Why parseArchitectSignals returned null. Used by the iteration-loop
+ * pause message to give the user a more specific diagnostic than the
+ * generic "missing or malformed" string. Surfaced 2026-05-08 — when
+ * opencode-ollama hangs without writing the signals file, the user
+ * was getting a misleading "review run hit an error mid-way" message
+ * that suggested a validator bug rather than the actual cause (agent
+ * never finished writing).
+ */
+export type SignalFailureReason =
+  /** Signals file doesn't exist on disk — the agent never created it. */
+  | "missing"
+  /** File exists but is the literal untouched template (NEEDS_REFINEMENT + all empty + null approach). Agent likely hung or crashed before editing. */
+  | "untouched_template"
+  /** File exists but JSON.parse failed — the agent wrote something corrupted. */
+  | "malformed_json"
+  /** File exists, JSON parsed, but `readiness` field is missing or unknown. */
+  | "missing_readiness"
+  /** File exists with a value cfcf doesn't understand for `readiness`. */
+  | "valid";
+
+/**
+ * Read the signals file on disk and classify why parseArchitectSignals
+ * couldn't return a valid result. Returns "valid" when the file actually
+ * IS valid (caller can use this to detect race conditions where the
+ * file appeared between the original parse and this diagnosis call).
+ */
+export async function diagnoseFailedArchitectSignals(
+  repoPath: string,
+): Promise<SignalFailureReason> {
+  const path = join(repoPath, "cfcf-docs", "cfcf-architect-signals.json");
+  let content: string;
+  try {
+    content = await readFile(path, "utf-8");
+  } catch {
+    return "missing";
+  }
+  let parsed: ArchitectSignals;
+  try {
+    parsed = JSON.parse(content) as ArchitectSignals;
+  } catch {
+    return "malformed_json";
+  }
+  if (!parsed.readiness) return "missing_readiness";
+  // The cfcf template ships with NEEDS_REFINEMENT + all-empty arrays +
+  // null recommended_approach. If the file matches this exactly, the
+  // agent never edited it.
+  if (
+    parsed.readiness === "NEEDS_REFINEMENT" &&
+    Array.isArray(parsed.gaps) && parsed.gaps.length === 0 &&
+    Array.isArray(parsed.suggestions) && parsed.suggestions.length === 0 &&
+    Array.isArray(parsed.risks) && parsed.risks.length === 0 &&
+    !parsed.recommended_approach
+  ) {
+    return "untouched_template";
+  }
+  return "valid";
+}
+
+/**
  * Count `[ ]` (pending) and `[x]` (completed) checkbox items in a plan
  * document. Used by `parseArchitectSignals` to detect the "agent said
  * READY but the plan has no pending work" case (item 6.28 dogfood,

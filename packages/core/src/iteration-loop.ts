@@ -805,6 +805,14 @@ export function buildPreLoopBlockReason(
   reviewError: string | undefined,
   readiness: string | undefined,
   gate: string,
+  /**
+   * Diagnostic info about why signals parsing failed (item 6.31 follow-up,
+   * 2026-05-08). Optional — when omitted, the generic "missing or
+   * malformed" message is used. When provided, the message is tailored
+   * to the specific failure mode (file missing / untouched template /
+   * malformed JSON) so the user has actionable diagnostics.
+   */
+  signalFailure?: import("./architect-runner.js").SignalFailureReason,
 ): string {
   if (reviewError) {
     return `The Solution Architect's pre-loop review failed before it could produce a verdict (${reviewError}). Check the architect log for details, then resume to retry, or pick "Stop loop now" to abandon.`;
@@ -833,7 +841,24 @@ export function buildPreLoopBlockReason(
   })();
 
   if (!readiness) {
-    return `The Solution Architect reviewed your Problem Pack but didn't produce a clear readiness verdict (signal file missing or malformed). This usually means the review run hit an error mid-way — check the architect log. To proceed: edit problem-pack/problem.md + success.md to address any obvious issues, then pick "Continue" to retry the review.`;
+    // Tailored diagnostic per failure mode (item 6.31 follow-up,
+    // 2026-05-08). Pre-fix, all four cases collapsed to the generic
+    // "missing or malformed" message — which sounded like a cfcf
+    // validator bug when the actual cause was usually an agent that
+    // hung or crashed before writing its verdict (the case we hit
+    // dogfooding opencode-ollama).
+    switch (signalFailure) {
+      case "missing":
+        return `The Solution Architect's signals file (cfcf-docs/cfcf-architect-signals.json) is missing. The agent likely failed to start or crashed before producing any output. Check the architect log file for the underlying error. To proceed: pick "Continue" to retry the review (a hung process from a previous attempt may need to be killed first — see \`cfcf doctor\` for orphan-process diagnostics), or pick "Stop loop now" to abandon.`;
+      case "untouched_template":
+        return `The Solution Architect's signals file exists but contains the unedited template (readiness="NEEDS_REFINEMENT" + all empty arrays + null approach). The agent process started, scaffolded the file, then never wrote a verdict — usually because it hung or crashed mid-run. Most common with smaller / non-coder local models or with adapters that buffer silently on errors (e.g. opencode-ollama; see \`docs/guides/anthropic-policy.md\` § opencode-ollama stability). Check the architect log file. To proceed: pick "Continue" to retry (consider switching the architect to a more reliable adapter like \`codex\` or \`claude-code-ollama\` first), or pick "Stop loop now" to abandon.`;
+      case "malformed_json":
+        return `The Solution Architect's signals file is not valid JSON. The agent wrote something but it can't be parsed. This usually means the model produced garbled output mid-token — common with small ollama models on long generations. Check the architect log file for the agent's actual output. To proceed: pick "Continue" to retry (consider a coder-tuned model like \`qwen2.5-coder\` or \`deepseek-coder-v2\` if the current model is general-purpose), or pick "Stop loop now" to abandon.`;
+      case "missing_readiness":
+        return `The Solution Architect's signals file is valid JSON but missing the \`readiness\` field — the agent didn't follow the schema. To proceed: pick "Continue" to retry (the new attempt may succeed; if the model consistently misses the schema, switch to a different adapter), or pick "Stop loop now".`;
+      default:
+        return `The Solution Architect reviewed your Problem Pack but didn't produce a clear readiness verdict (signal file missing or malformed). This usually means the review run hit an error mid-way — check the architect log. To proceed: pick "Continue" to retry the review or "Stop loop now" to abandon.`;
+    }
   }
 
   const verdict = readiness;
@@ -1183,10 +1208,16 @@ async function runLoop(
       state.phase = "paused";
       state.pauseReason =
         readiness === "SCOPE_COMPLETE" ? "scope_complete" : "anomaly";
+      // When readiness is missing, classify why so the pause message
+      // can give specific diagnostics (item 6.31 follow-up 2026-05-08).
+      const signalFailure = !readiness && !reviewError
+        ? await (await import("./architect-runner.js")).diagnoseFailedArchitectSignals(workspace.repoPath)
+        : undefined;
       const reason = buildPreLoopBlockReason(
         reviewError,
         readiness,
         loopCfg.readinessGate,
+        signalFailure,
       );
       const questions = reviewRes?.signals?.gaps?.slice(0, 5) ?? [];
       state.pendingQuestions = questions.length ? questions : [reason];

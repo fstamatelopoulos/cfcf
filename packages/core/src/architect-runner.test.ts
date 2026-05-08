@@ -10,6 +10,7 @@ import {
   resetArchitectSignals,
   parseArchitectSignals,
   countPlanItems,
+  diagnoseFailedArchitectSignals,
 } from "./architect-runner.js";
 import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 
@@ -330,6 +331,88 @@ describe("parseArchitectSignals", () => {
       expect(result).not.toBeNull();
       expect(result!.readiness).toBe(r);
     }
+  });
+});
+
+describe("diagnoseFailedArchitectSignals (item 6.31 follow-up — pause-message diagnostics)", () => {
+  test("returns 'missing' when signals file doesn't exist", async () => {
+    // Don't create the file
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("missing");
+  });
+
+  test("returns 'malformed_json' when file exists but isn't valid JSON", async () => {
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      "not json at all { broken",
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("malformed_json");
+  });
+
+  test("returns 'missing_readiness' when JSON parses but readiness field is absent", async () => {
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({ gaps: ["something"], suggestions: [] }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("missing_readiness");
+  });
+
+  test("returns 'untouched_template' when file is the literal template (NEEDS_REFINEMENT + all empty + null approach)", async () => {
+    // Exact shape that ships in cfcf's template + that opencode-ollama
+    // produced on 2026-05-08 when it hung mid-session.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "NEEDS_REFINEMENT",
+        gaps: [],
+        suggestions: [],
+        risks: [],
+        recommended_approach: null,
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("untouched_template");
+  });
+
+  test("returns 'valid' when the file is actually a valid signals payload (race-condition guard)", async () => {
+    // Caller calls this only when parseArchitectSignals returned null,
+    // but the file might have appeared between the two calls. Verifying
+    // we don't lie about a now-valid file.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "READY",
+        gaps: [],
+        suggestions: ["Add docs"],
+        risks: [],
+        recommended_approach: "Use Express",
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("valid");
+  });
+
+  test("does NOT classify a NEEDS_REFINEMENT-with-real-content as untouched-template", async () => {
+    // If the agent reported NEEDS_REFINEMENT with actual gaps/suggestions,
+    // that's a legitimate verdict — not a template.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "NEEDS_REFINEMENT",
+        gaps: ["Missing auth flow specification"],
+        suggestions: [],
+        risks: [],
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("valid");
   });
 });
 
