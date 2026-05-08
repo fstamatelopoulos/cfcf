@@ -43,21 +43,20 @@ export const claudeCodeAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // `--output-format stream-json --verbose` emits live JSONL events
-    // for each turn (system init, assistant text, tool calls, tool
-    // results, final result). Without `stream-json`, claude `-p` buffers
-    // stdout until the agent exits — silent log file for the entire run.
-    // The Apr-17 commit (bb92921) added `--verbose` alone claiming it
-    // gave live progress, but dogfooding 2026-05-08 against a 30B local
-    // model proved verbose-only mode still buffers; only `stream-json`
-    // actually streams. (See docs/decisions-log.md 2026-05-08.) The log
-    // file becomes JSONL (one event per line); a future log-viewer
-    // formatter can render the stream as readable text.
-    const args = [
-      "--dangerously-skip-permissions",
-      "--verbose",
-      "--output-format", "stream-json",
-    ];
+    // Plain `claude -p "<prompt>"` — claude buffers stdout and emits
+    // the final response when the agent finishes. No live progress in
+    // the log file during the run.
+    //
+    // History: Apr-17 commit `bb92921` added `--verbose` claiming it
+    // gave live progress; dogfooding 2026-05-08 disproved that claim
+    // (verbose-only still buffers). Then 2026-05-08 added
+    // `--output-format stream-json` which DOES stream live events as
+    // JSONL — but the JSONL log file was unreadable in the web UI
+    // log panel + hard to scan with `tail`. User feedback: revert to
+    // plain `-p` and accept the silence-during-run trade-off until
+    // we have a proper JSONL→text formatter for the log viewer.
+    // See docs/decisions-log.md 2026-05-08.
+    const args = ["--dangerously-skip-permissions"];
     if (model) {
       args.push("--model", model);
     }

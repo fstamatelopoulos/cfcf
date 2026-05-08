@@ -13,7 +13,33 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
-## 2026-05-08 — `claude -p --verbose` buffers stdout despite the Apr-17 commit's "live progress" claim; switch to `--output-format stream-json` for live JSONL events
+## 2026-05-08 (later same day) — Reverted both `--verbose` AND `--output-format stream-json` on the claude-code adapters; back to plain `claude -p`. Plus: fix the architect-signals validator's false-positive "untouched template" rejection of clean READY/SCOPE_COMPLETE verdicts.
+
+**Context.** Two follow-ups from the morning's "switch to stream-json" decision (entry below):
+
+1. **stream-json's UX didn't pan out.** The web UI's log panel showed only the first JSONL line (the `system` init event) — subsequent assistant / tool_use / tool_result events were either not flowing into the panel's polling cadence or were rendered as long unparseable single lines that didn't fit the panel. `tail -f` on disk worked, but the panel that 99% of users actually look at didn't. The structured noise was a strict loss vs. the silent buffering we replaced.
+
+2. **A second bug surfaced when the SA ran with qwen3-coder.** A complete calc workspace re-review legitimately produced a clean `readiness: "READY"` with empty `gaps` / `suggestions` / `risks` arrays + `recommended_approach: null` — qwen's terse-but-correct output style. cfcf's signals-validator rejected this exact shape as "untouched template" because the template ships with all-empty fields. Result: cfcf paused with "signal file missing or malformed" even though the signals file was both present AND valid.
+
+**Decisions.**
+
+(a) **Revert the stream-json switch + the original `--verbose` flag.** Both adapters now run plain `claude -p "<prompt>"` (with `--dangerously-skip-permissions [--model X]`). Trade-off: silent log file during the run; final response dumped at exit. We accept this trade-off for now — readable text logs > unreadable JSONL — and revisit if/when we add a JSONL→text formatter to the web UI's log viewer (iter-7 territory). Entry below documents the original switch + the lessons we still keep about flag-vs-protocol-surface naming + ps-output-as-ground-truth; what we DON'T keep is the conclusion "always use stream-json". Explicit follow-up: a proper log-viewer formatter for JSONL would let us re-enable stream-json without the UX cost.
+
+(b) **Fix the architect-signals validator** to distinguish "agent never edited the file" from "agent legitimately found nothing to add". The rule is now: `{empty gaps + suggestions + risks + null recommended_approach}` is treated as untouched-template **only when readiness is NEEDS_REFINEMENT or BLOCKED** (those values demand explanation). With READY or SCOPE_COMPLETE, empty supporting fields are accepted as the agent's actual verdict. 4 new regression tests in [`architect-runner.test.ts`](../../packages/core/src/architect-runner.test.ts) pin both halves of the contract.
+
+**Lessons.**
+
+1. **Streaming protocol changes are not free even when they're "obviously better."** stream-json IS strictly more capable than print mode, but the consuming surface (web UI log panel) was unprepared for it. Always pair a streaming-output change with the consuming-side formatter, OR accept the readability regression.
+
+2. **Validator-as-template-detector is a fragile pattern.** "If everything's empty, the agent didn't fill it in" is intuitive but conflates two semantically distinct cases. The model that surfaced the bug (qwen3-coder) wasn't doing anything wrong — it was being terser than Claude's typical output style. The fix recognises that the load-bearing field is `readiness`, not the supporting fields. Whenever a validator rejects on absence-of-content, ask "could the agent legitimately have nothing to add here?"
+
+3. **Same-day reverts are healthy.** The morning's stream-json switch shipped; the afternoon's dogfood revealed the UX cost; the same-day revert with a clear note in the decisions-log preserves the experiment + its cost without leaving the bad state in main. Better than insisting the morning's decision was "right" because it was logged.
+
+**Cross-refs.** [`packages/core/src/adapters/claude-code.ts`](../../packages/core/src/adapters/claude-code.ts), [`packages/core/src/adapters/claude-code-ollama.ts`](../../packages/core/src/adapters/claude-code-ollama.ts) — both back to plain `-p`. [`packages/core/src/architect-runner.ts`](../../packages/core/src/architect-runner.ts) `parseArchitectSignals` — readiness-conditional template-detection. Tests pinning both invariants. Future work: JSONL→text formatter for the web UI log viewer (iter-7 candidate).
+
+---
+
+## 2026-05-08 — `claude -p --verbose` buffers stdout despite the Apr-17 commit's "live progress" claim; switch to `--output-format stream-json` for live JSONL events (SUPERSEDED same day — see entry above)
 
 **Context.** Commit `bb92921` (2026-04-17, *"fix: add --verbose to Claude Code invocation for live log progress"*) added `--verbose` to the claude-code adapter's `buildCommand`. The commit message claimed: *"--verbose shows turn-by-turn text output so users can watch progress, matching Codex's verbose-by-default behavior."* That claim was untested against a long-running prompt; subsequent quick prompts completed in <1s, so the silence was masked.
 

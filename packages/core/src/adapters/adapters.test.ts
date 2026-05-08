@@ -76,24 +76,22 @@ describe("claude-code adapter", () => {
     ]);
   });
 
-  it("builds a valid command with stream-json output for live progress", () => {
+  it("builds a valid plain `-p` command (no --verbose, no --output-format)", () => {
     const { command, args } = claudeCodeAdapter.buildCommand(
       "/path/to/project",
       "read CLAUDE.md and execute",
     );
     expect(command).toBe("claude");
     expect(args).toContain("--dangerously-skip-permissions");
-    expect(args).toContain("--verbose");
-    // Stream-json is the only mode that delivers live turn-by-turn
-    // events — `--verbose` alone (the Apr-17 approach) still buffered
-    // stdout (verified during 6.28 dogfood; see decisions-log
-    // 2026-05-08). This test pins the flag so a future revert breaks
-    // the suite.
-    expect(args).toContain("--output-format");
-    const fmtIdx = args.indexOf("--output-format");
-    expect(args[fmtIdx + 1]).toBe("stream-json");
     expect(args).toContain("-p");
     expect(args).toContain("read CLAUDE.md and execute");
+    // 2026-05-08 reversion: --verbose / --output-format stream-json
+    // were dropped in favour of plain `-p` after dogfooding showed
+    // both flags hurt the log-readability UX (verbose-only still
+    // buffered; stream-json produced unreadable JSONL in the web UI).
+    // See docs/decisions-log.md 2026-05-08.
+    expect(args).not.toContain("--verbose");
+    expect(args).not.toContain("--output-format");
   });
 
   it("checkAvailability returns a result", async () => {
@@ -208,17 +206,14 @@ describe("claude-code-ollama adapter", () => {
     // Mandatory `--` separator must precede the claude pass-through.
     const sepIdx = args.indexOf("--");
     expect(sepIdx).toBeGreaterThan(0);
-    // Claude args after `--`
+    // Claude args after `--` (plain -p; verbose / stream-json reverted
+    // 2026-05-08 — see decisions-log).
     const passThrough = args.slice(sepIdx + 1);
     expect(passThrough).toContain("--dangerously-skip-permissions");
-    expect(passThrough).toContain("--verbose");
-    // stream-json must propagate through ollama's pass-through too —
-    // the wrapped claude buffers stdout without it (decisions-log 2026-05-08).
-    expect(passThrough).toContain("--output-format");
-    const fmtIdx = passThrough.indexOf("--output-format");
-    expect(passThrough[fmtIdx + 1]).toBe("stream-json");
     expect(passThrough).toContain("-p");
     expect(passThrough[passThrough.length - 1]).toBe("implement feature X");
+    expect(passThrough).not.toContain("--verbose");
+    expect(passThrough).not.toContain("--output-format");
   });
 
   it("omits --model when no model is given but still uses `--yes --` separator", () => {

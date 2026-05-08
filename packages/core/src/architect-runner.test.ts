@@ -121,4 +121,92 @@ describe("parseArchitectSignals", () => {
     const result = await parseArchitectSignals(TEST_DIR);
     expect(result).toBeNull();
   });
+
+  // Regression: 2026-05-08 — parseArchitectSignals used to reject ANY
+  // submission with all-empty supporting fields as "untouched template",
+  // which conflated two genuinely different cases:
+  //   (a) The agent never edited the file. Reject.
+  //   (b) The agent legitimately found nothing to add (a clean re-review
+  //       of a complete project). With readiness == READY or
+  //       SCOPE_COMPLETE, empty arrays + null recommended_approach are
+  //       the correct semantic answer.
+  // Surfaced when qwen3-coder ran the SA on a calc workspace whose plan
+  // was 100% complete; qwen produced READY + empty arrays (correct) and
+  // cfcf paused with "signal file missing or malformed" (incorrect).
+  // Fix: only reject empty supporting fields when readiness is one of
+  // the values that semantically demand explanation (NEEDS_REFINEMENT,
+  // BLOCKED). The four tests below pin both halves of the contract.
+
+  test("accepts READY with empty supporting fields (clean re-review verdict)", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+      // recommended_approach intentionally omitted — equivalent to null
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("READY");
+  });
+
+  test("accepts SCOPE_COMPLETE with empty supporting fields", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "SCOPE_COMPLETE",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("SCOPE_COMPLETE");
+  });
+
+  test("rejects NEEDS_REFINEMENT with empty fields (untouched template)", async () => {
+    // The cfcf template ships with `readiness: "NEEDS_REFINEMENT"` + all
+    // empty arrays + null recommended_approach. If we get this exact
+    // shape back, the agent never touched the file.
+    const signals: ArchitectSignals = {
+      readiness: "NEEDS_REFINEMENT",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).toBeNull();
+  });
+
+  test("rejects BLOCKED with empty fields (template-shaped)", async () => {
+    // BLOCKED with no gaps/risks/suggestions is suspicious — if the
+    // agent really meant BLOCKED, it should explain why. Treat as
+    // template-untouched.
+    const signals: ArchitectSignals = {
+      readiness: "BLOCKED",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).toBeNull();
+  });
 });

@@ -128,8 +128,33 @@ export async function parseArchitectSignals(
     const signals = JSON.parse(content) as ArchitectSignals;
     // Basic validation
     if (!signals.readiness) return null;
-    // Check it's not the untouched template
-    if (signals.gaps.length === 0 && signals.suggestions.length === 0 && signals.risks.length === 0 && !signals.recommended_approach) {
+    // Untouched-template detection (item 6.28 dogfood follow-up,
+    // 2026-05-08). The template ships with `readiness: "NEEDS_REFINEMENT"`
+    // + all-empty arrays + null recommended_approach. Pre-fix this code
+    // rejected ANY all-empty submission as "template untouched", but
+    // that conflated two genuinely different cases:
+    //   (a) The agent never edited the file → readiness is the template
+    //       default ("NEEDS_REFINEMENT") + everything empty. Reject.
+    //   (b) The agent reviewed a complete / clean project and legitimately
+    //       has no gaps/risks/suggestions to add. With readiness == READY
+    //       or SCOPE_COMPLETE, empty supporting fields are the correct
+    //       semantic answer; rejecting them paused the loop with a
+    //       "signal file missing or malformed" message that misled the
+    //       user (surfaced 2026-05-08 with qwen3-coder on the SA role
+    //       for a fully-shipped calc workspace re-review).
+    // The fix: only treat empty supporting fields as "untouched
+    // template" when readiness is one of the values that semantically
+    // demands explanation (NEEDS_REFINEMENT / BLOCKED). READY +
+    // SCOPE_COMPLETE accept empty fields as the agent's actual verdict.
+    const needsExplanation =
+      signals.readiness === "NEEDS_REFINEMENT" || signals.readiness === "BLOCKED";
+    if (
+      needsExplanation &&
+      signals.gaps.length === 0 &&
+      signals.suggestions.length === 0 &&
+      signals.risks.length === 0 &&
+      !signals.recommended_approach
+    ) {
       return null;
     }
     return signals;
