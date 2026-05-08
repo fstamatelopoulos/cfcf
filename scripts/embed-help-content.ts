@@ -47,6 +47,7 @@ const TOPICS: Array<{ slug: string; source: string; aliases?: string[] }> = [
   { slug: "spec",            source: "docs/guides/product-architect.md", aliases: ["pa", "product-architect"] },
   { slug: "installing",      source: "docs/guides/installing.md", aliases: ["install"] },
   { slug: "troubleshooting", source: "docs/guides/troubleshooting.md", aliases: ["troubleshoot"] },
+  { slug: "anthropic-policy", source: "docs/guides/anthropic-policy.md", aliases: ["policy", "harness", "ollama"] },
   { slug: "api",             source: "docs/api/server-api.md" },
 ];
 

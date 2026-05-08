@@ -55,7 +55,7 @@ export const opencodeOllamaAdapter: AgentAdapter = {
   },
 
   unattendedFlags(): string[] {
-    return ["launch", "opencode", "--yes", "--", "run"];
+    return ["launch", "opencode", "--yes", "--", "run", "--dangerously-skip-permissions"];
   },
 
   buildCommand(
@@ -63,16 +63,19 @@ export const opencodeOllamaAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // ollama launch opencode --model <local-model> --yes -- run "<prompt>"
+    // ollama launch opencode --model <local-model> --yes -- \
+    //   run --dangerously-skip-permissions "<prompt>"
     // No --model passed to opencode after `--` — the launch wrapper has
-    // configured the model side.
+    // configured the model side. `--dangerously-skip-permissions` is
+    // required for the same reason as in `opencode.ts` (avoid the
+    // permission-preset cancel-state in CI / harness contexts).
     const ollamaArgs: string[] = ["launch", "opencode"];
     if (model) {
       ollamaArgs.push("--model", model);
     }
     ollamaArgs.push("--yes", "--");
 
-    const opencodeArgs: string[] = ["run", prompt];
+    const opencodeArgs: string[] = ["run", "--dangerously-skip-permissions", prompt];
 
     return { command: "ollama", args: [...ollamaArgs, ...opencodeArgs] };
   },

@@ -49,10 +49,14 @@ export const opencodeAdapter: AgentAdapter = {
   },
 
   unattendedFlags(): string[] {
-    // `run` is the non-interactive subcommand; opencode doesn't ship a
-    // dedicated "skip permissions" flag (its prompt-trust model is
-    // upfront via `opencode auth login`).
-    return ["run"];
+    // `run` is the non-interactive subcommand; `--dangerously-skip-
+    // permissions` is required for unattended runs because opencode's
+    // default permission preset denies tools like `question`,
+    // `plan_enter`, `plan_exit`, which causes `opencode run` to finish
+    // in a "cancel state" without writes in CI / harness contexts
+    // (see github/anomalyco/opencode#13851 — the exact failure mode
+    // a coding harness like cfcf hits if the flag isn't passed).
+    return ["run", "--dangerously-skip-permissions"];
   },
 
   buildCommand(
@@ -60,10 +64,10 @@ export const opencodeAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // opencode run [--model provider/model] "<prompt>"
+    // opencode run --dangerously-skip-permissions [--model provider/model] "<prompt>"
     // Model expects the `provider/model` shape per opencode docs; cfcf
     // doesn't validate the shape (the user owns the provider auth side).
-    const args: string[] = ["run"];
+    const args: string[] = ["run", "--dangerously-skip-permissions"];
     if (model) {
       args.push("--model", model);
     }

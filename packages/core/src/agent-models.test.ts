@@ -126,17 +126,37 @@ describe("resolveModelsForAdapter", () => {
 });
 
 describe("resolveAllModels", () => {
-  test("returns every seeded adapter with its resolved list", () => {
+  test("returns every registered adapter, with seeded ones resolved + new ones empty", () => {
     const result = resolveAllModels(null);
-    expect(Object.keys(result).sort()).toEqual(Object.keys(SEED_MODELS).sort());
+    // 6.26 seeded adapters carry their seed lists.
     expect(result["claude-code"]).toEqual(SEED_MODELS["claude-code"]);
     expect(result["codex"]).toEqual(SEED_MODELS["codex"]);
+    // 6.28 new adapters appear in the map even with no seed entry.
+    expect(result).toHaveProperty("opencode");
+    expect(result).toHaveProperty("claude-code-ollama");
+    expect(result).toHaveProperty("opencode-ollama");
+    // ...with empty lists when no override / ollama models are present.
+    expect(result["opencode"]).toEqual([]);
+    expect(result["claude-code-ollama"]).toEqual([]);
+    expect(result["opencode-ollama"]).toEqual([]);
   });
 
-  test("includes user-only adapters that have no seed entry", () => {
+  test("includes user-only adapters that have no seed entry and no registry entry", () => {
     const cfg = configWith({ "in-house-agent": ["model-a", "model-b"] });
     const result = resolveAllModels(cfg);
     expect(result["in-house-agent"]).toEqual(["model-a", "model-b"]);
     expect(result["claude-code"]).toEqual(SEED_MODELS["claude-code"]); // seed survives
+  });
+
+  test("ollama adapters surface availableOllamaModels in the result", () => {
+    const cfg: CfcfGlobalConfig = {
+      ...configWith({}),
+      availableOllamaModels: ["gemma4:31b", "qwen2.5-coder:32b"],
+    };
+    const result = resolveAllModels(cfg);
+    expect(result["claude-code-ollama"]).toEqual(["gemma4:31b", "qwen2.5-coder:32b"]);
+    expect(result["opencode-ollama"]).toEqual(["gemma4:31b", "qwen2.5-coder:32b"]);
+    // Direct opencode (modelSource=custom) stays empty regardless.
+    expect(result["opencode"]).toEqual([]);
   });
 });

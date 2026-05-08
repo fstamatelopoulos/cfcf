@@ -134,17 +134,23 @@ describe("codex adapter", () => {
 });
 
 describe("opencode adapter", () => {
-  it("has run as the unattended flag", () => {
-    expect(opencodeAdapter.unattendedFlags()).toEqual(["run"]);
+  it("has run + dangerously-skip-permissions as the unattended flags", () => {
+    // --dangerously-skip-permissions avoids the CI cancel-state
+    // footgun documented at github/anomalyco/opencode#13851.
+    expect(opencodeAdapter.unattendedFlags()).toEqual([
+      "run",
+      "--dangerously-skip-permissions",
+    ]);
   });
 
-  it("builds a `opencode run [--model X] <prompt>` command", () => {
+  it("builds a `opencode run --dangerously-skip-permissions [--model X] <prompt>` command", () => {
     const { command, args } = opencodeAdapter.buildCommand(
       "/path/to/project",
       "implement feature X",
     );
     expect(command).toBe("opencode");
     expect(args[0]).toBe("run");
+    expect(args).toContain("--dangerously-skip-permissions");
     // Last arg is the prompt
     expect(args[args.length - 1]).toBe("implement feature X");
     // No model flag when model is undefined
@@ -159,6 +165,7 @@ describe("opencode adapter", () => {
     );
     expect(args).toContain("--model");
     expect(args).toContain("anthropic/claude-3-5-sonnet");
+    expect(args).toContain("--dangerously-skip-permissions");
     expect(args[args.length - 1]).toBe("implement");
   });
 
@@ -222,7 +229,7 @@ describe("claude-code-ollama adapter", () => {
 });
 
 describe("opencode-ollama adapter", () => {
-  it("builds a `ollama launch opencode --model X --yes -- run prompt` command", () => {
+  it("builds a `ollama launch opencode --model X --yes -- run --dangerously-skip-permissions prompt` command", () => {
     const { command, args } = opencodeOllamaAdapter.buildCommand(
       "/path/to/project",
       "implement feature X",
@@ -238,6 +245,7 @@ describe("opencode-ollama adapter", () => {
     expect(sepIdx).toBeGreaterThan(0);
     const passThrough = args.slice(sepIdx + 1);
     expect(passThrough[0]).toBe("run");
+    expect(passThrough).toContain("--dangerously-skip-permissions");
     expect(passThrough[passThrough.length - 1]).toBe("implement feature X");
   });
 

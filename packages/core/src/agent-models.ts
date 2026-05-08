@@ -20,7 +20,7 @@
  */
 
 import { SEED_MODELS, getSeedModels } from "./adapters/seed-models.js";
-import { getAdapter } from "./adapters/index.js";
+import { getAdapter, getAdapterNames } from "./adapters/index.js";
 import type { CfcfGlobalConfig } from "./types.js";
 
 /**
@@ -74,14 +74,20 @@ export function resolveModelsForAdapter(
  * Used by `GET /api/agents/models` to populate every web picker in one
  * round-trip and by `cfcf doctor` for diagnostics.
  *
- * Iteration order: every adapter that has a seed entry, plus any
- * adapter the user has added an override for (so a user-only adapter
- * with no seed still shows up).
+ * Iteration order: (a) every adapter registered in the registry — so
+ * the new 6.28 adapters (opencode, claude-code-ollama, opencode-ollama)
+ * show up even though they have no seed-models.ts entry, (b) every
+ * adapter that has a seed entry (back-compat for adapters added via
+ * a hand-edited config without a registry change), (c) every adapter
+ * the user has added an `agentModels` override for. The union covers
+ * "user-only adapter with no registry entry" + "registry adapter with
+ * no seed list" cleanly. (item 6.28)
  */
 export function resolveAllModels(
   config: CfcfGlobalConfig | null,
 ): Record<string, string[]> {
   const adapters = new Set([
+    ...getAdapterNames(),
     ...Object.keys(SEED_MODELS),
     ...Object.keys(config?.agentModels ?? {}),
   ]);

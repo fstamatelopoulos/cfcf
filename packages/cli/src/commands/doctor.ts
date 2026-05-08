@@ -20,7 +20,16 @@ import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { bashCompletionPath, zshCompletionPath, detectShell } from "./completion.js";
-import { listHelpTopics, compareSemver, defaultUpdateFilePath, VERSION } from "@cfcf/core";
+import {
+  listHelpTopics,
+  compareSemver,
+  defaultUpdateFilePath,
+  VERSION,
+  detectOllama,
+  listOllamaModels,
+  readConfig,
+  isClaudeCodeHarnessRisk,
+} from "@cfcf/core";
 
 interface CheckResult {
   name: string;
@@ -311,9 +320,14 @@ function checkRuntimeDeps(): CheckResult[] {
 function checkAgentClis(): CheckResult[] {
   // Detect the agent CLIs cfcf can drive. Doesn't read config (which the
   // user may not have run init yet); just reports what's reachable.
+  // The *-ollama composite adapters depend on the underlying claude /
+  // opencode CLI plus ollama itself; reported separately by
+  // checkOllama / checkOpencode rather than as a single "claude-code-ollama"
+  // line so the user can see exactly which dep is missing if any.
   const agents = [
     { name: "claude-code", check: ["claude", "--version"] },
     { name: "codex",       check: ["codex", "--version"] },
+    { name: "opencode",    check: ["opencode", "--version"] },
   ];
   return agents.map(({ name, check }) => {
     const r = spawnSync(check[0]!, check.slice(1), { encoding: "utf8" });
@@ -330,6 +344,77 @@ function checkAgentClis(): CheckResult[] {
       detail: "not found on PATH (only required if you've configured this adapter)",
     };
   });
+}
+
+/**
+ * Probe ollama (item 6.28). Reports installation status + the count of
+ * locally-pulled models. Both the `claude-code-ollama` and
+ * `opencode-ollama` adapters depend on this; if ollama isn't installed
+ * the *-ollama composite adapters can't run regardless of whether the
+ * underlying claude / opencode CLI is reachable.
+ */
+async function checkOllama(): Promise<CheckResult> {
+  const result = await detectOllama();
+  if (!result.available) {
+    return {
+      name: "Ollama (for *-ollama adapters)",
+      status: "warn",
+      detail: `not found on PATH (${result.error}). Install from https://ollama.com if you want the local-model unattended path.`,
+    };
+  }
+  const models = await listOllamaModels();
+  const modelLine = models.length === 0
+    ? "no local models pulled (run `ollama pull <model>` to enable the *-ollama adapters)"
+    : `${models.length} local model${models.length === 1 ? "" : "s"}: ${models.slice(0, 5).join(", ")}${models.length > 5 ? `, +${models.length - 5} more` : ""}`;
+  return {
+    name: "Ollama (for *-ollama adapters)",
+    status: models.length === 0 ? "warn" : "ok",
+    detail: `${result.version} -- ${modelLine}`,
+  };
+}
+
+/**
+ * Surface the per-role harness-risk status (item 6.28). Reads the
+ * configured per-role adapter from the user's saved config and warns
+ * when claude-code is picked for any unattended role (dev / judge /
+ * reflection / documenter, plus architect when autoReviewSpecs=true).
+ *
+ * Best-effort: if no config exists yet (pre-init) the check returns ok
+ * — the user will see the same warning at `cfcf init` time so doctor
+ * doesn't need to fire prematurely.
+ */
+async function checkHarnessPolicy(): Promise<CheckResult> {
+  const name = "Anthropic harness policy (per-role)";
+  try {
+    const config = await readConfig();
+    if (!config) {
+      return { name, status: "ok", detail: "no config yet — run `cfcf init`" };
+    }
+    const risky: string[] = [];
+    if (isClaudeCodeHarnessRisk(config.devAgent.adapter)) risky.push("dev");
+    if (isClaudeCodeHarnessRisk(config.judgeAgent.adapter)) risky.push("judge");
+    if (isClaudeCodeHarnessRisk(config.documenterAgent.adapter)) risky.push("documenter");
+    if (config.reflectionAgent && isClaudeCodeHarnessRisk(config.reflectionAgent.adapter)) risky.push("reflection");
+    if (config.autoReviewSpecs && isClaudeCodeHarnessRisk(config.architectAgent.adapter)) risky.push("architect (autoReviewSpecs=true)");
+    if (risky.length === 0) {
+      return {
+        name,
+        status: "ok",
+        detail: "no unattended role uses claude-code (compliant with Anthropic's third-party-harness policy)",
+      };
+    }
+    return {
+      name,
+      status: "warn",
+      detail: `claude-code in use for unattended role${risky.length > 1 ? "s" : ""}: ${risky.join(", ")}. See docs/guides/anthropic-policy.md for compliant alternatives.`,
+    };
+  } catch (err) {
+    return {
+      name,
+      status: "ok",
+      detail: `config unreadable (${err instanceof Error ? err.message : String(err)}); skipped`,
+    };
+  }
 }
 
 function checkClioDb(): CheckResult {
@@ -657,7 +742,7 @@ export function registerDoctorCommand(program: Command): void {
       "Self-check that confirms a cfcf install is healthy (binary, native libs, runtime deps, agent CLIs).",
     )
     .option("--json", "Emit results as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const results: CheckResult[] = [];
       results.push(checkBunRuntime());
       results.push(checkCfcfPackage());
@@ -667,6 +752,8 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkCustomSqliteLoadable());
       results.push(...checkRuntimeDeps());
       results.push(...checkAgentClis());
+      results.push(await checkOllama());
+      results.push(await checkHarnessPolicy());
       results.push(checkClioDb());
       results.push(checkHelpContent());
       results.push(checkHelpAssistant());

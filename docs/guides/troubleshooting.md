@@ -121,19 +121,47 @@ Then re-run `cfcf init`.
 
 You picked an agent during init that isn't on your `$PATH`. Two options:
 
-**Install the agent CLI** (Anthropic's `claude-code` or OpenAI's `codex`):
+**Install the agent CLI** (Anthropic's `claude-code`, OpenAI's `codex`, or sst.dev's `opencode`):
 
 ```bash
 # claude-code
 npm install -g @anthropic-ai/claude-code   # or follow Anthropic's installer
-which claude-code
+which claude
 
 # codex
 npm install -g @openai/codex                # or follow OpenAI's installer
 which codex
+
+# opencode (item 6.28)
+npm install -g opencode-ai
+which opencode
 ```
 
 **Or pick the other one** — re-run `cfcf init --force` and choose differently.
+
+### "ollama CLI not found" / "claude-code-ollama unavailable"
+
+The `claude-code-ollama` and `opencode-ollama` adapters (item 6.28) wrap the underlying agent CLI through `ollama launch`, which requires both ollama and the wrapped agent to be on `$PATH`.
+
+```bash
+# Install ollama
+brew install ollama                          # macOS
+curl -fsSL https://ollama.com/install.sh | sh # Linux
+which ollama
+
+# Pull at least one model the iteration loop can drive
+ollama pull qwen2.5-coder:32b
+ollama list                                   # confirm
+
+# Confirm the wrapper works
+ollama launch claude --model qwen2.5-coder:32b --yes -- -p "say hello"
+```
+
+Re-run `cfcf init --force` afterwards so cfcf picks up the new ollama snapshot. See [`anthropic-policy.md`](anthropic-policy.md) for the full setup walkthrough and the role-by-role recommendation.
+
+### Anthropic harness-policy warning during `cfcf init`
+
+The warning fires when you've picked `claude-code` for an unattended role (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`). It's **informational, not blocking** — your config saves. To clear the warning, re-run `cfcf init --force` or `cfcf config edit` and pick `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for those roles instead. PA / HA / manually-invoked SA on `claude-code` do NOT trigger the warning — they're within Anthropic's allowed-interactive scope. Full background: [`anthropic-policy.md`](anthropic-policy.md).
 
 ### `cfcf init` fails to download the embedder
 
