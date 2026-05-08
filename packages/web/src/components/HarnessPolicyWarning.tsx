@@ -206,7 +206,8 @@ export function HarnessPolicyWarning({
             <code>claude-code-ollama</code></strong> (<code>dev</code>,{" "}
             <code>judge</code>, <code>reflection</code>,{" "}
             <code>documenter</code>, <code>architect</code>). PA and HA are
-            unaffected.
+            unaffected — they run interactively in your terminal, so you
+            see output live as the agent works.
           </div>
           <div style={{ marginBottom: "0.5rem" }}>
             Currently configured for: {claudeOllamaRoles.map((role, i) => (
@@ -250,7 +251,8 @@ export function HarnessPolicyWarning({
             <code>claude-code-ollama</code></strong> (<code>dev</code>,{" "}
             <code>judge</code>, <code>reflection</code>,{" "}
             <code>documenter</code>, <code>architect</code>). PA and HA are
-            unaffected — their TUI takes over your shell.
+            unaffected — they run interactively in your terminal, so you
+            see output live as the agent works.
           </div>
           <div style={{ marginBottom: "0.5rem" }}>
             Currently configured for: {claudeOllamaRoles.map((role, i) => (

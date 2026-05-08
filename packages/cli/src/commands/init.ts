@@ -432,7 +432,9 @@ export function registerInitCommand(program: Command): void {
         console.log("  OpenAI-compatible endpoint is more tolerant of variance in tool-call output.");
         console.log();
         console.log("  Applies to any unattended role on claude-code-ollama");
-        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are unaffected.");
+        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are");
+        console.log("  unaffected — they run interactively in your terminal, so you see output");
+        console.log("  live as the agent works.");
         console.log(`  Currently configured for: ${claudeOllamaRoles.join(", ")}`);
         console.log();
 
@@ -445,7 +447,9 @@ export function registerInitCommand(program: Command): void {
         console.log("  when the agent exits. This is a UX caveat, not a correctness issue.");
         console.log();
         console.log("  Applies to any unattended role on claude-code-ollama");
-        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are unaffected.");
+        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are");
+        console.log("  unaffected — they run interactively in your terminal, so you see output");
+        console.log("  live as the agent works.");
         console.log(`  Currently configured for: ${claudeOllamaRoles.join(", ")}`);
         console.log();
         console.log("  For live progress in the log file, prefer codex (streams natively in");
