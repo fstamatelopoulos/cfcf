@@ -10,15 +10,23 @@ This review runs in one of two modes -- detect which one applies before you star
 
 **First-run mode.** `cfcf-docs/plan.md` is absent, or exists but has no completed items (no `[x]` entries). Treat the project as a fresh start: produce a full plan from scratch as described below.
 
-**Re-review mode.** `cfcf-docs/plan.md` already contains completed items (`[x]`). The project has prior iterations. The user is likely re-running `cfcf review` because (a) they added new requirements to the problem pack, (b) they adopted an existing repo mid-stream, or (c) they want a health check before starting another loop. In this mode:
+**Re-review mode.** `cfcf-docs/plan.md` already contains completed items (`[x]`). The project has prior iterations. The user is likely re-running `cfcf review` (or starting another loop with `autoReviewSpecs=true`) because (a) they added new requirements to the problem pack, (b) they adopted an existing repo mid-stream, (c) they want a health check before starting another loop, or (d) the project is finished and they re-launched the loop expecting a "nothing to do" verdict. In this mode:
 
 1. **Read everything first:** current `cfcf-docs/plan.md`, `cfcf-docs/iteration-logs/iteration-*.md`, `cfcf-docs/iteration-handoffs/iteration-*.md` (per-iteration forward-looking notes each dev left behind), `cfcf-docs/decision-log.md`, `cfcf-docs/iteration-history.md`, `cfcf-docs/judge-assessment.md` (latest verdict from the previous iteration's judge), and (if present) `cfcf-docs/reflection-reviews/reflection-*.md`. These tell you what has already been delivered and where the last iteration left off.
 2. **Compare to the current problem pack.** Identify whether there are *new* requirements that the existing plan doesn't cover.
 3. **Do not delete or edit completed items** (`[x]`) or existing `## Iteration N` headers. cfcf enforces this: any such destructive rewrite is automatically reverted.
 4. **If new requirements exist, append new pending iterations** to the plan (`## Iteration <next-N> -- <phase>`) below the existing ones. You may also add pending items to any existing pending iteration that is clearly a fit, but prefer new iterations for new scope.
 5. **If no new requirements exist** (the pack is unchanged and the plan still covers it), leave `cfcf-docs/plan.md` completely untouched and say so in your `architect-review.md` (e.g. "The current plan still covers the problem pack; no refinements needed.").
-6. **Still produce `cfcf-docs/architect-review.md`** with the readiness assessment, a short "What's changed since last review" section, and the usual gaps / risks / recommendations. The `readiness` signal should reflect the *current* state (typically `READY` if the loop is resumable as-is; `NEEDS_REFINEMENT` if the pack is ambiguous; `BLOCKED` only for critical issues).
-7. **Still produce `cfcf-docs/cfcf-architect-signals.json`.**
+6. **Still produce `cfcf-docs/architect-review.md`** with the readiness assessment, a short "What's changed since last review" section, and the usual gaps / risks / recommendations.
+7. **Pick the right `readiness` value** — this is the load-bearing signal that drives what the harness does next:
+   - **`SCOPE_COMPLETE`** — Use this when **`cfcf-docs/plan.md` has zero pending items** (every item is `[x]`) AND the problem pack hasn't been extended with new requirements. The project is finished; the loop has nothing to build. The harness pauses on `SCOPE_COMPLETE` regardless of `readinessGate` and offers the user three actions (stop / refresh docs / refine plan with new requirements) — exactly the right UX for "done". **Picking `READY` here instead is wrong**: it sends the dev agent into a loop iteration with no plan items to execute, wasting an iteration before the loop figures out there's nothing to do.
+   - **`READY`** — Use this when there ARE pending plan items the dev agent can pick up. Either you appended new pending iterations (case a above), or the previous loop paused with pending items left to execute (case b/c above with a still-incomplete plan). The harness will start (or resume) the dev iteration cycle.
+   - **`NEEDS_REFINEMENT`** — The current problem pack is ambiguous and dev-grade execution would hit blockers. List the gaps + suggestions so the user can edit `problem-pack/*.md` before retrying. Don't use this for "finished" — that's `SCOPE_COMPLETE`.
+   - **`BLOCKED`** — Critical information missing or hard contradictions in the spec. Development cannot proceed at all until resolved.
+
+   **Decision tree for re-reviews**: count pending items in `plan.md` (`[ ]` checkboxes). If zero → check problem-pack for new requirements not yet in the plan → if none → `SCOPE_COMPLETE`. If new requirements exist → append iterations + return `READY`. If pending items already exist → `READY`. Anywhere along the way you see ambiguity / contradictions → upgrade to `NEEDS_REFINEMENT` or `BLOCKED`.
+
+8. **Still produce `cfcf-docs/cfcf-architect-signals.json`.**
 
 In re-review mode you are NOT scaffolding `docs/architecture.md`, `docs/api-reference.md`, or `docs/setup-guide.md` -- they already exist and the dev/documenter roles maintain them.
 
@@ -201,11 +209,12 @@ Write a JSON file with this exact structure:
 }
 ```
 
-**Readiness values:**
-- `READY`: Problem definition is clear and actionable. Dev agents can proceed with high confidence.
+**Readiness values** (pick the one that matches reality; the harness routes very differently for each):
+
+- `READY`: Pending plan items exist for the dev agent to execute (either new appended iterations or pending items from a paused loop). Dev agents can proceed with high confidence. The harness starts or resumes the dev iteration cycle.
 - `NEEDS_REFINEMENT`: There are gaps or ambiguities that should be addressed. Development can proceed but may hit blockers.
 - `BLOCKED`: Critical information is missing. Development should not proceed until resolved.
-- `SCOPE_COMPLETE`: The Problem Pack describes work that is **already implemented and tested** in the source tree (regardless of whether the spec itself needs polish). Use this instead of `READY` or `NEEDS_REFINEMENT` when the loop has nothing meaningful to build — e.g. the workspace was previously completed and the user re-launched the loop, or the implementation was done manually outside cfcf and the spec is just describing what already exists. Document any remaining concerns (missing scaffold files, broken tooling, repo state issues) in the `risks` field — those are real but not loop-blocking *work-items*; they are separate fixes the user owns. The harness always pauses on `SCOPE_COMPLETE` regardless of `readinessGate` setting and offers the user three actions: stop the loop, refresh the documenter, or refine the plan with new requirements.
+- `SCOPE_COMPLETE`: **Use this for finished projects with nothing left to build.** The Problem Pack describes work that is **already implemented and tested** in the source tree (regardless of whether the spec itself needs polish). Concretely: `cfcf-docs/plan.md` has all `[x]` items, no `[ ]` pending items, and the problem-pack hasn't been extended with new requirements. Use this instead of `READY` when the dev agent has no work to execute — e.g. the workspace was previously completed and the user re-launched the loop, or the implementation was done manually outside cfcf and the spec is just describing what already exists. **Picking `READY` for a finished project is wrong**: it wastes a full dev iteration before the loop figures out there's nothing to do. Document any remaining concerns (missing scaffold files, broken tooling, repo state issues) in the `risks` field — those are real but not loop-blocking *work-items*; they are separate fixes the user owns. The harness always pauses on `SCOPE_COMPLETE` regardless of `readinessGate` setting and offers the user three actions: stop the loop, refresh the documenter, or refine the plan with new requirements.
 
 ### 5. Seed entries in `cfcf-docs/decision-log.md` (optional but encouraged)
 

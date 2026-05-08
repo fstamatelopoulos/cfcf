@@ -115,7 +115,55 @@ export async function resetArchitectSignals(repoPath: string): Promise<void> {
 }
 
 /**
+ * Count `[ ]` (pending) and `[x]` (completed) checkbox items in a plan
+ * document. Used by `parseArchitectSignals` to detect the "agent said
+ * READY but the plan has no pending work" case (item 6.28 dogfood,
+ * 2026-05-08). Pure function for testability.
+ */
+export function countPlanItems(planContent: string): { pending: number; completed: number } {
+  // GFM-style checkboxes: `- [ ]` or `- [x]` / `- [X]`. Allow leading
+  // whitespace + alternative bullet markers (`*`, `+`).
+  const pending = (planContent.match(/^\s*[-*+]\s+\[\s\]/gm) ?? []).length;
+  const completed = (planContent.match(/^\s*[-*+]\s+\[[xX]\]/gm) ?? []).length;
+  return { pending, completed };
+}
+
+/**
+ * Read `cfcf-docs/plan.md` and count its checkbox items. Returns
+ * `{pending: 0, completed: 0}` if the file is missing — matches the
+ * "no plan yet" case (e.g. fresh workspace pre-architect-first-run).
+ */
+async function readPlanItemCounts(repoPath: string): Promise<{ pending: number; completed: number }> {
+  try {
+    const content = await readFile(join(repoPath, "cfcf-docs", "plan.md"), "utf-8");
+    return countPlanItems(content);
+  } catch {
+    return { pending: 0, completed: 0 };
+  }
+}
+
+/**
  * Parse the architect signal file after the architect exits.
+ *
+ * Two safeguards live here, both surfaced 2026-05-08 during dogfood
+ * with qwen3-coder on the SA role for a fully-shipped calc workspace:
+ *
+ *   1. **Untouched-template rejection** (only when readiness genuinely
+ *      demands explanation: NEEDS_REFINEMENT / BLOCKED). Avoids
+ *      false-positive rejection of clean READY/SCOPE_COMPLETE verdicts
+ *      with empty supporting fields.
+ *   2. **READY → SCOPE_COMPLETE auto-promotion** when plan.md has all
+ *      `[x]` items and zero `[ ]` pending. This catches a common agent
+ *      slip-up where the model identifies the project as complete but
+ *      labels it READY (the more familiar value) instead of
+ *      SCOPE_COMPLETE. Picking READY for a finished project is wrong:
+ *      the harness sends the dev agent into a wasted iteration before
+ *      the loop figures out there's no work. The prompt template
+ *      explicitly tells the agent the right answer is SCOPE_COMPLETE,
+ *      but defensive auto-promotion catches non-compliant agents too.
+ *      Only fires when there's at least one `[x]` (work has actually
+ *      been done) AND zero `[ ]` (nothing pending) — guards against
+ *      promoting an empty plan in first-run mode.
  */
 export async function parseArchitectSignals(
   repoPath: string,
@@ -128,24 +176,7 @@ export async function parseArchitectSignals(
     const signals = JSON.parse(content) as ArchitectSignals;
     // Basic validation
     if (!signals.readiness) return null;
-    // Untouched-template detection (item 6.28 dogfood follow-up,
-    // 2026-05-08). The template ships with `readiness: "NEEDS_REFINEMENT"`
-    // + all-empty arrays + null recommended_approach. Pre-fix this code
-    // rejected ANY all-empty submission as "template untouched", but
-    // that conflated two genuinely different cases:
-    //   (a) The agent never edited the file → readiness is the template
-    //       default ("NEEDS_REFINEMENT") + everything empty. Reject.
-    //   (b) The agent reviewed a complete / clean project and legitimately
-    //       has no gaps/risks/suggestions to add. With readiness == READY
-    //       or SCOPE_COMPLETE, empty supporting fields are the correct
-    //       semantic answer; rejecting them paused the loop with a
-    //       "signal file missing or malformed" message that misled the
-    //       user (surfaced 2026-05-08 with qwen3-coder on the SA role
-    //       for a fully-shipped calc workspace re-review).
-    // The fix: only treat empty supporting fields as "untouched
-    // template" when readiness is one of the values that semantically
-    // demands explanation (NEEDS_REFINEMENT / BLOCKED). READY +
-    // SCOPE_COMPLETE accept empty fields as the agent's actual verdict.
+    // Untouched-template detection (1) — see docstring above.
     const needsExplanation =
       signals.readiness === "NEEDS_REFINEMENT" || signals.readiness === "BLOCKED";
     if (
@@ -156,6 +187,16 @@ export async function parseArchitectSignals(
       !signals.recommended_approach
     ) {
       return null;
+    }
+    // READY → SCOPE_COMPLETE auto-promotion (2) — see docstring above.
+    if (signals.readiness === "READY") {
+      const { pending, completed } = await readPlanItemCounts(repoPath);
+      if (pending === 0 && completed > 0) {
+        console.log(
+          `[architect] note: agent returned readiness="READY" but cfcf-docs/plan.md has ${completed} completed item${completed === 1 ? "" : "s"} and 0 pending — promoting to SCOPE_COMPLETE so the harness can route to the "done" UX rather than a wasted dev iteration.`,
+        );
+        signals.readiness = "SCOPE_COMPLETE";
+      }
     }
     return signals;
   } catch {
