@@ -79,8 +79,14 @@ async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<v
       }
     }
 
-    // Kill all the processes
+    // Kill all active spawns. Item 6.31 (2026-05-08): each kill now
+    // sends SIGTERM to the whole process group + schedules a SIGKILL
+    // 1.5s later. We must wait for that grace window before exiting,
+    // otherwise the timers get cancelled when this process dies and
+    // the SIGKILL never fires — leaving orphans of init that hold
+    // ollama's model serializer for up to 10 min.
     killAllActiveProcesses();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
   // Stop the JobScheduler so its periodic timer doesn't keep the event

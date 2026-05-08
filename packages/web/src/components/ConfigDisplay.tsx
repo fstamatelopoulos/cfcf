@@ -5,6 +5,7 @@ import { fetchAgentModels, fetchGlobalConfig, saveWorkspace } from "../api";
 import { AgentModelSelect } from "./AgentModelSelect";
 import { ClioProjectDialog } from "./ClioProjectDialog";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
+import { HarnessPolicyWarning } from "./HarnessPolicyWarning";
 import { navigateTo } from "../hooks/useRoute";
 
 const ROLE_KEYS: (keyof Pick<
@@ -327,6 +328,19 @@ export function ConfigDisplay({
           per-workspace overridable; pick one agent you trust for those
           workloads and use it everywhere.
         </p>
+        <HarnessPolicyWarning
+          unattendedRoles={[
+            { label: "dev", adapter: draft.devAgent.adapter },
+            { label: "judge", adapter: draft.judgeAgent.adapter },
+            { label: "documenter", adapter: draft.documenterAgent.adapter },
+            ...(draft.reflectionAgent
+              ? [{ label: "reflection", adapter: draft.reflectionAgent.adapter }]
+              : []),
+            ...(draft.autoReviewSpecs
+              ? [{ label: "architect (autoReviewSpecs=true)", adapter: draft.architectAgent.adapter }]
+              : []),
+          ]}
+        />
       </FormSection>
 
       {/* Iteration defaults + loop policy */}

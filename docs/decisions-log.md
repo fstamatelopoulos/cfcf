@@ -13,6 +13,109 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-08 (later same day) — Reverted both `--verbose` AND `--output-format stream-json` on the claude-code adapters; back to plain `claude -p`. Plus: fix the architect-signals validator's false-positive "untouched template" rejection of clean READY/SCOPE_COMPLETE verdicts.
+
+**Context.** Two follow-ups from the morning's "switch to stream-json" decision (entry below):
+
+1. **stream-json's UX didn't pan out.** The web UI's log panel showed only the first JSONL line (the `system` init event) — subsequent assistant / tool_use / tool_result events were either not flowing into the panel's polling cadence or were rendered as long unparseable single lines that didn't fit the panel. `tail -f` on disk worked, but the panel that 99% of users actually look at didn't. The structured noise was a strict loss vs. the silent buffering we replaced.
+
+2. **A second bug surfaced when the SA ran with qwen3-coder.** A complete calc workspace re-review legitimately produced a clean `readiness: "READY"` with empty `gaps` / `suggestions` / `risks` arrays + `recommended_approach: null` — qwen's terse-but-correct output style. cfcf's signals-validator rejected this exact shape as "untouched template" because the template ships with all-empty fields. Result: cfcf paused with "signal file missing or malformed" even though the signals file was both present AND valid.
+
+**Decisions.**
+
+(a) **Revert the stream-json switch + the original `--verbose` flag.** Both adapters now run plain `claude -p "<prompt>"` (with `--dangerously-skip-permissions [--model X]`). Trade-off: silent log file during the run; final response dumped at exit. We accept this trade-off for now — readable text logs > unreadable JSONL — and revisit if/when we add a JSONL→text formatter to the web UI's log viewer (iter-7 territory). Entry below documents the original switch + the lessons we still keep about flag-vs-protocol-surface naming + ps-output-as-ground-truth; what we DON'T keep is the conclusion "always use stream-json". Explicit follow-up: a proper log-viewer formatter for JSONL would let us re-enable stream-json without the UX cost.
+
+(b) **Fix the architect-signals validator** to distinguish "agent never edited the file" from "agent legitimately found nothing to add". The rule is now: `{empty gaps + suggestions + risks + null recommended_approach}` is treated as untouched-template **only when readiness is NEEDS_REFINEMENT or BLOCKED** (those values demand explanation). With READY or SCOPE_COMPLETE, empty supporting fields are accepted as the agent's actual verdict. 4 new regression tests in [`architect-runner.test.ts`](../../packages/core/src/architect-runner.test.ts) pin both halves of the contract.
+
+**Lessons.**
+
+1. **Streaming protocol changes are not free even when they're "obviously better."** stream-json IS strictly more capable than print mode, but the consuming surface (web UI log panel) was unprepared for it. Always pair a streaming-output change with the consuming-side formatter, OR accept the readability regression.
+
+2. **Validator-as-template-detector is a fragile pattern.** "If everything's empty, the agent didn't fill it in" is intuitive but conflates two semantically distinct cases. The model that surfaced the bug (qwen3-coder) wasn't doing anything wrong — it was being terser than Claude's typical output style. The fix recognises that the load-bearing field is `readiness`, not the supporting fields. Whenever a validator rejects on absence-of-content, ask "could the agent legitimately have nothing to add here?"
+
+3. **Same-day reverts are healthy.** The morning's stream-json switch shipped; the afternoon's dogfood revealed the UX cost; the same-day revert with a clear note in the decisions-log preserves the experiment + its cost without leaving the bad state in main. Better than insisting the morning's decision was "right" because it was logged.
+
+**Cross-refs.** [`packages/core/src/adapters/claude-code.ts`](../../packages/core/src/adapters/claude-code.ts), [`packages/core/src/adapters/claude-code-ollama.ts`](../../packages/core/src/adapters/claude-code-ollama.ts) — both back to plain `-p`. [`packages/core/src/architect-runner.ts`](../../packages/core/src/architect-runner.ts) `parseArchitectSignals` — readiness-conditional template-detection. Tests pinning both invariants. Future work: JSONL→text formatter for the web UI log viewer (iter-7 candidate).
+
+---
+
+## 2026-05-08 — `claude -p --verbose` buffers stdout despite the Apr-17 commit's "live progress" claim; switch to `--output-format stream-json` for live JSONL events (SUPERSEDED same day — see entry above)
+
+**Context.** Commit `bb92921` (2026-04-17, *"fix: add --verbose to Claude Code invocation for live log progress"*) added `--verbose` to the claude-code adapter's `buildCommand`. The commit message claimed: *"--verbose shows turn-by-turn text output so users can watch progress, matching Codex's verbose-by-default behavior."* That claim was untested against a long-running prompt; subsequent quick prompts completed in <1s, so the silence was masked.
+
+Dogfooding 2026-05-08 against a 30B local model (`claude-code-ollama` driving `qwen3-coder:latest` through `ollama launch claude`) revealed the truth: **claude `-p --verbose` still buffers stdout to the end.** The dev iteration log file stayed at 0 bytes for ~3 minutes while ollama's own log showed dozens of `/v1/messages?beta=true` POSTs flowing through (each a real turn). Claude was making real progress; the harness saw nothing until the agent exited.
+
+Confirmed via process inspection: 3 claude PIDs alive, ollama runner at 0% CPU between turns, log file unchanged. After agent exit, the buffered output dumped all at once.
+
+**Why the Apr-17 claim turned out to be wrong.** Without seeing the source, the most plausible explanation is that claude's `-p` mode has always been a "single-completion" contract — it returns one final text response when the agent finishes its work, regardless of `--verbose`. `--verbose` adds metadata + warnings to that final response; it doesn't change the streaming contract. The streaming output mode is `--output-format stream-json` (a separate flag, structured JSONL events for each turn). The Claude Code desktop app uses `--output-format stream-json --verbose --input-format stream-json` (visible in `ps` output of an interactive session) — that's the proper streaming invocation.
+
+**Decided** — switch the `claude-code` and `claude-code-ollama` adapters to `--dangerously-skip-permissions --verbose --output-format stream-json -p "<prompt>"`. Trade-off:
+
+- *Win*: Live turn-by-turn progress in the log file (one JSONL event per assistant text chunk, per tool call, per tool result). Useful for tailing during long iterations on local models.
+- *Cost*: The log file is now JSONL instead of plain text. Casual `tail -f` shows structured noise (one JSON object per line) rather than narrative. A future log-viewer formatter can render the stream as readable text on demand; for now `cat` / `tail` work but require a JSONL eye to read.
+- *No change to signal-file output*: Judge / architect / reflection consume `cfcf-iteration-signals.json` from disk, which the agent writes via `Edit`/`Write` tool calls. Stdout format change doesn't affect signal-file parsing.
+
+**Lessons.**
+
+1. **A "fix: …live progress…" commit deserves a long-running test before claiming success.** The Apr-17 fix was likely tested against a quick "say hello" prompt that completed in <1s — too fast to tell streaming from buffering apart. Future "live log" claims need a multi-minute agent run as the verification path.
+
+2. **Read the upstream protocol surface, not the surface flag.** `--verbose` *sounds* like it should make output verbose-and-streamy. `--output-format stream-json` is the actual streaming contract per Anthropic's CLI design. Generic-name flags (`--verbose`) are usually about quantity of output, not streaming semantics.
+
+3. **`ps`-output of a known-streaming peer is a good ground truth.** Once the user's interactive Claude Code session was visible via `ps` running `--output-format stream-json --verbose --input-format stream-json`, the right answer was obvious. Whenever an upstream tool's flag behaviour is murky, look at how its first-party UI invokes it.
+
+**Cross-refs.** [`packages/core/src/adapters/claude-code.ts`](../../packages/core/src/adapters/claude-code.ts), [`packages/core/src/adapters/claude-code-ollama.ts`](../../packages/core/src/adapters/claude-code-ollama.ts) — both pass `--output-format stream-json --verbose`. Tests in [`packages/core/src/adapters/adapters.test.ts`](../../packages/core/src/adapters/adapters.test.ts) pin the flag.
+
+---
+
+## 2026-05-08 — `cfcf clio docs ingest/edit --project X` was silently absorbed by parent option (commander.js shadowing)
+
+**Context.** A Product Architect session (calc workspace, 2026-05-08) reported: PA passed `--project cf-system-pa-memory` on `cfcf clio docs ingest`, but both ingested docs (`pa-workspace-memory` + `pa-session-pa-...`) ended up in `cf-system-default`. PA then ran `cfcf clio docs edit <id> --project cf-system-pa-memory` to migrate them and reported it "silently no-op-ed" the project move while still applying any `--set-meta` change.
+
+Reproduction confirmed against the user's actual Clio DB:
+- `cfcf clio docs edit <id> --project cf-system-pa-memory` → "Nothing to edit. Pass at least one of --title, --author, --project, --set-meta, --unset-meta." (action's payload-empty guard fired even though `--project` WAS passed)
+- `cfcf clio docs edit <id> --project cf-system-pa-memory --set-meta debug=test` → "Updated document …" but the doc remained in `cf-system-default`; the audit-log diff showed only `metadata` changed, no `projectId`.
+- `cfcf clio docs ingest /tmp/x.md --project cf-system-pa-memory` → ingest's child-default `cf-system-default` won.
+
+**Root cause.** commander.js's option-resolution rule when the same long-name option exists on both a parent and a child command: **the parent's option absorbs the value, leaving the child's `opts` field undefined**. The CLI code at [`packages/cli/src/commands/clio.ts`](../../packages/cli/src/commands/clio.ts) had defined `-p, --project` directly on the `docsCmd` parent (for its default-list action), AND each child subcommand (`ingest`, `edit`, etc.) had its own `--project`. When the user typed `--project X`, commander attached `X` to the parent's hidden opts; the child's action handler saw `opts.project === undefined`.
+
+For ingest, the child had a default of `"cf-system-default"`, so the un-set value silently fell back — no error, just the wrong project. For edit, the child had no default, so the action's "is anything to edit?" guard fired with the misleading "Nothing to edit" message. When the user added `--set-meta` to bypass the guard, the metadata change went through but the project change still didn't.
+
+**Options considered.**
+
+1. **Rename one of the `--project` flags** (e.g. parent → `--scope-project`, child → `--target-project`). Functional but breaks the symmetric CLI naming + bloats the user-facing surface. Rejected.
+2. **Read `opts.project` from both child and parent in each action handler** (`opts.project ?? cmd.parent?.opts().project`). Hacky; every command that nests under `docs` would need this fallback. Rejected.
+3. **Remove the parent-level options on `docsCmd`** so the children's `--project` reach their action handlers cleanly. The cost: `cfcf clio docs` (no subcommand) used to act as a default `list` with `--project`/`--limit` options; after the fix, it prints help and users invoke `cfcf clio docs list ...` explicitly. **Selected.**
+
+**Decided** — option 3. `docsCmd`'s `.option(...).action(listDocs)` block was removed; the explicit `docsCmd.command("list")` (which had the same options redundantly) is now the only way to list. Default-action behaviour for the `cfcf clio docs` parent now falls through to commander's help.
+
+The fix is verified end-to-end against the user's real Clio DB:
+
+```
+$ cfcf clio docs edit <id> --project cf-system-pa-memory
+Updated document <id>
+  project: dbb42f29-820b-4f59-9514-0045fee2081f   ← cf-system-pa-memory uuid
+$ sqlite3 ~/.cfcf/clio.db "SELECT (SELECT name FROM clio_projects WHERE id=d.project_id) FROM clio_documents d WHERE d.id='<id>';"
+cf-system-pa-memory                                ← moved correctly
+```
+
+Audit log now shows the `projectId` diff:
+
+```
+edit-metadata|agent|{"diff":{"projectId":{"before":"<old-uuid>","after":"<new-uuid>"}}}
+```
+
+**Lessons.**
+
+1. **commander.js parent-vs-child option shadowing is a real footgun.** The library matches a long-name option to a command in its lookup chain; if the parent matches first, the parent gets the value. There's no warning, no error — the child's action handler just sees `undefined`. When you add an option to a child and a same-named option already exists on a parent, you've silently changed semantics. **Rule we're adopting**: treat parent-level options as *exclusive* to commands that have no children with overlapping names. Either move the option to the children explicitly, or rename it to avoid the clash.
+
+2. **Default-action subcommand patterns interact badly with shadowing.** The `parent.option(...).action(listAction)` pattern (parent doubles as a default-list action) made the parent define options that any subcommand would also need, creating clashes by construction. The cleaner pattern is: parent has NO action (commander prints help), explicit `.command("list")` carries the list options. Default actions are convenient but expensive to keep correct as the subcommand tree grows.
+
+3. **"Silent no-op" reports deserve hard reproduction before believing the symptom.** PA's report was correct on the failure mode but identified the wrong root cause (claimed it was a "workspace auto-route" overriding the explicit flag). Running the actual command sequence in a debug shell, watching the audit log, and checking commander's parsed-opts shape pinpointed the real issue in ~10 minutes. Don't accept "this command silently no-ops" without seeing what payload actually reaches the server.
+
+**Cross-refs.** Commit ships in iter-6 6.28's debug pass. Regression test at [`packages/cli/src/commands/clio-option-parsing.test.ts`](../../packages/cli/src/commands/clio-option-parsing.test.ts) pins the option-parsing invariants (4 tests covering edit/ingest with and without `--project`).
+
+---
+
 ## 2026-05-07 — Anthropic's third-party-harness policy → adapter expansion via `ollama launch` (item 6.28)
 
 **Context.** Anthropic's Jan→Apr 2026 clarification on subscription OAuth tokens (Consumer Terms §3.7 + the February 2026 written clarification: *"Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted"* + Boris Cherny's 2026-04-04 X post tying subscription limits exclusively to interactive use) made cfcf's unattended iteration loop a textbook violation pattern when running under a Pro/Max subscription. The rule targets the **credential** (subscription OAuth token in any third-party tool / harness / Agent SDK), not the headless-vs-interactive pattern per se — but in practice the unattended `claude -p` path used by cfcf's dev / judge / reflection / documenter roles maps onto exactly that violation. Carve-outs — interactive `claude` CLI, Anthropic's first-party Routines, CI on the user's own repo with `CLAUDE_CODE_OAUTH_TOKEN`, Agent SDK with API-key auth — don't cover the cfcf use case.

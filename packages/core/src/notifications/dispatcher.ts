@@ -32,6 +32,21 @@ export function dispatch(
   event: NotificationEvent,
   config: NotificationConfig | undefined,
 ): Promise<void> {
+  // Global kill-switch (item 6.28 follow-up). Honored by every channel
+  // including macOS / Linux desktop notifications. Useful in:
+  //   - Test suites: set in beforeEach so a fire-and-forget loop that
+  //     races past afterEach can't fire a real desktop notification
+  //     against the user's restored config (the bug that surfaced
+  //     2026-05-08 — `iteration-loop.test.ts > Loop State Persistence`
+  //     leaked a "Loop failed" notification onto the user's desktop).
+  //   - CI / scripted runs: a one-shot env override that doesn't
+  //     require editing the user's saved config.
+  // Recognised values: "1", "true", "yes" (case-insensitive). Anything
+  // else (including unset) leaves dispatch enabled.
+  if (notificationsDisabledByEnv()) {
+    return Promise.resolve();
+  }
+
   if (!config || !config.enabled) {
     return Promise.resolve();
   }
@@ -45,6 +60,14 @@ export function dispatch(
   // slow channel block the others.
   const promises = channels.map((channel) => deliverWithTimeout(channel, event));
   return Promise.allSettled(promises).then(() => void 0);
+}
+
+/** Read `CFCF_DISABLE_NOTIFICATIONS` env var; truthy values disable dispatch. */
+function notificationsDisabledByEnv(): boolean {
+  const raw = process.env.CFCF_DISABLE_NOTIFICATIONS;
+  if (!raw) return false;
+  const normalised = raw.trim().toLowerCase();
+  return normalised === "1" || normalised === "true" || normalised === "yes";
 }
 
 /** Look up the channel implementations for a given event type. */

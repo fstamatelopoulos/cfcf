@@ -9,6 +9,8 @@ import {
   writeArchitectInstructions,
   resetArchitectSignals,
   parseArchitectSignals,
+  countPlanItems,
+  diagnoseFailedArchitectSignals,
 } from "./architect-runner.js";
 import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 
@@ -120,5 +122,337 @@ describe("parseArchitectSignals", () => {
     );
     const result = await parseArchitectSignals(TEST_DIR);
     expect(result).toBeNull();
+  });
+
+  // Regression: 2026-05-08 — parseArchitectSignals used to reject ANY
+  // submission with all-empty supporting fields as "untouched template",
+  // which conflated two genuinely different cases:
+  //   (a) The agent never edited the file. Reject.
+  //   (b) The agent legitimately found nothing to add (a clean re-review
+  //       of a complete project). With readiness == READY or
+  //       SCOPE_COMPLETE, empty arrays + null recommended_approach are
+  //       the correct semantic answer.
+  // Surfaced when qwen3-coder ran the SA on a calc workspace whose plan
+  // was 100% complete; qwen produced READY + empty arrays (correct) and
+  // cfcf paused with "signal file missing or malformed" (incorrect).
+  // Fix: only reject empty supporting fields when readiness is one of
+  // the values that semantically demand explanation (NEEDS_REFINEMENT,
+  // BLOCKED). The four tests below pin both halves of the contract.
+
+  test("accepts READY with empty supporting fields (clean re-review verdict)", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+      // recommended_approach intentionally omitted — equivalent to null
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("READY");
+  });
+
+  test("accepts SCOPE_COMPLETE with empty supporting fields", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "SCOPE_COMPLETE",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("SCOPE_COMPLETE");
+  });
+
+  test("rejects NEEDS_REFINEMENT with empty fields (untouched template)", async () => {
+    // The cfcf template ships with `readiness: "NEEDS_REFINEMENT"` + all
+    // empty arrays + null recommended_approach. If we get this exact
+    // shape back, the agent never touched the file.
+    const signals: ArchitectSignals = {
+      readiness: "NEEDS_REFINEMENT",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).toBeNull();
+  });
+
+  test("rejects BLOCKED with empty fields (template-shaped)", async () => {
+    // BLOCKED with no gaps/risks/suggestions is suspicious — if the
+    // agent really meant BLOCKED, it should explain why. Treat as
+    // template-untouched.
+    const signals: ArchitectSignals = {
+      readiness: "BLOCKED",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).toBeNull();
+  });
+
+  // Regression: 2026-05-08 — agents (qwen3-coder specifically) returning
+  // READY for a fully-shipped project where the right answer is
+  // SCOPE_COMPLETE. Defensive auto-promotion in parseArchitectSignals
+  // checks plan.md and overrides READY → SCOPE_COMPLETE when there are
+  // completed items and zero pending. Tests below pin the boundary
+  // conditions.
+
+  test("promotes READY → SCOPE_COMPLETE when plan.md has all completed items + zero pending", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "plan.md"),
+      "# Plan\n\n- [x] Done item one\n- [x] Done item two\n",
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("SCOPE_COMPLETE");
+  });
+
+  test("does NOT promote READY when plan.md still has pending items", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "plan.md"),
+      "# Plan\n\n- [x] Done\n- [ ] Pending one\n- [ ] Pending two\n",
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("READY");
+  });
+
+  test("does NOT promote READY when plan.md is empty (first-run mode)", async () => {
+    // No `[x]` items + no `[ ]` items = no plan yet (first-run
+    // architect just scaffolded an empty stub, or the file is
+    // missing). Don't auto-promote — we'd be inferring SCOPE_COMPLETE
+    // from absence-of-data which is not safe.
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "plan.md"),
+      "# Plan\n\nTodo list will go here.\n",
+      "utf-8",
+    );
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("READY");
+  });
+
+  test("does NOT promote READY when plan.md is missing", async () => {
+    const signals: ArchitectSignals = {
+      readiness: "READY",
+      gaps: [],
+      suggestions: [],
+      risks: [],
+    };
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify(signals),
+      "utf-8",
+    );
+    // Don't create plan.md
+    const result = await parseArchitectSignals(TEST_DIR);
+    expect(result).not.toBeNull();
+    expect(result!.readiness).toBe("READY");
+  });
+
+  test("does NOT touch SCOPE_COMPLETE / NEEDS_REFINEMENT / BLOCKED verdicts", async () => {
+    // Auto-promotion only fires when readiness === "READY". Other
+    // verdicts pass through unchanged regardless of plan.md state.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "plan.md"),
+      "# Plan\n\n- [x] Done one\n- [x] Done two\n",
+      "utf-8",
+    );
+    for (const r of ["SCOPE_COMPLETE", "NEEDS_REFINEMENT", "BLOCKED"] as const) {
+      const signals: ArchitectSignals = {
+        readiness: r,
+        gaps: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy gap"],
+        suggestions: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy suggestion"],
+        risks: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy risk"],
+      };
+      await writeFile(
+        join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+        JSON.stringify(signals),
+        "utf-8",
+      );
+      const result = await parseArchitectSignals(TEST_DIR);
+      expect(result).not.toBeNull();
+      expect(result!.readiness).toBe(r);
+    }
+  });
+});
+
+describe("diagnoseFailedArchitectSignals (item 6.31 follow-up — pause-message diagnostics)", () => {
+  test("returns 'missing' when signals file doesn't exist", async () => {
+    // Don't create the file
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("missing");
+  });
+
+  test("returns 'malformed_json' when file exists but isn't valid JSON", async () => {
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      "not json at all { broken",
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("malformed_json");
+  });
+
+  test("returns 'missing_readiness' when JSON parses but readiness field is absent", async () => {
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({ gaps: ["something"], suggestions: [] }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("missing_readiness");
+  });
+
+  test("returns 'untouched_template' when file is the literal template (NEEDS_REFINEMENT + all empty + null approach)", async () => {
+    // Exact shape that ships in cfcf's template + that opencode-ollama
+    // produced on 2026-05-08 when it hung mid-session.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "NEEDS_REFINEMENT",
+        gaps: [],
+        suggestions: [],
+        risks: [],
+        recommended_approach: null,
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("untouched_template");
+  });
+
+  test("returns 'valid' when the file is actually a valid signals payload (race-condition guard)", async () => {
+    // Caller calls this only when parseArchitectSignals returned null,
+    // but the file might have appeared between the two calls. Verifying
+    // we don't lie about a now-valid file.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "READY",
+        gaps: [],
+        suggestions: ["Add docs"],
+        risks: [],
+        recommended_approach: "Use Express",
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("valid");
+  });
+
+  test("does NOT classify a NEEDS_REFINEMENT-with-real-content as untouched-template", async () => {
+    // If the agent reported NEEDS_REFINEMENT with actual gaps/suggestions,
+    // that's a legitimate verdict — not a template.
+    await writeFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
+      JSON.stringify({
+        readiness: "NEEDS_REFINEMENT",
+        gaps: ["Missing auth flow specification"],
+        suggestions: [],
+        risks: [],
+      }),
+      "utf-8",
+    );
+    const result = await diagnoseFailedArchitectSignals(TEST_DIR);
+    expect(result).toBe("valid");
+  });
+});
+
+describe("countPlanItems", () => {
+  test("counts standard `- [ ]` and `- [x]` checkboxes", () => {
+    const plan = `# Plan
+
+## Iteration 1
+- [x] First item
+- [x] Second item
+
+## Iteration 2
+- [ ] Pending one
+- [ ] Pending two
+- [x] Already done in iter 2
+`;
+    expect(countPlanItems(plan)).toEqual({ pending: 2, completed: 3 });
+  });
+
+  test("accepts capital X for completed items", () => {
+    expect(countPlanItems("- [X] Done\n- [x] Also done\n")).toEqual({ pending: 0, completed: 2 });
+  });
+
+  test("accepts `*` and `+` bullet markers", () => {
+    expect(countPlanItems("* [x] one\n+ [ ] two\n- [x] three\n")).toEqual({ pending: 1, completed: 2 });
+  });
+
+  test("ignores non-checkbox lines", () => {
+    const plan = `# Plan
+
+Regular text lines aren't counted.
+And [bracketed text] without checkboxes isn't either.
+- Plain bullet, no checkbox
+- [x] This counts
+`;
+    expect(countPlanItems(plan)).toEqual({ pending: 0, completed: 1 });
+  });
+
+  test("returns zeros for an empty plan", () => {
+    expect(countPlanItems("")).toEqual({ pending: 0, completed: 0 });
+    expect(countPlanItems("# Plan\n\nNo checkboxes here.\n")).toEqual({ pending: 0, completed: 0 });
   });
 });

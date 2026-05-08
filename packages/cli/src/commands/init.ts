@@ -13,6 +13,8 @@ import {
   createDefaultConfig,
   getConfigPath,
   detectAvailableAgents,
+  detectOllama,
+  listOllamaModels,
   getAdapterNames,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_PAUSE_EVERY,
@@ -22,6 +24,8 @@ import {
   isEmbedderCached,
   LocalClio,
   resolveModelsForAdapter,
+  isClaudeCodeHarnessRisk,
+  CLAUDE_CODE_HARNESS_WARNING,
 } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { createInterface } from "readline";
@@ -77,6 +81,25 @@ export function registerInitCommand(program: Command): void {
         }
       }
 
+      // Detect ollama (item 6.28). Probed independently of the agent
+      // adapters because ollama isn't itself a coding agent — it's a
+      // local model server that the *-ollama adapters wrap. Pulled
+      // models are captured for the model-picker source on those
+      // adapters; the list may be empty (ollama installed but no
+      // models pulled), in which case the picker falls back to the
+      // custom-model-name sentinel.
+      const ollamaResult = await detectOllama();
+      let ollamaModels: string[] = [];
+      if (ollamaResult.available) {
+        ollamaModels = await listOllamaModels();
+        const modelSummary = ollamaModels.length === 0
+          ? "no models pulled yet"
+          : `${ollamaModels.length} local model${ollamaModels.length === 1 ? "" : "s"}`;
+        console.log(`  ✓ Ollama (${ollamaResult.version}; ${modelSummary})`);
+      } else {
+        console.log(`  ✗ Ollama -- ${ollamaResult.error}`);
+      }
+
       // Check git
       console.log();
       try {
@@ -115,8 +138,8 @@ export function registerInitCommand(program: Command): void {
       // is still detected on this machine (a previously-installed agent
       // may have been removed) and fall back to the bootstrap default
       // for any role pointing at an unavailable agent.
-      let config: CfcfGlobalConfig = createDefaultConfig(available);
-      const fresh = createDefaultConfig(available); // kept for fallback
+      let config: CfcfGlobalConfig = createDefaultConfig(available, ollamaModels);
+      const fresh = createDefaultConfig(available, ollamaModels); // kept for fallback
       if (exists && opts.force) {
         const existing = await readConfig();
         if (existing) {
@@ -124,6 +147,10 @@ export function registerInitCommand(program: Command): void {
           // Refresh the detected-agents list (may have changed since
           // last init).
           config.availableAgents = available;
+          // Refresh the ollama-models snapshot too (item 6.28). When
+          // the user has pulled / removed models since the last init,
+          // the *-ollama model picker should surface the current set.
+          config.availableOllamaModels = ollamaModels.length > 0 ? ollamaModels : undefined;
           // Sanity-check each role's adapter against current detection.
           // If the user's previously-picked dev agent is gone, fall
           // back to the bootstrap default rather than carrying a stale
@@ -335,6 +362,73 @@ export function registerInitCommand(program: Command): void {
         (config.autoDocumenter ?? true) ? "yes" : "no",
       );
       config.autoDocumenter = autoDoc.toLowerCase() === "yes" || autoDoc.toLowerCase() === "y";
+
+      // Two related callouts surfaced after every role + model pick +
+      // auto* flag is settled (item 6.28). Same logic as the web UI's
+      // <HarnessPolicyWarning> component (kept in sync).
+      //
+      //   1. ⚠ policy-grade — claude-code (direct) on unattended role.
+      //      Anthropic's third-party-harness rule applies. See
+      //      docs/decisions-log.md (2026-05-07) for the policy framing.
+      //   2. ℹ log-visibility — claude-code-ollama on unattended role.
+      //      Policy-clean (no Anthropic credential), but `claude -p`
+      //      buffers stdout for the entire run regardless. UX caveat.
+      //
+      // Architect is conditional on autoReviewSpecs=true for both
+      // (otherwise it runs only when the user manually invokes
+      // `cfcf review`, which is interactive scope).
+      const harnessRiskyRoles: string[] = [];
+      const bufferingRoles: string[] = [];
+      const checkRole = (roleLabel: string, adapter: string) => {
+        if (isClaudeCodeHarnessRisk(adapter)) harnessRiskyRoles.push(roleLabel);
+        if (adapter === "claude-code-ollama") bufferingRoles.push(roleLabel);
+      };
+      checkRole("dev", config.devAgent.adapter);
+      checkRole("judge", config.judgeAgent.adapter);
+      checkRole("documenter", config.documenterAgent.adapter);
+      if (config.reflectionAgent) {
+        checkRole("reflection", config.reflectionAgent.adapter);
+      }
+      if (config.autoReviewSpecs) {
+        checkRole("architect (because autoReviewSpecs=true)", config.architectAgent.adapter);
+      }
+
+      if (harnessRiskyRoles.length > 0) {
+        console.log();
+        console.log("⚠  Anthropic third-party-harness policy notice");
+        console.log("  ---------------------------------------------");
+        console.log(`  ${CLAUDE_CODE_HARNESS_WARNING}`);
+        console.log();
+        console.log(`  Affected role${harnessRiskyRoles.length > 1 ? "s" : ""}: ${harnessRiskyRoles.join(", ")}`);
+        console.log();
+        console.log("  Compliant alternatives for unattended roles:");
+        if (available.includes("codex")) console.log("    - codex (OpenAI's policy explicitly endorses CLI automation; streams progress live)");
+        if (available.includes("claude-code-ollama")) console.log("    - claude-code-ollama (Claude Code via local ollama models — policy-clean but buffers logs; see info note below)");
+        if (available.includes("opencode-ollama")) console.log("    - opencode-ollama (Opencode via local ollama models; streams live)");
+        if (available.includes("opencode")) console.log("    - opencode (uses your own provider auth via `opencode auth login`; streams live)");
+        console.log();
+        console.log(`  Re-run \`cfcf init --force\` or \`cfcf config edit\` to switch.`);
+        console.log();
+      }
+
+      if (bufferingRoles.length > 0) {
+        console.log();
+        console.log("ℹ  Log-visibility note: claude-code-ollama buffers during the run");
+        console.log("  --------------------------------------------------------------");
+        console.log("  claude-code-ollama is policy-clean (no Anthropic credential involved");
+        console.log("  — local ollama serves the model), but `claude -p` still buffers stdout");
+        console.log("  for the entire run regardless of which model is behind it. The iteration");
+        console.log("  log file stays empty during the run and dumps the final response only");
+        console.log("  when the agent exits. This is a UX caveat, not a correctness issue.");
+        console.log();
+        console.log(`  Affected role${bufferingRoles.length > 1 ? "s" : ""}: ${bufferingRoles.join(", ")}`);
+        console.log();
+        console.log("  For live progress in the log file, prefer codex (streams natively in");
+        console.log("  exec mode) or the opencode adapters. Keep claude-code-ollama if you");
+        console.log("  specifically prefer Claude's tool-call format and don't need live");
+        console.log("  monitoring. See `cfcf help anthropic-policy` for the full breakdown.");
+        console.log();
+      }
 
       // Notifications
       console.log();

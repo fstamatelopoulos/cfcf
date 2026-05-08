@@ -778,20 +778,25 @@ function registerUnder(root: Command): void {
     console.log(`Tip: --include-deleted to surface tombstones; --deleted-only for the trash-bin view; --json for raw records.`);
   }
 
-  // Default action (no subcommand) = list. Mirrors `projects` defaulting to list.
-  docsCmd
-    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
-    .option("-n, --limit <n>", "Max docs to return (default 50, max 500)", (v) => parseInt(v, 10))
-    .option("--offset <n>", "Pagination offset (default 0)", (v) => parseInt(v, 10))
-    .option("--include-deleted", "Include soft-deleted docs alongside live ones")
-    .option(
-      "--deleted-only",
-      "Show ONLY soft-deleted docs (trash-bin view). Mutually exclusive with --include-deleted; this flag wins.",
-    )
-    .option("--json", "Emit raw JSON")
-    .action(listDocs);
+  // Surfaced 2026-05-08: previously this block also added a default
+  // action via `docsCmd.option(...).action(listDocs)`, so `cfcf clio
+  // docs` (no subcommand) ran list. That worked, BUT the parent-level
+  // `-p, --project` option silently shadowed the SAME-NAMED options on
+  // the `ingest` and `edit` subcommands — commander.js attributes
+  // matching long-name options to the parent when both parent and
+  // child define them. The visible failure was `cfcf clio docs ingest
+  // --project cf-system-pa-memory` ingesting into cf-system-default
+  // instead, and `cfcf clio docs edit <id> --project X` silently
+  // no-op-ing the project move while still applying any --set-meta.
+  // The fix is to remove the parent-level options so the child
+  // commands' --project flags reach their action handlers cleanly.
+  // `cfcf clio docs` (no subcommand) now prints help; users who want
+  // the list use `cfcf clio docs list` explicitly. See the
+  // 2026-05-08 decisions-log entry for the full diagnosis.
 
-  // Explicit `list` subcommand too, in case users type it out.
+  // Explicit `list` subcommand. (Previously also wired as the default
+  // action on `docsCmd` itself, but that caused the option-shadowing
+  // bug above.)
   docsCmd
     .command("list")
     .description("List Clio documents (newest first). Soft-deleted docs are excluded by default.")

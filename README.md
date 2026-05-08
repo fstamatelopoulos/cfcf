@@ -28,8 +28,11 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
 - **[Bun](https://bun.sh/)** v1.3+ — cfcf's runtime. The curl-bash installer below installs Bun for you if it's missing, so this is effectively automatic for first-time users.
 - At least one supported AI coding agent (cfcf detects what's installed during `cfcf init`):
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
-  - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
-  - More will be supported in the future, I just started with the dev agents I actively use
+  - **[Codex CLI](https://github.com/openai/codex)** (OpenAI) — recommended for the unattended iteration roles (dev / judge / reflection / documenter); streams progress live to log files
+  - **[Opencode](https://opencode.ai)** (sst.dev) — alternative to Codex; runs against your provider's API or via local ollama models
+  - **[Ollama](https://ollama.com)** — optional, enables `claude-code-ollama` and `opencode-ollama` adapters that drive the agent CLI against locally-served models
+
+> ⚠️ **Anthropic policy + log-visibility heads-up.** `claude-code` (direct, talking to Anthropic's API/subscription) is **only recommended for interactive roles**: Product Architect (`cfcf spec`), Help Assistant (`cfcf help assistant`), and manually-invoked Solution Architect (`cfcf review`). Anthropic's third-party-harness policy restricts subscription OAuth to interactive use; cf²'s unattended dev / judge / reflection / documenter loop is the violation pattern the rule targets. **`claude-code-ollama` is policy-clean** (no Anthropic credential involved — local ollama serves the model) but shares Claude Code's `-p` stdout-buffering behaviour: log files stay silent during the entire run and dump the final response only when the agent exits. If you want live progress monitoring, use `codex` or the opencode adapters for unattended roles. See [`docs/guides/anthropic-policy.md`](docs/guides/anthropic-policy.md) for the full breakdown + the recommended adapter-per-role table. cf² surfaces warnings in `cfcf init` and the web UI Settings / workspace Config when these recommendations are violated; neither blocks the choice.
 
 cfcf is distributed as a standard npm package (`@cerefox/codefactory`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/codefactory-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
 
@@ -50,13 +53,33 @@ powershell -c "irm bun.sh/install.ps1 | iex"
 
 ### Install an AI Agent
 
+cfcf needs **at least one** of the supported coding agents below, but `claude-code` alone isn't enough if you want to avoid Anthropic's third-party-harness policy on your unattended iteration loop. The four roles (dev / judge / reflection / documenter) need to run on a non-Anthropic-OAuth path: `codex`, `opencode`, or one of the `*-ollama` variants. **Recommended minimum**: install `claude-code` (for the interactive PA / HA roles) **plus one** of `codex` / `opencode` / `ollama` (for the unattended roles). See [`docs/guides/anthropic-policy.md`](docs/guides/anthropic-policy.md) for the full role-to-adapter mapping.
+
 ```bash
-# Claude Code (requires Anthropic account)
+# Claude Code (Anthropic) — required if you use PA / HA / manual SA, optional otherwise.
+# Account: free Pro account works for interactive use; subscription OAuth is restricted to interactive.
 npm install -g @anthropic-ai/claude-code
 
-# Codex CLI (requires OpenAI account)
+# Codex CLI (OpenAI) — recommended unattended-roles default. Streams progress live to log files.
+# Account: ChatGPT Plus / Pro / Business, OR API key (the API-key path is policy-clean for harness use).
 npm install -g @openai/codex
+
+# Opencode (sst.dev) — alternative to Codex for the unattended roles. Provider-agnostic
+# (Anthropic API, OpenAI, OpenRouter, ollama). Run `opencode auth login` after install
+# to wire up your provider of choice. Streams progress live to log files.
+npm install -g opencode-ai
+
+# Ollama — optional, enables the `claude-code-ollama` and `opencode-ollama` adapters
+# that drive Claude Code or Opencode against locally-served models (no cloud calls).
+# After install, `ollama pull qwen2.5-coder:32b` pulls a coder-tuned model that works
+# well as an iteration driver. Note: Claude Code via ollama still buffers stdout
+# (silent log during run); see anthropic-policy.md for the trade-off.
+brew install ollama         # macOS
+# OR
+curl -fsSL https://ollama.com/install.sh | sh   # Linux
 ```
+
+cfcf detects what's installed during `cfcf init` and only offers adapters that have their underlying CLI on PATH. The `cfcf doctor` command confirms which adapters are usable post-install.
 
 ## Install (end users)
 
@@ -134,6 +157,7 @@ bun run dev:cli -- <command>
 For changes that touch the install flow (`scripts/install.sh`, `scripts/build-cli.sh`, post-install banners, `cfcf self-update`, etc.), the canonical local-test workflow is:
 
 ```bash
+bun install                            # one-time, on a fresh clone (populates node_modules/.bin so the build's `tsc -b && vite build` step finds its tools)
 ./scripts/local-install.sh             # builds, installs, verifies — same flow an end user gets via curl-bash
 cfcf self-update --yes                 # restores the published version when you're done
 ```

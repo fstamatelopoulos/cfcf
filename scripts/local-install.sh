@@ -90,6 +90,32 @@ else
 fi
 echo
 
+# ── Pre-flight: dev tree must be installed ─────────────────────────────
+#
+# The build pipeline (stage-dist → build-cli → packages/web's
+# `tsc -b && vite build`) needs `tsc`, `vite`, and the rest of the
+# workspace dev tooling on PATH via `node_modules/.bin/`. On a fresh
+# clone the workspace tree is empty, so the build crashes ~200 lines
+# deep with `tsc: command not found`. Detecting it up front gives the
+# user a clean, actionable error instead of a confusing crash.
+#
+# Two reasons we don't auto-run `bun install` here:
+#   (1) Implicit network calls in a build script are surprising —
+#       contributors should be able to predict what happens.
+#   (2) `bun install` may pick a different lockfile resolution than
+#       the user expects on first run; explicit is safer.
+if [[ ! -d "$REPO_DIR/node_modules" ]]; then
+  echo "[local-install] ✗ workspace dependencies not installed (no node_modules at $REPO_DIR)" >&2
+  echo "[local-install]" >&2
+  echo "[local-install]   This script needs the dev tree to be set up first. Run:" >&2
+  echo "[local-install]" >&2
+  echo "[local-install]     bun install" >&2
+  echo "[local-install]" >&2
+  echo "[local-install]   (Use bun, not npm — cfcf workspaces use Bun's workspace:* protocol" >&2
+  echo "[local-install]    which npm doesn't understand. See README.md → For developers.)" >&2
+  exit 1
+fi
+
 # ── Step 1: clean (default) ────────────────────────────────────────────
 
 if (( DO_CLEAN )); then

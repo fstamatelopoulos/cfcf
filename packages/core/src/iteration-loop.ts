@@ -300,7 +300,17 @@ export function resolveLoopConfig(
 /**
  * Decide whether reflection should run after the judge completes.
  *
- * Rules (research doc §2.2):
+ * Rules (research doc §2.2 + 2026-05-08 should-continue-false fix):
+ *   - **Skip when `should_continue: false`** — the loop is about to
+ *     terminate; reflection's purpose is to inform the *next*
+ *     iteration, and there is no next iteration. This bypass overrides
+ *     `reflection_needed` regardless of value because there's nothing
+ *     productive reflection could do on a loop that's already ending.
+ *     Surfaced 2026-05-08 with qwen3-coder on a fully-shipped calc
+ *     workspace: judge correctly set should_continue=false but also
+ *     set reflection_needed=true (defaulting per the prompt's
+ *     "when in doubt" rule). Reflection ran on top of the already-
+ *     ending loop and burned tokens with nothing to add.
  *   - Run reflection when `judge.reflection_needed` is `true` or missing.
  *   - Skip reflection when `judge.reflection_needed` is `false` AND the
  *     number of consecutive skips has not yet reached the safeguard
@@ -309,6 +319,10 @@ export function resolveLoopConfig(
  *   - If judge signals are missing entirely (judge crashed / malformed
  *     output), skip reflection too -- the harness will already pause
  *     on the missing signals and retry the judge on resume.
+ *
+ * The safeguard ceiling does NOT apply to the should_continue=false
+ * bypass — those iterations are by definition non-consecutive (the
+ * loop ends, the count resets to zero on the next loop start).
  */
 export function shouldRunReflection(
   judgeSignals: JudgeSignals | null,
@@ -317,6 +331,17 @@ export function shouldRunReflection(
 ): { run: boolean; reason: string } {
   if (!judgeSignals) {
     return { run: false, reason: "judge signals missing -- harness will pause before reflection" };
+  }
+  // Loop is ending → reflection has no next iteration to inform.
+  // Bypass takes precedence over reflection_needed because the agent
+  // can't always be relied on to set reflection_needed=false here
+  // (qwen3-coder defaulted reflection_needed=true even when paired
+  // with should_continue=false; surfaced 2026-05-08).
+  if (judgeSignals.should_continue === false) {
+    return {
+      run: false,
+      reason: "judge said should_continue=false; loop is ending, no next iteration for reflection to inform",
+    };
   }
   const ceiling = workspace.reflectSafeguardAfter ?? 3;
   const skipped = state.iterationsSinceLastReflection ?? 0;
@@ -780,6 +805,14 @@ export function buildPreLoopBlockReason(
   reviewError: string | undefined,
   readiness: string | undefined,
   gate: string,
+  /**
+   * Diagnostic info about why signals parsing failed (item 6.31 follow-up,
+   * 2026-05-08). Optional — when omitted, the generic "missing or
+   * malformed" message is used. When provided, the message is tailored
+   * to the specific failure mode (file missing / untouched template /
+   * malformed JSON) so the user has actionable diagnostics.
+   */
+  signalFailure?: import("./architect-runner.js").SignalFailureReason,
 ): string {
   if (reviewError) {
     return `The Solution Architect's pre-loop review failed before it could produce a verdict (${reviewError}). Check the architect log for details, then resume to retry, or pick "Stop loop now" to abandon.`;
@@ -808,7 +841,24 @@ export function buildPreLoopBlockReason(
   })();
 
   if (!readiness) {
-    return `The Solution Architect reviewed your Problem Pack but didn't produce a clear readiness verdict (signal file missing or malformed). This usually means the review run hit an error mid-way — check the architect log. To proceed: edit problem-pack/problem.md + success.md to address any obvious issues, then pick "Continue" to retry the review.`;
+    // Tailored diagnostic per failure mode (item 6.31 follow-up,
+    // 2026-05-08). Pre-fix, all four cases collapsed to the generic
+    // "missing or malformed" message — which sounded like a cfcf
+    // validator bug when the actual cause was usually an agent that
+    // hung or crashed before writing its verdict (the case we hit
+    // dogfooding opencode-ollama).
+    switch (signalFailure) {
+      case "missing":
+        return `The Solution Architect's signals file (cfcf-docs/cfcf-architect-signals.json) is missing. The agent likely failed to start or crashed before producing any output. Check the architect log file for the underlying error. To proceed: pick "Continue" to retry the review (a hung process from a previous attempt may need to be killed first — see \`cfcf doctor\` for orphan-process diagnostics), or pick "Stop loop now" to abandon.`;
+      case "untouched_template":
+        return `The Solution Architect's signals file exists but contains the unedited template (readiness="NEEDS_REFINEMENT" + all empty arrays + null approach). The agent process started, scaffolded the file, then never wrote a verdict — usually because it hung or crashed mid-run. Most common with smaller / non-coder local models or with adapters that buffer silently on errors (e.g. opencode-ollama; see \`docs/guides/anthropic-policy.md\` § opencode-ollama stability). Check the architect log file. To proceed: pick "Continue" to retry (consider switching the architect to a more reliable adapter like \`codex\` or \`claude-code-ollama\` first), or pick "Stop loop now" to abandon.`;
+      case "malformed_json":
+        return `The Solution Architect's signals file is not valid JSON. The agent wrote something but it can't be parsed. This usually means the model produced garbled output mid-token — common with small ollama models on long generations. Check the architect log file for the agent's actual output. To proceed: pick "Continue" to retry (consider a coder-tuned model like \`qwen2.5-coder\` or \`deepseek-coder-v2\` if the current model is general-purpose), or pick "Stop loop now" to abandon.`;
+      case "missing_readiness":
+        return `The Solution Architect's signals file is valid JSON but missing the \`readiness\` field — the agent didn't follow the schema. To proceed: pick "Continue" to retry (the new attempt may succeed; if the model consistently misses the schema, switch to a different adapter), or pick "Stop loop now".`;
+      default:
+        return `The Solution Architect reviewed your Problem Pack but didn't produce a clear readiness verdict (signal file missing or malformed). This usually means the review run hit an error mid-way — check the architect log. To proceed: pick "Continue" to retry the review or "Stop loop now" to abandon.`;
+    }
   }
 
   const verdict = readiness;
@@ -1158,10 +1208,16 @@ async function runLoop(
       state.phase = "paused";
       state.pauseReason =
         readiness === "SCOPE_COMPLETE" ? "scope_complete" : "anomaly";
+      // When readiness is missing, classify why so the pause message
+      // can give specific diagnostics (item 6.31 follow-up 2026-05-08).
+      const signalFailure = !readiness && !reviewError
+        ? await (await import("./architect-runner.js")).diagnoseFailedArchitectSignals(workspace.repoPath)
+        : undefined;
       const reason = buildPreLoopBlockReason(
         reviewError,
         readiness,
         loopCfg.readinessGate,
+        signalFailure,
       );
       const questions = reviewRes?.signals?.gaps?.slice(0, 5) ?? [];
       state.pendingQuestions = questions.length ? questions : [reason];

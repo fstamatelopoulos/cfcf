@@ -3,7 +3,12 @@
  */
 
 import type { Command } from "commander";
-import { configExists, readConfig, getConfigPath } from "@cfcf/core";
+import {
+  configExists,
+  readConfig,
+  getConfigPath,
+  isClaudeCodeHarnessRisk,
+} from "@cfcf/core";
 import { formatAgent } from "../format.js";
 
 export function registerConfigCommands(program: Command): void {
@@ -52,6 +57,29 @@ export function registerConfigCommands(program: Command): void {
       console.log(`Cleanup merged:    ${cfg.cleanupMergedBranches ? "yes (delete iteration branches after merge)" : "no (keep for audit)"}`);
       console.log(`Permissions:       ${cfg.permissionsAcknowledged ? "acknowledged" : "not acknowledged"}`);
       console.log(`Available agents:  ${cfg.availableAgents.join(", ") || "none detected"}`);
+      if (cfg.availableOllamaModels && cfg.availableOllamaModels.length > 0) {
+        const summary = cfg.availableOllamaModels.length <= 5
+          ? cfg.availableOllamaModels.join(", ")
+          : `${cfg.availableOllamaModels.slice(0, 5).join(", ")}, +${cfg.availableOllamaModels.length - 5} more`;
+        console.log(`Ollama models:     ${summary}`);
+      }
+
+      // item 6.28 — surface a one-line harness-policy warning when
+      // claude-code is configured for any unattended role. Mirrors
+      // the longer block in `cfcf init`'s post-pick output but kept
+      // terse here because `config show` is informational not setup.
+      const risky: string[] = [];
+      if (isClaudeCodeHarnessRisk(cfg.devAgent.adapter)) risky.push("dev");
+      if (isClaudeCodeHarnessRisk(cfg.judgeAgent.adapter)) risky.push("judge");
+      if (isClaudeCodeHarnessRisk(cfg.documenterAgent.adapter)) risky.push("documenter");
+      if (cfg.reflectionAgent && isClaudeCodeHarnessRisk(cfg.reflectionAgent.adapter)) risky.push("reflection");
+      if (cfg.autoReviewSpecs && isClaudeCodeHarnessRisk(cfg.architectAgent.adapter)) risky.push("architect (autoReviewSpecs=true)");
+      if (risky.length > 0) {
+        console.log();
+        console.log(`⚠  Anthropic harness-policy notice: claude-code in use for ${risky.join(", ")}.`);
+        console.log(`   See \`cfcf help anthropic-policy\` for compliant alternatives.`);
+      }
+
       if (cfg.notifications) {
         console.log(`Notifications:    ${cfg.notifications.enabled ? "enabled" : "disabled"}`);
         if (cfg.notifications.enabled) {

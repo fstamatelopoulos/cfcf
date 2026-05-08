@@ -9,7 +9,20 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Item 6.28 (foundation): adapter expansion for Anthropic harness policy
+
+Anthropic's Jan→Apr 2026 third-party-harness policy clarification (Consumer Terms §3.7 + Boris Cherny's 2026-04-04 X post) makes the unattended cfcf iteration loop running `claude -p` under a Pro/Max subscription a textbook violation pattern. This release adds the backend foundation for compliant alternatives — three new agent adapters plus ollama detection plus a CLI warning when Claude Code is picked for an unattended role. Web-UI surfaces and the docs sweep follow in subsequent commits.
+
+- **New adapter — `opencode`** (direct): runs `opencode run [--model provider/model] <prompt>`. Instruction filename `AGENTS.md`. Uses your own `opencode auth login` provider config; cfcf doesn't surface a model list (the picker shows "(adapter default)" + the custom-name sentinel from 6.26 instead).
+- **New adapter — `claude-code-ollama`**: wraps Claude Code via `ollama launch claude --model <local> --yes -- <claude-flags>`. Requires both `ollama` and `claude` on PATH. Instruction filename `CLAUDE.md`. Models picker is sourced from `ollama list`. No subscription OAuth involved — ollama implements the Anthropic Messages API surface itself.
+- **New adapter — `opencode-ollama`**: same wrapper for opencode. Instruction filename `AGENTS.md`. Models picker is sourced from `ollama list`.
+- **Ollama detection** at `cfcf init` / `cfcf config edit` time: `ollama --version` + `ollama list` (first column parsed). Snapshot persisted on `CfcfGlobalConfig.availableOllamaModels`. The model picker for `*-ollama` adapters reads from there.
+- **Anthropic-policy warning** in `cfcf init`: when the user picks `claude-code` for an unattended role (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`), a consolidated warning block names the affected role(s), surfaces the compliant alternatives that are detected on this machine, and points at `docs/guides/anthropic-policy.md`. Interactive roles (Product Architect via `cfcf spec`, Help Assistant via `cfcf help assistant`, manually-invoked Solution Architect via `cfcf review`) do NOT trigger the warning — those take over the user's TUI directly, within Anthropic's allowed scope.
+- **Type-system extension**: `AgentAdapter` gains an optional `modelSource` field (`"seed"` | `"ollama"` | `"custom"`; defaults to `"seed"` for back-compat). `resolveModelsForAdapter()` routes by this field — ollama adapters pull from `availableOllamaModels`, custom returns `[]` (picker still has the default + custom-name fallback), seed preserves the 6.26 `agentModels` override path.
+
+Tests: 53 new unit tests added (registry coverage, `buildCommand` shapes including the mandatory `--` separator and `--yes` flag for unattended runs, `isClaudeCodeHarnessRisk` matrix, `availableOllamaModels` round-trip through config). All 645 core tests pass; no regressions.
+
+See `docs/decisions-log.md` 2026-05-07 for the policy framing + the four options considered + the lessons.
 
 ## [0.19.0] -- 2026-05-04
 

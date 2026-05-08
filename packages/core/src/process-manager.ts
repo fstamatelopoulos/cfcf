@@ -57,18 +57,35 @@ export async function spawnProcess(opts: ProcessOptions): Promise<ManagedProcess
     logWriter = Bun.file(opts.logFile).writer();
   }
 
+  // `detached: true` puts the spawned process (and its descendants) in
+  // their own process group / session. That lets us kill the whole
+  // subtree on shutdown via `process.kill(-pgid, signal)` rather than
+  // just the immediate child. Item 6.31 (2026-05-08): without this,
+  // wrapper scripts like `ollama launch <agent>` would die from SIGTERM
+  // but leave the wrapped agent (e.g. `claude`) running as an orphan,
+  // holding ollama's model serializer until it timed out (10 min).
+  // Surfaced when `cfcf server stop && cfcf server start` accumulated
+  // multiple zombie agents that wedged the next loop's API call queue.
   const proc = Bun.spawn([opts.command, ...opts.args], {
     cwd: opts.cwd,
     env: { ...process.env, ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
+    // Spawn into a new process group on Unix (Bun calls setsid).
+    // Without this, sending SIGTERM to `proc.pid` only signals the
+    // immediate child; descendants persist as orphans.
+    // See: https://bun.sh/docs/api/spawn#options.detached
+    // (Windows: process groups behave differently; Bun's detached
+    // is a no-op there. Acceptable since cfcf is Unix-first today.)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    detached: true as any,
   });
 
   // Set up timeout if requested
   if (opts.timeout && opts.timeout > 0) {
     timeoutId = setTimeout(() => {
       killed = true;
-      proc.kill();
+      killProcessTree(proc.pid);
     }, opts.timeout);
   }
 
@@ -122,7 +139,44 @@ export async function spawnProcess(opts: ProcessOptions): Promise<ManagedProcess
     result,
     kill() {
       killed = true;
-      proc.kill();
+      killProcessTree(proc.pid);
     },
   };
+}
+
+/**
+ * Kill the entire process tree rooted at `pid` (the leader of a process
+ * group spawned with `detached: true`). Sends SIGTERM first; after a
+ * 1.5s grace window, sends SIGKILL to anything still alive. Best-effort:
+ * ignores errors (the process may already be dead, or the pgid may have
+ * become invalid).
+ *
+ * Why send to `-pid` (negative): on Unix, `process.kill(-pgid, sig)`
+ * delivers `sig` to every process in the group `pgid`. Since we
+ * spawned with `detached: true`, the spawned process IS its own group
+ * leader and `pgid === pid`. So negating the pid signals the whole
+ * tree (the wrapper + everything it spawned recursively).
+ *
+ * Item 6.31 (2026-05-08).
+ */
+function killProcessTree(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    // SIGTERM the whole group. Negative pid = group target on Unix.
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    // Group may have already exited, or single-process kill is fine.
+    try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+  }
+  // After a grace window, force SIGKILL to anything still running.
+  // 1.5s is enough for a well-behaved agent CLI to shut down cleanly
+  // (drain stdout, finalise files, etc.); past that, the wrapper or
+  // a wedged inference call won't respect SIGTERM and we go nuclear.
+  setTimeout(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+    }
+  }, 1500).unref();
 }

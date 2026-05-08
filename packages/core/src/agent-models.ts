@@ -20,12 +20,25 @@
  */
 
 import { SEED_MODELS, getSeedModels } from "./adapters/seed-models.js";
+import { getAdapter, getAdapterNames } from "./adapters/index.js";
 import type { CfcfGlobalConfig } from "./types.js";
 
 /**
  * Resolve the model list to surface in pickers for the given adapter.
  *
- * Order: user override (if present + non-empty) → seed → empty array.
+ * Routing depends on the adapter's `modelSource` (item 6.28):
+ *   - "ollama":  pull from `config.availableOllamaModels` — the user's
+ *                locally-pulled ollama models snapshot. Used by
+ *                `claude-code-ollama` and `opencode-ollama`.
+ *   - "custom":  return [] — no list. The picker still surfaces the
+ *                "(adapter default)" + custom-model-name sentinel
+ *                options so the user can always type a value. Used by
+ *                `opencode` (direct), where the model is whatever the
+ *                user authed via `opencode auth login`.
+ *   - "seed" / unset:  the historical 6.26 path — user override on
+ *                `agentModels[adapter]` if non-empty, else the seed
+ *                from `seed-models.ts`. Used by `claude-code` + `codex`.
+ *
  * An empty array is a valid result; the picker still renders "(adapter
  * default)" + "(custom model name…)" so the user can always proceed.
  */
@@ -33,6 +46,22 @@ export function resolveModelsForAdapter(
   adapterName: string,
   config: CfcfGlobalConfig | null,
 ): string[] {
+  const adapter = getAdapter(adapterName);
+  const source = adapter?.modelSource ?? "seed";
+
+  if (source === "ollama") {
+    const models = config?.availableOllamaModels;
+    if (Array.isArray(models) && models.length > 0) {
+      return models.filter((m) => typeof m === "string" && m.trim().length > 0);
+    }
+    return [];
+  }
+
+  if (source === "custom") {
+    return [];
+  }
+
+  // "seed" — preserve the 6.26 user-override-then-seed precedence.
   const override = config?.agentModels?.[adapterName];
   if (Array.isArray(override) && override.length > 0) {
     return override.filter((m) => typeof m === "string" && m.trim().length > 0);
@@ -45,14 +74,20 @@ export function resolveModelsForAdapter(
  * Used by `GET /api/agents/models` to populate every web picker in one
  * round-trip and by `cfcf doctor` for diagnostics.
  *
- * Iteration order: every adapter that has a seed entry, plus any
- * adapter the user has added an override for (so a user-only adapter
- * with no seed still shows up).
+ * Iteration order: (a) every adapter registered in the registry — so
+ * the new 6.28 adapters (opencode, claude-code-ollama, opencode-ollama)
+ * show up even though they have no seed-models.ts entry, (b) every
+ * adapter that has a seed entry (back-compat for adapters added via
+ * a hand-edited config without a registry change), (c) every adapter
+ * the user has added an `agentModels` override for. The union covers
+ * "user-only adapter with no registry entry" + "registry adapter with
+ * no seed list" cleanly. (item 6.28)
  */
 export function resolveAllModels(
   config: CfcfGlobalConfig | null,
 ): Record<string, string[]> {
   const adapters = new Set([
+    ...getAdapterNames(),
     ...Object.keys(SEED_MODELS),
     ...Object.keys(config?.agentModels ?? {}),
   ]);

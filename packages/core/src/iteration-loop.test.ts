@@ -252,14 +252,30 @@ describe("Decision Engine - makeDecision", () => {
 describe("Loop State Persistence", () => {
   let tempDir: string;
   const originalEnv = process.env.CFCF_CONFIG_DIR;
+  const originalNotifyEnv = process.env.CFCF_DISABLE_NOTIFICATIONS;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "cfcf-loop-persist-test-"));
     process.env.CFCF_CONFIG_DIR = tempDir;
+    // The "startLoop persists state to disk" test below kicks off a real
+    // fire-and-forget iteration loop. The loop fails quickly (no real
+    // agent setup) and tries to fire `loop.failed` through the
+    // notification dispatcher. Without this gate, the dispatch can race
+    // past afterEach + tempDir teardown, by which point the user's real
+    // ~/.cfcf config is back on PATH — leaking a real macOS desktop
+    // notification onto the user's screen. The dispatcher honors
+    // `CFCF_DISABLE_NOTIFICATIONS=1` as a global kill-switch so the
+    // race can't reach a real channel. Surfaced 2026-05-08.
+    process.env.CFCF_DISABLE_NOTIFICATIONS = "1";
   });
 
   afterEach(async () => {
     process.env.CFCF_CONFIG_DIR = originalEnv;
+    if (originalNotifyEnv === undefined) {
+      delete process.env.CFCF_DISABLE_NOTIFICATIONS;
+    } else {
+      process.env.CFCF_DISABLE_NOTIFICATIONS = originalNotifyEnv;
+    }
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -402,6 +418,66 @@ describe("shouldRunReflection (trigger logic)", () => {
   test("skips when judge signals are missing (harness will pause separately)", () => {
     const res = shouldRunReflection(null, makeLoopState(), makeProject());
     expect(res.run).toBe(false);
+  });
+
+  // 2026-05-08 — should_continue=false bypass. Loop is ending; reflection
+  // has no next iteration to inform. Surfaced when qwen3-coder set
+  // reflection_needed=true (defaulting per the prompt's "when in doubt"
+  // rule) on the same iteration where it correctly set
+  // should_continue=false. Reflection ran on a loop already ending and
+  // burned tokens.
+
+  test("skips when judge sets should_continue=false (loop ending; no next iter to inform)", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: false, reflection_needed: true }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("should_continue=false");
+  });
+
+  test("should_continue=false bypass overrides reflection_needed=true (no token waste at end of loop)", () => {
+    // Even when judge explicitly requests reflection, if it ALSO says
+    // the loop should end, skip reflection — the request is internally
+    // contradictory and the should_continue half wins.
+    const res = shouldRunReflection(
+      makeJudgeSignals({
+        should_continue: false,
+        reflection_needed: true,
+        reflection_reason: "agent thought reflection was useful here",
+      }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("loop is ending");
+  });
+
+  test("should_continue=false bypass overrides safeguard ceiling (loop is ending; ceiling irrelevant)", () => {
+    // The safeguard ceiling exists to catch agents over-aggressively
+    // opting out of reflection across many consecutive iterations.
+    // When should_continue=false, there ARE no more iterations to
+    // count toward the ceiling — the bypass takes precedence.
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: false, reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 5 }), // way past ceiling
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("loop is ending");
+  });
+
+  test("should_continue=true with reflection_needed=true still runs reflection (no bypass)", () => {
+    // Sanity: the bypass only fires on should_continue=false. Loops
+    // that are continuing run reflection per existing rules.
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: true, reflection_needed: true }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(true);
+    expect(res.reason).toContain("judge requested");
   });
 });
 

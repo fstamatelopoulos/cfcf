@@ -48,7 +48,9 @@ describe("config", () => {
 
       const read = await readConfig();
       expect(read).not.toBeNull();
-      expect(read!.devAgent.adapter).toBe("claude-code");
+      // dev defaults to codex now (item 6.28 — Anthropic harness policy);
+      // judge falls back to same as dev when no other compliant adapter.
+      expect(read!.devAgent.adapter).toBe("codex");
       expect(read!.judgeAgent.adapter).toBe("codex");
       expect(read!.availableAgents).toEqual(["claude-code", "codex"]);
     });
@@ -73,10 +75,40 @@ describe("config", () => {
   });
 
   describe("createDefaultConfig", () => {
-    it("prefers claude-code as dev and codex as judge when both available", () => {
+    // item 6.28: defaults flipped so unattended roles prefer codex over
+    // claude-code (Anthropic's third-party-harness policy makes claude-code
+    // non-compliant for the unattended dev/judge/reflection/documenter
+    // pattern). Interactive roles (architect / PA / HA) keep claude-code
+    // preference because they're within Anthropic's allowed-interactive scope.
+
+    it("prefers codex as dev when both codex + claude-code available (policy-aligned)", () => {
       const config = createDefaultConfig(["claude-code", "codex"]);
-      expect(config.devAgent.adapter).toBe("claude-code");
+      expect(config.devAgent.adapter).toBe("codex");
+      // Judge: only one compliant adapter (codex) is available — same-as-dev
+      // beats firing the policy warning by defaulting to claude-code.
       expect(config.judgeAgent.adapter).toBe("codex");
+      // Documenter + reflection: same compliance reasoning as dev.
+      expect(config.documenterAgent.adapter).toBe("codex");
+      expect(config.reflectionAgent?.adapter).toBe("codex");
+      // Architect / PA / HA: interactive roles, claude-code preferred.
+      expect(config.architectAgent.adapter).toBe("claude-code");
+      expect(config.productArchitectAgent?.adapter).toBe("claude-code");
+      expect(config.helpAssistantAgent?.adapter).toBe("claude-code");
+    });
+
+    it("falls back to claude-code as dev when codex isn't available", () => {
+      const config = createDefaultConfig(["claude-code"]);
+      expect(config.devAgent.adapter).toBe("claude-code");
+      expect(config.judgeAgent.adapter).toBe("claude-code");
+    });
+
+    it("when ollama-routed adapters are available, prefers a different compliant adapter for judge", () => {
+      // dev → codex (top of preference). Judge prefers different compliant
+      // adapter — claude-code-ollama wins over claude-code (which would
+      // trigger the warning).
+      const config = createDefaultConfig(["claude-code", "codex", "claude-code-ollama"]);
+      expect(config.devAgent.adapter).toBe("codex");
+      expect(config.judgeAgent.adapter).toBe("claude-code-ollama");
     });
 
     it("uses the only available agent for both roles if only one detected", () => {
@@ -95,6 +127,25 @@ describe("config", () => {
     it("records available agents", () => {
       const config = createDefaultConfig(["claude-code", "codex"]);
       expect(config.availableAgents).toEqual(["claude-code", "codex"]);
+    });
+
+    // item 6.28 — ollama models snapshot.
+    it("records availableOllamaModels when passed a non-empty list", () => {
+      const config = createDefaultConfig(
+        ["claude-code", "claude-code-ollama"],
+        ["gemma4:31b", "qwen2.5-coder:32b"],
+      );
+      expect(config.availableOllamaModels).toEqual(["gemma4:31b", "qwen2.5-coder:32b"]);
+    });
+
+    it("leaves availableOllamaModels undefined when no ollama models are passed", () => {
+      const config = createDefaultConfig(["claude-code"]);
+      expect(config.availableOllamaModels).toBeUndefined();
+    });
+
+    it("normalises an empty ollama models list to undefined", () => {
+      const config = createDefaultConfig(["claude-code"], []);
+      expect(config.availableOllamaModels).toBeUndefined();
     });
   });
 

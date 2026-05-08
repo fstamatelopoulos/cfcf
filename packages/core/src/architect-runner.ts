@@ -115,7 +115,114 @@ export async function resetArchitectSignals(repoPath: string): Promise<void> {
 }
 
 /**
+ * Why parseArchitectSignals returned null. Used by the iteration-loop
+ * pause message to give the user a more specific diagnostic than the
+ * generic "missing or malformed" string. Surfaced 2026-05-08 — when
+ * opencode-ollama hangs without writing the signals file, the user
+ * was getting a misleading "review run hit an error mid-way" message
+ * that suggested a validator bug rather than the actual cause (agent
+ * never finished writing).
+ */
+export type SignalFailureReason =
+  /** Signals file doesn't exist on disk — the agent never created it. */
+  | "missing"
+  /** File exists but is the literal untouched template (NEEDS_REFINEMENT + all empty + null approach). Agent likely hung or crashed before editing. */
+  | "untouched_template"
+  /** File exists but JSON.parse failed — the agent wrote something corrupted. */
+  | "malformed_json"
+  /** File exists, JSON parsed, but `readiness` field is missing or unknown. */
+  | "missing_readiness"
+  /** File exists with a value cfcf doesn't understand for `readiness`. */
+  | "valid";
+
+/**
+ * Read the signals file on disk and classify why parseArchitectSignals
+ * couldn't return a valid result. Returns "valid" when the file actually
+ * IS valid (caller can use this to detect race conditions where the
+ * file appeared between the original parse and this diagnosis call).
+ */
+export async function diagnoseFailedArchitectSignals(
+  repoPath: string,
+): Promise<SignalFailureReason> {
+  const path = join(repoPath, "cfcf-docs", "cfcf-architect-signals.json");
+  let content: string;
+  try {
+    content = await readFile(path, "utf-8");
+  } catch {
+    return "missing";
+  }
+  let parsed: ArchitectSignals;
+  try {
+    parsed = JSON.parse(content) as ArchitectSignals;
+  } catch {
+    return "malformed_json";
+  }
+  if (!parsed.readiness) return "missing_readiness";
+  // The cfcf template ships with NEEDS_REFINEMENT + all-empty arrays +
+  // null recommended_approach. If the file matches this exactly, the
+  // agent never edited it.
+  if (
+    parsed.readiness === "NEEDS_REFINEMENT" &&
+    Array.isArray(parsed.gaps) && parsed.gaps.length === 0 &&
+    Array.isArray(parsed.suggestions) && parsed.suggestions.length === 0 &&
+    Array.isArray(parsed.risks) && parsed.risks.length === 0 &&
+    !parsed.recommended_approach
+  ) {
+    return "untouched_template";
+  }
+  return "valid";
+}
+
+/**
+ * Count `[ ]` (pending) and `[x]` (completed) checkbox items in a plan
+ * document. Used by `parseArchitectSignals` to detect the "agent said
+ * READY but the plan has no pending work" case (item 6.28 dogfood,
+ * 2026-05-08). Pure function for testability.
+ */
+export function countPlanItems(planContent: string): { pending: number; completed: number } {
+  // GFM-style checkboxes: `- [ ]` or `- [x]` / `- [X]`. Allow leading
+  // whitespace + alternative bullet markers (`*`, `+`).
+  const pending = (planContent.match(/^\s*[-*+]\s+\[\s\]/gm) ?? []).length;
+  const completed = (planContent.match(/^\s*[-*+]\s+\[[xX]\]/gm) ?? []).length;
+  return { pending, completed };
+}
+
+/**
+ * Read `cfcf-docs/plan.md` and count its checkbox items. Returns
+ * `{pending: 0, completed: 0}` if the file is missing — matches the
+ * "no plan yet" case (e.g. fresh workspace pre-architect-first-run).
+ */
+async function readPlanItemCounts(repoPath: string): Promise<{ pending: number; completed: number }> {
+  try {
+    const content = await readFile(join(repoPath, "cfcf-docs", "plan.md"), "utf-8");
+    return countPlanItems(content);
+  } catch {
+    return { pending: 0, completed: 0 };
+  }
+}
+
+/**
  * Parse the architect signal file after the architect exits.
+ *
+ * Two safeguards live here, both surfaced 2026-05-08 during dogfood
+ * with qwen3-coder on the SA role for a fully-shipped calc workspace:
+ *
+ *   1. **Untouched-template rejection** (only when readiness genuinely
+ *      demands explanation: NEEDS_REFINEMENT / BLOCKED). Avoids
+ *      false-positive rejection of clean READY/SCOPE_COMPLETE verdicts
+ *      with empty supporting fields.
+ *   2. **READY → SCOPE_COMPLETE auto-promotion** when plan.md has all
+ *      `[x]` items and zero `[ ]` pending. This catches a common agent
+ *      slip-up where the model identifies the project as complete but
+ *      labels it READY (the more familiar value) instead of
+ *      SCOPE_COMPLETE. Picking READY for a finished project is wrong:
+ *      the harness sends the dev agent into a wasted iteration before
+ *      the loop figures out there's no work. The prompt template
+ *      explicitly tells the agent the right answer is SCOPE_COMPLETE,
+ *      but defensive auto-promotion catches non-compliant agents too.
+ *      Only fires when there's at least one `[x]` (work has actually
+ *      been done) AND zero `[ ]` (nothing pending) — guards against
+ *      promoting an empty plan in first-run mode.
  */
 export async function parseArchitectSignals(
   repoPath: string,
@@ -128,9 +235,27 @@ export async function parseArchitectSignals(
     const signals = JSON.parse(content) as ArchitectSignals;
     // Basic validation
     if (!signals.readiness) return null;
-    // Check it's not the untouched template
-    if (signals.gaps.length === 0 && signals.suggestions.length === 0 && signals.risks.length === 0 && !signals.recommended_approach) {
+    // Untouched-template detection (1) — see docstring above.
+    const needsExplanation =
+      signals.readiness === "NEEDS_REFINEMENT" || signals.readiness === "BLOCKED";
+    if (
+      needsExplanation &&
+      signals.gaps.length === 0 &&
+      signals.suggestions.length === 0 &&
+      signals.risks.length === 0 &&
+      !signals.recommended_approach
+    ) {
       return null;
+    }
+    // READY → SCOPE_COMPLETE auto-promotion (2) — see docstring above.
+    if (signals.readiness === "READY") {
+      const { pending, completed } = await readPlanItemCounts(repoPath);
+      if (pending === 0 && completed > 0) {
+        console.log(
+          `[architect] note: agent returned readiness="READY" but cfcf-docs/plan.md has ${completed} completed item${completed === 1 ? "" : "s"} and 0 pending — promoting to SCOPE_COMPLETE so the harness can route to the "done" UX rather than a wasted dev iteration.`,
+        );
+        signals.readiness = "SCOPE_COMPLETE";
+      }
     }
     return signals;
   } catch {

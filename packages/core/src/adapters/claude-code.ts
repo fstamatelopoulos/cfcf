@@ -43,11 +43,20 @@ export const claudeCodeAdapter: AgentAdapter = {
     prompt: string,
     model?: string,
   ): { command: string; args: string[] } {
-    // --verbose gives live turn-by-turn text output (so the user can watch
-    // progress in the log). Without it, Claude Code in print mode is silent
-    // until the final response. Matches Codex's verbose-by-default behavior
-    // for consistency across agents.
-    const args = ["--dangerously-skip-permissions", "--verbose"];
+    // Plain `claude -p "<prompt>"` — claude buffers stdout and emits
+    // the final response when the agent finishes. No live progress in
+    // the log file during the run.
+    //
+    // History: Apr-17 commit `bb92921` added `--verbose` claiming it
+    // gave live progress; dogfooding 2026-05-08 disproved that claim
+    // (verbose-only still buffers). Then 2026-05-08 added
+    // `--output-format stream-json` which DOES stream live events as
+    // JSONL — but the JSONL log file was unreadable in the web UI
+    // log panel + hard to scan with `tail`. User feedback: revert to
+    // plain `-p` and accept the silence-during-run trade-off until
+    // we have a proper JSONL→text formatter for the log viewer.
+    // See docs/decisions-log.md 2026-05-08.
+    const args = ["--dangerously-skip-permissions"];
     if (model) {
       args.push("--model", model);
     }

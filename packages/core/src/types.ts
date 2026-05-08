@@ -30,6 +30,21 @@ export interface AgentAdapter {
 
   /** The filename this agent uses for its instruction file (e.g., "CLAUDE.md") */
   instructionFilename: string;
+
+  /**
+   * Where the model picker for this adapter sources its options.
+   * (item 6.28; defaults to "seed" when omitted for backward compat.)
+   *   - "seed":   the standard `seed-models.ts` registry merged with the
+   *               user's `agentModels` override (claude-code, codex).
+   *   - "ollama": locally-pulled ollama models from `ollama list`,
+   *               surfaced via `availableOllamaModels` on the config
+   *               (claude-code-ollama, opencode-ollama).
+   *   - "custom": no list — the picker shows just the "(adapter default)"
+   *               + custom-model-name sentinel options because cfcf
+   *               doesn't have visibility into the user's provider auth
+   *               config (opencode direct).
+   */
+  modelSource?: "seed" | "ollama" | "custom";
 }
 
 // --- Configuration ---
@@ -118,6 +133,15 @@ export interface CfcfGlobalConfig {
   pauseEvery: number;
   /** Detected available agents (populated during first-run) */
   availableAgents: string[];
+  /**
+   * Locally-pulled ollama models, captured at `cfcf init` /
+   * `cfcf config edit` time via `ollama list`. Used as the model-picker
+   * source for `*-ollama` adapters (claude-code-ollama, opencode-ollama).
+   * Optional + may be empty: ollama may not be installed, or no models
+   * may be pulled yet. Re-detected by `cfcf init --force`.
+   * (item 6.28)
+   */
+  availableOllamaModels?: string[];
   /** Whether the user acknowledged the permission flags */
   permissionsAcknowledged: boolean;
   /** Notification configuration (optional; defaults applied if missing) */

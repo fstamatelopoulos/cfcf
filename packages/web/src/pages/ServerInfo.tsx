@@ -10,6 +10,7 @@ import {
 import { navigateTo } from "../hooks/useRoute";
 import type { NotificationChannelName, NotificationEventType } from "../types";
 import { AgentModelSelect } from "../components/AgentModelSelect";
+import { HarnessPolicyWarning } from "../components/HarnessPolicyWarning";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -349,6 +350,19 @@ export function ServerInfo() {
                 })}
               </tbody>
             </table>
+            <HarnessPolicyWarning
+              unattendedRoles={[
+                { label: "dev", adapter: draft.devAgent.adapter },
+                { label: "judge", adapter: draft.judgeAgent.adapter },
+                { label: "documenter", adapter: draft.documenterAgent.adapter },
+                ...(draft.reflectionAgent
+                  ? [{ label: "reflection", adapter: draft.reflectionAgent.adapter }]
+                  : []),
+                ...(draft.autoReviewSpecs
+                  ? [{ label: "architect (autoReviewSpecs=true)", adapter: draft.architectAgent.adapter }]
+                  : []),
+              ]}
+            />
           </FormSection>
 
           <FormSection title="Model registry">

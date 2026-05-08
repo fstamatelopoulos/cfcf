@@ -65,35 +65,60 @@ export async function writeConfig(config: CfcfGlobalConfig): Promise<void> {
 
 /**
  * Create a default config populated with detected agents.
+ *
+ * `availableOllamaModels` is optional (item 6.28) — when ollama isn't
+ * detected at first-run time, callers pass undefined or an empty array
+ * and the config field stays unset. The model picker for `*-ollama`
+ * adapters falls back to its empty-list path.
  */
-export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig {
-  // Pick dev agent: prefer claude-code if available, then codex
-  const devAdapter =
-    availableAgents.includes("claude-code")
-      ? "claude-code"
-      : availableAgents.includes("codex")
-        ? "codex"
-        : availableAgents[0] || "claude-code";
+export function createDefaultConfig(
+  availableAgents: string[],
+  availableOllamaModels?: string[],
+): CfcfGlobalConfig {
+  // Default-adapter policy (item 6.28):
+  //   - **Unattended roles** (dev / judge / reflection / documenter): prefer
+  //     `codex` first, since Anthropic's third-party-harness policy makes
+  //     `claude-code` non-compliant for these. Without this preference,
+  //     fresh `cfcf init` would default unattended roles to claude-code
+  //     and immediately fire the policy warning — bad UX.
+  //   - **Interactive roles** (architect / Product Architect / Help
+  //     Assistant): prefer `claude-code` first. These run inside the
+  //     user's TUI and are within Anthropic's allowed-interactive scope.
+  //
+  // Helper: prefer codex among policy-compliant unattended adapters.
+  // The future ollama-routed + opencode adapters are also compliant;
+  // codex stays first because it's the most well-tested existing path
+  // and OpenAI's policy explicitly endorses CLI automation.
+  const pickUnattendedDefault = (excludeAdapter?: string): string => {
+    const order = ["codex", "claude-code-ollama", "opencode-ollama", "opencode", "claude-code"];
+    for (const candidate of order) {
+      if (candidate === excludeAdapter) continue;
+      if (availableAgents.includes(candidate)) return candidate;
+    }
+    return availableAgents[0] || "codex";
+  };
 
-  // Pick judge agent: prefer a different agent from dev, then same
-  const judgeAdapter =
-    availableAgents.includes("codex") && devAdapter !== "codex"
-      ? "codex"
-      : availableAgents.includes("claude-code") && devAdapter !== "claude-code"
-        ? "claude-code"
-        : devAdapter;
+  // Dev: codex if available, else claude-code, else first detected.
+  const devAdapter = pickUnattendedDefault();
 
-  // Architect agent: prefer claude-code (typically needs strong reasoning)
+  // Judge: prefer a different policy-compliant adapter from dev. If only
+  // one compliant adapter is available, fall back to same-as-dev rather
+  // than claude-code (avoiding the warning trumps the differ-from-dev
+  // preference).
+  const judgeCandidate = pickUnattendedDefault(devAdapter);
+  const judgeAdapter = judgeCandidate === "claude-code" ? devAdapter : judgeCandidate;
+
+  // Architect: prefer claude-code (interactive role — `cfcf review` is
+  // user-invoked; runs unattended only when `autoReviewSpecs=true`,
+  // which is opt-in and surfaces the warning at init time).
   const architectAdapter =
     availableAgents.includes("claude-code")
       ? "claude-code"
       : devAdapter;
 
-  // Documenter agent: prefer claude-code (strong writing ability)
-  const documenterAdapter =
-    availableAgents.includes("claude-code")
-      ? "claude-code"
-      : devAdapter;
+  // Documenter: same policy as dev — runs unattended after a successful
+  // loop, so prefer codex over claude-code.
+  const documenterAdapter = pickUnattendedDefault();
 
   // Default notifications: pick the OS channel for the current platform
   const osChannel = process.platform === "darwin" ? "macos" : process.platform === "linux" ? "linux" : "terminal-bell";
@@ -106,13 +131,31 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     },
   };
 
+  // PA + HA: explicit defaults to claude-code (interactive scope). Without
+  // this, validateConfig backfills them from architect / dev — and with
+  // the dev=codex flip above, HA would otherwise default to codex even
+  // though it's an interactive role where claude-code is policy-clean.
+  const productArchitectAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : architectAdapter;
+  const helpAssistantAdapter =
+    availableAgents.includes("claude-code")
+      ? "claude-code"
+      : devAdapter;
+
   return {
     version: CONFIG_VERSION,
     devAgent: { adapter: devAdapter },
     judgeAgent: { adapter: judgeAdapter },
     architectAgent: { adapter: architectAdapter },
     documenterAgent: { adapter: documenterAdapter },
-    reflectionAgent: { adapter: architectAdapter }, // same preference as architect
+    // Reflection runs unattended every iteration — backfill from the
+    // policy-compliant unattended pick (same as dev's default), not
+    // from architect (which prefers claude-code for interactive use).
+    reflectionAgent: { adapter: devAdapter },
+    productArchitectAgent: { adapter: productArchitectAdapter },
+    helpAssistantAgent: { adapter: helpAssistantAdapter },
     reflectSafeguardAfter: 3,
     autoReviewSpecs: false,
     autoDocumenter: true,
@@ -120,6 +163,9 @@ export function createDefaultConfig(availableAgents: string[]): CfcfGlobalConfig
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pauseEvery: DEFAULT_PAUSE_EVERY,
     availableAgents,
+    availableOllamaModels: Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0
+      ? [...availableOllamaModels]
+      : undefined,
     permissionsAcknowledged: false,
     notifications: defaultNotifications,
     notifyUpdates: true,   // item 6.20
@@ -202,6 +248,20 @@ export function validateConfig(config: CfcfGlobalConfig): CfcfGlobalConfig {
   // the user's OS preference until they pick a theme explicitly.
   if (config.theme !== "dark" && config.theme !== "light" && config.theme !== "auto") {
     config.theme = "auto";
+  }
+  // item 6.28 -- ollama models snapshot from `ollama list` at init time.
+  // Coerce malformed entries to undefined so a hand-edited config can't
+  // break startup. An empty array gets normalised to undefined too —
+  // there's no observable difference downstream.
+  if (config.availableOllamaModels !== undefined) {
+    if (!Array.isArray(config.availableOllamaModels)) {
+      delete config.availableOllamaModels;
+    } else {
+      const filtered = config.availableOllamaModels
+        .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
+        .map((m) => m.trim());
+      config.availableOllamaModels = filtered.length > 0 ? filtered : undefined;
+    }
   }
   // item 6.26 -- per-adapter model override. Coerce malformed entries to
   // a no-op (drop the field rather than throw); the seed list is the
