@@ -431,6 +431,10 @@ export function registerInitCommand(program: Command): void {
         console.log("  If you hit this error, switch to opencode-ollama for the same model — its");
         console.log("  OpenAI-compatible endpoint is more tolerant of variance in tool-call output.");
         console.log();
+        console.log("  Applies to any unattended role on claude-code-ollama");
+        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are unaffected.");
+        console.log(`  Currently configured for: ${claudeOllamaRoles.join(", ")}`);
+        console.log();
 
         console.log("ℹ  Log-visibility note: claude-code-ollama buffers during the run");
         console.log("  --------------------------------------------------------------");
@@ -440,7 +444,9 @@ export function registerInitCommand(program: Command): void {
         console.log("  log file stays empty during the run and dumps the final response only");
         console.log("  when the agent exits. This is a UX caveat, not a correctness issue.");
         console.log();
-        console.log(`  Affected role${claudeOllamaRoles.length > 1 ? "s" : ""}: ${claudeOllamaRoles.join(", ")}`);
+        console.log("  Applies to any unattended role on claude-code-ollama");
+        console.log("  (dev / judge / reflection / documenter / architect). PA and HA are unaffected.");
+        console.log(`  Currently configured for: ${claudeOllamaRoles.join(", ")}`);
         console.log();
         console.log("  For live progress in the log file, prefer codex (streams natively in");
         console.log("  exec mode) or the opencode adapters. Keep claude-code-ollama if you");

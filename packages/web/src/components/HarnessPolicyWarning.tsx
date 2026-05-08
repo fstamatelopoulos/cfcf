@@ -201,6 +201,21 @@ export function HarnessPolicyWarning({
             usually capable; it's the strict-Anthropic-shape translation
             that rejects it.
           </div>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <strong>Applies to any unattended role on{" "}
+            <code>claude-code-ollama</code></strong> (<code>dev</code>,{" "}
+            <code>judge</code>, <code>reflection</code>,{" "}
+            <code>documenter</code>, <code>architect</code>). PA and HA are
+            unaffected.
+          </div>
+          <div style={{ marginBottom: "0.5rem" }}>
+            Currently configured for: {claudeOllamaRoles.map((role, i) => (
+              <span key={role}>
+                {i > 0 && ", "}
+                <code>{role}</code>
+              </span>
+            ))}.
+          </div>
         </div>
       )}
 
@@ -231,13 +246,19 @@ export function HarnessPolicyWarning({
             issue.
           </div>
           <div style={{ marginBottom: "0.5rem" }}>
-            Affected role{claudeOllamaRoles.length > 1 ? "s" : ""}:{" "}
-            {claudeOllamaRoles.map((role, i) => (
+            <strong>Applies to any unattended role on{" "}
+            <code>claude-code-ollama</code></strong> (<code>dev</code>,{" "}
+            <code>judge</code>, <code>reflection</code>,{" "}
+            <code>documenter</code>, <code>architect</code>). PA and HA are
+            unaffected — their TUI takes over your shell.
+          </div>
+          <div style={{ marginBottom: "0.5rem" }}>
+            Currently configured for: {claudeOllamaRoles.map((role, i) => (
               <span key={role}>
                 {i > 0 && ", "}
                 <code>{role}</code>
               </span>
-            ))}
+            ))}.
           </div>
           <div>
             For live progress in the log file, prefer <code>codex</code> (streams
