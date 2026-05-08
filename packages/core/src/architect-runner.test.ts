@@ -318,9 +318,9 @@ describe("parseArchitectSignals", () => {
     for (const r of ["SCOPE_COMPLETE", "NEEDS_REFINEMENT", "BLOCKED"] as const) {
       const signals: ArchitectSignals = {
         readiness: r,
-        gaps: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy gap"],
-        suggestions: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy suggestion"],
-        risks: r === "READY" || r === "SCOPE_COMPLETE" ? [] : ["dummy risk"],
+        gaps: r === "SCOPE_COMPLETE" ? [] : ["dummy gap"],
+        suggestions: r === "SCOPE_COMPLETE" ? [] : ["dummy suggestion"],
+        risks: r === "SCOPE_COMPLETE" ? [] : ["dummy risk"],
       };
       await writeFile(
         join(TEST_DIR, "cfcf-docs", "cfcf-architect-signals.json"),
