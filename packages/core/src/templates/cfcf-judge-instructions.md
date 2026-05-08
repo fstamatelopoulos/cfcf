@@ -89,26 +89,46 @@ full cross-iteration history. By default, reflection runs every iteration.
 You may opt the next iteration OUT of reflection by setting
 `reflection_needed: false`.
 
-**Set `reflection_needed: false` ONLY when all three hold:**
+**Set `reflection_needed: false` when ANY of these holds:**
 
-1. This iteration made **clean, on-plan progress** that matches the
-   current `plan.md` item(s). No scope drift.
-2. **No new risks, concerns, or surprising behaviors** emerged that
-   warrant strategic review.
-3. **Prior iterations have not shown a drift pattern** that this
-   iteration continued (same module churning, same test flapping,
-   same concern recurring).
+1. **`should_continue: false` AND `determination: SUCCESS`** — the loop
+   is about to terminate. Reflection's job is to inform the *next*
+   iteration; if there is no next iteration, reflection has no
+   purpose. Setting `reflection_needed: true` here just burns an
+   extra agent spawn on a loop that's already ending. **This is the
+   most common case agents miss** — picking `SUCCESS` + setting
+   `should_continue: false` is a pair: reflection is irrelevant once
+   you've decided the project is done.
+2. This iteration made **clean, on-plan progress** that matches the
+   current `plan.md` item(s) AND **no new risks, concerns, or
+   surprising behaviors** emerged AND **prior iterations have not
+   shown a drift pattern** (same module churning, same test flapping,
+   same concern recurring). When all three hold, reflection has
+   nothing to add.
 
 **Set `reflection_needed: true`** and populate `reflection_reason` with a
 short focus hint (e.g. `"token refresh approach has failed three ways;
 consider whether the whole auth layer decomposition is wrong"`) whenever
-you would benefit from a cross-iteration sanity check.
+you would benefit from a cross-iteration sanity check AND the loop is
+continuing (`should_continue: true`).
 
-**Omit the field (null) or set `true`** when in doubt. The cost of an
-unnecessary reflection pass is low; the cost of strategic drift going
-unchecked for many iterations is high. cfcf also enforces a safeguard:
-after several consecutive opt-outs it forces reflection regardless, so
-over-aggressive opting out is caught automatically.
+**Omit the field (null) or set `true`** when in doubt about an
+ongoing loop. The cost of an unnecessary reflection pass mid-loop is
+low; the cost of strategic drift going unchecked for many iterations
+is high. cfcf also enforces a safeguard: after several consecutive
+opt-outs it forces reflection regardless, so over-aggressive opting
+out is caught automatically.
+
+**Decision rule** (apply before deciding `reflection_needed`):
+
+```
+if should_continue == false:
+    reflection_needed = false   # loop ending; no next iteration to inform
+elif iteration_was_clean and no_new_concerns and no_drift_pattern:
+    reflection_needed = false   # nothing for reflection to add
+else:
+    reflection_needed = true    # default; cfcf safeguards aggressive opt-out
+```
 
 **Determination values:**
 - `SUCCESS`: All success criteria are met. The project is done.

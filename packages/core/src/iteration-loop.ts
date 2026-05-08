@@ -300,7 +300,17 @@ export function resolveLoopConfig(
 /**
  * Decide whether reflection should run after the judge completes.
  *
- * Rules (research doc §2.2):
+ * Rules (research doc §2.2 + 2026-05-08 should-continue-false fix):
+ *   - **Skip when `should_continue: false`** — the loop is about to
+ *     terminate; reflection's purpose is to inform the *next*
+ *     iteration, and there is no next iteration. This bypass overrides
+ *     `reflection_needed` regardless of value because there's nothing
+ *     productive reflection could do on a loop that's already ending.
+ *     Surfaced 2026-05-08 with qwen3-coder on a fully-shipped calc
+ *     workspace: judge correctly set should_continue=false but also
+ *     set reflection_needed=true (defaulting per the prompt's
+ *     "when in doubt" rule). Reflection ran on top of the already-
+ *     ending loop and burned tokens with nothing to add.
  *   - Run reflection when `judge.reflection_needed` is `true` or missing.
  *   - Skip reflection when `judge.reflection_needed` is `false` AND the
  *     number of consecutive skips has not yet reached the safeguard
@@ -309,6 +319,10 @@ export function resolveLoopConfig(
  *   - If judge signals are missing entirely (judge crashed / malformed
  *     output), skip reflection too -- the harness will already pause
  *     on the missing signals and retry the judge on resume.
+ *
+ * The safeguard ceiling does NOT apply to the should_continue=false
+ * bypass — those iterations are by definition non-consecutive (the
+ * loop ends, the count resets to zero on the next loop start).
  */
 export function shouldRunReflection(
   judgeSignals: JudgeSignals | null,
@@ -317,6 +331,17 @@ export function shouldRunReflection(
 ): { run: boolean; reason: string } {
   if (!judgeSignals) {
     return { run: false, reason: "judge signals missing -- harness will pause before reflection" };
+  }
+  // Loop is ending → reflection has no next iteration to inform.
+  // Bypass takes precedence over reflection_needed because the agent
+  // can't always be relied on to set reflection_needed=false here
+  // (qwen3-coder defaulted reflection_needed=true even when paired
+  // with should_continue=false; surfaced 2026-05-08).
+  if (judgeSignals.should_continue === false) {
+    return {
+      run: false,
+      reason: "judge said should_continue=false; loop is ending, no next iteration for reflection to inform",
+    };
   }
   const ceiling = workspace.reflectSafeguardAfter ?? 3;
   const skipped = state.iterationsSinceLastReflection ?? 0;

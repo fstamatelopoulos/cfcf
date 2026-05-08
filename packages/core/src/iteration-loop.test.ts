@@ -419,6 +419,66 @@ describe("shouldRunReflection (trigger logic)", () => {
     const res = shouldRunReflection(null, makeLoopState(), makeProject());
     expect(res.run).toBe(false);
   });
+
+  // 2026-05-08 — should_continue=false bypass. Loop is ending; reflection
+  // has no next iteration to inform. Surfaced when qwen3-coder set
+  // reflection_needed=true (defaulting per the prompt's "when in doubt"
+  // rule) on the same iteration where it correctly set
+  // should_continue=false. Reflection ran on a loop already ending and
+  // burned tokens.
+
+  test("skips when judge sets should_continue=false (loop ending; no next iter to inform)", () => {
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: false, reflection_needed: true }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("should_continue=false");
+  });
+
+  test("should_continue=false bypass overrides reflection_needed=true (no token waste at end of loop)", () => {
+    // Even when judge explicitly requests reflection, if it ALSO says
+    // the loop should end, skip reflection — the request is internally
+    // contradictory and the should_continue half wins.
+    const res = shouldRunReflection(
+      makeJudgeSignals({
+        should_continue: false,
+        reflection_needed: true,
+        reflection_reason: "agent thought reflection was useful here",
+      }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("loop is ending");
+  });
+
+  test("should_continue=false bypass overrides safeguard ceiling (loop is ending; ceiling irrelevant)", () => {
+    // The safeguard ceiling exists to catch agents over-aggressively
+    // opting out of reflection across many consecutive iterations.
+    // When should_continue=false, there ARE no more iterations to
+    // count toward the ceiling — the bypass takes precedence.
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: false, reflection_needed: false }),
+      makeLoopState({ iterationsSinceLastReflection: 5 }), // way past ceiling
+      makeProject({ reflectSafeguardAfter: 3 }),
+    );
+    expect(res.run).toBe(false);
+    expect(res.reason).toContain("loop is ending");
+  });
+
+  test("should_continue=true with reflection_needed=true still runs reflection (no bypass)", () => {
+    // Sanity: the bypass only fires on should_continue=false. Loops
+    // that are continuing run reflection per existing rules.
+    const res = shouldRunReflection(
+      makeJudgeSignals({ should_continue: true, reflection_needed: true }),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(res.run).toBe(true);
+    expect(res.reason).toContain("judge requested");
+  });
 });
 
 describe("makeDecision - reflection precedence (research Q6)", () => {
