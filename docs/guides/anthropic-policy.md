@@ -1,14 +1,19 @@
 # Anthropic third-party-harness policy and cf² adapter strategy
 
-This guide explains:
+This guide covers two related topics that together drive cf²'s adapter recommendations:
 
-1. What Anthropic's January–April 2026 policy clarification said about subscription OAuth tokens and third-party tools.
-2. Why cfcf's unattended iteration loop is the violation pattern the rule targets.
-3. Why the interactive **Product Architect** + **Help Assistant** roles are within Anthropic's allowed scope.
-4. Which adapter to pick for which role to stay on the safe side of the policy.
-5. How to set up the local-ollama compliant path end-to-end.
+1. **Anthropic's policy on Claude Code in third-party harnesses** — why direct `claude-code` (talking to Anthropic's API/subscription) is restricted to interactive roles only, and why `claude-code-ollama` (local ollama models) is policy-clean and OK anywhere.
+2. **Log visibility during unattended runs** — `claude -p` (used by both `claude-code` AND `claude-code-ollama`) buffers stdout for the entire run. This is a UX concern, not a correctness one, but it changes which adapter is best for unattended roles where you want to watch progress.
 
-> **TL;DR.** Use `claude-code` only for **interactive roles** (Product Architect, Help Assistant, manually-invoked Solution Architect). For the unattended iteration loop (dev / judge / reflection / documenter — plus architect when `autoReviewSpecs=true`), use one of: `codex`, `claude-code-ollama`, `opencode-ollama`, or `opencode` (direct, with your own provider auth). cfcf surfaces a warning at `cfcf init` time when this rule is violated; this guide explains why.
+> **TL;DR — recommended setup.**
+> - **Interactive roles** (Product Architect via `cfcf spec`, Help Assistant via `cfcf help assistant`, manually-invoked Solution Architect via `cfcf review`): **`claude-code` is the recommended choice.** TUI takes over your shell; no policy issue, no log-visibility issue (you watch it live in your terminal).
+> - **Unattended roles** (dev / judge / reflection / documenter / auto-architect when `autoReviewSpecs=true`):
+>     - **First choice**: `codex` — streams progress live to the log file, policy-clean, fast setup.
+>     - **Alternatives**: `opencode-ollama` / `opencode` — also stream live, also policy-clean.
+>     - **Works but silent during run**: `claude-code-ollama` — uses local ollama models with Claude's UX. Same `-p` stdout buffering as direct claude-code: log file stays empty until the agent exits, then dumps the final response. Pick this if you prefer Claude's tool-call format / instruction-file conventions and don't need live monitoring.
+>     - **Avoid**: `claude-code` (direct) — violates Anthropic's third-party-harness policy on top of the buffering.
+>
+> cf² surfaces warnings at `cfcf init` / `cfcf config edit` and in the web UI when `claude-code` is picked for an unattended role (yellow callout, policy-grade) and a softer note when `claude-code-ollama` is picked for an unattended role (blue callout, log-visibility). Neither blocks the choice — you can still proceed.
 
 ---
 
@@ -68,17 +73,45 @@ cf² will display an **inline warning** at `cfcf init` and `cfcf config edit` ti
 
 ## Recommended adapters per role (default config)
 
-| Role | Recommended adapter | Why |
-|---|---|---|
-| **Product Architect** | `claude-code` | Interactive, allowed scope. Opus-class model is worth the spend on spec authoring. |
-| **Help Assistant** | `claude-code` | Interactive, allowed scope. A smaller Sonnet/Haiku model is fine here — most queries are quick. |
-| **Solution Architect** (manual) | `claude-code` | Manually invoked, you drive. |
-| **Dev agent** | `claude-code-ollama` (or `codex`) | Compliant unattended path. Opencode-ollama works equally well if you prefer opencode's UX. `codex` is the OpenAI-API path. |
-| **Judge agent** | `codex` (or `claude-code-ollama` if dev is `codex`) | "Different agent than dev" is the historical recommendation; either compliant path is fine. |
-| **Reflection agent** | `claude-code-ollama` (or `codex`) | Strongest reasoning available on the unattended path. |
-| **Documenter agent** | `claude-code-ollama` (or `codex`) | Compliant unattended path. |
+| Role | Recommended adapter | Live log? | Why |
+|---|---|---|---|
+| **Product Architect** | `claude-code` | n/a (interactive — TUI in your shell) | Interactive, allowed scope. Opus-class model is worth the spend on spec authoring. |
+| **Help Assistant** | `claude-code` | n/a (interactive) | Interactive, allowed scope. A smaller Sonnet/Haiku model is fine here. |
+| **Solution Architect** (manual) | `claude-code` | n/a (interactive) | Manually invoked, you drive. |
+| **Dev agent** | `codex` (or `claude-code-ollama` if you prefer Claude's UX) | ✅ codex / ❌ claude-code-ollama | Compliant unattended path. codex streams live; claude-code-ollama buffers (silent log during run, dumps at exit). |
+| **Judge agent** | `codex` | ✅ live | "Different agent than dev" is the historical recommendation; codex's `exec` mode also streams live. |
+| **Reflection agent** | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | Strongest reasoning available on the unattended path. |
+| **Documenter agent** | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | Same trade-off as dev. **Note**: small / non-coder ollama models (e.g. `gemma4:31b`) may produce malformed tool-result blocks during the documenter's many file-write turns — prefer coder-tuned models like `qwen3-coder` or `deepseek-coder-v2` for `claude-code-ollama` on this role. |
 
 You can mix and match freely — these are recommendations for first-run defaults, not enforced by cfcf.
+
+**Why `codex` is the unattended default**: it's the only path today that combines (a) policy-clean (OpenAI's API-key flow explicitly endorses CLI automation), (b) live progress streaming in the log file (codex's `exec` mode is verbose-by-default), and (c) well-tested across cf²'s iteration roles. Use `claude-code-ollama` when you specifically prefer Claude's instruction-file / tool-call conventions and accept the silent-log trade-off.
+
+---
+
+## Log visibility during unattended runs
+
+This is independent of (but stacks with) the policy concern.
+
+`claude -p "<prompt>"` — used by both `claude-code` AND `claude-code-ollama` adapters — **buffers stdout to the end of the run.** Even with `--verbose`, the log file stays empty (or near-empty) for the entire iteration; the buffered output dumps when the agent exits. There is no live progress indicator in the log file; the iteration appears "stuck" until the final dump arrives.
+
+This is a property of how Claude Code's print mode works (single-completion contract — one final response after the agent finishes its work), not a cfcf bug. Documented at the binary level in `claude --help` and confirmed during dogfooding (decisions-log 2026-05-08).
+
+**Why we don't enable streaming.** Claude Code does support `--output-format stream-json` for live JSONL events, but the JSONL output is structurally noisy — unreadable in the web UI's log viewer panel and hard to scan with `tail -f`. The cf² adapters keep plain `-p` until a JSONL→text formatter lands in the web log viewer.
+
+**Affected adapters** in cf²:
+- `claude-code` (direct, with Anthropic API/subscription) — silent log + policy violation. Use for interactive only.
+- `claude-code-ollama` (Claude Code wrapped via `ollama launch`) — silent log, but policy-clean. OK for unattended if you don't need live monitoring.
+
+**Unaffected adapters** (live progress in the log file):
+- `codex` — `codex exec` streams natively
+- `opencode` / `opencode-ollama` — `opencode run` streams (verified during cf² 6.28 dogfood for opencode-ollama; opencode standalone untested but expected based on opencode's CLI docs)
+
+**Workarounds when using `claude-code-ollama` for unattended roles:**
+- Watch ollama's server log (`~/.ollama/logs/server.log`) for live `/v1/messages?beta=true` POSTs — gives you a turn count while the agent runs, even though the cfcf log file is silent.
+- Watch file-system mutations: `ls -la <repo>/cfcf-docs/` updates as the agent writes intermediate artefacts (the iteration handoff, signal files).
+- Web UI history panel shows the iteration's status badge (running / completed / failed) which updates regardless of stdout.
+- Final log dump arrives when the agent exits — you'll see the full transcript at that point.
 
 ---
 

@@ -118,7 +118,7 @@ When the loop pauses, you can resume with one of five structured actions (`conti
 | **Author or refine your Problem Pack interactively** | [`product-architect.md`](product-architect.md) — the `cfcf spec` reference |
 | **Look up a specific CLI command** | [`cli-usage.md`](cli-usage.md) — verb-by-verb reference |
 | **Get started with Clio (cross-workspace memory)** | [`clio-quickstart.md`](clio-quickstart.md) |
-| **Set up the local-ollama / opencode path (recommended for unattended roles)** | [`anthropic-policy.md`](anthropic-policy.md) — Anthropic harness policy + adapter recommendations |
+| **Pick the right adapter for each role (Anthropic policy + log visibility)** | [`anthropic-policy.md`](anthropic-policy.md) — Anthropic harness policy + adapter recommendations + log-visibility caveats. Required reading before `cfcf init` if you have Claude Code installed. |
 | **Wire cf² into your own automation** | [`../api/server-api.md`](../api/server-api.md) — HTTP API |
 | **Diagnose something that's not working** | [Troubleshooting](#troubleshooting) (below) or [`troubleshooting.md`](troubleshooting.md) |
 | **Set up shell tab-completion** | [Shell completion](#shell-completion) (below) — auto-installed in v0.13+ |

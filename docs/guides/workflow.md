@@ -68,7 +68,16 @@ Two are **interactive** — the agent CLI's TUI takes over your shell until you 
 
 Each role can use a different agent and model. Reflection is the strongest-context role -- the project's full history is its input -- so the recommended default is the most capable model available (Claude Opus, GPT-5, etc.). The Product Architect defaults to Sonnet for claude-code (Help Assistant defaults to Haiku for its Q&A workload). You can configure each role separately in `cfcf init` or via `cfcf config edit`.
 
-**Adapter choice and the Anthropic harness policy** (item 6.28): the five iteration-loop roles run unattended (cfcf spawns the agent CLI in `-p` / `exec` / `run` mode and parses signal files), which puts them in Anthropic's third-party-harness territory when `claude-code` is the adapter. The recommended setup keeps `claude-code` for **Product Architect**, **Help Assistant**, and **manually-invoked Solution Architect** (`cfcf review`) — those run interactively, within Anthropic's allowed-interactive scope — and routes the unattended roles through `codex`, `claude-code-ollama`, `opencode-ollama`, or `opencode`. cfcf surfaces a warning at `cfcf init` and `cfcf config edit` time if you've picked `claude-code` for an unattended role; the warning is informational, not blocking. Full breakdown: [`anthropic-policy.md`](anthropic-policy.md) (also `cfcf help anthropic-policy` after install).
+**Adapter choice — Anthropic policy + log visibility**:
+
+- **Interactive roles** (`Product Architect`, `Help Assistant`, manually-invoked `Solution Architect` via `cfcf review`): **`claude-code` is the recommended choice.** TUI takes over your shell; you watch progress live in the terminal. No policy concern (Anthropic permits interactive subscription use) and no log-visibility concern.
+- **Unattended roles** (dev / judge / reflection / documenter / auto-architect when `autoReviewSpecs=true`): the loop spawns the agent CLI without you driving — that's where the trade-offs matter:
+    - **`codex`** is the recommended unattended default — streams progress live to the log file (visible during the run), policy-clean (OpenAI's API-key path explicitly endorses CLI automation).
+    - **`opencode-ollama` / `opencode`** — also stream live, also policy-clean.
+    - **`claude-code-ollama`** — policy-clean (no Anthropic credential involved; local ollama serves the model), but shares Claude Code's `-p` stdout-buffering behaviour: the log file stays silent during the run and only dumps the final response when the agent exits. Pick this if you specifically prefer Claude's tool-call format / instruction-file conventions and don't need live monitoring.
+    - **`claude-code`** (direct) — **avoid for unattended roles**: violates Anthropic's third-party-harness policy AND has the same silent-log issue.
+
+cf² surfaces an inline warning in `cfcf init` and the web UI when `claude-code` is picked for an unattended role (yellow callout, policy-grade) and a softer info note when `claude-code-ollama` is picked (blue callout, log-visibility). Neither blocks the choice. Full breakdown: [`anthropic-policy.md`](anthropic-policy.md) (also `cfcf help anthropic-policy` after install).
 
 ### Three Tiers of Evaluation
 

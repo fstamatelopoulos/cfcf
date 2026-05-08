@@ -161,7 +161,30 @@ Re-run `cfcf init --force` afterwards so cfcf picks up the new ollama snapshot. 
 
 ### Anthropic harness-policy warning during `cfcf init`
 
-The warning fires when you've picked `claude-code` for an unattended role (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`). It's **informational, not blocking** — your config saves. To clear the warning, re-run `cfcf init --force` or `cfcf config edit` and pick `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for those roles instead. PA / HA / manually-invoked SA on `claude-code` do NOT trigger the warning — they're within Anthropic's allowed-interactive scope. Full background: [`anthropic-policy.md`](anthropic-policy.md).
+The warning fires when you've picked `claude-code` (direct, talking to Anthropic's API/subscription) for an unattended role (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`). It's **informational, not blocking** — your config saves. To clear the warning, re-run `cfcf init --force` or `cfcf config edit` and pick `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for those roles instead. PA / HA / manually-invoked SA on `claude-code` do NOT trigger the warning — they're within Anthropic's allowed-interactive scope. Full background: [`anthropic-policy.md`](anthropic-policy.md).
+
+### Log-visibility note during `cfcf init` (claude-code-ollama on unattended role)
+
+A softer info note (blue, not yellow) fires when you pick `claude-code-ollama` for an unattended role. The ollama path is **policy-clean** (no Anthropic credential involved), but `claude -p` buffers stdout for the entire run regardless of which model serves it — log files stay silent during the run and dump the final response only when the agent exits. This is a UX caveat, not a correctness issue. If you want live progress monitoring, prefer `codex` (streams natively in `exec` mode) or the opencode adapters for unattended roles.
+
+### Iteration log file is empty / appears stuck while a claude-code* role is running
+
+Expected — see the entry above. Both `claude-code` and `claude-code-ollama` use `claude -p`, which buffers stdout to the end of the run. The log file (`~/.cfcf/logs/<workspace>/iteration-NNN-<role>.log`) stays small or empty for the entire iteration, then the buffered output dumps when the agent exits.
+
+**Diagnostics during a "stuck" run** to confirm progress is happening:
+
+```bash
+# Ollama-routed runs: tail ollama's own log for live POST activity
+tail -f ~/.ollama/logs/server.log | grep messages
+
+# File-system mutations: agent writes signal files / iteration handoff
+watch -n 2 'ls -la /tmp/your-repo/cfcf-docs/'
+
+# Process state: model runner CPU + memory shows generation activity
+ps -o pid,pcpu,pmem,command | grep -E "claude|ollama runner"
+```
+
+If you want live progress in the cf² log file specifically, switch the role to `codex`, `opencode`, or `opencode-ollama` — those stream tokens turn-by-turn into the log file as the agent works.
 
 ### `cfcf init` fails to download the embedder
 

@@ -363,26 +363,36 @@ export function registerInitCommand(program: Command): void {
       );
       config.autoDocumenter = autoDoc.toLowerCase() === "yes" || autoDoc.toLowerCase() === "y";
 
-      // Anthropic third-party-harness policy warning (item 6.28).
-      // Surfaced after every role + model pick + auto* flag is settled,
-      // so we can name the affected role(s) precisely. See
-      // docs/decisions-log.md (2026-05-07) for the policy framing.
+      // Two related callouts surfaced after every role + model pick +
+      // auto* flag is settled (item 6.28). Same logic as the web UI's
+      // <HarnessPolicyWarning> component (kept in sync).
+      //
+      //   1. ⚠ policy-grade — claude-code (direct) on unattended role.
+      //      Anthropic's third-party-harness rule applies. See
+      //      docs/decisions-log.md (2026-05-07) for the policy framing.
+      //   2. ℹ log-visibility — claude-code-ollama on unattended role.
+      //      Policy-clean (no Anthropic credential), but `claude -p`
+      //      buffers stdout for the entire run regardless. UX caveat.
+      //
+      // Architect is conditional on autoReviewSpecs=true for both
+      // (otherwise it runs only when the user manually invokes
+      // `cfcf review`, which is interactive scope).
       const harnessRiskyRoles: string[] = [];
+      const bufferingRoles: string[] = [];
       const checkRole = (roleLabel: string, adapter: string) => {
         if (isClaudeCodeHarnessRisk(adapter)) harnessRiskyRoles.push(roleLabel);
+        if (adapter === "claude-code-ollama") bufferingRoles.push(roleLabel);
       };
-      // Always-unattended roles:
       checkRole("dev", config.devAgent.adapter);
       checkRole("judge", config.judgeAgent.adapter);
       checkRole("documenter", config.documenterAgent.adapter);
       if (config.reflectionAgent) {
         checkRole("reflection", config.reflectionAgent.adapter);
       }
-      // Architect is conditional on autoReviewSpecs=true (otherwise it
-      // runs only when the user manually invokes `cfcf review`).
       if (config.autoReviewSpecs) {
         checkRole("architect (because autoReviewSpecs=true)", config.architectAgent.adapter);
       }
+
       if (harnessRiskyRoles.length > 0) {
         console.log();
         console.log("⚠  Anthropic third-party-harness policy notice");
@@ -392,12 +402,31 @@ export function registerInitCommand(program: Command): void {
         console.log(`  Affected role${harnessRiskyRoles.length > 1 ? "s" : ""}: ${harnessRiskyRoles.join(", ")}`);
         console.log();
         console.log("  Compliant alternatives for unattended roles:");
-        if (available.includes("codex")) console.log("    - codex (OpenAI's policy explicitly endorses CLI automation)");
-        if (available.includes("claude-code-ollama")) console.log("    - claude-code-ollama (Claude Code via local ollama models)");
-        if (available.includes("opencode-ollama")) console.log("    - opencode-ollama (Opencode via local ollama models)");
-        if (available.includes("opencode")) console.log("    - opencode (uses your own provider auth via `opencode auth login`)");
+        if (available.includes("codex")) console.log("    - codex (OpenAI's policy explicitly endorses CLI automation; streams progress live)");
+        if (available.includes("claude-code-ollama")) console.log("    - claude-code-ollama (Claude Code via local ollama models — policy-clean but buffers logs; see info note below)");
+        if (available.includes("opencode-ollama")) console.log("    - opencode-ollama (Opencode via local ollama models; streams live)");
+        if (available.includes("opencode")) console.log("    - opencode (uses your own provider auth via `opencode auth login`; streams live)");
         console.log();
         console.log(`  Re-run \`cfcf init --force\` or \`cfcf config edit\` to switch.`);
+        console.log();
+      }
+
+      if (bufferingRoles.length > 0) {
+        console.log();
+        console.log("ℹ  Log-visibility note: claude-code-ollama buffers during the run");
+        console.log("  --------------------------------------------------------------");
+        console.log("  claude-code-ollama is policy-clean (no Anthropic credential involved");
+        console.log("  — local ollama serves the model), but `claude -p` still buffers stdout");
+        console.log("  for the entire run regardless of which model is behind it. The iteration");
+        console.log("  log file stays empty during the run and dumps the final response only");
+        console.log("  when the agent exits. This is a UX caveat, not a correctness issue.");
+        console.log();
+        console.log(`  Affected role${bufferingRoles.length > 1 ? "s" : ""}: ${bufferingRoles.join(", ")}`);
+        console.log();
+        console.log("  For live progress in the log file, prefer codex (streams natively in");
+        console.log("  exec mode) or the opencode adapters. Keep claude-code-ollama if you");
+        console.log("  specifically prefer Claude's tool-call format and don't need live");
+        console.log("  monitoring. See `cfcf help anthropic-policy` for the full breakdown.");
         console.log();
       }
 

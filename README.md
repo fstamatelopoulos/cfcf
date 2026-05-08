@@ -28,8 +28,11 @@ cfcf can be driven from the CLI or from the web GUI served by the same Hono serv
 - **[Bun](https://bun.sh/)** v1.3+ — cfcf's runtime. The curl-bash installer below installs Bun for you if it's missing, so this is effectively automatic for first-time users.
 - At least one supported AI coding agent (cfcf detects what's installed during `cfcf init`):
   - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (Anthropic)
-  - **[Codex CLI](https://github.com/openai/codex)** (OpenAI)
-  - More will be supported in the future, I just started with the dev agents I actively use
+  - **[Codex CLI](https://github.com/openai/codex)** (OpenAI) — recommended for the unattended iteration roles (dev / judge / reflection / documenter); streams progress live to log files
+  - **[Opencode](https://opencode.ai)** (sst.dev) — alternative to Codex; runs against your provider's API or via local ollama models
+  - **[Ollama](https://ollama.com)** — optional, enables `claude-code-ollama` and `opencode-ollama` adapters that drive the agent CLI against locally-served models
+
+> ⚠️ **Anthropic policy + log-visibility heads-up.** `claude-code` (direct, talking to Anthropic's API/subscription) is **only recommended for interactive roles**: Product Architect (`cfcf spec`), Help Assistant (`cfcf help assistant`), and manually-invoked Solution Architect (`cfcf review`). Anthropic's third-party-harness policy restricts subscription OAuth to interactive use; cf²'s unattended dev / judge / reflection / documenter loop is the violation pattern the rule targets. **`claude-code-ollama` is policy-clean** (no Anthropic credential involved — local ollama serves the model) but shares Claude Code's `-p` stdout-buffering behaviour: log files stay silent during the entire run and dump the final response only when the agent exits. If you want live progress monitoring, use `codex` or the opencode adapters for unattended roles. See [`docs/guides/anthropic-policy.md`](docs/guides/anthropic-policy.md) for the full breakdown + the recommended adapter-per-role table. cf² surfaces warnings in `cfcf init` and the web UI Settings / workspace Config when these recommendations are violated; neither blocks the choice.
 
 cfcf is distributed as a standard npm package (`@cerefox/codefactory`); `bun install -g` resolves the heavy native deps (transformers, ORT, sharp) the same way every JS-ecosystem CLI does. A per-platform `@cerefox/codefactory-native-<platform>` package provides the pinned libsqlite3 + sqlite-vec libs. See [`docs/guides/installing.md`](docs/guides/installing.md) for the install one-liner + local / file-URL install paths.
 
