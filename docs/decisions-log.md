@@ -13,6 +13,48 @@ Entries describe *why we picked the path we did*, not *what shipped when* — th
 
 ---
 
+## 2026-05-07 — Anthropic's third-party-harness policy → adapter expansion via `ollama launch` (item 6.28)
+
+**Context.** Anthropic's Jan→Apr 2026 clarification on subscription OAuth tokens (Consumer Terms §3.7 + the February 2026 written clarification: *"Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted"* + Boris Cherny's 2026-04-04 X post tying subscription limits exclusively to interactive use) made cfcf's unattended iteration loop a textbook violation pattern when running under a Pro/Max subscription. The rule targets the **credential** (subscription OAuth token in any third-party tool / harness / Agent SDK), not the headless-vs-interactive pattern per se — but in practice the unattended `claude -p` path used by cfcf's dev / judge / reflection / documenter roles maps onto exactly that violation. Carve-outs — interactive `claude` CLI, Anthropic's first-party Routines, CI on the user's own repo with `CLAUDE_CODE_OAUTH_TOKEN`, Agent SDK with API-key auth — don't cover the cfcf use case.
+
+OpenAI / Codex's policy is materially different. The Codex pricing page explicitly endorses the API-key path as "great for automation in shared environments like CI", and the CLI is documented as scriptable for non-interactive pipelines. No published prohibition on third-party harnesses. The existing `codex` adapter is therefore unaffected; the response is scoped to Claude Code.
+
+cfcf needs (a) a non-Claude-subscription path for unattended roles and (b) clear UX guidance steering users toward that path while leaving the interactive Product Architect + Help Assistant roles on Claude Code (where the subscription is unambiguously fine because the agent's TUI takes over the user's shell directly).
+
+**Options considered.**
+
+1. **Stay on Claude Code for all roles (status quo).** Policy violation by the rule as written. Rejected.
+2. **Env-vars + local proxy.** Plumb `customBaseUrl` + `customAuthToken` per role on the existing `claude-code` adapter; users run a local proxy (`claude-bridge` / `LiteLLM` / `claude-code-router`) that translates Anthropic-shape requests to ollama. Drafted in the 2026-05-07 design pass and **rejected after a correction from the user**: the working setup is `ollama launch claude --model gemma4:31b` — a single exec command, no proxy stack, no env-var dance. The proxy approach would have shifted maintenance responsibility onto cfcf docs (which proxy to recommend, version pinning, debugging steps when the proxy desyncs from upstream API shape).
+3. **Single config flag on the existing `claude-code` adapter** ("via ollama? yes/no") that swaps `buildCommand` between direct `claude` and `ollama launch claude`. Functional but fights the existing adapter contract: the model picker has to source from two different lists depending on the flag, availability has to consider both binaries, the display name is ambiguous. Rejected.
+4. **`ollama launch <agent>` exec wrapper as separate adapter entries** in the registry. Three new adapters: `opencode` (direct), `claude-code-ollama`, `opencode-ollama`. Each has a distinct availability check, model picker source, and display name. Existing `claude-code` and `codex` adapters unchanged. **Selected.**
+
+**Decided** — option 4. Specifically:
+
+- **Three new adapters** in `packages/core/src/adapters/`, registered in `adapters/index.ts`:
+  - `opencode` (direct) — availability via `opencode --version`; models picker shows just the "Custom model name…" sentinel from 6.26 because cfcf doesn't see opencode's internal provider config (the user owns it via `opencode auth login`).
+  - `claude-code-ollama` — `buildCommand` returns `{ command: "ollama", args: ["launch", "claude", "--model", <ollama-model>, ...claude-flags] }`; availability requires BOTH `ollama` and `claude` detected; models from `availableOllamaModels`; instruction filename stays `CLAUDE.md`.
+  - `opencode-ollama` — same pattern with `opencode` as the wrapped agent; availability requires both `ollama` and `opencode`.
+- **Ollama detection** as a standalone helper alongside `detectAvailableAgents()` — `ollama --version` to confirm installation, `ollama list` to enumerate locally-pulled models. Result cached as `availableOllamaModels: string[]` on `CfcfGlobalConfig`; refreshed by `cfcf init` / `cfcf config edit` and on web Settings tab mount.
+- **Role mapping** (recommended `cfcf init` defaults — user can override):
+  - *Interactive — stay on Claude Code by default*: Product Architect (`cfcf spec`), Help Assistant (`cfcf help assistant`), Solution Architect when invoked manually via `cfcf review`. The agent's TUI takes over the user's shell; cfcf is acting as a launcher with curated prompts. Within Anthropic's allowed-interactive scope.
+  - *Unattended — default off Claude Code*: dev, judge, reflection, documenter, and architect when `autoReviewSpecs=true`. Pick from `claude-code-ollama`, `opencode-ollama`, `opencode` (direct, with user-configured provider auth), or the existing `codex`.
+- **Warning UI** when `claude-code` is selected for an unattended role — CLI one-liner at config save, web yellow callout below the adapter dropdown. Suppressed for PA / HA / manual SA. Wording: *"For limited testing only — do not use for production use as Anthropic prohibits unattended harness use of Claude Code subscriptions. See `docs/guides/anthropic-policy.md`."*
+- **Documentation sweep** — README + the relevant guides (`manual.md`, `cli-usage.md`, `installing.md`, `workflow.md`, `troubleshooting.md`) get a section on the policy + the role-by-role recommendation. New dedicated guide `docs/guides/anthropic-policy.md` carries the long-form explanation.
+
+Out of scope (deferred): Claude API metering as a separate role-target lane (a pure "API-key Claude" path that doesn't go through claude-code CLI at all); opencode with non-ollama providers exposed in the model picker (Anthropic API direct, OpenAI, OpenRouter dropdowns — adapter still works, just no first-class picker for those); auto-installation / management of ollama or local models.
+
+**Lessons.**
+
+1. **The policy is about the credential, not the pattern — but maps to the pattern in practice.** Reading "third-party harness" as "any binary you run" loses the actual rule (subscription OAuth token in an unauthorised tool). cfcf's `claude -p` in the iteration loop is a violation because it consumes a subscription OAuth token from a non-Anthropic-managed harness, not because it's headless. The credential framing matters: it explains why an env-var-with-API-key path would be policy-clean (no subscription OAuth involved) while the same binary running headless under subscription is not.
+2. **Don't assume cross-vendor symmetry.** Anthropic's framing ("subscription OAuth token in third-party tool = no") is materially different from OpenAI's ("API key path is great for automation, ChatGPT-sign-in is for personal use, no third-party-harness prohibition"). The mitigation has to be vendor-specific; a generic "harness compatibility" abstraction would have over-fit one and under-served the other.
+3. **Trust the user's working command shape over the design's first-pass.** The original draft used env-vars + proxy because that's what the literature on "Claude Code with custom backend" surfaces first. The user's actual setup is `ollama launch claude --model gemma4:31b` — a much simpler exec wrapper that side-steps the entire proxy-stack-maintenance question. When the user's running command differs from the design's first instinct, the user's command usually wins because it's already known to work.
+4. **Separate adapter entries beat config flags when the adapter's "shape" really differs.** `claude-code-ollama` has a different command, different model picker source, and different availability check than `claude-code`. Cramming both into one adapter via a flag would have cost clarity at every picker site to save ~30 lines of adapter boilerplate. The `AgentAdapter` interface is cheap; use it.
+5. **Document the rejected option, not just the chosen one.** The env-vars-and-proxy approach is a plausible reading of "support ollama in claude-code" and a future contributor might re-propose it without context. Captured here so the rejection rationale is durable.
+
+**Cross-refs.** [`docs/plan.md`](plan.md) row 6.28 (full implementation scope across seven sub-bullets a–g); F.1 in the Backlog (Third agent adapter — trigger fired; superseded by 6.28 for the OpenCode candidate, residual Aider + Goose candidates remain); `docs/guides/anthropic-policy.md` (planned, will carry the long-form user-facing explanation when 6.28 ships).
+
+---
+
 ## 2026-05-03 — Clio author/actor convention: `<role>|<agent>|<model>` stamp on every write
 
 **Context.** Item 6.18 round-3 surfaced a recurring question: when an agent (or the iteration loop, or the user via the CLI / web UI) writes to Clio, who is doing the write — and how do we make the audit log + future analytics able to tell? Pre-6.18-round-3 the answer was inconsistent: the iteration loop's auto-ingest paths sometimes set `author: "agent"` (a meaningless catch-all), the PA + HA prompt examples didn't pin a stamp at all, and the user-facing CLI defaulted to `"mcp-agent"` or whatever the caller passed. Result: the audit log records mutations, but you can't filter to "all writes by the dev role under claude-code" because the dimension wasn't being captured.
