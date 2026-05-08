@@ -252,14 +252,30 @@ describe("Decision Engine - makeDecision", () => {
 describe("Loop State Persistence", () => {
   let tempDir: string;
   const originalEnv = process.env.CFCF_CONFIG_DIR;
+  const originalNotifyEnv = process.env.CFCF_DISABLE_NOTIFICATIONS;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "cfcf-loop-persist-test-"));
     process.env.CFCF_CONFIG_DIR = tempDir;
+    // The "startLoop persists state to disk" test below kicks off a real
+    // fire-and-forget iteration loop. The loop fails quickly (no real
+    // agent setup) and tries to fire `loop.failed` through the
+    // notification dispatcher. Without this gate, the dispatch can race
+    // past afterEach + tempDir teardown, by which point the user's real
+    // ~/.cfcf config is back on PATH — leaking a real macOS desktop
+    // notification onto the user's screen. The dispatcher honors
+    // `CFCF_DISABLE_NOTIFICATIONS=1` as a global kill-switch so the
+    // race can't reach a real channel. Surfaced 2026-05-08.
+    process.env.CFCF_DISABLE_NOTIFICATIONS = "1";
   });
 
   afterEach(async () => {
     process.env.CFCF_CONFIG_DIR = originalEnv;
+    if (originalNotifyEnv === undefined) {
+      delete process.env.CFCF_DISABLE_NOTIFICATIONS;
+    } else {
+      process.env.CFCF_DISABLE_NOTIFICATIONS = originalNotifyEnv;
+    }
     await rm(tempDir, { recursive: true, force: true });
   });
 

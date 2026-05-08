@@ -165,6 +165,60 @@ describe("notification dispatcher", () => {
     expect(good.calls).toHaveLength(1);
   });
 
+  test("CFCF_DISABLE_NOTIFICATIONS=1 short-circuits dispatch (item 6.28 follow-up)", async () => {
+    // Defense in depth against test / CI contexts leaking real desktop
+    // notifications. Fires before the per-channel resolution so even a
+    // fully-configured dispatch is silent.
+    const macos = makeMockChannel("macos");
+    const log = makeMockChannel("log");
+    const config: NotificationConfig = {
+      enabled: true,
+      events: { "loop.paused": ["macos", "log"] },
+    };
+
+    const original = process.env.CFCF_DISABLE_NOTIFICATIONS;
+    try {
+      process.env.CFCF_DISABLE_NOTIFICATIONS = "1";
+      await withMockChannels({ macos, log } as unknown as Record<NotificationChannelName, NotificationChannel>, async () => {
+        await dispatch(makeTestEvent(), config);
+      });
+      expect(macos.calls).toHaveLength(0);
+      expect(log.calls).toHaveLength(0);
+    } finally {
+      if (original === undefined) delete process.env.CFCF_DISABLE_NOTIFICATIONS;
+      else process.env.CFCF_DISABLE_NOTIFICATIONS = original;
+    }
+  });
+
+  test("CFCF_DISABLE_NOTIFICATIONS accepts 'true' / 'yes' / '1' (case-insensitive)", async () => {
+    const macos = makeMockChannel("macos");
+    const config: NotificationConfig = { enabled: true, events: { "loop.paused": ["macos"] } };
+
+    const original = process.env.CFCF_DISABLE_NOTIFICATIONS;
+    try {
+      for (const value of ["1", "true", "TRUE", "yes", "  Yes  "]) {
+        process.env.CFCF_DISABLE_NOTIFICATIONS = value;
+        macos.calls.length = 0;
+        await withMockChannels({ macos } as unknown as Record<NotificationChannelName, NotificationChannel>, async () => {
+          await dispatch(makeTestEvent(), config);
+        });
+        expect(macos.calls).toHaveLength(0);
+      }
+      // Anything else leaves dispatch enabled.
+      for (const value of ["0", "false", "no", ""]) {
+        process.env.CFCF_DISABLE_NOTIFICATIONS = value;
+        macos.calls.length = 0;
+        await withMockChannels({ macos } as unknown as Record<NotificationChannelName, NotificationChannel>, async () => {
+          await dispatch(makeTestEvent(), config);
+        });
+        expect(macos.calls).toHaveLength(1);
+      }
+    } finally {
+      if (original === undefined) delete process.env.CFCF_DISABLE_NOTIFICATIONS;
+      else process.env.CFCF_DISABLE_NOTIFICATIONS = original;
+    }
+  });
+
   test("makeEvent populates timestamp and project fields", () => {
     const event = makeEvent({
       type: "loop.completed",
