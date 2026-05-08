@@ -87,6 +87,26 @@ You can mix and match freely — these are recommendations for first-run default
 
 **Why `codex` is the unattended default**: it's the only path today that combines (a) policy-clean (OpenAI's API-key flow explicitly endorses CLI automation), (b) live progress streaming in the log file (codex's `exec` mode is verbose-by-default), and (c) well-tested across cf²'s iteration roles. Use `claude-code-ollama` when you specifically prefer Claude's instruction-file / tool-call conventions and accept the silent-log trade-off.
 
+### A note on `opencode-ollama` stability (2026-05-08 dogfood)
+
+`opencode-ollama` works in principle but has known stability issues in cf²'s harness pattern that we haven't fully resolved yet. Specifically:
+
+- **Hardcoded permission denies.** Even with `--dangerously-skip-permissions`, opencode's session config denies `question` / `plan_enter` / `plan_exit` permissions internally (matches [github/anomalyco/opencode#13851](https://github.com/anomalyco/opencode/issues/13851)). When the model tries to use one of those, opencode silently waits on a stdin permission prompt that never arrives — the agent appears to hang.
+- **Silent error swallowing.** When ollama returns a 5xx (e.g. because of a busy/serializing model runner), opencode logs the failure to its INTERNAL log file (`~/.local/share/opencode/log/<timestamp>.log`) but doesn't propagate the error to stdout or exit non-zero. cf²'s harness sees a hung process with no diagnostic.
+- **Stdout buffering** like claude-code-ollama — the cf² log file shows only opencode's session-header banner during the run.
+
+**Recommendation until iter-6 stability work lands** (item 6.32 in the plan): for unattended roles, prefer `claude-code-ollama` (which is the better-tested ollama path in cf²'s harness — verified end-to-end with qwen3-coder on the calc workspace) or `codex` (which streams live + has no comparable hang issues). Use `opencode-ollama` only if you've validated it works against your specific model + workload combination. The adapter is shipped for users who specifically want opencode's UX, but it's not the recommended unattended default today.
+
+If you do hit an opencode hang during a loop run, the recovery is:
+```bash
+# Find + kill the stuck opencode + ollama-launch wrappers (cfcf 6.31 will
+# automate this on `cfcf server stop`; until then, kill them manually):
+pgrep -f "ollama launch opencode|/.opencode/bin/opencode" | xargs kill
+# Optional: also kill the loaded ollama runner so it cold-starts fresh:
+pgrep -f "ollama runner" | xargs kill
+# Then resume / retry the loop from the cf² web UI or `cfcf resume`.
+```
+
 ---
 
 ## Log visibility during unattended runs

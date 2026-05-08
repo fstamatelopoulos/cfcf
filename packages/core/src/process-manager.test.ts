@@ -103,5 +103,45 @@ describe("process manager", () => {
       const result = await managed.result;
       expect(result.exitCode).toBe(0);
     });
+
+    // Regression: 2026-05-08 (item 6.31) — kill() must terminate the
+    // whole process tree, not just the immediate child. Without
+    // detached + process-group semantics, wrapper scripts like
+    // `ollama launch <agent>` would die from SIGTERM but leave the
+    // wrapped agent running as an orphan of init.
+    it("kill() terminates the whole process tree (wrapper + child)", async () => {
+      // Spawn `bash -c "sleep 30 & wait"`. The bash shell is the
+      // immediate child; `sleep 30` is a grandchild via the
+      // backgrounded `&`. Pre-fix: kill() sent SIGTERM to bash,
+      // bash died, sleep continued for 30s as orphan. Post-fix:
+      // kill() sends SIGTERM to the whole process group, killing
+      // both bash and sleep together.
+      const managed = await spawnProcess({
+        command: "bash",
+        args: ["-c", "sleep 30 & wait"],
+        cwd: process.cwd(),
+      });
+      // Capture the spawned bash's PID so we can verify the sleep
+      // grandchild dies too. On macOS / Linux pgrep -P <pid> lists
+      // direct children.
+      const bashPid = managed.proc.pid;
+      // Wait briefly for sleep to spawn under bash.
+      await new Promise((r) => setTimeout(r, 200));
+      // Verify sleep is alive as bash's child (sanity guard for the
+      // test's own setup; if pgrep can't find the child the test is
+      // unreliable on this platform).
+      const childrenBefore = Bun.spawnSync(["pgrep", "-P", String(bashPid)]);
+      const sleepPidStr = childrenBefore.stdout.toString().trim().split("\n")[0];
+      const sleepPid = parseInt(sleepPidStr, 10);
+      expect(sleepPid).toBeGreaterThan(0);
+      // Now kill the spawn. This should take down both bash AND sleep.
+      managed.kill();
+      // Wait for the SIGTERM grace window + a bit for OS reaping.
+      await new Promise((r) => setTimeout(r, 2200));
+      // The sleep grandchild should be gone — `kill -0 <pid>` returns
+      // non-zero if the pid is no longer alive.
+      const stillAlive = Bun.spawnSync(["kill", "-0", String(sleepPid)]);
+      expect(stillAlive.exitCode).not.toBe(0);
+    });
   });
 });
