@@ -5,7 +5,7 @@ import { fetchAgentModels, fetchGlobalConfig, saveWorkspace } from "../api";
 import { AgentModelSelect } from "./AgentModelSelect";
 import { ClioProjectDialog } from "./ClioProjectDialog";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
-import { HarnessPolicyWarning } from "./HarnessPolicyWarning";
+import { HarnessPolicyWarning, isPolicyRiskyRow } from "./HarnessPolicyWarning";
 import { navigateTo } from "../hooks/useRoute";
 
 const ROLE_KEYS: (keyof Pick<
@@ -274,6 +274,7 @@ export function ConfigDisplay({
           <tbody>
             {ROLE_KEYS.map((key) => {
               const agent = draft[key] ?? { adapter: draft.devAgent.adapter };
+              const policyRisky = isPolicyRiskyRow(agent.adapter);
               return (
                 <tr key={key}>
                   <th>{ROLE_LABEL[key]}</th>
@@ -293,6 +294,20 @@ export function ConfigDisplay({
                         </option>
                       )}
                     </select>
+                    {policyRisky && (
+                      <span
+                        title="Anthropic third-party-harness policy notice — see the warning below the table."
+                        aria-label="Anthropic harness policy warning applies to this row"
+                        style={{
+                          marginLeft: "0.5rem",
+                          color: "var(--color-warning, #c8861a)",
+                          fontWeight: "bold",
+                          cursor: "help",
+                        }}
+                      >
+                        ⚠
+                      </span>
+                    )}
                   </td>
                   <td>
                     <AgentModelSelect
@@ -333,11 +348,9 @@ export function ConfigDisplay({
             { label: "dev", adapter: draft.devAgent.adapter },
             { label: "judge", adapter: draft.judgeAgent.adapter },
             { label: "documenter", adapter: draft.documenterAgent.adapter },
+            { label: "architect", adapter: draft.architectAgent.adapter },
             ...(draft.reflectionAgent
               ? [{ label: "reflection", adapter: draft.reflectionAgent.adapter }]
-              : []),
-            ...(draft.autoReviewSpecs
-              ? [{ label: "architect (autoReviewSpecs=true)", adapter: draft.architectAgent.adapter }]
               : []),
           ]}
         />

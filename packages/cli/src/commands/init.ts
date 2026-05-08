@@ -363,34 +363,41 @@ export function registerInitCommand(program: Command): void {
       );
       config.autoDocumenter = autoDoc.toLowerCase() === "yes" || autoDoc.toLowerCase() === "y";
 
-      // Two related callouts surfaced after every role + model pick +
-      // auto* flag is settled (item 6.28). Same logic as the web UI's
-      // <HarnessPolicyWarning> component (kept in sync).
+      // Three related callouts surfaced after every role + model pick +
+      // auto* flag is settled (items 6.28 + 6.30). Same logic as the
+      // web UI's <HarnessPolicyWarning> component (kept in sync).
       //
       //   1. ⚠ policy-grade — claude-code (direct) on unattended role.
       //      Anthropic's third-party-harness rule applies. See
       //      docs/decisions-log.md (2026-05-07) for the policy framing.
-      //   2. ℹ log-visibility — claude-code-ollama on unattended role.
+      //   2. ℹ API-parse-error — claude-code-ollama on unattended role
+      //      (item 6.30, May 2026): Anthropic's strict Messages API
+      //      parser rejects malformed tool-call output from some
+      //      non-coder-tuned local models (gemma4, etc.). Coder-tuned
+      //      models work fine; opencode-ollama is the recommended
+      //      fall-back for the same model when this combination fails.
+      //   3. ℹ log-visibility — claude-code-ollama on unattended role.
       //      Policy-clean (no Anthropic credential), but `claude -p`
       //      buffers stdout for the entire run regardless. UX caveat.
       //
-      // Architect is conditional on autoReviewSpecs=true for both
-      // (otherwise it runs only when the user manually invokes
-      // `cfcf review`, which is interactive scope).
+      // Architect is always counted as unattended (item 6.30): the
+      // loop invokes it on `refine_plan` resume actions and judge
+      // NEEDS_REFINEMENT verdicts as well as the pre-loop
+      // autoReviewSpecs path; same adapter setting drives all three
+      // loop paths AND the manual `cfcf review` path, so we warn for
+      // the worst case.
       const harnessRiskyRoles: string[] = [];
-      const bufferingRoles: string[] = [];
+      const claudeOllamaRoles: string[] = [];
       const checkRole = (roleLabel: string, adapter: string) => {
         if (isClaudeCodeHarnessRisk(adapter)) harnessRiskyRoles.push(roleLabel);
-        if (adapter === "claude-code-ollama") bufferingRoles.push(roleLabel);
+        if (adapter === "claude-code-ollama") claudeOllamaRoles.push(roleLabel);
       };
       checkRole("dev", config.devAgent.adapter);
       checkRole("judge", config.judgeAgent.adapter);
       checkRole("documenter", config.documenterAgent.adapter);
+      checkRole("architect", config.architectAgent.adapter);
       if (config.reflectionAgent) {
         checkRole("reflection", config.reflectionAgent.adapter);
-      }
-      if (config.autoReviewSpecs) {
-        checkRole("architect (because autoReviewSpecs=true)", config.architectAgent.adapter);
       }
 
       if (harnessRiskyRoles.length > 0) {
@@ -411,8 +418,20 @@ export function registerInitCommand(program: Command): void {
         console.log();
       }
 
-      if (bufferingRoles.length > 0) {
+      if (claudeOllamaRoles.length > 0) {
         console.log();
+        console.log("ℹ  API parse errors observed with some ollama models on claude-code-ollama (May 2026)");
+        console.log("  -------------------------------------------------------------------------------------");
+        console.log("  claude-code-ollama uses Anthropic's strict Messages API parser on top of ollama's");
+        console.log("  model output. Some non-coder-tuned local models (notably gemma4:31b) produce");
+        console.log("  tool-use / tool-result content blocks the parser rejects with");
+        console.log("  `API Error: Content block not found`, and the run exits with no files written.");
+        console.log("  Coder-tuned models (qwen3-coder, deepseek-coder) work fine.");
+        console.log();
+        console.log("  If you hit this error, switch to opencode-ollama for the same model — its");
+        console.log("  OpenAI-compatible endpoint is more tolerant of variance in tool-call output.");
+        console.log();
+
         console.log("ℹ  Log-visibility note: claude-code-ollama buffers during the run");
         console.log("  --------------------------------------------------------------");
         console.log("  claude-code-ollama is policy-clean (no Anthropic credential involved");
@@ -421,7 +440,7 @@ export function registerInitCommand(program: Command): void {
         console.log("  log file stays empty during the run and dumps the final response only");
         console.log("  when the agent exits. This is a UX caveat, not a correctness issue.");
         console.log();
-        console.log(`  Affected role${bufferingRoles.length > 1 ? "s" : ""}: ${bufferingRoles.join(", ")}`);
+        console.log(`  Affected role${claudeOllamaRoles.length > 1 ? "s" : ""}: ${claudeOllamaRoles.join(", ")}`);
         console.log();
         console.log("  For live progress in the log file, prefer codex (streams natively in");
         console.log("  exec mode) or the opencode adapters. Keep claude-code-ollama if you");
