@@ -90,8 +90,13 @@ describe("config", () => {
       // Documenter + reflection: same compliance reasoning as dev.
       expect(config.documenterAgent.adapter).toBe("codex");
       expect(config.reflectionAgent?.adapter).toBe("codex");
-      // Architect / PA / HA: interactive roles, claude-code preferred.
-      expect(config.architectAgent.adapter).toBe("claude-code");
+      // Architect: classified unattended (item 6.30) — same reasoning as
+      // dev. All architect invocations spawn headlessly with `-p`, even
+      // manual `cfcf review`, so claude-code would fire the policy
+      // warning on fresh install. Default to codex.
+      expect(config.architectAgent.adapter).toBe("codex");
+      // PA + HA: TRULY interactive (TUI takeover via stdio: "inherit"),
+      // claude-code preferred.
       expect(config.productArchitectAgent?.adapter).toBe("claude-code");
       expect(config.helpAssistantAgent?.adapter).toBe("claude-code");
     });

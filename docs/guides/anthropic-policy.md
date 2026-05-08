@@ -6,14 +6,14 @@ This guide covers two related topics that together drive cf²'s adapter recommen
 2. **Log visibility during unattended runs** — `claude -p` (used by both `claude-code` AND `claude-code-ollama`) buffers stdout for the entire run. This is a UX concern, not a correctness one, but it changes which adapter is best for unattended roles where you want to watch progress.
 
 > **TL;DR — recommended setup.**
-> - **Interactive roles** (Product Architect via `cfcf spec`, Help Assistant via `cfcf help assistant`, manually-invoked Solution Architect via `cfcf review`): **`claude-code` is the recommended choice.** TUI takes over your shell; no policy issue, no log-visibility issue (you watch it live in your terminal).
-> - **Unattended roles** (dev / judge / reflection / documenter / auto-architect when `autoReviewSpecs=true`):
+> - **Interactive roles** (Product Architect via `cfcf spec`, Help Assistant via `cfcf help assistant`): **`claude-code` is the recommended choice.** TUI takes over your shell (`stdio: "inherit"`); no policy issue, no log-visibility issue.
+> - **Unattended roles** (dev / judge / reflection / documenter / Solution Architect — including manual `cfcf review`, since the architect is always spawned headlessly with `-p` regardless of how it's invoked; item 6.30 correction):
 >     - **First choice**: `codex` — streams progress live to the log file, policy-clean, fast setup.
 >     - **Alternatives**: `opencode-ollama` / `opencode` — also stream live, also policy-clean.
 >     - **Works but silent during run**: `claude-code-ollama` — uses local ollama models with Claude's UX. Same `-p` stdout buffering as direct claude-code: log file stays empty until the agent exits, then dumps the final response. Pick this if you prefer Claude's tool-call format / instruction-file conventions and don't need live monitoring.
 >     - **Avoid**: `claude-code` (direct) — violates Anthropic's third-party-harness policy on top of the buffering.
 >
-> cf² surfaces warnings at `cfcf init` / `cfcf config edit` and in the web UI when `claude-code` is picked for an unattended role (yellow callout, policy-grade) and a softer note when `claude-code-ollama` is picked for an unattended role (blue callout, log-visibility). Neither blocks the choice — you can still proceed.
+> cf² surfaces warnings at `cfcf init` / `cfcf config edit` and in the web UI when `claude-code` is picked for an unattended role (yellow callout, policy-grade), an info note when `claude-code-ollama` is picked (blue callout, API-parse-error caveat for non-coder models — item 6.30), and a second info note about log-visibility (also blue, applies to claude-code-ollama universally). None of them block the choice — you can still proceed.
 
 ---
 
@@ -25,7 +25,7 @@ Across the **January 2026** OAuth-token block, the **February 2026** written cla
 
 The underlying Consumer Terms §3.7 already prohibits accessing the Services "through automated or non-human means" except via an Anthropic API key (or where Anthropic explicitly permits it). The 2026 clarification connects that abstract rule to a concrete pattern: **subscription OAuth token in a non-Anthropic-managed harness** is the prohibited combination.
 
-The rule targets **the credential**, not the headless-vs-interactive pattern itself. But in practice the most common violation pattern is "headless `claude -p` running under a subscription OAuth token from inside a third-party tool" — which is exactly what cfcf does for its unattended dev / judge / reflection / documenter roles.
+The rule targets **the credential**, not the headless-vs-interactive pattern itself. But in practice the most common violation pattern is "headless `claude -p` running under a subscription OAuth token from inside a third-party tool" — which is exactly what cfcf does for its unattended dev / judge / reflection / documenter / architect roles.
 
 ### What stays allowed
 
@@ -77,7 +77,7 @@ cf² will display an **inline warning** at `cfcf init` and `cfcf config edit` ti
 |---|---|---|---|
 | **Product Architect** | `claude-code` | n/a (interactive — TUI in your shell) | Interactive, allowed scope. Opus-class model is worth the spend on spec authoring. |
 | **Help Assistant** | `claude-code` | n/a (interactive) | Interactive, allowed scope. A smaller Sonnet/Haiku model is fine here. |
-| **Solution Architect** (manual) | `claude-code` | n/a (interactive) | Manually invoked, you drive. |
+| **Solution Architect** (any invocation: pre-loop, mid-loop refine_plan, manual `cfcf review`) | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | All architect spawns are headless `claude -p` / `codex exec` regardless of invocation path — the `cfcf review` CLI just polls a status endpoint while the server runs the agent in the background, no TUI takeover. Same trade-offs as dev. |
 | **Dev agent** | `codex` (or `claude-code-ollama` if you prefer Claude's UX) | ✅ codex / ❌ claude-code-ollama | Compliant unattended path. codex streams live; claude-code-ollama buffers (silent log during run, dumps at exit). |
 | **Judge agent** | `codex` | ✅ live | "Different agent than dev" is the historical recommendation; codex's `exec` mode also streams live. |
 | **Reflection agent** | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | Strongest reasoning available on the unattended path. |
@@ -193,7 +193,7 @@ Run `cfcf init` (first-run) or `cfcf config edit` (already configured). The agen
 - `opencode-ollama` — Opencode via ollama
 - `opencode` — Opencode standalone (you must `opencode auth login` separately for this to work)
 
-Pick `claude-code-ollama` (or one of the alternatives) for dev / judge / reflection / documenter. Pick `claude-code` for Product Architect / Help Assistant.
+Pick `claude-code-ollama` (or one of the alternatives) for dev / judge / reflection / documenter / architect. Pick `claude-code` for Product Architect / Help Assistant — those are the only two roles where the agent's TUI actually takes over your shell (`stdio: "inherit"`).
 
 ### 5. Verify
 
