@@ -30,6 +30,21 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 - New `refreshOllamaModelsInConfig()` helper in `@cfcf/core`. 4 new
   unit tests + 2 new endpoint tests.
 
+### Fixed — Item 6.33: model-picker UX for ollama-routed adapters
+
+- **Hide "(adapter default)" for `claude-code-ollama` and
+  `opencode-ollama`.** The seed-sourced adapters (`claude-code`,
+  `codex`) have real built-in defaults when `--model` is omitted, so
+  the empty option meaningfully says "let the CLI pick". The
+  ollama-routed adapters don't — `ollama launch <agent>` requires
+  `--model <name>` to know which local model to hand off, and saving
+  `model=""` would produce a silent misconfiguration. The picker now
+  forces a deliberate selection for these adapters.
+- **Empty-state placeholder for ollama-routed adapters** when no
+  models are available: `(no ollama models — pull one or click
+  Refresh)` rendered as a disabled option so the dropdown isn't
+  visually empty + the user is told what to do next.
+
 ## [0.21.0] -- 2026-05-08
 
 ### Added — Item 6.31: orphan agent-process cleanup
