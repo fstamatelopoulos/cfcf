@@ -9,7 +9,14 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- **Web Settings → Agent roles: stale "(custom)" model after adapter change.** Reproduced on both the global Settings page and the per-workspace Config tab (the two surfaces share the same `<AgentModelSelect>` + `updateAgent` pattern). Switching a role's adapter from e.g. `claude-code` (model: `sonnet`) to `codex` left the model field unchanged, so the picker rendered `sonnet (custom)` via `<AgentModelSelect>`'s back-compat path — the legacy carry-over looked like an intentional pin and would have silently saved a misconfiguration. Fix: `updateAgent` in both `ConfigDisplay.tsx` (workspace) and `ServerInfo.tsx` (global) now resets `model` on adapter change. Picks the first entry from the new adapter's resolved model list when non-empty; clears the field when empty so the picker falls back to `(adapter default)` for seed adapters or the disabled empty-state placeholder for ollama-routed adapters. Behaviour on direct model-field changes is unchanged.
+- **Stale assertion in `server/src/app.test.ts > PUT /api/config > accepts a partial patch and returns the merged config`.** Pre-existing on main; surfaced during the verification pass for the dropdown fix above. The test asserted `body.devAgent.adapter === "claude-code"` but `createDefaultConfig(["claude-code", "codex"])` now picks `codex` for unattended roles per the policy-default flip from item 6.28. Test point is "PUT-merge preserves untouched fields", not "what the default dev adapter is" — assertion updated to match the post-6.28 default with a comment explaining the expectation.
+
+### Documentation
+
+- **CLAUDE.md "Agent-agnostic" principle** updated from "Two adapters today (Claude Code, Codex)" to the current five (`claude-code`, `codex`, `opencode`, `claude-code-ollama`, `opencode-ollama`), with a one-line nod to the 6.28 policy framing. Drift from the v0.20.0 adapter expansion that hadn't been swept into the principles bullet yet.
 
 ## [0.22.1] -- 2026-05-09
 

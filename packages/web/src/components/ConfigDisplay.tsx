@@ -118,6 +118,23 @@ export function ConfigDisplay({
     if (field === "model" && value === "") {
       delete (next as { model?: string }).model;
     }
+    // When the adapter changes, the previously-selected model almost
+    // certainly doesn't exist for the new adapter (e.g. switching from
+    // claude-code's "sonnet" to codex would otherwise render as
+    // "sonnet (custom)" via AgentModelSelect's back-compat path —
+    // looks intentional but is just a stale carry-over). Reset to the
+    // first model in the new adapter's list, or clear the field if
+    // the list is empty so the picker falls back to "(adapter
+    // default)" (seed adapters) or the disabled empty-state placeholder
+    // (ollama-routed adapters).
+    if (field === "adapter") {
+      const newList = agentModels[value] ?? [];
+      if (newList.length > 0) {
+        (next as { model?: string }).model = newList[0];
+      } else {
+        delete (next as { model?: string }).model;
+      }
+    }
     setDraft({ ...draft, [roleKey]: next });
     setSavedAt(null);
   }

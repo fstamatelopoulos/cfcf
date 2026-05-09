@@ -108,8 +108,15 @@ describe("server API", () => {
       expect(body.maxIterations).toBe(20);
       expect(body.autoReviewSpecs).toBe(true);
       expect(body.readinessGate).toBe("needs_refinement_or_blocked");
-      // Untouched fields preserved
-      expect(body.devAgent.adapter).toBe("claude-code");
+      // Untouched fields preserved. Note: `devAgent.adapter` defaults to
+      // `codex` (not `claude-code`) when both are detected — the
+      // policy-default flip from item 6.28 makes unattended roles
+      // prefer codex so a fresh `cfcf init` doesn't fire the
+      // Anthropic harness-policy warning. The test point here is
+      // "PUT-merge preserves untouched fields", not "what the default
+      // dev adapter is" — we just need to assert against whatever
+      // createDefaultConfig produced.
+      expect(body.devAgent.adapter).toBe("codex");
       expect(body.autoDocumenter).toBe(true);
     });
 
