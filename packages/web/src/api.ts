@@ -338,11 +338,17 @@ export function refreshOllamaModels(): Promise<RefreshOllamaModelsResponse> {
 
 // --- Role-template management (item 6.8) ---
 
+export type RoleTemplateVersionType = "full" | "augmented";
+
 export interface RoleTemplateVersion {
   id: string;
   label: string;
   savedAt: string;
   contentHash: string;
+  /** Round-2 type. Optional only for back-compat reads of round-1 manifests. */
+  type: RoleTemplateVersionType;
+  /** cf² version when this version was saved (display-only "forked from cf² vX.Y.Z" badge). */
+  cfcfVersion?: string;
 }
 
 export interface RoleTemplateSummary {
@@ -377,7 +383,7 @@ export function getRoleTemplateVersionContent(name: string, versionId: string): 
 
 export function createRoleTemplateVersion(
   name: string,
-  body: { label: string; content: string },
+  body: { label: string; content: string; type?: RoleTemplateVersionType },
 ): Promise<RoleTemplateVersion> {
   return request<RoleTemplateVersion>(
     `/api/role-templates/${encodeURIComponent(name)}/versions`,

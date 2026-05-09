@@ -1,19 +1,35 @@
 /**
  * Agents page (item 6.8): role-template management UI.
  *
- * Top-level layout: a tab strip across the top (one tab per managed
- * role template), then the main panel for the selected role with:
- *   - Heading + "currently in production" indicator
- *   - Version selector dropdown
- *   - Editor (textarea) — read-only by default; toggle Edit to make
- *     it editable. Save creates a new version with a label.
- *   - Promote-to-production / Revert-to-default actions
- *   - Per-version delete affordance (disabled for default)
+ * Round 2 (item 6.8 round 2 — augmented type added):
  *
- * State model: the currently-selected version is tracked locally
- * (`selectedVersionId`); when the user picks a different version
- * we re-fetch the content. The "promoted" version is whatever the
- * server says — independent of which version the user is viewing.
+ * Two version types coexist:
+ *   - "full"      → the version body REPLACES the bundled default.
+ *                   Maximum flexibility; no auto-upgrade.
+ *   - "augmented" → the version body is APPENDED to the bundled default
+ *                   at promote/recompose time. Auto-picks-up cf² upgrades.
+ *
+ * Two creation entry points:
+ *   - "Edit"    button → enters full-edit mode (single textarea
+ *                        prefilled with the currently-selected version).
+ *   - "Augment" button → enters augmented-edit mode (split view: bundled
+ *                        default read-only on top, empty extension below).
+ *
+ * Existing-version display:
+ *   - Full version    → single textarea, the version's body.
+ *   - Augmented version → split view: bundled default (read-only) on top,
+ *                         the version's extension on bottom (read-only or
+ *                         editable depending on isEditing).
+ *
+ * Save actions vary by editType:
+ *   - Editing existing full      → Save changes / Save as new full version
+ *   - Editing existing augmented → Save changes / Save as new augmented version
+ *   - Creating new full          → Save as new full version
+ *   - Creating new augmented     → Save as new augmented version
+ *
+ * Storage + composition + auto-recompose-on-cf²-upgrade live in
+ * `@cfcf/core/role-templates` (`refreshAugmentedOverrides`); this
+ * component is just the UI surface.
  */
 
 import { useEffect, useState } from "react";
@@ -28,6 +44,7 @@ import {
   type RoleTemplateSummary,
   type RoleTemplateFull,
   type RoleTemplateVersion,
+  type RoleTemplateVersionType,
 } from "../api";
 import { navigateTo } from "../hooks/useRoute";
 
@@ -43,8 +60,22 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
   const [activeName, setActiveName] = useState<string | null>(initialTemplate ?? null);
   const [template, setTemplate] = useState<RoleTemplateFull | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string>(DEFAULT_VERSION_ID);
+  /**
+   * Body content shown in the editor.
+   * - For full-type display: the entire template body.
+   * - For augmented-type display: just the user's EXTENSION
+   *   (the bundled default is rendered separately above it).
+   */
   const [content, setContent] = useState<string>("");
   const [isEditing, setIsEditing] = useState(false);
+  /**
+   * What kind of edit/creation flow the user is in. Only meaningful
+   * while `isEditing === true`. Set by the Edit / Augment buttons.
+   * For editing existing versions it mirrors the version's type.
+   */
+  const [editType, setEditType] = useState<RoleTemplateVersionType>("full");
+  /** True when the user clicked Augment (creates new augmented from default). */
+  const [creatingNew, setCreatingNew] = useState(false);
   const [editingDirty, setEditingDirty] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +84,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
   // Bumped after a save / delete / promote to refresh dependent data.
   const [rev, setRev] = useState(0);
 
-  // Initial load: fetch summary list + auto-select first if none chosen
-  // (or if the URL points at a template name that doesn't exist).
+  // Initial load: fetch summary list + auto-select first.
   useEffect(() => {
     listRoleTemplates()
       .then((r) => {
@@ -69,10 +99,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // React to back/forward navigation: when the URL's `?template=` query
-  // changes, sync activeName so the page actually shows the new tab.
-  // Without this effect, only the first mount's initialTemplate was
-  // honoured; later hash changes were silently ignored.
+  // React to back/forward navigation through `?template=...`.
   useEffect(() => {
     if (!initialTemplate) return;
     if (initialTemplate === activeName) return;
@@ -82,56 +109,99 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTemplate, summaries]);
 
-  // Whenever activeName or rev changes, fetch full template state.
+  // Load full state for the active template.
   useEffect(() => {
     if (!activeName) return;
     setError(null);
     getRoleTemplate(activeName)
       .then((t) => {
         setTemplate(t);
-        // Default to viewing the currently-promoted version.
         setSelectedVersionId(t.currentVersionId);
-        setContent(t.currentContent);
+        // Fetch the body for the currently-promoted version (just the
+        // extension if it's augmented; the full body otherwise).
+        return loadBodyForSelection(t, t.currentVersionId);
+      })
+      .then(() => {
         setIsEditing(false);
         setEditingDirty(false);
-        // Update URL (without page reload) so the back button works.
-        if (window.location.hash !== `#/agents?template=${encodeURIComponent(t.name)}`) {
-          window.history.replaceState(null, "", `#/agents?template=${encodeURIComponent(t.name)}`);
-        }
+        setCreatingNew(false);
       })
       .catch((e) => setError(String(e)));
+
+    if (window.location.hash !== `#/agents?template=${encodeURIComponent(activeName)}`) {
+      window.history.replaceState(null, "", `#/agents?template=${encodeURIComponent(activeName)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeName, rev]);
 
-  // When the user picks a different version (without editing), fetch its content.
+  // When the user picks a different version (without editing), re-fetch
+  // the body for that version.
   useEffect(() => {
     if (!activeName || !template) return;
     if (isEditing) return; // don't blow away in-flight edits
-    if (selectedVersionId === template.currentVersionId) {
-      setContent(template.currentContent);
+    loadBodyForSelection(template, selectedVersionId).catch((e) => setError(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVersionId, activeName]);
+
+  async function loadBodyForSelection(t: RoleTemplateFull, versionId: string): Promise<void> {
+    if (versionId === DEFAULT_VERSION_ID) {
+      setContent(t.defaultContent);
       return;
     }
-    if (selectedVersionId === DEFAULT_VERSION_ID) {
-      setContent(template.defaultContent);
-      return;
-    }
-    getRoleTemplateVersionContent(activeName, selectedVersionId)
-      .then((r) => setContent(r.content))
-      .catch((e) => setError(String(e)));
-  }, [selectedVersionId, activeName, template, isEditing]);
+    const r = await getRoleTemplateVersionContent(t.name, versionId);
+    setContent(r.content);
+  }
 
   // --- Action handlers ---
 
+  function startEdit() {
+    if (!template) return;
+    const v = template.versions.find((x) => x.id === selectedVersionId);
+    setEditType(v ? v.type : "full");
+    setCreatingNew(selectedVersionId === DEFAULT_VERSION_ID); // Edit on default = creating new
+    setIsEditing(true);
+    setEditingDirty(false);
+    setStatusMsg(null);
+  }
+
+  function startAugment() {
+    if (!template) return;
+    if (editingDirty && !window.confirm("Discard unsaved changes?")) return;
+    // Augment ALWAYS creates a new augmented version on top of the
+    // bundled default — regardless of which version is currently
+    // selected. This keeps the upgrade-friendly contract: augmented
+    // versions ride along on whatever cf² ships next.
+    setSelectedVersionId(DEFAULT_VERSION_ID);
+    setEditType("augmented");
+    setCreatingNew(true);
+    setIsEditing(true);
+    setEditingDirty(false);
+    setContent(""); // empty extension; user types their additions
+    setStatusMsg(null);
+  }
+
   async function handleSaveAsNew() {
     if (!activeName) return;
-    const label = window.prompt("Label for this version (e.g. 'stricter judge', 'opus run')");
+    const promptText =
+      editType === "augmented"
+        ? "Label for this augmented version (e.g. 'jira-hint', 'team-style')"
+        : "Label for this version (e.g. 'stricter judge', 'opus run')";
+    const label = window.prompt(promptText);
     if (!label || !label.trim()) return;
     setBusy(true);
     setStatusMsg(null);
     try {
-      const v = await createRoleTemplateVersion(activeName, { label: label.trim(), content });
-      setStatusMsg(`✓ Saved as "${v.label}". (Not yet promoted — click Promote below.)`);
+      const v = await createRoleTemplateVersion(activeName, {
+        label: label.trim(),
+        content,
+        type: editType,
+      });
+      setStatusMsg(
+        `✓ Saved as "${v.label}" (${v.type}). Not yet promoted — click Promote to make it live.`,
+      );
       setIsEditing(false);
       setEditingDirty(false);
+      setCreatingNew(false);
       setRev((n) => n + 1);
       setSelectedVersionId(v.id);
     } catch (e) {
@@ -154,7 +224,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
       setStatusMsg(
         selectedVersionId === template.currentVersionId
           ? "✓ Saved. (This version is currently promoted, so the change is live for the next agent run.)"
-          : "✓ Saved. (Promote this version to make it live.)",
+          : "✓ Saved. Promote this version to make it live.",
       );
       setIsEditing(false);
       setEditingDirty(false);
@@ -176,7 +246,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
       setStatusMsg(
         selectedVersionId === DEFAULT_VERSION_ID
           ? "✓ Reverted to bundled default. The next agent run will use cf²'s default template."
-          : `✓ Promoted to production. The next agent run will use this version.`,
+          : "✓ Promoted to production. The next agent run will use this version.",
       );
       setRev((n) => n + 1);
     } catch (e) {
@@ -188,7 +258,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
 
   async function handleDelete() {
     if (!activeName || !template) return;
-    if (selectedVersionId === DEFAULT_VERSION_ID) return; // can't happen UI-wise
+    if (selectedVersionId === DEFAULT_VERSION_ID) return;
     const v = template.versions.find((x) => x.id === selectedVersionId);
     if (!v) return;
     if (!window.confirm(`Delete version "${v.label}"? This cannot be undone.`)) return;
@@ -206,7 +276,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
     }
   }
 
-  // --- Render ---
+  // --- Derived state ---
 
   if (!activeName) {
     return (
@@ -222,11 +292,30 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
     if (!template) return "—";
     if (template.currentVersionId === DEFAULT_VERSION_ID) return "Default (built-in)";
     const v = template.versions.find((x) => x.id === template.currentVersionId);
-    return v ? v.label : template.currentVersionId;
+    return v ? `${v.label} (${v.type})` : template.currentVersionId;
   })();
 
   const selectionIsPromoted = template?.currentVersionId === selectedVersionId;
   const selectionIsDefault = selectedVersionId === DEFAULT_VERSION_ID;
+  const selectedVersion: RoleTemplateVersion | undefined = template?.versions.find(
+    (x) => x.id === selectedVersionId,
+  );
+  /**
+   * Type the editor should render in.
+   * - When editing: editType (set by the Edit / Augment button).
+   * - When viewing: the selected version's type, defaulting to "full"
+   *   for the bundled default (single textarea read-only).
+   */
+  const displayType: RoleTemplateVersionType = isEditing
+    ? editType
+    : (selectedVersion?.type ?? "full");
+  const showSplitView = displayType === "augmented";
+  // The textarea(s) are editable only in edit mode AND when the user
+  // is actually authoring the body (default tab is "view-only" for the
+  // standard template even in augment mode — that's what the read-only
+  // top panel is).
+  const extensionEditable = isEditing && displayType === "augmented";
+  const fullEditable = isEditing && displayType === "full";
 
   return (
     <div style={{ padding: "1rem", maxWidth: "1100px", margin: "0 auto" }}>
@@ -273,7 +362,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               {s.displayName}
               {s.currentVersionId !== DEFAULT_VERSION_ID && (
                 <span
-                  title="Custom version is currently promoted"
+                  title="A custom version is currently promoted"
                   style={{ marginLeft: "0.4rem", color: "var(--color-accent, #4a8ee6)" }}
                 >
                   •
@@ -318,6 +407,18 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
                   • unsaved changes
                 </span>
               )}
+              {creatingNew && isEditing && (
+                <span
+                  style={{
+                    marginLeft: "0.5rem",
+                    fontSize: "var(--text-sm)",
+                    color: "var(--color-accent, #4a8ee6)",
+                    fontWeight: "normal",
+                  }}
+                >
+                  • creating new {editType} version
+                </span>
+              )}
             </h3>
             <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted, #888)" }}>
               In production:{" "}
@@ -328,9 +429,28 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
             Template file: <code>{template.name}</code>. Override path:{" "}
             <code>~/.cfcf/templates/{template.name}</code>{" "}
             <span style={{ opacity: 0.7 }}>
-              (written by cf² when you promote a non-default version; deleted when you revert).
+              (cf² writes the composed override file here when a non-default version is promoted;
+              deletes it when you revert.)
             </span>
           </p>
+
+          {/* Status message — moved ABOVE the version selector so the
+              "Promote to make it live" hint is below the action buttons
+              when the user reads it. */}
+          {statusMsg && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.5rem 0.75rem",
+                background: "color-mix(in srgb, var(--color-success, #6ec06e) 12%, transparent)",
+                borderLeft: "3px solid var(--color-success, #6ec06e)",
+                fontSize: "var(--text-sm)",
+                borderRadius: "4px",
+              }}
+            >
+              {statusMsg}
+            </div>
+          )}
 
           {/* Version selector + actions */}
           <div
@@ -350,7 +470,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               value={selectedVersionId}
               disabled={isEditing}
               onChange={(e) => setSelectedVersionId(e.target.value)}
-              style={{ minWidth: "16rem" }}
+              style={{ minWidth: "20rem" }}
             >
               <option value={DEFAULT_VERSION_ID}>
                 Default (built-in)
@@ -358,7 +478,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               </option>
               {template.versions.map((v) => (
                 <option key={v.id} value={v.id}>
-                  {v.label} ({new Date(v.savedAt).toLocaleString()})
+                  {v.label} — {v.type} ({new Date(v.savedAt).toLocaleString()})
                   {template.currentVersionId === v.id ? " — promoted" : ""}
                 </option>
               ))}
@@ -370,9 +490,25 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
                   type="button"
                   className="btn btn--small btn--secondary"
                   disabled={busy}
-                  onClick={() => setIsEditing(true)}
+                  onClick={startEdit}
+                  title={
+                    selectionIsDefault
+                      ? "Fork the bundled default into a new full version"
+                      : selectedVersion?.type === "augmented"
+                      ? "Edit this augmented version's extension"
+                      : "Edit this full version's body"
+                  }
                 >
                   Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small btn--secondary"
+                  disabled={busy}
+                  onClick={startAugment}
+                  title="Add custom directions on top of the bundled default (auto-upgrades when cf² ships a new default)"
+                >
+                  Augment
                 </button>
                 <button
                   type="button"
@@ -397,7 +533,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               </>
             ) : (
               <>
-                {!selectionIsDefault && (
+                {!creatingNew && !selectionIsDefault && (
                   <button
                     type="button"
                     className="btn btn--small btn--primary"
@@ -410,11 +546,15 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
                 <button
                   type="button"
                   className="btn btn--small btn--primary"
-                  disabled={busy || !editingDirty}
+                  disabled={busy || (!editingDirty && !creatingNew)}
                   onClick={handleSaveAsNew}
-                  title="Save as a new version (with a label) — original stays untouched"
+                  title={
+                    editType === "augmented"
+                      ? "Save as a new augmented version (extension only — auto-upgrades with cf²)"
+                      : "Save as a new full version (frozen — does not auto-upgrade)"
+                  }
                 >
-                  Save as new version
+                  Save as new {editType} version
                 </button>
                 <button
                   type="button"
@@ -424,7 +564,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
                     if (editingDirty && !window.confirm("Discard unsaved changes?")) return;
                     setIsEditing(false);
                     setEditingDirty(false);
-                    // Re-fetch original content for the selected version.
+                    setCreatingNew(false);
                     setRev((n) => n + 1);
                   }}
                 >
@@ -434,63 +574,44 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
             )}
           </div>
 
-          {statusMsg && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.5rem 0.75rem",
-                background: "color-mix(in srgb, var(--color-success, #6ec06e) 12%, transparent)",
-                borderLeft: "3px solid var(--color-success, #6ec06e)",
-                fontSize: "var(--text-sm)",
-                borderRadius: "4px",
-              }}
-            >
-              {statusMsg}
-            </div>
-          )}
-
-          {/* Content editor.
-              readOnly is gated ONLY by `!isEditing` — the bundled default
-              "lives" on disk read-only (we never overwrite the embedded
-              constant), but the user still needs to TYPE in this editor
-              to draft a new version that gets saved via "Save as new
-              version". The save action is what's gated, not the typing. */}
-          <textarea
-            value={content}
-            readOnly={!isEditing}
-            onChange={(e) => {
-              setContent(e.target.value);
-              setEditingDirty(true);
-            }}
-            spellCheck={false}
-            style={{
-              width: "100%",
-              minHeight: "60vh",
-              fontFamily: "var(--font-mono, monospace)",
-              fontSize: "var(--text-sm)",
-              padding: "0.75rem",
-              border: "1px solid var(--color-border, #444)",
-              borderRadius: "4px",
-              background: isEditing
-                ? "var(--color-bg)"
-                : "var(--color-bg-muted, var(--color-bg))",
-              color: "var(--color-text)",
-              resize: "vertical",
-            }}
-          />
-          {isEditing && selectionIsDefault && (
+          {/* Forked-from-cf²-vX.Y.Z badge for full versions */}
+          {!isEditing && selectedVersion?.type === "full" && selectedVersion.cfcfVersion && (
             <p
               style={{
-                marginTop: "0.5rem",
+                marginTop: "-0.25rem",
+                marginBottom: "0.75rem",
                 fontSize: "var(--text-sm)",
                 color: "var(--color-text-muted, #888)",
               }}
             >
-              You're editing a copy of the bundled default. Click{" "}
-              <strong>Save as new version</strong> to fork your changes
-              into a new version (the cf²-shipped default itself stays
-              untouched and remains available in the dropdown).
+              ℹ Forked from cf² <code>v{selectedVersion.cfcfVersion}</code>'s bundled default. Full
+              versions don't auto-upgrade — compare against the latest <strong>Default
+              (built-in)</strong> if cf² has shipped a newer template since.
             </p>
+          )}
+
+          {/* Editor area — split for augmented, single for full */}
+          {showSplitView ? (
+            <SplitEditor
+              defaultContent={template.defaultContent}
+              extension={content}
+              extensionEditable={extensionEditable}
+              onExtensionChange={(next) => {
+                setContent(next);
+                setEditingDirty(true);
+              }}
+              creatingNew={creatingNew}
+            />
+          ) : (
+            <FullEditor
+              content={content}
+              editable={fullEditable}
+              onChange={(next) => {
+                setContent(next);
+                setEditingDirty(true);
+              }}
+              showFullEditFromDefaultHint={isEditing && selectionIsDefault && !creatingNew}
+            />
           )}
 
           {/* Inline help below editor */}
@@ -506,12 +627,16 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
             }}
             role="status"
           >
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>How this works</strong>
+            <strong style={{ display: "block", marginBottom: "0.4rem" }}>How this works</strong>
             <div style={{ marginBottom: "0.4rem" }}>
-              cf² ships a built-in default for every role. Saved versions live under{" "}
-              <code>~/.cfcf/templates-managed/{template.name}/</code>. When you promote a version,
-              its content is written to <code>~/.cfcf/templates/{template.name}</code> — the
-              existing user-global override path that <code>getTemplate()</code> already reads.
+              <strong>Two ways to customise a role.</strong> <em>Edit</em> opens a single editor
+              prefilled with the selected version's content; saving creates a <strong>full</strong>
+              {" "}version that <strong>replaces</strong> the bundled default entirely. <em>Augment</em>
+              {" "}keeps cf²'s default read-only and lets you add a section below it; saving creates
+              an <strong>augmented</strong> version. The harness composes
+              {" "}<code>&lt;default&gt; + separator + &lt;your additions&gt;</code> at promote
+              time, and re-composes on every server boot — so when cf² ships a new default,
+              your augmented additions automatically ride along. Full versions don't migrate.
             </div>
             <div style={{ marginBottom: "0.4rem" }}>
               <strong>"Promote to production"</strong> activates the selected version for the next
@@ -525,7 +650,6 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
             </div>
           </div>
 
-          {/* Subtle skip-link to Settings (the user might be looking for the global config). */}
           <p style={{ marginTop: "1.5rem", fontSize: "var(--text-sm)", color: "var(--color-text-muted, #888)" }}>
             Looking for adapter / model settings?{" "}
             <a
@@ -543,5 +667,169 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
         </>
       )}
     </div>
+  );
+}
+
+// --- Sub-components ---
+
+/**
+ * Single-textarea editor for full-type versions (and the bundled
+ * default, which renders here as a read-only full template).
+ */
+function FullEditor({
+  content,
+  editable,
+  onChange,
+  showFullEditFromDefaultHint,
+}: {
+  content: string;
+  editable: boolean;
+  onChange: (next: string) => void;
+  showFullEditFromDefaultHint: boolean;
+}) {
+  return (
+    <>
+      <textarea
+        value={content}
+        readOnly={!editable}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+        style={{
+          width: "100%",
+          minHeight: "60vh",
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: "var(--text-sm)",
+          padding: "0.75rem",
+          border: "1px solid var(--color-border, #444)",
+          borderRadius: "4px",
+          background: editable
+            ? "var(--color-bg)"
+            : "var(--color-bg-muted, var(--color-bg))",
+          color: "var(--color-text)",
+          resize: "vertical",
+        }}
+      />
+      {showFullEditFromDefaultHint && (
+        <p
+          style={{
+            marginTop: "0.5rem",
+            fontSize: "var(--text-sm)",
+            color: "var(--color-text-muted, #888)",
+          }}
+        >
+          You're editing a copy of the bundled default. Click <strong>Save as new full
+          version</strong> to fork your changes — the cf²-shipped default itself stays untouched
+          and remains available in the dropdown.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Split editor for augmented-type versions: bundled default at top
+ * (always read-only — that's the whole point of the type) + extension
+ * textarea at bottom (editable when `extensionEditable`).
+ *
+ * Shorter standard panel by design (~25vh) so the extension editor
+ * has visual prominence, since that's what the user is actually
+ * working with.
+ */
+function SplitEditor({
+  defaultContent,
+  extension,
+  extensionEditable,
+  onExtensionChange,
+  creatingNew,
+}: {
+  defaultContent: string;
+  extension: string;
+  extensionEditable: boolean;
+  onExtensionChange: (next: string) => void;
+  creatingNew: boolean;
+}) {
+  return (
+    <>
+      <div
+        style={{
+          marginBottom: "0.5rem",
+          fontSize: "var(--text-sm)",
+          color: "var(--color-text-muted, #888)",
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <strong style={{ color: "var(--color-text)" }}>cf² standard template (read-only)</strong>
+        <span>
+          Updated automatically when cf² ships a new default; your extension below rides along.
+        </span>
+      </div>
+      <textarea
+        value={defaultContent}
+        readOnly
+        spellCheck={false}
+        style={{
+          width: "100%",
+          minHeight: "25vh",
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: "var(--text-sm)",
+          padding: "0.75rem",
+          border: "1px solid var(--color-border, #444)",
+          borderRadius: "4px",
+          background: "var(--color-bg-muted, var(--color-bg))",
+          color: "var(--color-text)",
+          resize: "vertical",
+          marginBottom: "1rem",
+        }}
+      />
+      <div
+        style={{
+          marginBottom: "0.5rem",
+          fontSize: "var(--text-sm)",
+          color: "var(--color-text-muted, #888)",
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <strong style={{ color: "var(--color-text)" }}>
+          Your custom additions{" "}
+          {extensionEditable ? "" : "(read-only)"}
+        </strong>
+        <span>
+          Appended after the standard template at promote time + every server boot.
+        </span>
+      </div>
+      <textarea
+        value={extension}
+        readOnly={!extensionEditable}
+        onChange={(e) => onExtensionChange(e.target.value)}
+        spellCheck={false}
+        placeholder={
+          creatingNew
+            ? "Write your custom directions here. Examples:\n• Always cite the Linear ticket ID in summaries.\n• Use AAA test naming.\n• Prefer functional patterns over classes."
+            : ""
+        }
+        style={{
+          width: "100%",
+          minHeight: "30vh",
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: "var(--text-sm)",
+          padding: "0.75rem",
+          border: "1px solid var(--color-border, #444)",
+          borderRadius: "4px",
+          background: extensionEditable
+            ? "var(--color-bg)"
+            : "var(--color-bg-muted, var(--color-bg))",
+          color: "var(--color-text)",
+          resize: "vertical",
+        }}
+      />
+    </>
   );
 }

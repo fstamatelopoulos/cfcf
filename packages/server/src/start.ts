@@ -28,6 +28,7 @@ import {
   reapOrphans,
   formatOrphanLine,
   refreshOllamaModelsInConfig,
+  refreshAugmentedOverrides,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -155,6 +156,29 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   );
   if (staleLoopCount > 0) {
     console.log(`Marked ${staleLoopCount} stale active loop(s) as failed`);
+  }
+
+  // Re-compose any promoted "augmented" role-template overrides
+  // (item 6.8 round 2). Each augmented version stores only the user's
+  // extension; the override file on disk is `<bundled-default> +
+  // separator + <extension>`. When cf² is upgraded, the bundled
+  // default may have changed — this pass detects that and rewrites
+  // the override file with the new composition. Best-effort: errors
+  // are logged but never block boot.
+  try {
+    const result = await refreshAugmentedOverrides();
+    if (result.refreshed.length > 0) {
+      console.log(
+        `[server] Re-composed ${result.refreshed.length} augmented role-template override(s) after default change: ${result.refreshed.join(", ")}`,
+      );
+    }
+    for (const e of result.errors) {
+      console.warn(`[server] augmented-template refresh failed for ${e.name}: ${e.error}`);
+    }
+  } catch (err) {
+    console.warn(
+      `[server] augmented-template refresh pass failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Refresh ollama models on every boot (item 6.33). The

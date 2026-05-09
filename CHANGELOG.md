@@ -9,7 +9,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-### Added — Item 6.8 (round 1): role-template management UI
+### Added — Item 6.8: role-template management UI (rounds 1 + 2)
+
+**Round 1: full-template editing**
 
 - **New top-level "Agents" tab** in the web UI (between Memory and
   Settings). One sub-tab per managed role template; each tab shows
@@ -24,34 +26,79 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
   override path that `getTemplate()` already reads — no runtime
   changes to agent spawning. Reverting to default deletes the override
   file so cf² falls back to the embedded default. Editing a
-  promoted version refreshes the override file in-place so the
-  change is live for the next agent run.
-- **Managed templates (round 1)**: `cfcf-architect-instructions.md`,
-  `cfcf-judge-instructions.md`, `cfcf-documenter-instructions.md`,
-  `cfcf-reflection-instructions.md`, `process.md`. Per-project
-  overrides at `<repo>/cfcf-templates/<name>` continue to take
-  precedence over the user-global override (the power-user escape
-  hatch, unmanaged from the UI).
+  promoted version refreshes the override file in-place.
 - **HTTP API**: `GET /api/role-templates`, `GET .../:name`,
   `GET .../:name/versions/:versionId`, `POST .../:name/versions`,
   `PUT .../:name/versions/:versionId`,
   `DELETE .../:name/versions/:versionId`,
   `POST .../:name/promote`. Uniform `{ error: string }` envelope.
-- **New core module** `packages/core/src/role-templates.ts` with
-  list / get / save / update / delete / promote helpers, manifest
-  self-heal on corruption, orphan detection. `getEmbeddedTemplate(name)`
-  newly exported from `templates.ts` for read-only access to the
-  bundled default.
-- **Out of scope for round 1 (deferred follow-ups)**: dev-role
-  custom-directions block (Tier-2 from the original design — needs
-  the sentinel-merge insertion-point design first), Product Architect /
-  Help Assistant system-prompt management (their prompts are
-  programmatically assembled, not file-loaded), per-project override
-  management UI, diff viewer between versions.
-- **Tests**: 30 unit tests in `role-templates.test.ts`, 15 endpoint
-  tests in `routes/role-templates.test.ts`, 3 new route-parser tests
-  for `/agents` + `?template=`.
-- **Design doc**: [`docs/design/role-template-management.md`](docs/design/role-template-management.md).
+- **New core module** `packages/core/src/role-templates.ts` with full
+  CRUD, manifest self-heal on corruption, orphan detection.
+  `getEmbeddedTemplate(name)` newly exported from `templates.ts` for
+  read-only access to the bundled default.
+
+**Round 2: augmented-type versions (auto-upgrade-friendly)**
+
+- **`type: "full" | "augmented"`** added to every saved version.
+  Round-1 manifests (no `type`) are read as `"full"` for back-compat.
+  - **`type: "full"`** — body REPLACES the bundled default at
+    promote time. Maximum flexibility (delete sections, restructure);
+    no auto-upgrade. UI shows a `ℹ Forked from cf² vX.Y.Z` badge so
+    the user knows their version may have drifted from the latest
+    bundled default.
+  - **`type: "augmented"`** — body is APPENDED to the live bundled
+    default at promote time. The harness composes
+    `<bundled-default> + separator + <extension>` and writes that to
+    the override file. The bundled default is read live (never
+    duplicated on disk), so when cf² ships a new default, the user's
+    extension automatically rides along on the new version. **This is
+    upgrade-friendly by default.**
+- **Boot-time auto-recompose**: every server boot re-composes any
+  promoted augmented version (`refreshAugmentedOverrides()` in core,
+  called from `start.ts` after the orphan reaper). Cheap idempotent
+  pass — only writes when the on-disk override actually differs from
+  the live composition. Single log line on change:
+  `[server] Re-composed N augmented role-template override(s)…`.
+  Full versions are NOT touched (frozen by design).
+- **New "Augment" button** in the action row, next to "Edit". Augment
+  always creates a new augmented version on top of the bundled
+  default (regardless of which version is currently selected — keeps
+  the upgrade-friendly contract).
+- **Split editor view** for augmented versions: bundled default
+  rendered read-only at the top (~25vh, smaller so the extension
+  editor has visual prominence), extension textarea below (~30vh)
+  with a placeholder showing example custom directions. Editing
+  toggles only the extension to editable.
+- **Version dropdown** suffixes each entry with its type:
+  `My stricter judge — full (2026-05-09) — promoted`.
+- **API extension**: `POST /api/role-templates/:name/versions` body
+  now accepts an optional `type: "full" | "augmented"` (defaults to
+  `"full"`). Invalid values return 400.
+- **UI polish (also round 2)**: status messages moved above the
+  version-selector row (so "click Promote" reads naturally below the
+  buttons), directional words removed from messages, "creating new
+  X version" indicator added to the heading when appropriate.
+
+**Managed templates (rounds 1 + 2)**: `cfcf-architect-instructions.md`,
+`cfcf-judge-instructions.md`, `cfcf-documenter-instructions.md`,
+`cfcf-reflection-instructions.md`, `process.md`. Per-project overrides
+at `<repo>/cfcf-templates/<name>` continue to take precedence over the
+user-global override (the power-user escape hatch, unmanaged from the UI).
+
+**Out of scope (deferred)**: dev-role custom-directions block (dev's
+instructions are programmatically generated by `context-assembler`,
+not file-loaded — needs a different mechanism), Product Architect /
+Help Assistant system-prompt management, per-project override
+management UI, diff viewer between versions.
+
+**Tests**: 41 unit tests in `role-templates.test.ts` (every flow +
+manifest corruption recovery + cross-template isolation +
+back-compat with round-1 manifests + augmented composition + boot
+refresh), 17 endpoint tests in `routes/role-templates.test.ts`
+(including round-2 type validation), 3 route-parser tests for
+`/agents` + `?template=`.
+
+**Design doc**: [`docs/design/role-template-management.md`](docs/design/role-template-management.md).
 
 ### Added — Item 6.33: ollama-models refresh
 

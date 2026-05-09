@@ -112,6 +112,32 @@ describe("POST /api/role-templates/:name/versions", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("creates an augmented version when type='augmented' is supplied (round 2)", async () => {
+    const app = createApp();
+    const res = await app.request(`/api/role-templates/${JUDGE_ENC}/versions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        label: "augmented test",
+        content: "Append-only directions.",
+        type: "augmented",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.type).toBe("augmented");
+  });
+
+  it("rejects invalid type with 400 (round 2)", async () => {
+    const app = createApp();
+    const res = await app.request(`/api/role-templates/${JUDGE_ENC}/versions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "x", content: "y", type: "patch" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("GET /api/role-templates/:name/versions/:versionId", () => {

@@ -64,7 +64,7 @@ export function registerRoleTemplatesRoutes(app: Hono): void {
 
   app.post("/api/role-templates/:name/versions", async (c) => {
     const name = decodeURIComponent(c.req.param("name"));
-    let body: { label?: unknown; content?: unknown };
+    let body: { label?: unknown; content?: unknown; type?: unknown };
     try {
       body = await c.req.json();
     } catch {
@@ -73,8 +73,15 @@ export function registerRoleTemplatesRoutes(app: Hono): void {
     if (typeof body.label !== "string" || typeof body.content !== "string") {
       return c.json({ error: "Body must include `label` and `content` (both strings)" }, 400);
     }
+    let type: "full" | "augmented" = "full";
+    if (body.type !== undefined) {
+      if (body.type !== "full" && body.type !== "augmented") {
+        return c.json({ error: "`type` must be 'full' or 'augmented' if provided" }, 400);
+      }
+      type = body.type;
+    }
     try {
-      const v = await saveVersion(name, { label: body.label, content: body.content });
+      const v = await saveVersion(name, { label: body.label, content: body.content, type });
       return c.json(v, 201);
     } catch (err) {
       return c.json(errorBody(err), 400);

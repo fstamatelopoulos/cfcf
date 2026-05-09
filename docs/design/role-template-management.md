@@ -1,5 +1,8 @@
 # Role-template management (item 6.8) — design
 
+> **Round 1 shipped 2026-05-08** (full-template editing).
+> **Round 2 shipped 2026-05-09** (augmented-type versions for upgrade-friendly customisation).
+
 ## Problem
 
 cf² ships a fixed set of agent-role instruction templates (`cfcf-architect-
@@ -54,10 +57,11 @@ the existing override mechanism, plus a web UI for editing.
     manifest.json     {
                         currentVersionId: "v_<id>" | "default",
                         versions: [
-                          { id, label, savedAt, contentHash }
+                          { id, label, savedAt, contentHash, type, cfcfVersion }
                         ]
                       }
-    v_<id>.md         each saved version's content
+    v_<id>.md         body — full template body for type="full",
+                      extension only for type="augmented"
   cfcf-judge-instructions.md/
     ...
 ```
@@ -65,6 +69,42 @@ the existing override mechanism, plus a web UI for editing.
 `"default"` is a sentinel value meaning "no override active". When a user
 "promotes default", `~/.cfcf/templates/<name>` is **deleted** so
 `getTemplate` falls through to the embedded default.
+
+### Two version types (round 2)
+
+Each version has a `type` field:
+
+| `type` | What's stored on disk | What gets written to the override file at promote time | Auto-upgrade with cf²? |
+|---|---|---|---|
+| `"full"` | The complete template body | The body verbatim | ❌ Frozen — UI shows "Forked from cf² vX.Y.Z" |
+| `"augmented"` | Just the user's extension | `<bundled-default> + separator + <extension>` | ✅ Boot-time recompose picks up the new default |
+
+**Why both**: full edits give maximum flexibility (delete sections, restructure
+the prompt, etc.) but lose the auto-upgrade benefit. Augmented edits are
+upgrade-friendly but constrained to additions on top of cf²'s default. Each
+serves a real use case; the user picks per version.
+
+**Round-1 manifests** (saved before the type field existed) read back as
+`type: "full"` automatically — no migration needed.
+
+### Composition + boot refresh (augmented type)
+
+`composeForOverride(name, type, body)`:
+- `type === "full"`: pass-through.
+- `type === "augmented"`: `getEmbeddedTemplate(name) + AUGMENTATION_SEPARATOR + body`.
+
+`AUGMENTATION_SEPARATOR` is `\n\n---\n\n## Custom additions\n\n*(Managed via the
+cf² Agents tab — edit this section there, not in this file.)*\n\n` so the
+rendered template has a clean visual + textual demarcation.
+
+`refreshAugmentedOverrides()` runs at every server boot. For every managed
+template whose currently-promoted version is augmented, it re-composes against
+the live bundled default and writes to the override file **only if the on-disk
+content differs**. Cheap, idempotent, transparent to the user. This is the
+mechanism that makes cf² upgrades hands-off for augmented versions.
+
+Full versions are explicitly NOT touched by the boot refresh — the user
+fully owns those, and any auto-merge against a new default would be wrong.
 
 ### Templates managed
 

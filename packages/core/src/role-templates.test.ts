@@ -24,7 +24,9 @@ import {
   updateVersion,
   deleteVersion,
   promoteVersion,
+  refreshAugmentedOverrides,
   findOrphanedVersions,
+  AUGMENTATION_SEPARATOR,
   DEFAULT_VERSION_ID,
 } from "./role-templates.js";
 import { getTemplate, getEmbeddedTemplate } from "./templates.js";
@@ -105,12 +107,33 @@ describe("saveVersion", () => {
     expect(v.label).toBe("stricter judge");
     expect(v.savedAt).toMatch(/T/); // ISO
     expect(v.contentHash.length).toBe(12);
+    // Round 2: type defaults to "full" + cfcfVersion stamped
+    expect(v.type).toBe("full");
+    expect(typeof v.cfcfVersion).toBe("string");
 
     const managed = await getManagedTemplate(JUDGE);
     expect(managed.versions).toHaveLength(1);
     expect(managed.versions[0]).toEqual(v);
     // Promoted is still default until explicitly promoted.
     expect(managed.currentVersionId).toBe("default");
+  });
+
+  test("creates an augmented version when type='augmented' is passed", async () => {
+    const v = await saveVersion(JUDGE, {
+      label: "with project hints",
+      content: "Always reference Linear ticket IDs in summaries.",
+      type: "augmented",
+    });
+    expect(v.type).toBe("augmented");
+    // The body file holds ONLY the extension (no bundled default).
+    const stored = await getVersionContent(JUDGE, v.id);
+    expect(stored).toBe("Always reference Linear ticket IDs in summaries.");
+  });
+
+  test("rejects invalid type values", async () => {
+    expect(
+      saveVersion(JUDGE, { label: "x", content: "y", type: "patch" as never }),
+    ).rejects.toThrow();
   });
 
   test("rejects empty labels", async () => {
@@ -300,5 +323,144 @@ describe("self-heal: stale promoted-version pointer", () => {
     const managed = await getManagedTemplate(JUDGE);
     // The currentContent must fall back to default rather than throw.
     expect(managed.currentContent).toBe(getEmbeddedTemplate(JUDGE));
+  });
+});
+
+describe("augmented type — round 2 composition + boot refresh", () => {
+  test("promoting an augmented version writes <default> + separator + <extension> to the override", async () => {
+    const ext = "Project-specific: cite Linear ticket in every summary.";
+    const v = await saveVersion(JUDGE, { label: "linear-augmented", content: ext, type: "augmented" });
+    await promoteVersion(JUDGE, v.id);
+
+    const overridePath = join(tmpDir, "templates", JUDGE);
+    expect(existsSync(overridePath)).toBe(true);
+    const onDisk = readFileSync(overridePath, "utf-8");
+    const expected = getEmbeddedTemplate(JUDGE) + AUGMENTATION_SEPARATOR + ext;
+    expect(onDisk).toBe(expected);
+
+    // getTemplate() returns the composed version too.
+    const resolved = await getTemplate(JUDGE);
+    expect(resolved).toBe(expected);
+  });
+
+  test("editing the promoted augmented version recomposes against the live default", async () => {
+    const v = await saveVersion(JUDGE, {
+      label: "v1",
+      content: "ext-v1",
+      type: "augmented",
+    });
+    await promoteVersion(JUDGE, v.id);
+
+    await updateVersion(JUDGE, v.id, { content: "ext-v2" });
+    const onDisk = readFileSync(join(tmpDir, "templates", JUDGE), "utf-8");
+    expect(onDisk).toBe(getEmbeddedTemplate(JUDGE) + AUGMENTATION_SEPARATOR + "ext-v2");
+  });
+
+  test("promoting 'default' over an augmented version deletes the override file", async () => {
+    const v = await saveVersion(JUDGE, { label: "x", content: "ext", type: "augmented" });
+    await promoteVersion(JUDGE, v.id);
+    expect(existsSync(join(tmpDir, "templates", JUDGE))).toBe(true);
+
+    await promoteVersion(JUDGE, DEFAULT_VERSION_ID);
+    expect(existsSync(join(tmpDir, "templates", JUDGE))).toBe(false);
+  });
+
+  test("getVersionContent returns the EXTENSION only for augmented versions (not the composed text)", async () => {
+    const v = await saveVersion(JUDGE, {
+      label: "x",
+      content: "extension only",
+      type: "augmented",
+    });
+    const content = await getVersionContent(JUDGE, v.id);
+    expect(content).toBe("extension only");
+  });
+});
+
+describe("refreshAugmentedOverrides (boot-time refresh)", () => {
+  test("rewrites a stale augmented override (simulating a cf² upgrade where the default changed)", async () => {
+    const ext = "my custom directions";
+    const v = await saveVersion(JUDGE, { label: "x", content: ext, type: "augmented" });
+    await promoteVersion(JUDGE, v.id);
+    // Simulate cf² upgrade: the override on disk reflects the OLD
+    // composed content. We mimic that by clobbering the override with
+    // a stale composition (the bundled default has "drifted" to a new
+    // value the user hasn't seen).
+    const stalePath = join(tmpDir, "templates", JUDGE);
+    writeFileSync(stalePath, "OLD DEFAULT" + AUGMENTATION_SEPARATOR + ext, "utf-8");
+
+    const result = await refreshAugmentedOverrides();
+    expect(result.refreshed).toContain(JUDGE);
+
+    const fresh = readFileSync(stalePath, "utf-8");
+    expect(fresh).toBe(getEmbeddedTemplate(JUDGE) + AUGMENTATION_SEPARATOR + ext);
+  });
+
+  test("no-op when the on-disk content already matches the composed text (idempotent)", async () => {
+    const v = await saveVersion(JUDGE, {
+      label: "x",
+      content: "ext",
+      type: "augmented",
+    });
+    await promoteVersion(JUDGE, v.id);
+
+    const result = await refreshAugmentedOverrides();
+    // Just promoted → already up to date → not refreshed again.
+    expect(result.refreshed).not.toContain(JUDGE);
+  });
+
+  test("does NOT touch full versions (they're frozen by design)", async () => {
+    const v = await saveVersion(JUDGE, { label: "x", content: "FULL CUSTOM", type: "full" });
+    await promoteVersion(JUDGE, v.id);
+    // Even if the bundled default changes, full versions keep their content.
+    // Simulate a stale override (user's hand-edited the file, etc.).
+    const overridePath = join(tmpDir, "templates", JUDGE);
+    writeFileSync(overridePath, "FULL CUSTOM (out of sync but user owns this)", "utf-8");
+
+    const result = await refreshAugmentedOverrides();
+    expect(result.refreshed).not.toContain(JUDGE);
+    // Override file untouched.
+    expect(readFileSync(overridePath, "utf-8")).toBe(
+      "FULL CUSTOM (out of sync but user owns this)",
+    );
+  });
+
+  test("does NOT touch templates whose currentVersionId is 'default'", async () => {
+    // No version saved + promoted → boot refresh is a no-op.
+    const result = await refreshAugmentedOverrides();
+    expect(result.refreshed).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe("back-compat: round-1 manifests without `type`", () => {
+  test("a manifest written by round-1 code (no type field) loads as type='full'", async () => {
+    // Manually scaffold a round-1-shaped manifest.
+    const dir = join(tmpDir, "templates-managed", JUDGE);
+    mkdirSync(dir, { recursive: true });
+    const v_id = "v_legacy";
+    writeFileSync(join(dir, `${v_id}.md`), "legacy body", "utf-8");
+    writeFileSync(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        currentVersionId: "default",
+        versions: [
+          {
+            id: v_id,
+            label: "legacy",
+            savedAt: "2026-01-01T00:00:00Z",
+            contentHash: "abc",
+            // no type, no cfcfVersion
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const managed = await getManagedTemplate(JUDGE);
+    expect(managed.versions[0].type).toBe("full");
+    // Promoting a back-compat full version keeps current behaviour.
+    await promoteVersion(JUDGE, v_id);
+    const onDisk = readFileSync(join(tmpDir, "templates", JUDGE), "utf-8");
+    expect(onDisk).toBe("legacy body");
   });
 });
