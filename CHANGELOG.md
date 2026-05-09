@@ -9,7 +9,41 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Item 6.33: ollama-models refresh
+
+- **Auto-refresh on server boot.** `cfcf server start` now calls
+  `listOllamaModels()` and persists the result to
+  `availableOllamaModels` in the global config if the live list
+  differs from what's saved. Newly-pulled ollama models propagate to
+  role-picker dropdowns after a server restart without re-running
+  `cfcf init --force`. Best-effort: ollama not installed / detection
+  failure / config write failure all log + continue, never block boot.
+  Order-insensitive comparison (since `ollama list` reorders by
+  modified-time) so the boot path doesn't flap on every restart.
+- **"Refresh ollama models" button.** New button in the Agent roles
+  section of both web Settings and per-workspace Config tabs. Calls
+  `POST /api/agents/refresh-ollama-models`, displays a status
+  message ("✓ N models detected — list updated" or "list already
+  current"), and triggers a re-fetch of `/api/agents/models` so the
+  `*-ollama` adapter dropdowns pick up new entries without a server
+  restart.
+- New `refreshOllamaModelsInConfig()` helper in `@cfcf/core`. 4 new
+  unit tests + 2 new endpoint tests.
+
+### Fixed — Item 6.33: model-picker UX for ollama-routed adapters
+
+- **Hide "(adapter default)" for `claude-code-ollama` and
+  `opencode-ollama`.** The seed-sourced adapters (`claude-code`,
+  `codex`) have real built-in defaults when `--model` is omitted, so
+  the empty option meaningfully says "let the CLI pick". The
+  ollama-routed adapters don't — `ollama launch <agent>` requires
+  `--model <name>` to know which local model to hand off, and saving
+  `model=""` would produce a silent misconfiguration. The picker now
+  forces a deliberate selection for these adapters.
+- **Empty-state placeholder for ollama-routed adapters** when no
+  models are available: `(no ollama models — pull one or click
+  Refresh)` rendered as a disabled option so the dropdown isn't
+  visually empty + the user is told what to do next.
 
 ## [0.21.0] -- 2026-05-08
 

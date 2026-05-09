@@ -86,3 +86,37 @@ describe("/api/agents/models", () => {
     expect(body.adapters["claude-code"]).toContain("sonnet");
   });
 });
+
+describe("/api/agents/refresh-ollama-models (item 6.33)", () => {
+  it("returns a 200 with shape { models, updated, error? }", async () => {
+    // Don't assume ollama is or isn't installed on the test runner —
+    // CI doesn't have it, dev machines often do. Either way, the
+    // endpoint must return a 200 with the documented shape.
+    writeConfig({});
+    const app = createApp();
+    const res = await app.request("/api/agents/refresh-ollama-models", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("models");
+    expect(body).toHaveProperty("updated");
+    expect(Array.isArray(body.models)).toBe(true);
+    expect(typeof body.updated).toBe("boolean");
+    // `error` is optional; only present when ollama is missing. If
+    // present, must be a string.
+    if (body.error !== undefined) {
+      expect(typeof body.error).toBe("string");
+    }
+  });
+
+  it("does NOT throw a 500 when ollama isn't installed", async () => {
+    // Defence-in-depth: even if Bun.which() resolves an ollama binary
+    // that subsequently fails, the endpoint must still return 200.
+    // The pre-init case (no config file) is the trickier path; cover it.
+    const app = createApp();
+    const res = await app.request("/api/agents/refresh-ollama-models", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.models)).toBe(true);
+    expect(typeof body.updated).toBe("boolean");
+  });
+});
