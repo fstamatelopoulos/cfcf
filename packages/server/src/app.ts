@@ -16,6 +16,7 @@ import { registerClioRoutes } from "./routes/clio.js";
 import { registerHelpRoutes } from "./routes/help.js";
 import { registerUpdateRoutes } from "./routes/update.js";
 import { registerAgentModelsRoutes } from "./routes/agent-models.js";
+import { registerRoleTemplatesRoutes } from "./routes/role-templates.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -1110,6 +1111,10 @@ export function createApp() {
   // /api/agents/models -- per-adapter model registry for the model
   // pickers (Settings + workspace Config). Item 6.26.
   registerAgentModelsRoutes(app);
+
+  // /api/role-templates/* -- role-instruction template versioning
+  // and promote-to-production layer (item 6.8).
+  registerRoleTemplatesRoutes(app);
 
   // --- Static file serving (Web GUI) ---
   //

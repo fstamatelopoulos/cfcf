@@ -5,6 +5,7 @@ import { WorkspaceDetail } from "./pages/WorkspaceDetail";
 import { ServerInfo } from "./pages/ServerInfo";
 import { HelpPage } from "./pages/Help";
 import { MemoryPage } from "./pages/Memory";
+import { AgentTemplatesPage } from "./pages/AgentTemplates";
 import { useRoute } from "./hooks/useRoute";
 import { ServerStatusProvider } from "./hooks/useServerStatus";
 
@@ -25,6 +26,8 @@ export function App() {
             <HelpPage />
           ) : route.page === "memory" ? (
             <MemoryPage />
+          ) : route.page === "agents" ? (
+            <AgentTemplatesPage initialTemplate={route.agentTemplate} />
           ) : (
             <Dashboard />
           )}

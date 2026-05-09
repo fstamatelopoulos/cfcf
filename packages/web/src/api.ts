@@ -336,6 +336,93 @@ export function refreshOllamaModels(): Promise<RefreshOllamaModelsResponse> {
   return request<RefreshOllamaModelsResponse>("/api/agents/refresh-ollama-models", { method: "POST" });
 }
 
+// --- Role-template management (item 6.8) ---
+
+export type RoleTemplateVersionType = "full" | "augmented";
+
+export interface RoleTemplateVersion {
+  id: string;
+  label: string;
+  savedAt: string;
+  contentHash: string;
+  /** Round-2 type. Optional only for back-compat reads of round-1 manifests. */
+  type: RoleTemplateVersionType;
+  /** cf² version when this version was saved (display-only "forked from cf² vX.Y.Z" badge). */
+  cfcfVersion?: string;
+}
+
+export interface RoleTemplateSummary {
+  name: string;
+  displayName: string;
+  currentVersionId: string;
+  versionCount: number;
+}
+
+export interface RoleTemplateFull {
+  name: string;
+  displayName: string;
+  defaultContent: string;
+  currentVersionId: string;
+  currentContent: string;
+  versions: RoleTemplateVersion[];
+}
+
+export function listRoleTemplates(): Promise<{ templates: RoleTemplateSummary[] }> {
+  return request<{ templates: RoleTemplateSummary[] }>("/api/role-templates");
+}
+
+export function getRoleTemplate(name: string): Promise<RoleTemplateFull> {
+  return request<RoleTemplateFull>(`/api/role-templates/${encodeURIComponent(name)}`);
+}
+
+export function getRoleTemplateVersionContent(name: string, versionId: string): Promise<{ content: string }> {
+  return request<{ content: string }>(
+    `/api/role-templates/${encodeURIComponent(name)}/versions/${encodeURIComponent(versionId)}`,
+  );
+}
+
+export function createRoleTemplateVersion(
+  name: string,
+  body: { label: string; content: string; type?: RoleTemplateVersionType },
+): Promise<RoleTemplateVersion> {
+  return request<RoleTemplateVersion>(
+    `/api/role-templates/${encodeURIComponent(name)}/versions`,
+    { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } },
+  );
+}
+
+export function updateRoleTemplateVersion(
+  name: string,
+  versionId: string,
+  body: { label?: string; content?: string },
+): Promise<RoleTemplateVersion> {
+  return request<RoleTemplateVersion>(
+    `/api/role-templates/${encodeURIComponent(name)}/versions/${encodeURIComponent(versionId)}`,
+    { method: "PUT", body: JSON.stringify(body), headers: { "content-type": "application/json" } },
+  );
+}
+
+export function deleteRoleTemplateVersion(
+  name: string,
+  versionId: string,
+): Promise<{ deleted: boolean; template: RoleTemplateFull }> {
+  return request<{ deleted: boolean; template: RoleTemplateFull }>(
+    `/api/role-templates/${encodeURIComponent(name)}/versions/${encodeURIComponent(versionId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function promoteRoleTemplateVersion(name: string, versionId: string): Promise<RoleTemplateFull> {
+  return request<RoleTemplateFull>(
+    `/api/role-templates/${encodeURIComponent(name)}/promote`,
+    {
+      method: "POST",
+      body: JSON.stringify({ versionId }),
+      headers: { "content-type": "application/json" },
+    },
+  );
+}
+
 // --- Reflect (item 5.6 / web surface in 6.12) ---
 
 export interface ReflectState {

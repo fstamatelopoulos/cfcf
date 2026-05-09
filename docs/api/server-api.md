@@ -1367,6 +1367,141 @@ Rewire a workspace's Clio Project assignment. Backs the `cfcf workspace set --pr
 
 ---
 
+## Agent Models (item 6.26 + 6.33)
+
+### GET /api/agents/models
+
+Returns the resolved per-adapter model registry. Each entry is a list of model names the picker should offer for that adapter. For `*-ollama` adapters, the list comes from `availableOllamaModels` in the global config (last refreshed by `cfcf init` or by the boot-time / button-triggered refresh below). For seed-sourced adapters (`claude-code`, `codex`), the list is the user override on `CfcfGlobalConfig.agentModels[<adapter>]` if set + non-empty, otherwise the bundled seed in `packages/core/src/adapters/seed-models.ts`.
+
+**Response:** `200 OK`
+```json
+{
+  "adapters": {
+    "claude-code": ["sonnet", "opus", "haiku"],
+    "codex": ["gpt-5-codex", "gpt-5", "o3"],
+    "claude-code-ollama": ["gemma4:31b", "qwen3-coder:latest"],
+    "...": []
+  },
+  "seed": { "claude-code": ["sonnet", "opus", "haiku"], "...": [] }
+}
+```
+
+The `seed` field is surfaced alongside so the Settings → Model registry editor can show users what they'd revert to if they cleared their override.
+
+### POST /api/agents/refresh-ollama-models (item 6.33)
+
+On-demand re-detection of locally-pulled ollama models. Runs `ollama list` live, persists the result to `availableOllamaModels` in the global config if the live list differs from what's saved (order-insensitive comparison, since `ollama list` reorders by mtime). After the call, re-fetch `/api/agents/models` to pick up the new list in the per-adapter resolved registry.
+
+Always returns `200 OK` — "ollama not installed" is surfaced as a hint in the body, not an HTTP failure.
+
+**Response:** `200 OK`
+```json
+{ "models": ["gemma4:31b", "qwen3-coder:latest"], "updated": false }
+```
+
+Or, when ollama isn't installed:
+```json
+{ "models": [], "updated": false, "error": "ollama not detected" }
+```
+
+`updated: true` means the saved list differed from the live list and was rewritten.
+
+The boot-time auto-refresh in `start.ts` calls the same underlying helper (`refreshOllamaModelsInConfig` from `@cfcf/core`) so this endpoint and `cfcf server start` share their behaviour.
+
+---
+
+## Role-Template Management (item 6.8)
+
+Versioning + promote-to-production layer for the role-instruction templates each agent reads (`cfcf-architect-instructions.md`, `process.md` for the dev role, `cfcf-judge-instructions.md`, `cfcf-reflection-instructions.md`, `cfcf-documenter-instructions.md`). Two version types:
+
+- **`type: "full"`** — body REPLACES the bundled default at promote time. Maximum flexibility; doesn't auto-pick-up cf² upgrades. Carries a `cfcfVersion` field stamped at save time so the UI can show a "Forked from cf² vX.Y.Z" badge.
+- **`type: "augmented"`** — body is APPENDED to the live bundled default at promote time AND every server boot (`refreshAugmentedOverrides()` in core, called from `start.ts`). The bundled default is read live and never duplicated on disk, so the user's extension automatically rides along when cf² ships a new template.
+
+The user-global override path `~/.cfcf/templates/<name>` (read by `getTemplate()`) is what the runtime sees. Promote writes the (composed-for-augmented) content there; revert-to-default deletes it.
+
+### GET /api/role-templates
+
+List managed templates with summary info. Tab order matches the natural agent execution sequence (architect → dev → judge → reflection → documenter).
+
+**Response:** `200 OK`
+```json
+{
+  "templates": [
+    { "name": "cfcf-architect-instructions.md", "displayName": "Solution Architect", "currentVersionId": "default", "versionCount": 0 },
+    { "name": "process.md", "displayName": "Developer", "currentVersionId": "v_abc123", "versionCount": 2 }
+  ]
+}
+```
+
+### GET /api/role-templates/:name
+
+Full state for one template.
+
+**Response:** `200 OK`
+```json
+{
+  "name": "cfcf-judge-instructions.md",
+  "displayName": "Judge",
+  "defaultContent": "...",
+  "currentVersionId": "v_abc123",
+  "currentContent": "...",
+  "versions": [
+    {
+      "id": "v_abc123",
+      "label": "stricter judge",
+      "savedAt": "2026-05-09T12:00:00Z",
+      "contentHash": "abc123def456",
+      "type": "full",
+      "cfcfVersion": "0.21.0"
+    }
+  ]
+}
+```
+
+For an augmented promoted version, `currentContent` is the **composed** text (matches what's in the override file).
+
+### GET /api/role-templates/:name/versions/:versionId
+
+Returns the body of a specific version. For `versionId === "default"` returns the bundled default. For an augmented version returns the **extension only** (not the composed text). 404 on unknown name or version.
+
+**Response:** `200 OK` -- `{ "content": "..." }`
+
+### POST /api/role-templates/:name/versions
+
+Save a new version.
+
+**Request body:** `{ "label": "string", "content": "string", "type"?: "full" | "augmented" }`
+
+`type` defaults to `"full"` when omitted. Invalid types return 400.
+
+**Response:** `201 Created` -- the new `TemplateVersion` object.
+
+### PUT /api/role-templates/:name/versions/:versionId
+
+Update an existing version's label and/or content. If the version is the currently-promoted one, the override file is refreshed automatically (with re-composition for augmented).
+
+**Request body:** `{ "label"?: "string", "content"?: "string" }` (at least one required).
+
+**Response:** `200 OK` -- the updated `TemplateVersion` object. 400 if attempting to update `versionId === "default"` (read-only).
+
+### DELETE /api/role-templates/:name/versions/:versionId
+
+Delete a saved version. Cannot delete `"default"`. If the deleted version was the promoted one, automatically reverts to default (override file deleted).
+
+**Response:** `200 OK` -- `{ "deleted": true, "template": <refreshed full state> }`.
+
+### POST /api/role-templates/:name/promote
+
+Promote a version (or `"default"`) to production.
+
+**Request body:** `{ "versionId": "string" }`
+
+For `"default"` the override file is deleted (revert). For a saved version, the body is composed (per its `type`) and written to the override file.
+
+**Response:** `200 OK` -- the refreshed `RoleTemplateFull` object so the UI can update local state without an extra GET.
+
+---
+
 ## Server Lifecycle
 
 ### POST /api/shutdown

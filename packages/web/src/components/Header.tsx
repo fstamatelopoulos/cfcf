@@ -68,6 +68,15 @@ export function Header() {
           Memory
         </a>
         <a
+          href="#/agents"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo("/agents");
+          }}
+        >
+          Agents
+        </a>
+        <a
           href="#/server"
           onClick={(e) => {
             e.preventDefault();

@@ -3,13 +3,15 @@ import { useState, useEffect } from "react";
 export type MemoryTab = "search" | "browse" | "ingest" | "audit" | "projects" | "trash";
 
 interface Route {
-  page: "dashboard" | "workspace" | "server" | "help" | "memory";
+  page: "dashboard" | "workspace" | "server" | "help" | "memory" | "agents";
   workspaceId?: string;
   helpTopic?: string;
   /** Memory page sub-tab (item 6.18). Defaults to "search". */
   memoryTab?: MemoryTab;
   /** Memory page document detail overlay (item 6.18). */
   memoryDocId?: string;
+  /** Agents page selected role-template name (item 6.8). */
+  agentTemplate?: string;
 }
 
 /**
@@ -36,6 +38,14 @@ function parseHashImpl(hash: string): Route {
   }
   if (hash === "/server") {
     return { page: "server" };
+  }
+  // Agents page (item 6.8): `/agents` lands on the first role; an
+  // optional `?template=<name>` selects a specific role-template tab.
+  if (hash === "/agents" || hash.startsWith("/agents?")) {
+    const qIdx = hash.indexOf("?");
+    const params = qIdx >= 0 ? new URLSearchParams(hash.slice(qIdx + 1)) : new URLSearchParams();
+    const tpl = params.get("template");
+    return { page: "agents", agentTemplate: tpl ?? undefined };
   }
   // Memory: support `?tab=…&doc=…` query string, e.g. `#/memory?tab=ingest`.
   // Hash routers don't get the URL's real query string, so we parse a

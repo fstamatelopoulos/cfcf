@@ -150,6 +150,20 @@ export function listTemplates(): string[] {
   return Object.keys(EMBEDDED);
 }
 
+/**
+ * Return the embedded (bundled) default for a template, ignoring any
+ * project-local or user-global overrides. Used by `role-templates.ts`
+ * to surface "the cfcf-shipped default" as a non-deletable version
+ * the user can always revert to. Throws if the template name isn't
+ * known.
+ */
+export function getEmbeddedTemplate(name: string): string {
+  if (!(name in EMBEDDED)) {
+    throw new Error(`Unknown template: ${name}. Known templates: ${Object.keys(EMBEDDED).join(", ")}`);
+  }
+  return EMBEDDED[name];
+}
+
 // --- Helpers ---
 
 async function tryRead(path: string): Promise<string | null> {
