@@ -121,4 +121,51 @@ describe("buildLaunchArgs", () => {
       buildLaunchArgs({ adapter: "fake-agent" as "claude-code" }, "x", "Hi"),
     ).toThrow(/Help Assistant doesn't support adapter "fake-agent"/);
   });
+
+  // claude-code-ollama (item 6.34)
+
+  it("claude-code-ollama: wraps with `ollama launch claude --model X --yes --` then claude's flags", () => {
+    const { command, args, tempPromptFile } = buildLaunchArgs(
+      { adapter: "claude-code-ollama", model: "qwen3-coder:latest" },
+      "HA system prompt",
+      "Hello",
+    );
+    expect(command).toBe("ollama");
+    // ollama-side flags
+    expect(args[0]).toBe("launch");
+    expect(args[1]).toBe("claude");
+    const modelIdx = args.indexOf("--model");
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(args[modelIdx + 1]).toBe("qwen3-coder:latest");
+    expect(args).toContain("--yes");
+    // mandatory `--` separator
+    const sepIdx = args.indexOf("--");
+    expect(sepIdx).toBeGreaterThanOrEqual(0);
+    // claude's flags AFTER the separator
+    expect(args.slice(sepIdx + 1)).toContain("--append-system-prompt");
+    expect(args.slice(sepIdx + 1)).toContain("HA system prompt");
+    // No --dangerously-skip-permissions (HA is interactive)
+    expect(args).not.toContain("--dangerously-skip-permissions");
+    // firstUserMessage must be the LAST positional (Flavour A)
+    expect(args[args.length - 1]).toBe("Hello");
+    expect(tempPromptFile).toBeNull();
+  });
+
+  it("claude-code-ollama: omits --model when no agent.model is set", () => {
+    const { args } = buildLaunchArgs(
+      { adapter: "claude-code-ollama" },
+      "x",
+      "Hi",
+    );
+    expect(args).not.toContain("--model");
+    // Still has `--yes --`
+    expect(args).toContain("--yes");
+    expect(args).toContain("--");
+  });
+
+  it("error message lists claude-code-ollama as supported (helps users on opencode-ollama)", () => {
+    expect(() =>
+      buildLaunchArgs({ adapter: "opencode-ollama" as "claude-code" }, "x", "Hi"),
+    ).toThrow(/claude-code, codex, claude-code-ollama/);
+  });
 });

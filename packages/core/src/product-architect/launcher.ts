@@ -176,11 +176,45 @@ export function buildLaunchArgs(
       args.push(firstUserMessage); // positional [PROMPT]
       return { command: "codex", args, tempPromptFile: promptFile };
     }
+    case "claude-code-ollama": {
+      // Same shape as the `claude-code` case, wrapped in
+      // `ollama launch claude --model <ollama-model> --yes -- <claude-flags>`.
+      // The `--model` here goes to OLLAMA (selects which local model to
+      // serve); claude itself doesn't get `--model` because ollama
+      // already pinned the model serving the API surface. So
+      // `agent.model` is the ollama-side model name (e.g.
+      // `qwen3-coder:latest`, `gemma4:31b`), not a Claude alias.
+      //
+      // Permissions + system-prompt injection work the same way as the
+      // direct claude-code case — the flags passed after `--` are
+      // claude's own flags, so `--append-system-prompt` and
+      // `--dangerously-skip-permissions` (in non-safe mode) flow
+      // through the ollama launch wrapper unchanged.
+      const ollamaArgs: string[] = ["launch", "claude"];
+      if (agent.model) {
+        ollamaArgs.push("--model", agent.model);
+      }
+      ollamaArgs.push("--yes", "--");
+
+      const claudeArgs: string[] = ["--append-system-prompt", systemPrompt];
+      if (!safe) {
+        claudeArgs.push("--dangerously-skip-permissions");
+      }
+      claudeArgs.push(firstUserMessage); // positional [prompt] (Flavour A)
+
+      return {
+        command: "ollama",
+        args: [...ollamaArgs, ...claudeArgs],
+        tempPromptFile: null,
+      };
+    }
     default:
       throw new Error(
         `Product Architect doesn't support adapter "${agent.adapter}" yet. ` +
-        `Supported: claude-code, codex. ` +
-        `Set productArchitectAgent in your config (cfcf config edit) to one of those.`,
+        `Supported: claude-code, codex, claude-code-ollama. ` +
+        `(opencode + opencode-ollama interactive support is a known follow-up — ` +
+        `their system-prompt-injection flag is non-trivial; see plan item 6.34.) ` +
+        `Set productArchitectAgent in your config (cfcf config edit) to one of the supported adapters.`,
       );
   }
 }

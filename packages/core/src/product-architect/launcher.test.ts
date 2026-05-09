@@ -137,4 +137,61 @@ describe("buildLaunchArgs (Pattern A)", () => {
     // <repo>/cfcf-docs/AGENTS.md).
     expect(cx.tempPromptFile).not.toContain("cfcf-docs");
   });
+
+  // claude-code-ollama (item 6.34)
+
+  it("claude-code-ollama: wraps with `ollama launch claude --model X --yes --` then claude flags", () => {
+    const out = buildLaunchArgs(
+      { adapter: "claude-code-ollama", model: "qwen3-coder:latest" },
+      "PA system prompt",
+      "Hello",
+    );
+    expect(out.command).toBe("ollama");
+    expect(out.tempPromptFile).toBeNull();
+    expect(out.args[0]).toBe("launch");
+    expect(out.args[1]).toBe("claude");
+    const modelIdx = out.args.indexOf("--model");
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(out.args[modelIdx + 1]).toBe("qwen3-coder:latest");
+    expect(out.args).toContain("--yes");
+    const sepIdx = out.args.indexOf("--");
+    expect(sepIdx).toBeGreaterThanOrEqual(0);
+    // claude's flags AFTER the separator
+    const after = out.args.slice(sepIdx + 1);
+    expect(after).toContain("--append-system-prompt");
+    expect(after).toContain("PA system prompt");
+    // Default (non-safe) mode passes --dangerously-skip-permissions
+    // through to claude.
+    expect(after).toContain("--dangerously-skip-permissions");
+    // firstUserMessage must be the LAST positional (Flavour A)
+    expect(out.args[out.args.length - 1]).toBe("Hello");
+  });
+
+  it("claude-code-ollama in safe mode: drops --dangerously-skip-permissions", () => {
+    const out = buildLaunchArgs(
+      { adapter: "claude-code-ollama", model: "qwen3-coder:latest" },
+      "PA",
+      "Hello",
+      true, // safe = true
+    );
+    expect(out.args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("claude-code-ollama: omits --model when no agent.model is set", () => {
+    const out = buildLaunchArgs(
+      { adapter: "claude-code-ollama" },
+      "PA",
+      "Hello",
+    );
+    expect(out.args).not.toContain("--model");
+    // Still has `--yes --`
+    expect(out.args).toContain("--yes");
+    expect(out.args).toContain("--");
+  });
+
+  it("error message lists claude-code-ollama as supported (so users on opencode-ollama see the alternative)", () => {
+    expect(() =>
+      buildLaunchArgs({ adapter: "opencode-ollama" }, "x", "Hello"),
+    ).toThrow(/claude-code, codex, claude-code-ollama/);
+  });
 });
