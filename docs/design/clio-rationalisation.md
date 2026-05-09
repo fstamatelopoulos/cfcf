@@ -307,6 +307,94 @@ requestor + query. cfcf's audit log records mutations only.
 Tracked as a future Backlog item (`F.X — Clio read-audit log + privacy
 gating`). Not in scope for the 6.9 PR.
 
+## Per-role Clio interaction matrix
+
+The actual instructions we'll bake into each role's template, organised
+by **action** (read vs write) and **mechanism** (auto-ingested by the
+loop vs direct call from the agent). The "Mechanism" column is the
+load-bearing one: most ingest paths are already automatic — the agents
+just need to know **what to write to which canonical file** and the
+loop's auto-ingest hooks pick it up. Direct `cfcf clio docs ingest` is
+reserved for the rare cross-workspace-portable case that doesn't fit
+any auto-ingested artefact.
+
+### Default Clio Project routing (post-Phase-2)
+
+- **Per-workspace project** = `cf-workspace-<workspace-id>` (auto-created
+  at `cfcf workspace init`, auto-routed by `loop-ingest.ts`).
+- **Global memory project** = `cf-system-memory-global` (cross-workspace,
+  hand-curated by all roles + the user).
+- **PA-specific** = `cf-system-pa-memory` (PA's own per-workspace
+  scratchpad + workspace-summary).
+- **HA-specific** = `cf-system-ha-memory` (HA's Q&A history).
+
+When a role searches without a `--project` filter, Clio searches all
+projects (back-compat behaviour). When the agent wants the recommended
+"workspace + global" pair, it passes
+`--project cf-workspace-<id>,cf-system-memory-global` (multi-project
+search added in Phase 2).
+
+### Write matrix — what each role produces, and where it lands
+
+| Role | Trigger | What they write | Canonical destination | Mechanism |
+|---|---|---|---|---|
+| **All iteration roles** | Every run | Tagged entries appended to `cfcf-docs/decision-log.md` (`[lesson]`, `[risk]`, `[observation]`, `[strategy]`, `[resolved-question]`) | per-workspace project | Auto-ingest (`ingestDecisionLogEntries`) |
+| **All iteration roles** | Discovered cross-workspace-portable user preference (e.g. "user prefers vertical-slice tests", "always commit before bun-link") | Short note via `cfcf clio docs ingest --project cf-system-memory-global --author "<role-stamp>" --tier semantic --artifact-type lesson` | global memory | **Direct** (no auto path) |
+| **Dev (`process.md`)** | Every iteration | `cfcf-docs/iteration-logs/iteration-N.md` (curated changelog) | per-workspace project | Auto-ingest (`ingestIterationLog` under `clio.ingestPolicy = "all"`) |
+| **Dev** | Every iteration | `cfcf-docs/iteration-handoff.md` (forward-looking notes for next iteration's dev) | per-workspace project | Auto-ingest (`ingestIterationHandoff` under "all") |
+| **Dev** | Decision worth remembering (env quirk, failed approach, "we tried X, didn't work") | `decision-log.md` `[lesson]` entry — describe what was tried, what failed, what worked instead | per-workspace project | Auto-ingest |
+| **Judge** | Every iteration | `cfcf-docs/judge-assessment.md` | per-workspace project | Auto-ingest (under "all" policy) |
+| **Judge** | Every iteration | `cfcf-docs/cfcf-judge-signals.json` → loop synthesises an iteration-summary doc | per-workspace project | Auto-ingest (`ingestIterationSummary`, ALWAYS — not gated by ingestPolicy) |
+| **Judge** | Notices regression / recurring flake / drift across iterations | `decision-log.md` `[risk]` or `[observation]` entry | per-workspace project | Auto-ingest |
+| **Solution Architect** | Every review (pre-loop, refine_plan, manual) | `cfcf-docs/architect-review.md` | per-workspace project | Auto-ingest (`ingestArchitectReview`) |
+| **Solution Architect** | Plan-level decision (technology pick, scope-out, phase split) | `decision-log.md` `[decision]` entry | per-workspace project | Auto-ingest |
+| **Solution Architect** | User-stated architecture preference that's portable ("user always wants vertical slices over horizontal layers") | Direct ingest to global memory | global memory | **Direct** |
+| **Reflection** | Every reflection run | `cfcf-docs/reflection-reviews/reflection-N.md` | per-workspace project | Auto-ingest (`ingestReflectionAnalysis`) |
+| **Reflection** | Strategic shift detected (loop is drifting; recommend pivot) | `decision-log.md` `[strategy]` entry | per-workspace project | Auto-ingest |
+| **Reflection** | Cross-iteration lesson that's portable across workspaces ("opus + tool-heavy roles tends to over-edit") | Direct ingest to global memory as `lesson` | global memory | **Direct** |
+| **Documenter** | After SUCCESS (or `cfcf document`) | Polished docs in `docs/` of the user's repo | — (the docs ARE the artefact; they live in the repo, not Clio) | None |
+| **Documenter** | Discovered docs-style preference ("user wants Mermaid diagrams, not ASCII") | Direct ingest to global memory | global memory | **Direct** |
+| **Product Architect** (`cfcf spec`) | Every session | `<repo>/.cfcf-pa/session-<id>.md` (live scratchpad) | `cf-system-pa-memory` | Already wired (PA prompt-assembler + memory protocol) |
+| **Product Architect** | Session end ("save before you go?") | `cf-system-pa-memory` workspace-summary refresh | `cf-system-pa-memory` | Already wired |
+| **Product Architect** | User stated a portable preference ("I always want a 'glossary' section in problem.md") | Direct ingest to global memory | `cf-system-memory-global` | Already wired |
+| **Product Architect** | Problem-Pack-level decision (scope cut, success-criteria change) | `decision-log.md` `[decision]` entry — flows to per-workspace project | per-workspace project | Auto-ingest (PA runs in the user's repo with full FS access) |
+| **Help Assistant** (`cfcf help assistant`) | Every turn | Q&A history append | `cf-system-ha-memory` | Already wired |
+| **Help Assistant** | User stated a portable preference | Direct ingest to global memory | `cf-system-memory-global` | Already wired |
+
+### Read matrix — when each role searches Clio
+
+The agents already get a top-k preload via `cfcf-docs/clio-relevant.md`
+(generated by `writeClioRelevant` at iteration boundary, matched
+against `problem.md`). The role-specific triggers below are for
+**additional, on-demand** searches when the preload isn't enough.
+
+| Role | Search trigger | Query shape | Project scope |
+|---|---|---|---|
+| **All iteration roles** | Pre-curated context (preloaded into every iteration) | — | — (read `cfcf-docs/clio-relevant.md` directly) |
+| **All iteration roles** | About to introduce a new dependency / framework / pattern | `"<dependency name> OR <pattern name>"` | workspace + global |
+| **All iteration roles** | About to flag a risk that sounds familiar | `"<risk description>"` | workspace + global |
+| **All iteration roles** | About to make a stylistic choice (commit message style, test naming, comment density) | `"user preference <topic>"` | global only |
+| **Dev** | Test flaking in non-obvious way | `"<failing test name> OR <symptom>"` | workspace |
+| **Dev** | About to add or replace a tool | `"<tool name>"` + global | workspace + global |
+| **Judge** | Before flagging a regression — was it a known flake? | `"<symptom>"` | workspace |
+| **Judge** | Recurring pattern across N iterations — has reflection seen this before? | `"<pattern description>"` | workspace |
+| **Solution Architect** | Before scoping a new phase | `"user prefers <approach>"` / `"prior architect on <problem domain>"` | global + workspace |
+| **Solution Architect** | Before flagging a risk | `"<risk pattern>"` | workspace + global |
+| **Reflection** | Before identifying a strategic shift | `"<symptom> OR <approach>"` reflections | workspace |
+| **Reflection** | Cross-iteration lesson — does it apply globally? | `"<pattern>"` | global (decide whether to also write back) |
+| **Documenter** | Before writing a section | `"docs style preference <topic>"` | global |
+| **Product Architect** | Spec authoring — has this user expressed preferences on this kind of problem before? | `"<problem-domain> preferences"` | global + cf-system-pa-memory |
+| **Help Assistant** | Each user query | The query itself (semantic search over recent Q&A) | cf-system-ha-memory + global |
+
+### Constraints (what NOT to do — go in `clio-guide.md`)
+
+- **Never purge** (`cfcf clio docs delete --hard` not available to agents). Soft-delete only; restore is reversible.
+- **Don't ingest secrets / credentials / API keys** — Clio is plaintext SQLite, not encrypted. If you find them in scope, scrub them or skip the ingest.
+- **Don't ingest large transient files** (full log files, raw stdouts > 50 KB). Decision-log entries are short summaries, not raw traces.
+- **Always pass `--author "<role>|<agent>|<model>"` on direct ingest** so the audit log + future analytics can attribute writes correctly. Auto-ingest paths handle this for you.
+- **Don't search every turn** — token + latency cost. The preloaded `clio-relevant.md` handles the "I just want some context" case; on-demand search is for specific triggers.
+- **Don't write the same lesson twice** — Clio dedups by sha256 of full content, but you should still phrase deliberately. If a prior search returned the lesson, you don't need to re-ingest it.
+
 ## Implementation plan
 
 Two phases. Phase 1 is the bulk of the user-visible work; phase 2 is
