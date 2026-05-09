@@ -103,6 +103,13 @@ A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory 
 
 `cfcf server start` boots a local Hono server (default port `7233`) that hosts the HTTP API and a React web UI. Most cfcf CLI commands hit this server. The web UI is the easiest way to watch the loop in real time — `http://127.0.0.1:7233` after start.
 
+The web UI has five top-level tabs:
+- **Workspaces** — dashboard + per-workspace iteration history, log viewer, config tab.
+- **Memory** — Clio cross-workspace memory: search, browse, ingest, audit, projects.
+- **Agents** (item 6.8) — per-role instruction template editor with versioning + promote-to-production. Each role has a built-in default (always available) and any number of saved versions you create. Promote a version to make cf² use it on the next agent run; revert to default to fall back to the cf²-shipped template.
+- **Settings** — global config (per-role agent + model, ollama models, notifications, model registry).
+- **Help** — in-shell version of these guides.
+
 ### Pause actions
 
 When the loop pauses, you can resume with one of five structured actions (`continue` / `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection`) instead of a bare "Resume." Each action routes the harness — and any free-text feedback you provide — to a different destination. See [Workflow → User actions at pause points](workflow.md#user-actions-at-pause-points) for the full table and CLI examples.
