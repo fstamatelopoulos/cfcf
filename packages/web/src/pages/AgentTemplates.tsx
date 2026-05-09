@@ -449,10 +449,15 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
             </div>
           )}
 
-          {/* Content editor */}
+          {/* Content editor.
+              readOnly is gated ONLY by `!isEditing` — the bundled default
+              "lives" on disk read-only (we never overwrite the embedded
+              constant), but the user still needs to TYPE in this editor
+              to draft a new version that gets saved via "Save as new
+              version". The save action is what's gated, not the typing. */}
           <textarea
             value={content}
-            readOnly={!isEditing || selectionIsDefault}
+            readOnly={!isEditing}
             onChange={(e) => {
               setContent(e.target.value);
               setEditingDirty(true);
@@ -466,7 +471,7 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               padding: "0.75rem",
               border: "1px solid var(--color-border, #444)",
               borderRadius: "4px",
-              background: isEditing && !selectionIsDefault
+              background: isEditing
                 ? "var(--color-bg)"
                 : "var(--color-bg-muted, var(--color-bg))",
               color: "var(--color-text)",
@@ -481,8 +486,10 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
                 color: "var(--color-text-muted, #888)",
               }}
             >
-              The bundled default is read-only. Use <strong>Save as new version</strong> to fork
-              it into an editable version.
+              You're editing a copy of the bundled default. Click{" "}
+              <strong>Save as new version</strong> to fork your changes
+              into a new version (the cf²-shipped default itself stays
+              untouched and remains available in the dropdown).
             </p>
           )}
 
