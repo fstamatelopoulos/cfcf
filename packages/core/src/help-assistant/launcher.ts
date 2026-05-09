@@ -147,11 +147,41 @@ export function buildLaunchArgs(
       args.push(firstUserMessage); // positional [PROMPT] (Flavour A)
       return { command: "codex", args, tempPromptFile: promptFile };
     }
+    case "claude-code-ollama": {
+      // Same shape as the `claude-code` case, wrapped in `ollama launch
+      // claude --model <ollama-model> --yes -- <claude-flags>`. The
+      // `--model` flag here goes to OLLAMA (selects which local model
+      // to serve); claude itself doesn't get `--model` because ollama
+      // already pinned the model serving the API surface. So
+      // `agent.model` is the ollama-side model name (e.g.
+      // `qwen3-coder:latest`, `gemma4:31b`), not a Claude alias.
+      //
+      // Interactive mode (no `-p`); --append-system-prompt is a claude
+      // flag and passes through after the `--` separator unchanged.
+      // No --dangerously-skip-permissions: HA is interactive, the user
+      // reviews tool calls.
+      const ollamaArgs: string[] = ["launch", "claude"];
+      if (agent.model) {
+        ollamaArgs.push("--model", agent.model);
+      }
+      ollamaArgs.push("--yes", "--");
+
+      const claudeArgs: string[] = ["--append-system-prompt", systemPrompt];
+      claudeArgs.push(firstUserMessage); // positional [prompt] (Flavour A)
+
+      return {
+        command: "ollama",
+        args: [...ollamaArgs, ...claudeArgs],
+        tempPromptFile: null,
+      };
+    }
     default:
       throw new Error(
         `Help Assistant doesn't support adapter "${agent.adapter}" yet. ` +
-        `Supported: claude-code, codex. ` +
-        `Set helpAssistantAgent in your config (cfcf config edit) to one of those.`,
+        `Supported: claude-code, codex, claude-code-ollama. ` +
+        `(opencode + opencode-ollama interactive support is a known follow-up — ` +
+        `their system-prompt-injection flag is non-trivial; see plan item 6.34.) ` +
+        `Set helpAssistantAgent in your config (cfcf config edit) to one of the supported adapters.`,
       );
   }
 }

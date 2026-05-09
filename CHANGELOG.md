@@ -9,7 +9,42 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed — Item 6.34: Help Assistant + Product Architect launchers now accept `claude-code-ollama`
+
+The agent picker in `cfcf init` and the web Settings page surfaces every
+detected adapter for every role — but the Help Assistant and Product
+Architect have their **own** launchers (separate from the standard
+`spawnProcess` path because they need true TUI takeover via
+`stdio: "inherit"`) with hardcoded `switch` statements for argv
+composition. The new adapters from item 6.28 (`opencode`,
+`claude-code-ollama`, `opencode-ollama`) were never wired up to those
+switches, so picking `claude-code-ollama` for HA or PA at `cfcf init`
+would save fine but throw at launch time:
+
+```
+[ha] failed to launch: Help Assistant doesn't support adapter
+"claude-code-ollama" yet. Supported: claude-code, codex.
+```
+
+- Added a `case "claude-code-ollama"` arm to both launchers. Wraps the
+  existing claude-code argv with `ollama launch claude --model
+  <ollama-model> --yes -- <claude-flags>`. For HA: no
+  `--dangerously-skip-permissions` (HA is interactive, user reviews
+  tool calls). For PA: `--dangerously-skip-permissions` flows through
+  in non-safe mode (matches the direct claude-code behaviour).
+- The error message for the still-unsupported variants
+  (`opencode`, `opencode-ollama`) now lists `claude-code-ollama` as
+  the supported ollama path, so users on `opencode-ollama` see the
+  alternative immediately.
+- 7 new unit tests across `help-assistant/launcher.test.ts` and
+  `product-architect/launcher.test.ts` (argv shape, model omission,
+  safe-mode behaviour for PA, helpful-error-message check).
+- **Out of scope for this fix**: `opencode` and `opencode-ollama`
+  interactive support — opencode's interactive default reads
+  `AGENTS.md` from cwd, which doesn't fit cf²'s ephemeral-tempfile
+  pattern. Needs investigation into opencode's runtime
+  system-prompt-injection mechanism. Tracked as the deferred half of
+  item 6.34 in `docs/plan.md`.
 
 ## [0.22.0] -- 2026-05-09
 
