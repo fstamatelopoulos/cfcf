@@ -11,6 +11,110 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.21.0] -- 2026-05-08
+
+### Added — Item 6.31: orphan agent-process cleanup
+
+- **Boot-time orphan reaper.** `cfcf server start` now scans for stale agent
+  processes left behind by a previous server PID (a hard crash, OS panic,
+  SIGKILL — anything that bypassed the SIGINT/SIGTERM handlers shipped in
+  v0.20.0) and reaps them automatically. Three conjoined filters keep the
+  matcher conservative: PPID==1 (orphan signature on Unix) + same effective
+  user + cfcf-spawn command shape (`claude -p` + `--dangerously-skip-permissions`,
+  `codex exec -s danger-full-access`, `opencode run --dangerously-skip-permissions`,
+  `ollama launch <agent> --yes`). Best-effort: a scan failure never blocks
+  server boot. Single one-line log line on detection.
+- **`cfcf server reap` CLI verb.** Interactive list + y/N kill in a single
+  command — scan, print candidates with `pid=… kind=… elapsed=… <command>`,
+  prompt `Kill these N process(es)? [y/N]`. Empty case prints
+  `No zombie agent processes detected.` and exits 0. `-y / --yes` for
+  non-interactive use. Calls core directly — does NOT require the cfcf
+  server to be running.
+- New `packages/core/src/orphan-reaper.ts` with `findOrphanAgentProcesses()`,
+  `reapOrphans()`, `classifyCommand()`, `parsePsOutput()`,
+  `filterOrphans()`, `formatOrphanLine()` exported pure helpers. 25 unit
+  tests covering every cfcf-spawn pattern (positive + negative cases),
+  parser robustness on malformed input, each filter in isolation, and the
+  SIGTERM→SIGKILL flow with mocked `process.kill` (including the
+  group-then-direct fallback when the group target throws ESRCH).
+
+### Added — Item 6.30: API-parse-error callout + UX polish for ollama-routed roles
+
+- **New blue info callout: API parse errors with some ollama models on
+  claude-code-ollama (May 2026).** Fires whenever any unattended role uses
+  `claude-code-ollama`. Explains that Anthropic's strict Messages API parser
+  rejects malformed tool-call output from some non-coder-tuned local models
+  (notably `gemma4:31b`, confirmed via dogfood) and recommends switching to
+  `opencode-ollama` for the same model — its OpenAI-compatible endpoint is
+  more tolerant of variance in tool-call output. Renders in both web
+  Settings and per-workspace Config (shared `<HarnessPolicyWarning>`
+  component) AND in the `cfcf init` post-config banner.
+- **Inline ⚠ row indicator** next to the adapter selector for any unattended
+  row on `claude-code` (direct). Visual link between the offending row and
+  the yellow policy callout below the table. Scoped to unattended roles
+  only — PA and HA rows don't flag (they're allowed-interactive scope, the
+  agent's TUI literally takes over your shell via `stdio: "inherit"`).
+- **Universal-scope wording** in the two blue callouts (API-parse-error +
+  log-visibility): "Applies to any unattended role on `claude-code-ollama`
+  (dev, judge, reflection, documenter, architect). PA and HA are
+  unaffected — they run interactively in your terminal, so you see output
+  live as the agent works." The dynamic "Affected role(s):" label was
+  renamed to "Currently configured for:" so it reads as your current
+  config rather than the definitive set of affected roles.
+- New `isApiParseRisk(adapter)` helper in `@cfcf/core`, sister to existing
+  `isClaudeCodeHarnessRisk`. 4 unit tests added.
+
+### Changed — Item 6.30: architect always counted as unattended
+
+- **`UNATTENDED_ROLE_NAMES`** in `@cfcf/core` now always includes
+  `"architect"`. Previously the call sites (web + CLI + doctor) gated the
+  architect role on `autoReviewSpecs=true`, but that qualifier was too
+  narrow: the iteration loop also invokes the architect unattended on the
+  `refine_plan` resume action AND the manual `cfcf review` path is itself
+  headless (despite its user-invoked framing — the CLI just polls a status
+  endpoint while the server runs the agent in the background via
+  `spawnProcess` with `stdout: "pipe"` + log file; there's no
+  `stdio: "inherit"` anywhere in the architect path). The same adapter
+  setting drives all three loop paths AND `cfcf review`, so the warning
+  has to reflect the worst case.
+- **Fresh `cfcf init` defaults**: architect role now defaults to a
+  policy-clean adapter (`codex` first, then ollama variants, then
+  `opencode`) instead of `claude-code`. Existing user configs are NOT
+  affected — defaults only run on fresh init or `--force`. PA and HA
+  remain `claude-code`-default (they're the only roles that actually
+  use `stdio: "inherit"` to take over your shell).
+- **`cfcf doctor` `checkHarnessPolicy`**: drops the `autoReviewSpecs &&`
+  gate on the architect risk check; flags `architect` whenever its adapter
+  is `claude-code` regardless of the flag.
+- **`docs/guides/anthropic-policy.md`** TL;DR + violation-pattern paragraph
+  + role-recommendations table + verify instructions all updated. Architect
+  moved from the "Interactive roles" list to the "Unattended roles" list
+  with an explicit note that `cfcf review` polls a status endpoint rather
+  than taking over your TUI. Documenter row updated with the refined 6.30
+  finding: two workable paths (coder-tuned model on claude-code-ollama, OR
+  any model on opencode-ollama). Plain-English clarifier added that PA +
+  HA are the only two roles where the agent's TUI actually takes over
+  your shell.
+- **Plain-English wording in user-facing warnings**: "TUI" replaced with
+  "they run interactively in your terminal, so you see output live as the
+  agent works" in the two blue callouts and the matching CLI banner.
+
+### Added — `cfcf-binary` adapters
+
+- All five agent adapters (claude-code, codex, opencode, claude-code-ollama,
+  opencode-ollama) now pre-check binary presence via `Bun.which()` before
+  spawning. Eliminates the ENOENT noise Bun prints to stderr when an agent
+  CLI isn't installed (the throw IS caught by `try/catch`, but Bun logs the
+  error before throwing — pollutes CI test output). Behaviour unchanged when
+  binaries are present.
+
+### Refined plan rows
+
+- 6.31 marked ✅ shipped post-v0.20.0 with full sub-item summary (a/b/c).
+- 6.30 marked ✅ shipped post-v0.20.0 with full scope summary including
+  the refined finding from re-test.
+- iter-6 active-set callout updated.
+
 ## [0.20.0] -- 2026-05-08
 
 **Item 6.28 ships.** Three new agent adapters give cfcf's unattended roles (dev / judge / reflection / documenter) a path off Claude Code subscription OAuth — driven by Anthropic's Jan→Apr 2026 third-party-harness policy clarification. Ships alongside ollama detection, web UI + CLI warning callouts, a comprehensive policy guide, and 9 drive-by fixes that surfaced during dogfooding the new adapters end-to-end.
