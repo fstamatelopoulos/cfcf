@@ -132,19 +132,31 @@ export interface ManagedTemplateSummary {
 
 /**
  * The set of templates exposed via the management UI. Order matters —
- * it's the tab order in the web UI. Only templates listed here can be
- * managed; everything else in `EMBEDDED` is internal scaffolding (signal
- * files, markdown stubs) that wouldn't make sense to expose.
+ * it's the tab order in the web UI, chosen to match the **natural
+ * agent execution sequence** within an iteration loop: architect runs
+ * pre-loop (and on refine_plan / NEEDS_REFINEMENT), dev does the work,
+ * judge assesses, reflection optionally analyses cross-iteration, and
+ * documenter runs post-SUCCESS. Surfacing in this order means the user
+ * reads top-to-bottom in the same direction the agents fire.
+ *
+ * `process.md` is the **dev agent's primary instruction template** —
+ * the file's content literally opens with "You are a dev agent…". It's
+ * named "process.md" historically (it predates the explicit per-role
+ * instruction files for architect / judge / etc.), but functionally
+ * serves as `cfcf-dev-instructions.md`. The display name "Developer"
+ * reflects the role; the inline "Template file: process.md" hint on
+ * the page surfaces the actual filename for users who need to grep
+ * the override directory.
  *
  * If you add a new role-instruction template to the embedded registry,
  * add it here too to surface it in the management UI.
  */
 const MANAGED_TEMPLATES: Array<{ name: string; displayName: string }> = [
   { name: "cfcf-architect-instructions.md", displayName: "Solution Architect" },
+  { name: "process.md", displayName: "Developer" },
   { name: "cfcf-judge-instructions.md", displayName: "Judge" },
-  { name: "cfcf-documenter-instructions.md", displayName: "Documenter" },
   { name: "cfcf-reflection-instructions.md", displayName: "Reflection" },
-  { name: "process.md", displayName: "Workspace Process" },
+  { name: "cfcf-documenter-instructions.md", displayName: "Documenter" },
 ];
 
 export function listManagedTemplateNames(): Array<{ name: string; displayName: string }> {
