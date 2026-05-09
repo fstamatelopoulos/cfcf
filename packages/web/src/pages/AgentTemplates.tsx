@@ -69,6 +69,19 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // React to back/forward navigation: when the URL's `?template=` query
+  // changes, sync activeName so the page actually shows the new tab.
+  // Without this effect, only the first mount's initialTemplate was
+  // honoured; later hash changes were silently ignored.
+  useEffect(() => {
+    if (!initialTemplate) return;
+    if (initialTemplate === activeName) return;
+    if (summaries.some((s) => s.name === initialTemplate)) {
+      setActiveName(initialTemplate);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTemplate, summaries]);
+
   // Whenever activeName or rev changes, fetch full template state.
   useEffect(() => {
     if (!activeName) return;
@@ -290,7 +303,22 @@ export function AgentTemplatesPage({ initialTemplate }: Props) {
               marginBottom: "0.75rem",
             }}
           >
-            <h3 style={{ margin: 0 }}>{template.displayName}</h3>
+            <h3 style={{ margin: 0 }}>
+              {template.displayName}
+              {isEditing && editingDirty && (
+                <span
+                  style={{
+                    marginLeft: "0.5rem",
+                    fontSize: "var(--text-sm)",
+                    color: "var(--color-warning, #c8861a)",
+                    fontWeight: "normal",
+                  }}
+                  title="You have unsaved changes"
+                >
+                  • unsaved changes
+                </span>
+              )}
+            </h3>
             <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted, #888)" }}>
               In production:{" "}
               <strong style={{ color: "var(--color-text)" }}>{promotedLabel}</strong>
