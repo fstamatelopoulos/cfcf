@@ -70,8 +70,8 @@ Each role can use a different agent and model. Reflection is the strongest-conte
 
 **Adapter choice — Anthropic policy + log visibility**:
 
-- **Interactive roles** (`Product Architect`, `Help Assistant`, manually-invoked `Solution Architect` via `cfcf review`): **`claude-code` is the recommended choice.** TUI takes over your shell; you watch progress live in the terminal. No policy concern (Anthropic permits interactive subscription use) and no log-visibility concern.
-- **Unattended roles** (dev / judge / reflection / documenter / auto-architect when `autoReviewSpecs=true`): the loop spawns the agent CLI without you driving — that's where the trade-offs matter:
+- **Interactive roles** (`Product Architect`, `Help Assistant`): **`claude-code` is the recommended choice.** These are the only two roles that take over your shell via `Bun.spawn(... { stdio: "inherit" })` — you watch progress live in the terminal. No policy concern (Anthropic permits interactive subscription use) and no log-visibility concern.
+- **Unattended roles** (dev / judge / reflection / documenter / **architect**): the loop — and `cfcf review`, since it just polls a status endpoint while the server runs the architect headlessly in the background — spawns the agent CLI with `claude -p` (or equivalent) and pipes stdout to a log file. No TUI takeover anywhere. That's where the trade-offs matter:
     - **`codex`** is the recommended unattended default — streams progress live to the log file (visible during the run), policy-clean (OpenAI's API-key path explicitly endorses CLI automation).
     - **`opencode-ollama` / `opencode`** — also stream live, also policy-clean.
     - **`claude-code-ollama`** — policy-clean (no Anthropic credential involved; local ollama serves the model), but shares Claude Code's `-p` stdout-buffering behaviour: the log file stays silent during the run and only dumps the final response when the agent exits. Pick this if you specifically prefer Claude's tool-call format / instruction-file conventions and don't need live monitoring.

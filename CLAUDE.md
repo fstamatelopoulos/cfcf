@@ -15,7 +15,10 @@ cfcf (Cerefox Code Factory, also written cf², pronounced "cf square") is a dete
 - Agents run as **local processes** (not containers) in the user's dev environment
 - **Git branches** provide isolation between iterations (feature branch per iteration, merge to main)
 - **Seven agent roles**: five run inside the iteration loop — dev (writes code), judge (per-iteration assessment), architect (reviews / extends Problem Pack; verdicts: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE), reflection (cross-iteration strategic review), documenter (produces final docs); two are interactive — Product Architect (live spec iteration before the loop, item 5.14) and Help Assistant (in-shell guidance). Each role independently configurable (adapter + model).
-- **Per-adapter model registry** (item 6.26): pickers in web Settings, web workspace Config, and `cfcf init` / `cfcf config edit` source their model dropdown from `packages/core/src/adapters/seed-models.ts` (the bundled seed) merged with the user's optional override on `CfcfGlobalConfig.agentModels[<adapter>]`. Resolution lives in `resolveModelsForAdapter()`. The seed is intentionally minimal — generic aliases (`opus`, `sonnet`, `haiku` for claude-code; `gpt-5-codex`, `gpt-5`, `o3` for codex) so it ages slowly. **Single edit surface**: web Settings → Model registry is the one place to add/remove/reset per-adapter models; pickers themselves are read-only dropdowns (no inline "custom name" affordance — kept the UI predictable: one place to manage models). Hand-edited config values that aren't in the registry are preserved as `(custom)` entries on first render so back-compat doesn't break. **Maintenance**: when an upstream agent CLI ships a new headline model, edit the relevant array in `seed-models.ts` and ship in the next release; user overrides survive the upgrade.
+- **Per-adapter model registry** (item 6.26): pickers in web Settings, web workspace Config, and `cfcf init` / `cfcf config edit` source their model dropdown from `packages/core/src/adapters/seed-models.ts` (the bundled seed) merged with the user's optional override on `CfcfGlobalConfig.agentModels[<adapter>]`. Resolution lives in `resolveModelsForAdapter()`. The seed is intentionally minimal — generic aliases (`opus`, `sonnet`, `haiku` for claude-code; `gpt-5-codex`, `gpt-5`, `o3` for codex) so it ages slowly. **Single edit surface**: web Settings → Model registry is the one place to add/remove/reset per-adapter models; pickers themselves are read-only dropdowns (no inline "custom name" affordance — kept the UI predictable: one place to manage models). Hand-edited config values that aren't in the registry are preserved as `(custom)` entries on first render so back-compat doesn't break. **Maintenance**: when an upstream agent CLI ships a new headline model, edit the relevant array in `seed-models.ts` and ship in the next release; user overrides survive the upgrade. **Ollama-models refresh** (item 6.33, v0.21.x): for `*-ollama` adapters the model list comes from `availableOllamaModels` in the global config (populated at `cfcf init`). To pick up newly-pulled ollama models, the list is auto-refreshed on every `cfcf server start` (`refreshOllamaModelsInConfig()` in `@cfcf/core`, called from `start.ts`) AND on demand via the "Refresh ollama models" button in the web UI Agent-roles section (Settings + workspace Config). `POST /api/agents/refresh-ollama-models` is the underlying endpoint.
+- **Role-template management** (item 6.8): top-level **Agents** tab in the web UI lets users edit the instruction templates each role reads (`cfcf-architect-instructions.md`, `process.md` for the dev role, `cfcf-judge-instructions.md`, `cfcf-reflection-instructions.md`, `cfcf-documenter-instructions.md`). Each role has a bundled cf² default (always selectable, read-only) and any number of saved versions stored under `~/.cfcf/templates-managed/<name>/`. Two version types: **`full`** REPLACES the default (max flexibility, no auto-upgrade — UI shows a "Forked from cf² vX.Y.Z" badge); **`augmented`** APPENDS to the live default (extension-only on disk; composed at promote time + every server boot via `refreshAugmentedOverrides()` so cf² upgrades automatically propagate). Promoting a version writes the (composed-for-augmented) content to the existing user-global override path `~/.cfcf/templates/<name>` that `getTemplate()` already reads — no runtime changes to the agent-spawn pipeline. Reverting to default deletes the override. Project-local overrides at `<repo>/cfcf-templates/<name>` continue to take precedence (power-user escape hatch, unmanaged from the UI). Core: `packages/core/src/role-templates.ts`. API: `/api/role-templates/*`. UI: `packages/web/src/pages/AgentTemplates.tsx`. Design doc: `docs/design/role-template-management.md`.
+- **Orphan agent-process reaper** (item 6.31, v0.21.0): cf² spawns agents with `detached: true` so SIGTERM at server shutdown can kill the whole process group. **Graceful shutdown** (SIGINT/SIGTERM) sends group SIGTERM, waits 1.5s, then group SIGKILL — handles the common case. **Boot-time orphan scan** (`refreshAugmentedOverrides`'s sibling, in `packages/core/src/orphan-reaper.ts`) closes the hard-crash hole: when the previous server died via SIGKILL or OS panic, its agent children get reparented to PID 1; on next `cfcf server start`, the boot scan finds them via three conjoined filters (PPID==1 + same effective user + cfcf-spawned command shape) and reaps them. Orphans on `ollama launch <agent>` are particularly important — they hold ollama's model serializer for up to 10 min after their inference times out. **`cfcf server reap`** is the manual interactive variant (list + y/N + kill); doesn't require the cfcf server to be running. See `findOrphanAgentProcesses()` + `reapOrphans()` in `@cfcf/core`.
+- **Architect role is unattended for ALL invocation paths** (item 6.30, v0.21.0): the previous "manually-invoked SA via `cfcf review` is interactive" framing was wrong — verified in code that ALL architect spawns (pre-loop autoReviewSpecs, mid-loop refine_plan, manual `cfcf review`) use `spawnProcess` with `stdout: "pipe"` + log file. There's no `stdio: "inherit"` anywhere in the architect path; `cfcf review` is just a polling client to a server-side background spawn. So architect is in `UNATTENDED_ROLE_NAMES` always (no `autoReviewSpecs=true` gate); `cfcf doctor`'s harness check + the web UI's policy callout fire on architect+claude-code regardless of `autoReviewSpecs`; fresh `cfcf init` defaults architect to `codex` instead of `claude-code` (behaviour change for new installs only — existing user configs unaffected). Only **PA (`cfcf spec`)** and **HA (`cfcf help assistant`)** use `Bun.spawn(... { stdio: "inherit" })` and are within Anthropic's allowed-interactive scope.
 - **Structured pause actions** (item 6.25, shipped 2026-05-02): when a paused loop is resumed via `cfcf resume --action <…>`, the user picks one of `continue` / `finish_loop` / `stop_loop_now` / `refine_plan` / `consult_reflection`. `loop-stopped` is a workspace-history event type for user-initiated `stop_loop_now`.
 - **Three commits per iteration** when reflection runs: `cfcf iteration N dev (...)`, `cfcf iteration N judge (...)`, `cfcf iteration N reflect (<health>): <key_observation>`.
 - **Async execution**: iterate endpoint returns 202, CLI polls for status.
@@ -74,8 +77,25 @@ packages/
     iteration-loop.ts    # Main iteration loop controller + decision engine
                          #   (preparing -> dev -> judging -> reflecting? -> deciding)
     workspace-history.ts # history.json: review / iteration / reflection / document events
-    adapters/            # Agent adapter implementations (claude-code, codex)
+    adapters/            # Agent adapter implementations (claude-code, codex,
+                         #   opencode, claude-code-ollama, opencode-ollama —
+                         #   five total since item 6.28)
+    ollama-detection.ts  # detectOllama, listOllamaModels (item 6.28),
+                         #   refreshOllamaModelsInConfig (item 6.33 boot-time
+                         #   refresh + button-triggered re-detection)
+    orphan-reaper.ts     # findOrphanAgentProcesses + reapOrphans for boot-time
+                         #   reap of stale agents from a hard-crashed prior
+                         #   server PID (item 6.31, v0.21.0)
+    role-templates.ts    # Role-instruction-template versioning + promote-to-
+                         #   production layer (item 6.8). Two types: full
+                         #   (replace default) + augmented (append to live
+                         #   default; auto-recomposed on cf² upgrade via
+                         #   refreshAugmentedOverrides at server boot).
     templates/           # cfcf-docs/ file templates (17 entries incl. reflection + iteration-log + clio-guide)
+    templates.ts         # Template resolver: project-local override → user-global
+                         #   override (~/.cfcf/templates/) → embedded default.
+                         #   getEmbeddedTemplate(name) exposes the bundled
+                         #   default verbatim for role-templates.ts.
     clio/                # Clio memory layer (item 5.7)
       backend/
         types.ts           # MemoryBackend interface (swap point for future CerefoxRemote)
@@ -110,7 +130,7 @@ packages/
     commands/            # CLI command implementations
       init.ts            # First-run interactive setup (numbered agent picker, embedder
                          #   pick + inline HF download with progress bar, error classifier)
-      server.ts          # Server start/stop/status
+      server.ts          # Server start/stop/status/reap (item 6.31 added `reap`)
       workspace.ts       # Workspace init/list/show/delete (--project for Clio assignment)
       config.ts          # Global config show/edit
       run.ts             # Start iteration loop (agent) or single iteration (manual)
@@ -131,7 +151,9 @@ packages/
                          #   + cfcf memory alias
   web/src/
     App.tsx              # Root router (dashboard / workspace / server)
-    pages/               # Dashboard, WorkspaceDetail, ServerInfo
+    pages/               # Dashboard, WorkspaceDetail, ServerInfo, MemoryPage,
+                         #   HelpPage, AgentTemplatesPage (item 6.8 — /agents
+                         #   route, role-template management UI)
     components/          # Header, PhaseIndicator, WorkspaceHistory,
                          #   ArchitectReview, JudgeDetail, ReflectionDetail, …
     api.ts               # Client for all /api/* endpoints incl. /activity + /reflect

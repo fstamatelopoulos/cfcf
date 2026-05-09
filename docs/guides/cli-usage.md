@@ -26,12 +26,13 @@ What it does:
 1. Scans for installed agents (Claude Code, Codex CLI) and reports what it finds
 2. Verifies git is available
 3. Asks you to choose agents for **seven roles**: five iteration roles (dev, judge, architect, reflection, documenter) plus two interactive roles (Product Architect, Help Assistant). Each prompt asks for both adapter and model.
-4. Asks for model selection per role via a numbered picker driven by each adapter's bundled model registry (e.g. `opus` / `sonnet` / `haiku` for Claude Code; `gpt-5-codex` / `gpt-5` / `o3` for Codex). Pick `0` for "(use adapter default)". Edit the per-adapter model list later from the web UI's **Settings → Model registry** section; the CLI picker reads the augmented list on each subsequent run. For the `*-ollama` adapters (item 6.28), the model list is sourced from `ollama list` rather than the cfcf seed registry; for the standalone `opencode` adapter the picker shows just the "(adapter default)" + custom-name options because opencode's provider auth (and therefore its valid model list) lives outside cfcf's view.
-5. **Detects ollama** (item 6.28) and surfaces the count of locally-pulled models. When ollama is present alongside `claude` and/or `opencode`, the agent picker for each role conditionally includes `claude-code-ollama` and `opencode-ollama` so you can route unattended roles through a local model server.
-6. **Surfaces two related warnings for the Claude Code paths** (item 6.28) when picking adapters for unattended roles (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`):
+4. Asks for model selection per role via a numbered picker driven by each adapter's bundled model registry (e.g. `opus` / `sonnet` / `haiku` for Claude Code; `gpt-5-codex` / `gpt-5` / `o3` for Codex). Pick `0` for "(use adapter default)" — note: NOT offered for `claude-code-ollama` / `opencode-ollama`, which require an explicit `--model` flag (item 6.33). Edit the per-adapter model list later from the web UI's **Settings → Model registry** section; the CLI picker reads the augmented list on each subsequent run. For the `*-ollama` adapters (item 6.28), the model list is sourced from `ollama list` rather than the cfcf seed registry; for the standalone `opencode` adapter the picker shows just the "(adapter default)" + custom-name options because opencode's provider auth (and therefore its valid model list) lives outside cfcf's view.
+5. **Detects ollama** (item 6.28) and surfaces the count of locally-pulled models. When ollama is present alongside `claude` and/or `opencode`, the agent picker for each role conditionally includes `claude-code-ollama` and `opencode-ollama` so you can route unattended roles through a local model server. After init, ollama models are auto-refreshed on every `cfcf server start` (item 6.33) — newly-pulled models propagate to role-picker dropdowns without re-running `cfcf init`. There's also a "Refresh ollama models" button in the web UI Agent-roles section (Settings + workspace Config) for the impatient between-restarts case.
+6. **Surfaces three related warnings for the Claude Code paths** (items 6.28 + 6.30) when picking adapters for unattended roles (dev / judge / reflection / documenter / architect — note: architect counts as unattended for ALL invocation paths, including manual `cfcf review`, since its spawn pipeline is headless `claude -p` regardless of how it's invoked):
    - **Yellow / policy-grade**: fires when `claude-code` (direct, talking to Anthropic's API) is picked. Anthropic's third-party-harness policy restricts subscription OAuth to interactive use; the unattended cf² loop is the violation pattern. Recommendation: switch to `codex`, `claude-code-ollama`, `opencode`, or `opencode-ollama`.
+   - **Blue / API-parse-error note** (item 6.30, May 2026): fires when `claude-code-ollama` is picked. Some non-coder-tuned local models (notably `gemma4:31b`) produce tool-use / tool-result content blocks that Anthropic's strict Messages API parser rejects with `API Error: Content block not found`. If you hit this, switch to `opencode-ollama` for the same model — its OpenAI-compatible endpoint is more tolerant.
    - **Blue / log-visibility note**: fires when `claude-code-ollama` is picked. The ollama path is policy-clean, but `claude -p` still buffers stdout for the entire run — log files stay silent until the agent exits, then dump the final response. If you want live progress monitoring during long iterations, prefer `codex` (streams natively) or the opencode adapters.
-   - Both warnings are informational; neither blocks the save. PA / HA / manually-invoked SA on any Claude variant do NOT trigger either warning (interactive scope; live progress visible in the user's TUI). See `cfcf help anthropic-policy` for the full breakdown.
+   - All three warnings are informational; neither blocks the save. Only PA and HA on Claude variants do NOT trigger any warning (they take over your shell via `stdio: "inherit"` — the only paths actually within Anthropic's allowed-interactive scope). See `cfcf help anthropic-policy` for the full breakdown.
 5. Asks for default iteration limits (max iterations, pause cadence) and the reflection safeguard ceiling (`reflectSafeguardAfter`, default `3` -- the maximum consecutive iterations the judge may skip reflection before cfcf forces it)
 6. Asks for the pre-loop review + post-SUCCESS documenter flags (item 5.1):
    - `autoReviewSpecs` (default `false`) -- if `true`, Start Loop first runs the Solution Architect and gates on its readiness signal
@@ -92,7 +93,38 @@ The same information (plus the full global config) is available in the
 web GUI at `http://localhost:7233/#/server`. Since v0.7.3 that page is
 a full editor -- wire-compatible with `cfcf config edit` via the same
 `PUT /api/config` endpoint. Reach it from the **Settings** link in the
-top bar.
+top bar. The web UI's full top-level navigation:
+
+- **Workspaces** — dashboard + per-workspace iteration history, log viewer, config tab.
+- **Memory** — Clio (cross-workspace memory): search, browse, ingest, audit, projects, trash.
+- **Agents** (item 6.8) — per-role instruction-template editor with versioning + promote-to-production. One sub-tab per role; the bundled cf² default is always selectable (read-only). Save edits as either a `full` version (replaces the default; doesn't auto-upgrade) or an `augmented` version (extension-only on top of the live default; auto-upgrades when cf² ships a new template).
+- **Settings** — global config (per-role agent + model, ollama-models refresh button, model registry, notifications).
+- **Help** — in-shell version of the documentation guides.
+
+### `cfcf server reap` (item 6.31, v0.21.0)
+
+Detect + interactively kill orphan agent processes left behind by a
+previous server PID — typically when the server died via SIGKILL or
+an OS panic, bypassing the SIGINT/SIGTERM signal handlers that
+normally clean up child agents on graceful shutdown. Pure system
+call — does NOT require the cfcf server to be running.
+
+```bash
+cfcf server reap                 # interactive: lists candidates, asks y/N before killing
+cfcf server reap --yes           # non-interactive: kill anything detected
+```
+
+The matcher is conservative — three conjoined filters (PPID==1 +
+same effective user + cfcf-spawned command shape). Empty case:
+
+```
+No zombie agent processes detected.
+```
+
+Boot-time auto-reap runs the same logic on every `cfcf server start`,
+so manual reaping is only needed if you don't want to bounce the
+server. See [`troubleshooting.md`](troubleshooting.md) → "Loop appears
+hung / silent" if you suspect orphans.
 
 ---
 

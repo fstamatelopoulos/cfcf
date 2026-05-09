@@ -161,7 +161,7 @@ Re-run `cfcf init --force` afterwards so cfcf picks up the new ollama snapshot. 
 
 ### Anthropic harness-policy warning during `cfcf init`
 
-The warning fires when you've picked `claude-code` (direct, talking to Anthropic's API/subscription) for an unattended role (dev / judge / reflection / documenter, plus architect when `autoReviewSpecs=true`). It's **informational, not blocking** — your config saves. To clear the warning, re-run `cfcf init --force` or `cfcf config edit` and pick `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for those roles instead. PA / HA / manually-invoked SA on `claude-code` do NOT trigger the warning — they're within Anthropic's allowed-interactive scope. Full background: [`anthropic-policy.md`](anthropic-policy.md).
+The warning fires when you've picked `claude-code` (direct, talking to Anthropic's API/subscription) for an unattended role (dev / judge / reflection / documenter / architect — note: architect counts as unattended in all three loop paths AND for manual `cfcf review`, since the architect spawn pipeline is always headless `claude -p` regardless of how it's invoked). It's **informational, not blocking** — your config saves. To clear the warning, re-run `cfcf init --force` or `cfcf config edit` and pick `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for those roles instead. Only **PA and HA** on `claude-code` skip the warning — they're the two roles that take over your shell via `stdio: "inherit"`, the only paths actually within Anthropic's allowed-interactive scope. Full background: [`anthropic-policy.md`](anthropic-policy.md).
 
 ### Log-visibility note during `cfcf init` (claude-code-ollama on unattended role)
 

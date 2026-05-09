@@ -19,8 +19,8 @@ cf² is published on npmjs.com as [`@cerefox/codefactory`](https://www.npmjs.com
 
 cf² needs **at least one** AI coding agent on PATH; `cfcf init` only offers adapters whose underlying CLI it can detect. Per the policy + log-visibility note above, **`claude-code` alone is not a complete setup** if you plan to run unattended loops — those need a non-Anthropic-OAuth path. **Recommended minimum** for typical use:
 
-- **`claude-code`** (Anthropic) — for the interactive roles (PA / HA / manual SA). Optional if you don't use those.
-- **One of**: `codex` / `opencode` / `ollama` — for the unattended roles (dev / judge / reflection / documenter / auto-architect).
+- **`claude-code`** (Anthropic) — for the interactive roles (PA / HA). Optional if you don't use those.
+- **One of**: `codex` / `opencode` / `ollama` — for the unattended roles (dev / judge / reflection / documenter / architect — note: architect is always unattended in cf², including via manual `cfcf review`, since the architect spawn pipeline is headless `claude -p` regardless of how it's invoked).
 
 Mix as you like; cf² surfaces a warning at `cfcf init` if your unattended-role adapter choices conflict with the policy. The full role-to-adapter mapping table lives in [`anthropic-policy.md`](anthropic-policy.md).
 
@@ -32,7 +32,7 @@ claude --version    # confirm install
 claude              # first run prompts for Anthropic OAuth login (browser)
 ```
 
-Recommended for: **Product Architect (`cfcf spec`)**, **Help Assistant (`cfcf help assistant`)**, **manually-invoked Solution Architect (`cfcf review`)** — the interactive roles where Claude Code's TUI takes over your shell. Anthropic's third-party-harness policy restricts subscription OAuth to interactive use, so cf²'s automated dev / judge / reflection / documenter loop should NOT use direct `claude-code` (use `claude-code-ollama` or another adapter instead — see below).
+Recommended for: **Product Architect (`cfcf spec`)** and **Help Assistant (`cfcf help assistant`)** — the two roles where Claude Code's TUI literally takes over your shell (via `stdio: "inherit"`). Anthropic's third-party-harness policy restricts subscription OAuth to interactive use, so cf²'s headless `claude -p` paths — dev, judge, reflection, documenter, and Solution Architect (yes, even via `cfcf review`, which polls a status endpoint while the server runs the architect in the background) — should NOT use direct `claude-code` (use `claude-code-ollama` or another adapter instead — see below).
 
 ### Codex CLI (OpenAI)
 

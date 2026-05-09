@@ -106,7 +106,7 @@ A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory 
 The web UI has five top-level tabs:
 - **Workspaces** — dashboard + per-workspace iteration history, log viewer, config tab.
 - **Memory** — Clio cross-workspace memory: search, browse, ingest, audit, projects.
-- **Agents** (item 6.8) — per-role instruction template editor with versioning + promote-to-production. Each role has a built-in default (always available) and any number of saved versions you create. Promote a version to make cf² use it on the next agent run; revert to default to fall back to the cf²-shipped template.
+- **Agents** (item 6.8) — per-role instruction template editor with versioning + promote-to-production. One sub-tab per role (Solution Architect → Developer → Judge → Reflection → Documenter, matching the natural agent execution sequence). Each role has a built-in default (always available, read-only) and any number of saved versions. Two version types: **`full`** replaces the default entirely (max flexibility, doesn't auto-upgrade — UI shows a "Forked from cf² vX.Y.Z" badge); **`augmented`** appends to the live default (extension-only on disk; auto-recomposes when cf² ships a new template, so the upgrade is hands-off). Promote a version to make cf² use it on the next agent run; revert to default to fall back to the cf²-shipped template.
 - **Settings** — global config (per-role agent + model, ollama models, notifications, model registry).
 - **Help** — in-shell version of these guides.
 
