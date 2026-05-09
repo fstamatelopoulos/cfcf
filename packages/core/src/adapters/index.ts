@@ -63,21 +63,27 @@ const CLAUDE_CODE_HARNESS_ADAPTER = "claude-code";
 /**
  * Roles that run unattended inside the iteration loop. Picking
  * `claude-code` for any of these triggers the policy warning. PA / HA /
- * manually-invoked SA do NOT — they take over the user's TUI directly,
- * which Anthropic's policy permits.
+ * manually-invoked SA via `cfcf review` do NOT — they take over the
+ * user's TUI directly, which Anthropic's policy permits.
  *
- * "architect" is included because `autoReviewSpecs=true` makes the role
- * unattended (architect runs at the start of `cfcf run` without the user
- * driving its TUI). The warning also fires when the user has architect
- * on Claude Code AND `autoReviewSpecs` is true — the second condition
- * is enforced at the call site.
+ * "architect" was previously gated by the call site on
+ * `autoReviewSpecs=true`, but that qualifier was too narrow: the
+ * iteration loop also invokes the architect unattended on the
+ * `refine_plan` resume action (item 6.25) and on a NEEDS_REFINEMENT
+ * verdict from the judge (architect re-review pattern). The same
+ * adapter setting drives all three loop-invoked paths AND the manual
+ * `cfcf review` path. Since the user can't pick a different adapter
+ * per invocation context, the warning has to reflect the worst case
+ * — and the worst case is "loop will invoke this unattended". Always
+ * including architect here is the correct conservative behaviour
+ * (item 6.30, 2026-05-08).
  */
 export const UNATTENDED_ROLE_NAMES = [
   "dev",
   "judge",
   "reflection",
   "documenter",
-  // architect — only when autoReviewSpecs=true (caller-enforced)
+  "architect",
 ] as const;
 
 export type UnattendedRoleName = (typeof UNATTENDED_ROLE_NAMES)[number];
@@ -99,6 +105,22 @@ export function isClaudeCodeHarnessRisk(adapterName: string): boolean {
  */
 export const CLAUDE_CODE_HARNESS_WARNING =
   "Anthropic's third-party-harness policy prohibits using Claude Code subscriptions in unattended/headless contexts (the cfcf iteration loop is exactly that pattern). For limited testing only — do not use for production. See docs/guides/anthropic-policy.md.";
+
+/**
+ * Returns true when the picked adapter routes through claude-code-ollama,
+ * which uses Anthropic's strict Messages API parser on top of ollama's
+ * model output. Some non-coder-tuned local models (e.g. gemma4:31b)
+ * produce tool-use / tool-result content blocks the parser rejects with
+ * `API Error: Content block not found`. The OpenAI-compatible endpoint
+ * used by `opencode-ollama` is more tolerant of the same models — that's
+ * the recommended fall-back when this combination fails. Surfaced as
+ * an informational note (not a blocking warning) since the failure
+ * mode is model-specific and may not bite a given workspace's run.
+ * (item 6.30, 2026-05-08)
+ */
+export function isApiParseRisk(adapterName: string): boolean {
+  return adapterName === "claude-code-ollama";
+}
 
 export {
   claudeCodeAdapter,

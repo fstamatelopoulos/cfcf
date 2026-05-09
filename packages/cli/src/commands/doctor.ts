@@ -430,10 +430,13 @@ function checkClaudeSettingsModel(): CheckResult {
 }
 
 /**
- * Surface the per-role harness-risk status (item 6.28). Reads the
+ * Surface the per-role harness-risk status (item 6.28; refined for 6.30
+ * 2026-05-08 to count architect as always-unattended). Reads the
  * configured per-role adapter from the user's saved config and warns
  * when claude-code is picked for any unattended role (dev / judge /
- * reflection / documenter, plus architect when autoReviewSpecs=true).
+ * reflection / documenter / architect — architect is unattended in all
+ * three loop paths AND in manual `cfcf review`, since `cfcf review` is
+ * a polling client to a server-side headless spawn).
  *
  * Best-effort: if no config exists yet (pre-init) the check returns ok
  * — the user will see the same warning at `cfcf init` time so doctor
@@ -450,8 +453,8 @@ async function checkHarnessPolicy(): Promise<CheckResult> {
     if (isClaudeCodeHarnessRisk(config.devAgent.adapter)) risky.push("dev");
     if (isClaudeCodeHarnessRisk(config.judgeAgent.adapter)) risky.push("judge");
     if (isClaudeCodeHarnessRisk(config.documenterAgent.adapter)) risky.push("documenter");
+    if (isClaudeCodeHarnessRisk(config.architectAgent.adapter)) risky.push("architect");
     if (config.reflectionAgent && isClaudeCodeHarnessRisk(config.reflectionAgent.adapter)) risky.push("reflection");
-    if (config.autoReviewSpecs && isClaudeCodeHarnessRisk(config.architectAgent.adapter)) risky.push("architect (autoReviewSpecs=true)");
     if (risky.length === 0) {
       return {
         name,

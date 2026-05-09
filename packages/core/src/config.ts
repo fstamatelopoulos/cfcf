@@ -75,15 +75,24 @@ export function createDefaultConfig(
   availableAgents: string[],
   availableOllamaModels?: string[],
 ): CfcfGlobalConfig {
-  // Default-adapter policy (item 6.28):
-  //   - **Unattended roles** (dev / judge / reflection / documenter): prefer
-  //     `codex` first, since Anthropic's third-party-harness policy makes
-  //     `claude-code` non-compliant for these. Without this preference,
-  //     fresh `cfcf init` would default unattended roles to claude-code
-  //     and immediately fire the policy warning — bad UX.
-  //   - **Interactive roles** (architect / Product Architect / Help
-  //     Assistant): prefer `claude-code` first. These run inside the
-  //     user's TUI and are within Anthropic's allowed-interactive scope.
+  // Default-adapter policy (item 6.28, refined for item 6.30 2026-05-08):
+  //   - **Unattended roles** (dev / judge / reflection / documenter /
+  //     architect): prefer `codex` first, since Anthropic's third-party-
+  //     harness policy makes `claude-code` non-compliant for these.
+  //     **Architect was previously classified as interactive** based on
+  //     the assumption that `cfcf review` "takes over the user's TUI" —
+  //     but the actual implementation spawns the architect headlessly
+  //     via `runReview` → `spawnProcess` (stdout: "pipe" + log file) and
+  //     the CLI just polls a status endpoint. So architect is unattended
+  //     in the policy-relevant sense for ALL invocation paths (pre-loop
+  //     autoReviewSpecs, mid-loop refine_plan, manual cfcf review),
+  //     and defaults to a non-claude-code adapter to avoid triggering
+  //     the policy warning on fresh installs.
+  //   - **Truly interactive roles** (Product Architect via `cfcf spec`,
+  //     Help Assistant via `cfcf help assistant`): prefer `claude-code`
+  //     first. These use `Bun.spawn` with `stdio: "inherit"` — the
+  //     agent's TUI literally takes over the user's shell. Within
+  //     Anthropic's allowed-interactive scope.
   //
   // Helper: prefer codex among policy-compliant unattended adapters.
   // The future ollama-routed + opencode adapters are also compliant;
@@ -108,13 +117,12 @@ export function createDefaultConfig(
   const judgeCandidate = pickUnattendedDefault(devAdapter);
   const judgeAdapter = judgeCandidate === "claude-code" ? devAdapter : judgeCandidate;
 
-  // Architect: prefer claude-code (interactive role — `cfcf review` is
-  // user-invoked; runs unattended only when `autoReviewSpecs=true`,
-  // which is opt-in and surfaces the warning at init time).
-  const architectAdapter =
-    availableAgents.includes("claude-code")
-      ? "claude-code"
-      : devAdapter;
+  // Architect: same compliance reasoning as dev (item 6.30, 2026-05-08).
+  // All architect spawns are headless `claude -p` / `codex exec` —
+  // including manual `cfcf review`, which despite its user-invoked
+  // framing just polls a status endpoint while the server runs the
+  // agent in the background. Defaults to a policy-clean adapter.
+  const architectAdapter = pickUnattendedDefault();
 
   // Documenter: same policy as dev — runs unattended after a successful
   // loop, so prefer codex over claude-code.

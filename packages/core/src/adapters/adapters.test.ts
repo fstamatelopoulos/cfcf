@@ -9,6 +9,7 @@ import {
   claudeCodeOllamaAdapter,
   opencodeOllamaAdapter,
   isClaudeCodeHarnessRisk,
+  isApiParseRisk,
   CLAUDE_CODE_HARNESS_WARNING,
   UNATTENDED_ROLE_NAMES,
 } from "./index.js";
@@ -283,14 +284,39 @@ describe("isClaudeCodeHarnessRisk", () => {
   });
 });
 
+describe("isApiParseRisk (item 6.30)", () => {
+  it("returns true for `claude-code-ollama` (Anthropic-strict parser path)", () => {
+    expect(isApiParseRisk("claude-code-ollama")).toBe(true);
+  });
+
+  it("returns false for `opencode-ollama` (OpenAI-tolerant parser path is the recommended fall-back)", () => {
+    expect(isApiParseRisk("opencode-ollama")).toBe(false);
+  });
+
+  it("returns false for direct adapters (no ollama translation involved)", () => {
+    expect(isApiParseRisk("claude-code")).toBe(false);
+    expect(isApiParseRisk("codex")).toBe(false);
+    expect(isApiParseRisk("opencode")).toBe(false);
+  });
+
+  it("returns false for unknown adapter names", () => {
+    expect(isApiParseRisk("nonexistent")).toBe(false);
+    expect(isApiParseRisk("")).toBe(false);
+  });
+});
+
 describe("UNATTENDED_ROLE_NAMES + CLAUDE_CODE_HARNESS_WARNING", () => {
-  it("lists the four always-unattended iteration roles", () => {
+  it("lists the five always-unattended iteration roles (item 6.30: architect added)", () => {
     expect(UNATTENDED_ROLE_NAMES).toContain("dev");
     expect(UNATTENDED_ROLE_NAMES).toContain("judge");
     expect(UNATTENDED_ROLE_NAMES).toContain("reflection");
     expect(UNATTENDED_ROLE_NAMES).toContain("documenter");
-    // architect is conditionally unattended; not in this constant
-    expect(UNATTENDED_ROLE_NAMES).not.toContain("architect");
+    // architect is unattended whenever the loop invokes it (pre-loop
+    // when autoReviewSpecs=true, mid-loop on refine_plan or
+    // NEEDS_REFINEMENT). The same adapter setting drives all three
+    // loop paths AND the manual `cfcf review` path, so we include
+    // architect always — see UNATTENDED_ROLE_NAMES doc-comment.
+    expect(UNATTENDED_ROLE_NAMES).toContain("architect");
     expect(UNATTENDED_ROLE_NAMES).not.toContain("product-architect");
     expect(UNATTENDED_ROLE_NAMES).not.toContain("help-assistant");
   });

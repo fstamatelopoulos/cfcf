@@ -10,7 +10,7 @@ import {
 import { navigateTo } from "../hooks/useRoute";
 import type { NotificationChannelName, NotificationEventType } from "../types";
 import { AgentModelSelect } from "../components/AgentModelSelect";
-import { HarnessPolicyWarning } from "../components/HarnessPolicyWarning";
+import { HarnessPolicyWarning, isPolicyRiskyRow } from "../components/HarnessPolicyWarning";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -313,6 +313,17 @@ export function ServerInfo() {
               <tbody>
                 {ROLE_KEYS.map((key) => {
                   const agent = draft[key] ?? { adapter: draft.devAgent.adapter };
+                  // ⚠ only on unattended roles. PA / HA take over the
+                  // user's TUI directly and are within Anthropic's
+                  // allowed-interactive scope; flagging them with a
+                  // policy ⚠ would be wrong.
+                  const isUnattendedRole =
+                    key === "devAgent" ||
+                    key === "judgeAgent" ||
+                    key === "architectAgent" ||
+                    key === "documenterAgent" ||
+                    key === "reflectionAgent";
+                  const policyRisky = isUnattendedRole && isPolicyRiskyRow(agent.adapter);
                   return (
                     <tr key={key} className="project-history__row">
                       <td className="project-history__time" style={{ minWidth: "8rem" }}>
@@ -335,6 +346,20 @@ export function ServerInfo() {
                             </option>
                           )}
                         </select>
+                        {policyRisky && (
+                          <span
+                            title="Anthropic third-party-harness policy notice — see the warning below the table."
+                            aria-label="Anthropic harness policy warning applies to this row"
+                            style={{
+                              marginLeft: "0.5rem",
+                              color: "var(--color-warning, #c8861a)",
+                              fontWeight: "bold",
+                              cursor: "help",
+                            }}
+                          >
+                            ⚠
+                          </span>
+                        )}
                       </td>
                       <td>
                         <AgentModelSelect
@@ -355,11 +380,9 @@ export function ServerInfo() {
                 { label: "dev", adapter: draft.devAgent.adapter },
                 { label: "judge", adapter: draft.judgeAgent.adapter },
                 { label: "documenter", adapter: draft.documenterAgent.adapter },
+                { label: "architect", adapter: draft.architectAgent.adapter },
                 ...(draft.reflectionAgent
                   ? [{ label: "reflection", adapter: draft.reflectionAgent.adapter }]
-                  : []),
-                ...(draft.autoReviewSpecs
-                  ? [{ label: "architect (autoReviewSpecs=true)", adapter: draft.architectAgent.adapter }]
                   : []),
               ]}
             />
