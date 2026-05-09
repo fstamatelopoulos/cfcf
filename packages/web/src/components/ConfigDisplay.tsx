@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WorkspaceConfig } from "../types";
 import type { NotificationChannelName, NotificationEventType } from "../types";
-import { fetchAgentModels, fetchGlobalConfig, saveWorkspace } from "../api";
+import { fetchAgentModels, fetchGlobalConfig, refreshOllamaModels, saveWorkspace } from "../api";
 import { AgentModelSelect } from "./AgentModelSelect";
 import { ClioProjectDialog } from "./ClioProjectDialog";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
@@ -56,6 +56,11 @@ export function ConfigDisplay({
   // AgentModelSelect to populate the model dropdown for each role's
   // currently-chosen adapter.
   const [agentModels, setAgentModels] = useState<Record<string, string[]>>({});
+  // 6.33 -- bump to re-fetch agent models after a refresh-ollama call,
+  // so the *-ollama dropdowns pick up newly-detected models.
+  const [modelsRev, setModelsRev] = useState(0);
+  const [ollamaRefreshing, setOllamaRefreshing] = useState(false);
+  const [ollamaRefreshMsg, setOllamaRefreshMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -85,10 +90,15 @@ export function ConfigDisplay({
     fetchGlobalConfig()
       .then((cfg) => setAvailableAgents(cfg.availableAgents ?? []))
       .catch(() => setAvailableAgents([]));
+  }, []);
+
+  // Separate effect for agent models so the refresh button can re-fire
+  // it without re-fetching availableAgents.
+  useEffect(() => {
     fetchAgentModels()
       .then((res) => setAgentModels(res.adapters))
       .catch(() => setAgentModels({}));
-  }, []);
+  }, [modelsRev]);
 
   const isDirty = JSON.stringify(workspace) !== JSON.stringify(draft);
   const notificationsOverridden = !!draft.notifications;
@@ -263,6 +273,39 @@ export function ConfigDisplay({
       {/* Editable: remote URL */}
       {/* Agent roles */}
       <FormSection title="Agent roles">
+        <div style={{ marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn btn--small btn--secondary"
+            disabled={ollamaRefreshing}
+            onClick={async () => {
+              setOllamaRefreshing(true);
+              setOllamaRefreshMsg(null);
+              try {
+                const r = await refreshOllamaModels();
+                if (r.error) {
+                  setOllamaRefreshMsg(`ℹ ${r.error}`);
+                } else if (r.updated) {
+                  setOllamaRefreshMsg(`✓ ${r.models.length} ollama model${r.models.length === 1 ? "" : "s"} detected — list updated.`);
+                } else {
+                  setOllamaRefreshMsg(`✓ ${r.models.length} ollama model${r.models.length === 1 ? "" : "s"} detected — list already current.`);
+                }
+                setModelsRev((n) => n + 1);
+              } catch (err) {
+                setOllamaRefreshMsg(`✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+              } finally {
+                setOllamaRefreshing(false);
+              }
+            }}
+          >
+            {ollamaRefreshing ? "Refreshing…" : "Refresh ollama models"}
+          </button>
+          {ollamaRefreshMsg && (
+            <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted, #888)" }}>
+              {ollamaRefreshMsg}
+            </span>
+          )}
+        </div>
         <table className="config-display__table">
           <thead>
             <tr>

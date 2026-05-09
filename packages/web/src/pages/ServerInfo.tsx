@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   fetchAgentModels,
+  refreshOllamaModels,
   fetchServerStatus,
   fetchGlobalConfig,
   saveGlobalConfig,
@@ -81,6 +82,9 @@ export function ServerInfo() {
   // Bumped after a Model registry save so dependent dropdowns + the
   // editor refresh from the server's resolved view.
   const [modelsRev, setModelsRev] = useState(0);
+  // 6.33 -- ollama-models refresh button state.
+  const [ollamaRefreshing, setOllamaRefreshing] = useState(false);
+  const [ollamaRefreshMsg, setOllamaRefreshMsg] = useState<string | null>(null);
 
   // Initial + periodic fetch of read-only server status (version, uptime, etc.)
   useEffect(() => {
@@ -302,6 +306,41 @@ export function ServerInfo() {
       {draft && (
         <>
           <FormSection title="Agent roles">
+            <div style={{ marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn btn--small btn--secondary"
+                disabled={ollamaRefreshing}
+                onClick={async () => {
+                  setOllamaRefreshing(true);
+                  setOllamaRefreshMsg(null);
+                  try {
+                    const r = await refreshOllamaModels();
+                    if (r.error) {
+                      setOllamaRefreshMsg(`ℹ ${r.error}`);
+                    } else if (r.updated) {
+                      setOllamaRefreshMsg(`✓ ${r.models.length} ollama model${r.models.length === 1 ? "" : "s"} detected — list updated.`);
+                    } else {
+                      setOllamaRefreshMsg(`✓ ${r.models.length} ollama model${r.models.length === 1 ? "" : "s"} detected — list already current.`);
+                    }
+                    // Trigger a re-fetch of /api/agents/models so the
+                    // *-ollama dropdowns pick up the new list.
+                    setModelsRev((n) => n + 1);
+                  } catch (err) {
+                    setOllamaRefreshMsg(`✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+                  } finally {
+                    setOllamaRefreshing(false);
+                  }
+                }}
+              >
+                {ollamaRefreshing ? "Refreshing…" : "Refresh ollama models"}
+              </button>
+              {ollamaRefreshMsg && (
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted, #888)" }}>
+                  {ollamaRefreshMsg}
+                </span>
+              )}
+            </div>
             <table className="project-history__table">
               <thead>
                 <tr>

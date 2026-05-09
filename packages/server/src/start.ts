@@ -27,6 +27,7 @@ import {
   findOrphanAgentProcesses,
   reapOrphans,
   formatOrphanLine,
+  refreshOllamaModelsInConfig,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -154,6 +155,26 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   );
   if (staleLoopCount > 0) {
     console.log(`Marked ${staleLoopCount} stale active loop(s) as failed`);
+  }
+
+  // Refresh ollama models on every boot (item 6.33). The
+  // `availableOllamaModels` list is captured at `cfcf init` and never
+  // re-detected by the server itself. If the user pulls a new model
+  // (`ollama pull <name>`) and restarts the server, the new model
+  // wouldn't appear in the role-picker dropdowns without a refresh.
+  // Best-effort: ollama not installed / detection failure / config
+  // write failure all log + continue, never block boot.
+  try {
+    const refresh = await refreshOllamaModelsInConfig();
+    if (refresh.updated) {
+      console.log(
+        `[server] Refreshed availableOllamaModels (${refresh.models.length} model${refresh.models.length === 1 ? "" : "s"} detected)`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[server] Ollama-models refresh failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Orphan reaper (item 6.31 sub-(b)). The graceful-shutdown path

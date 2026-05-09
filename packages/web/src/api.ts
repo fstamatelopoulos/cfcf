@@ -317,6 +317,25 @@ export function fetchAgentModels(): Promise<AgentModelsResponse> {
   return request<AgentModelsResponse>("/api/agents/models");
 }
 
+export interface RefreshOllamaModelsResponse {
+  models: string[];
+  /** True iff the saved availableOllamaModels list differed and was rewritten. */
+  updated: boolean;
+  /** Set when ollama isn't installed (UX hint, not an HTTP failure). */
+  error?: string;
+}
+
+/**
+ * Trigger a live re-detection of locally-pulled ollama models and
+ * persist the result to global config (item 6.33). Returns the new
+ * list — caller should re-fetch `/api/agents/models` after this so the
+ * resolved per-adapter registries pick up the change for the
+ * `*-ollama` adapters.
+ */
+export function refreshOllamaModels(): Promise<RefreshOllamaModelsResponse> {
+  return request<RefreshOllamaModelsResponse>("/api/agents/refresh-ollama-models", { method: "POST" });
+}
+
 // --- Reflect (item 5.6 / web surface in 6.12) ---
 
 export interface ReflectState {
