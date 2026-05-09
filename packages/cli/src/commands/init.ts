@@ -180,53 +180,73 @@ export function registerInitCommand(program: Command): void {
       available.forEach((a, i) => console.log(`  ${i + 1}) ${a}`));
       console.log();
       console.log("Seven agent roles (each independently configurable):");
-      console.log("  - Dev agent: writes code, runs tests");
-      console.log("  - Judge agent: reviews iterations (encouraged to differ from dev)");
-      console.log("  - Architect agent (Solution Architect): reviews Problem Pack, creates plan outline");
-      console.log("  - Documenter agent: produces final polished documentation");
-      console.log("  - Reflection agent: cross-iteration strategic review");
-      console.log("  - Product Architect: interactive Problem Pack authoring (cfcf spec)");
-      console.log("  - Help Assistant: interactive cf² support agent (cfcf help assistant)");
+      console.log("  - Product Architect (interactive): Problem Pack authoring (cfcf spec)");
+      console.log("  - Solution Architect (headless | pre-loop): reviews Problem Pack, creates plan outline");
+      console.log("  - Developer (headless | loop): writes code, runs tests");
+      console.log("  - Iteration Judge (headless | loop): reviews each iteration (encouraged to differ from dev)");
+      console.log("  - Reflection Agent (headless | loop): cross-iteration strategic review");
+      console.log("  - Documenter (headless | after-loop): produces final polished documentation");
+      console.log("  - Help Assistant (interactive): cf² support agent (cfcf help assistant)");
       console.log();
+
+      // Adapters NOT supported for the two interactive roles (PA + HA).
+      // opencode + opencode-ollama don't fit cf²'s ephemeral-tempfile
+      // pattern for system-prompt injection (item 6.34, 2026-05-09).
+      // claude-code-ollama IS supported (round 1 of 6.34 wired the
+      // launchers). Defense-in-depth: the PA + HA launchers will reject
+      // these adapters at spawn time too.
+      const INTERACTIVE_UNSUPPORTED = new Set(["opencode", "opencode-ollama"]);
+      const interactiveList = available.filter((a) => !INTERACTIVE_UNSUPPORTED.has(a));
 
       // Pick an agent by number against the detected list. Returns the
       // chosen adapter name; never returns an unsupported value (loops
       // until the user types something valid OR accepts the default).
-      // Default index = position of `defaultName` in `available`, or 1.
+      // Default index = position of `defaultName` in the list, or 1.
       // `defaultName` is the value that came from createDefaultConfig --
       // e.g. claude-code if both are detected -- so pressing Enter keeps
       // the conventional pick.
-      async function pickAgent(role: string, defaultName: string): Promise<string> {
-        if (available.length === 1) return available[0];
-        const defaultIdx = Math.max(available.indexOf(defaultName), 0) + 1;
+      //
+      // `customList` overrides `available` for roles that filter the
+      // adapter set (PA + HA exclude opencode + opencode-ollama). When
+      // the filtered list is shorter than the global one, we print it
+      // so the user sees the actual options for that role.
+      async function pickAgent(role: string, defaultName: string, customList?: string[]): Promise<string> {
+        const list = customList ?? available;
+        if (list.length === 1) return list[0];
+        if (customList && customList.length !== available.length) {
+          console.log(`  Choices for ${role} (filtered — opencode variants don't support interactive system-prompt injection):`);
+          list.forEach((a, i) => console.log(`    ${i + 1}) ${a}`));
+        }
+        const defaultIdx = Math.max(list.indexOf(defaultName), 0) + 1;
         while (true) {
-          const raw = await prompt(`${role} agent (1-${available.length})`, String(defaultIdx));
+          const raw = await prompt(`${role} agent (1-${list.length})`, String(defaultIdx));
           const n = parseInt(raw, 10);
-          if (!Number.isNaN(n) && n >= 1 && n <= available.length) {
-            return available[n - 1];
+          if (!Number.isNaN(n) && n >= 1 && n <= list.length) {
+            return list[n - 1];
           }
-          console.log(`  Invalid choice "${raw}". Enter a number 1-${available.length}.`);
+          console.log(`  Invalid choice "${raw}". Enter a number 1-${list.length}.`);
         }
       }
 
       if (available.length > 1) {
-        config.devAgent.adapter        = await pickAgent("Dev",        config.devAgent.adapter);
-        config.judgeAgent.adapter      = await pickAgent("Judge",      config.judgeAgent.adapter);
-        config.architectAgent.adapter  = await pickAgent("Architect",  config.architectAgent.adapter);
-        config.documenterAgent.adapter = await pickAgent("Documenter", config.documenterAgent.adapter);
+        // Order matches the natural execution sequence + the web UI's
+        // Agent-roles tab strip: PA → SA → Dev → Judge → Reflection →
+        // Documenter → HA. PA + HA filter out opencode adapters.
+        const paDefault = config.productArchitectAgent?.adapter ?? config.architectAgent.adapter;
+        config.productArchitectAgent = { adapter: await pickAgent("Product Architect", paDefault, interactiveList) };
+        config.architectAgent.adapter  = await pickAgent("Solution Architect", config.architectAgent.adapter);
+        config.devAgent.adapter        = await pickAgent("Developer",          config.devAgent.adapter);
+        config.judgeAgent.adapter      = await pickAgent("Iteration Judge",    config.judgeAgent.adapter);
         // Reflection: defaults to the architect (broad-context, strong-
         // reasoning profile), per validateConfig's backfill rule.
         const reflectionDefault = config.reflectionAgent?.adapter ?? config.architectAgent.adapter;
-        config.reflectionAgent = { adapter: await pickAgent("Reflection", reflectionDefault) };
+        config.reflectionAgent = { adapter: await pickAgent("Reflection Agent", reflectionDefault) };
+        config.documenterAgent.adapter = await pickAgent("Documenter",         config.documenterAgent.adapter);
         // Help Assistant: defaults to the dev agent (interactive shell,
-        // file reads, tool use -- same profile as dev).
+        // file reads, tool use -- same profile as dev). Same opencode
+        // exclusion as PA.
         const haDefault = config.helpAssistantAgent?.adapter ?? config.devAgent.adapter;
-        config.helpAssistantAgent = { adapter: await pickAgent("Help Assistant", haDefault) };
-        // Product Architect: defaults to the architect agent (broad-
-        // context, strong-reasoning -- closer to PA's spec-iteration
-        // workload than dev's implement-and-test profile).
-        const paDefault = config.productArchitectAgent?.adapter ?? config.architectAgent.adapter;
-        config.productArchitectAgent = { adapter: await pickAgent("Product Architect", paDefault) };
+        config.helpAssistantAgent = { adapter: await pickAgent("Help Assistant", haDefault, interactiveList) };
       } else {
         console.log(`Only one agent detected (${available[0]}); using for all roles.`);
         config.devAgent.adapter = available[0];

@@ -9,6 +9,58 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Item 6.34 round 2: filter opencode variants from PA + HA pickers
+
+- **CLI + web pickers** for the two interactive roles (Product
+  Architect, Help Assistant) now drop `opencode` and `opencode-ollama`
+  from the adapter dropdown. `claude-code-ollama` IS still offered —
+  round 1 of 6.34 (v0.22.1) wired it through both launchers.
+- **Why filtered**: opencode's interactive system-prompt-injection
+  mechanism (named-agent files at `~/.config/opencode/agent/<name>.md`
+  selected via `--agent <name>`, OR auto-loaded `AGENTS.md` from cwd)
+  doesn't fit cf²'s ephemeral-tempfile pattern. Rather than implement
+  the supporting plumbing — interactive roles benefit most from the
+  strongest available models (Opus, GPT-5+) where opencode adds
+  little — we just filter and move on. Decision documented in plan
+  row 6.34; no Backlog item.
+- **Defense-in-depth**: the launcher error messages still fire if a
+  user hand-edits config to `opencode` or `opencode-ollama` for PA or
+  HA. The picker filter is the primary gate; the launcher check is
+  the safety net.
+- **If a user already has `opencode` saved for PA or HA** (configured
+  before this filter): the dropdown still renders the saved value as
+  `opencode (not supported for this role)` so they see they need to
+  switch — no silent coercion.
+
+### Changed — Agent-roles table: row order, labels, and context tags
+
+- **New row order** matches the natural agent execution sequence:
+  - Settings page (all seven): **Product Architect → Solution
+    Architect → Developer → Iteration Judge → Reflection Agent →
+    Documenter → Help Assistant**.
+  - Workspace Config (iteration roles only): **Solution Architect →
+    Developer → Iteration Judge → Reflection Agent → Documenter**.
+    PA + HA are global-only and don't appear here.
+- **Renamed labels**:
+  - "Dev" → **"Developer"**
+  - "Judge" → **"Iteration Judge"**
+  - "Reflection" → **"Reflection Agent"**
+  - "Architect" → **"Solution Architect"** (Settings already had this)
+- **New context tag** rendered below each label:
+  - `(interactive)` — Product Architect, Help Assistant
+  - `(headless | pre-loop)` — Solution Architect
+  - `(headless | loop)` — Developer, Iteration Judge, Reflection Agent
+  - `(headless | after-loop)` — Documenter
+- **New shared module**
+  [`packages/web/src/components/agentRoleMetadata.ts`](packages/web/src/components/agentRoleMetadata.ts)
+  is the single source of truth for the row order, labels, context
+  tags, visibility scope (global vs workspace), `isInteractive`
+  (drives picker filter), and `isUnattended` (drives policy ⚠
+  indicator). Both web views consume it; adding a future role is a
+  one-line change here.
+- CLI `cfcf init` mirrors the same order + labels in its
+  role-description printout and pickAgent flow.
+
 ### Fixed
 
 - **Web Settings → Agent roles: stale "(custom)" model after adapter change.** Reproduced on both the global Settings page and the per-workspace Config tab (the two surfaces share the same `<AgentModelSelect>` + `updateAgent` pattern). Switching a role's adapter from e.g. `claude-code` (model: `sonnet`) to `codex` left the model field unchanged, so the picker rendered `sonnet (custom)` via `<AgentModelSelect>`'s back-compat path — the legacy carry-over looked like an intentional pin and would have silently saved a misconfiguration. Fix: `updateAgent` in both `ConfigDisplay.tsx` (workspace) and `ServerInfo.tsx` (global) now resets `model` on adapter change. Picks the first entry from the new adapter's resolved model list when non-empty; clears the field when empty so the picker falls back to `(adapter default)` for seed adapters or the disabled empty-state placeholder for ollama-routed adapters. Behaviour on direct model-field changes is unchanged.
