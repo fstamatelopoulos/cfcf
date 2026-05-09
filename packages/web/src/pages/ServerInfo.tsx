@@ -23,20 +23,18 @@ function formatUptime(seconds: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-const ROLE_KEYS: (keyof Pick<
+// Row order, labels, context tags, and per-role visibility/picker
+// rules live in the shared `agentRoleMetadata` module so Settings +
+// workspace Config render the same way and stay in sync.
+import { AGENT_ROLE_ROWS, adaptersForRole, type AgentRoleRow } from "../components/agentRoleMetadata";
+
+// Roles shown on the Settings page = all seven (PA + HA are
+// global-config-only and live here).
+const ROLES: AgentRoleRow[] = AGENT_ROLE_ROWS.filter((r) => r.showInGlobal);
+type RoleKey = keyof Pick<
   GlobalConfig,
   "devAgent" | "judgeAgent" | "architectAgent" | "documenterAgent" | "reflectionAgent" | "productArchitectAgent" | "helpAssistantAgent"
->)[] = ["devAgent", "judgeAgent", "architectAgent", "documenterAgent", "reflectionAgent", "productArchitectAgent", "helpAssistantAgent"];
-
-const ROLE_LABEL: Record<string, string> = {
-  devAgent: "Dev",
-  judgeAgent: "Judge",
-  architectAgent: "Solution Architect",
-  documenterAgent: "Documenter",
-  reflectionAgent: "Reflection",
-  productArchitectAgent: "Product Architect",
-  helpAssistantAgent: "Help Assistant",
-};
+>;
 
 const NOTIFICATION_EVENTS: NotificationEventType[] = [
   "loop.paused",
@@ -136,7 +134,7 @@ export function ServerInfo() {
   }
 
   function updateAgent(
-    roleKey: typeof ROLE_KEYS[number],
+    roleKey: RoleKey,
     field: "adapter" | "model",
     value: string,
   ) {
@@ -370,38 +368,56 @@ export function ServerInfo() {
                 </tr>
               </thead>
               <tbody>
-                {ROLE_KEYS.map((key) => {
+                {ROLES.map((row) => {
+                  const key = row.key as RoleKey;
                   const agent = draft[key] ?? { adapter: draft.devAgent.adapter };
                   // ⚠ only on unattended roles. PA / HA take over the
                   // user's TUI directly and are within Anthropic's
                   // allowed-interactive scope; flagging them with a
                   // policy ⚠ would be wrong.
-                  const isUnattendedRole =
-                    key === "devAgent" ||
-                    key === "judgeAgent" ||
-                    key === "architectAgent" ||
-                    key === "documenterAgent" ||
-                    key === "reflectionAgent";
-                  const policyRisky = isUnattendedRole && isPolicyRiskyRow(agent.adapter);
+                  const policyRisky = row.isUnattended && isPolicyRiskyRow(agent.adapter);
+                  // For interactive roles (PA + HA): drop opencode +
+                  // opencode-ollama from the dropdown — they're not
+                  // supported by the launchers (item 6.34 round 2).
+                  // claude-code-ollama IS still available (round 1
+                  // wired it through).
+                  const allAdapters = draft.availableAgents ?? [];
+                  const adapterChoices = adaptersForRole(allAdapters, row);
                   return (
                     <tr key={key} className="project-history__row">
-                      <td className="project-history__time" style={{ minWidth: "8rem" }}>
-                        {ROLE_LABEL[key]}
+                      <td className="project-history__time" style={{ minWidth: "11rem" }}>
+                        <strong>{row.label}</strong>
+                        <div
+                          style={{
+                            fontSize: "var(--text-xs, 0.75rem)",
+                            color: "var(--color-text-muted, #888)",
+                            fontWeight: "normal",
+                          }}
+                        >
+                          {row.context}
+                        </div>
                       </td>
                       <td>
                         <select
                           value={agent.adapter}
                           onChange={(e) => updateAgent(key, "adapter", e.target.value)}
                         >
-                          {(draft.availableAgents ?? []).map((a) => (
+                          {adapterChoices.map((a) => (
                             <option key={a} value={a}>
                               {a}
                             </option>
                           ))}
-                          {/* include the current value even if it's no longer in availableAgents (don't silently drop it) */}
-                          {!(draft.availableAgents ?? []).includes(agent.adapter) && (
+                          {/* Show the saved value even when filtered out — so users on
+                              opencode after the 6.34 picker filter see "(not supported
+                              for this role)" rather than the dropdown silently coercing
+                              to a different value. Falls back to "(not detected)" when
+                              the adapter isn't even on the user's machine. */}
+                          {!adapterChoices.includes(agent.adapter) && (
                             <option value={agent.adapter}>
-                              {agent.adapter} (not detected)
+                              {agent.adapter}{" "}
+                              {allAdapters.includes(agent.adapter)
+                                ? "(not supported for this role)"
+                                : "(not detected)"}
                             </option>
                           )}
                         </select>
@@ -436,13 +452,15 @@ export function ServerInfo() {
             </table>
             <HarnessPolicyWarning
               unattendedRoles={[
-                { label: "dev", adapter: draft.devAgent.adapter },
-                { label: "judge", adapter: draft.judgeAgent.adapter },
-                { label: "documenter", adapter: draft.documenterAgent.adapter },
+                // Order matches the table above (natural execution flow):
+                // architect → developer → judge → reflection → documenter.
                 { label: "architect", adapter: draft.architectAgent.adapter },
+                { label: "developer", adapter: draft.devAgent.adapter },
+                { label: "judge", adapter: draft.judgeAgent.adapter },
                 ...(draft.reflectionAgent
                   ? [{ label: "reflection", adapter: draft.reflectionAgent.adapter }]
                   : []),
+                { label: "documenter", adapter: draft.documenterAgent.adapter },
               ]}
             />
           </FormSection>
