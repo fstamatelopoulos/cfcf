@@ -200,15 +200,18 @@ cfcf uses seven independently configurable agent roles — each role can use
 a different adapter and model. Five run inside the iteration loop; two are
 interactive:
 
+Listed here in the natural agent execution sequence (matches the
+**Agents** tab order in the web UI):
+
 | Role | Purpose |
 |------|---------|
-| Solution Architect | Reviews Problem Pack, produces / extends `plan.md` (verdicts: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE) |
-| Dev agent | Writes code, runs tests, authors per-iteration changelog |
-| Judge agent | Per-iteration assessment + `reflection_needed` opt-out signal |
-| Reflection agent | Cross-iteration strategic review, non-destructive plan edits |
-| Documenter | Polished final docs after SUCCESS |
-| Product Architect (interactive) | Live spec iteration before launching the loop |
-| Help Assistant (interactive) | In-shell help + how-to guidance |
+| Product Architect *(interactive)* | Live spec iteration before launching the loop (`cfcf spec`) |
+| Solution Architect *(headless | pre-loop)* | Reviews Problem Pack, produces / extends `plan.md` (verdicts: READY / NEEDS_REFINEMENT / BLOCKED / SCOPE_COMPLETE) |
+| Developer *(headless | loop)* | Writes code, runs tests, authors per-iteration changelog |
+| Iteration Judge *(headless | loop)* | Per-iteration assessment + `reflection_needed` opt-out signal |
+| Reflection Agent *(headless | loop)* | Cross-iteration strategic review, non-destructive plan edits |
+| Documenter *(headless | after-loop)* | Polished final docs after SUCCESS |
+| Help Assistant *(interactive)* | In-shell help + how-to guidance (`cfcf help assistant`) |
 
 ### Clio cross-workspace memory
 

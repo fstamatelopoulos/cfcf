@@ -53,10 +53,10 @@ cf² has seven independently configurable agent roles. Five are **non-interactiv
 
 | Role | Purpose | When it runs |
 |------|---------|-------------|
-| **Solution Architect** | Reviews Problem Pack, produces initial plan + doc stubs. On re-review: extends the plan non-destructively when new requirements appear. | User-invoked (`cfcf review`) |
-| **Dev agent** | Writes code, runs tests, produces handoff + iteration-log | Each iteration |
-| **Judge agent** | Reviews dev work, determines progress, may opt out of reflection | After each dev iteration |
-| **Reflection agent** | Reads the full cross-iteration history, classifies iteration health, may rewrite pending plan items non-destructively | After the judge on every iteration, unless the judge explicitly opts out |
+| **Solution Architect** | Reviews Problem Pack, produces initial plan + doc stubs. On re-review: extends the plan non-destructively when new requirements appear. | User-invoked via `cfcf review` (polling client to a server-side headless spawn — not interactive in the TUI sense, despite the user-driven invocation), AND on `refine_plan` resume actions, AND pre-loop when `autoReviewSpecs=true` |
+| **Developer** | Writes code, runs tests, produces handoff + iteration-log | Each iteration |
+| **Iteration Judge** | Reviews dev work, determines progress, may opt out of reflection | After each dev iteration |
+| **Reflection Agent** | Reads the full cross-iteration history, classifies iteration health, may rewrite pending plan items non-destructively | After the judge on every iteration, unless the judge explicitly opts out |
 | **Documenter** | Produces polished final documentation | Auto post-SUCCESS, or `cfcf document` on demand |
 
 Two are **interactive** — the agent CLI's TUI takes over your shell until you exit:

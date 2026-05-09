@@ -54,20 +54,19 @@ cfcf's existing `codex` adapter therefore remains a fully compliant unattended p
 
 ## Mapping to cf² roles
 
-cfcf has seven roles. Three are **interactive** (the agent's TUI takes over your shell, you drive); four are **unattended** (cfcf spawns the agent in `-p` / `exec` / `run` mode and parses its output, no human in the loop). The mapping to Anthropic's allowed scope follows from there.
+cfcf has seven roles. **Two are truly interactive** (the agent's TUI takes over your shell via `Bun.spawn(... { stdio: "inherit" })`, you drive); **five are unattended** (cfcf spawns the agent headlessly with `claude -p` / `codex exec` / `opencode run` and parses its output through a log file). The mapping to Anthropic's allowed scope follows from there.
 
 | Role | Mode | Allowed on Claude Code? | Why |
 |---|---|---|---|
 | **Product Architect** (`cfcf spec`) | Interactive | ✅ Yes | TUI takes over the shell; you drive the conversation. cfcf is acting as a launcher with a curated system prompt — same pattern as a config preset or slash command. |
 | **Help Assistant** (`cfcf help assistant`) | Interactive | ✅ Yes | Same as PA — the TUI takes over your shell. |
-| **Solution Architect** (`cfcf review`, manual) | Interactive | ✅ Yes | When invoked manually via `cfcf review`. |
-| **Solution Architect** (when `autoReviewSpecs=true`) | Unattended | ⚠️ No | The architect runs at the start of `cfcf run` without you driving its TUI — same harness pattern as dev. Switch to a non-Claude-Code adapter or set `autoReviewSpecs=false`. |
-| **Dev agent** | Unattended | ⚠️ No | Spawned per iteration in `-p` mode; you don't drive it. |
-| **Judge agent** | Unattended | ⚠️ No | Same. |
-| **Reflection agent** | Unattended | ⚠️ No | Same. |
-| **Documenter agent** | Unattended | ⚠️ No | Auto-runs after a successful loop; same harness pattern. |
+| **Solution Architect** (any invocation path: pre-loop, mid-loop refine_plan, manual `cfcf review`) | Unattended | ⚠️ No | All three architect spawns are headless `claude -p`. Even `cfcf review`, despite its user-invoked framing, is a polling client to a server-side background spawn — no TUI takeover. Item 6.30 correction (was previously misclassified as interactive). |
+| **Developer** | Unattended | ⚠️ No | Spawned per iteration in `-p` mode; you don't drive it. |
+| **Iteration Judge** | Unattended | ⚠️ No | Same. |
+| **Reflection Agent** | Unattended | ⚠️ No | Same. |
+| **Documenter** | Unattended | ⚠️ No | Auto-runs after a successful loop; same harness pattern. |
 
-cf² will display an **inline warning** at `cfcf init` and `cfcf config edit` time when you pick `claude-code` for any of the four ⚠️ rows. It does NOT block the choice — running Claude Code for limited testing on small tasks is fine and the policy is something the user owns. The warning exists so you don't pick it accidentally.
+cf² will display an **inline warning** at `cfcf init` and `cfcf config edit` time when you pick `claude-code` for any of the five ⚠️ rows. It does NOT block the choice — running Claude Code for limited testing on small tasks is fine and the policy is something the user owns. The warning exists so you don't pick it accidentally.
 
 ---
 
@@ -78,10 +77,10 @@ cf² will display an **inline warning** at `cfcf init` and `cfcf config edit` ti
 | **Product Architect** | `claude-code` | n/a (interactive — TUI in your shell) | Interactive, allowed scope. Opus-class model is worth the spend on spec authoring. |
 | **Help Assistant** | `claude-code` | n/a (interactive) | Interactive, allowed scope. A smaller Sonnet/Haiku model is fine here. |
 | **Solution Architect** (any invocation: pre-loop, mid-loop refine_plan, manual `cfcf review`) | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | All architect spawns are headless `claude -p` / `codex exec` regardless of invocation path — the `cfcf review` CLI just polls a status endpoint while the server runs the agent in the background, no TUI takeover. Same trade-offs as dev. |
-| **Dev agent** | `codex` (or `claude-code-ollama` if you prefer Claude's UX) | ✅ codex / ❌ claude-code-ollama | Compliant unattended path. codex streams live; claude-code-ollama buffers (silent log during run, dumps at exit). |
-| **Judge agent** | `codex` | ✅ live | "Different agent than dev" is the historical recommendation; codex's `exec` mode also streams live. |
-| **Reflection agent** | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | Strongest reasoning available on the unattended path. |
-| **Documenter agent** | `codex` (or `claude-code-ollama` with a coder-tuned model, OR `opencode-ollama` for any model) | ✅ codex / ❌ claude-code-ollama | Same trade-off as dev. **Important** (item 6.30, May 2026): `claude-code-ollama` uses Anthropic's strict Messages API parser. Some non-coder-tuned local models — confirmed: `gemma4:31b` — produce tool-use / tool-result content blocks the parser rejects with `API Error: Content block not found`, and the run exits with nothing written. **Two workable paths**: (1) keep `claude-code-ollama` and pick a coder-tuned model (`qwen3-coder`, `deepseek-coder-v2`) — verified working end-to-end; (2) keep the same model and switch to `opencode-ollama` — its OpenAI-compatible endpoint is more tolerant of variance in tool-call output, and `gemma4:31b + opencode-ollama` was confirmed to write all four documenter files cleanly. Pick (1) if you prefer Claude's tool-call format; pick (2) if you've already invested in a non-coder model. |
+| **Developer** | `codex` (or `claude-code-ollama` if you prefer Claude's UX) | ✅ codex / ❌ claude-code-ollama | Compliant unattended path. codex streams live; claude-code-ollama buffers (silent log during run, dumps at exit). |
+| **Iteration Judge** | `codex` | ✅ live | "Different agent than dev" is the historical recommendation; codex's `exec` mode also streams live. |
+| **Reflection Agent** | `codex` (or `claude-code-ollama`) | ✅ codex / ❌ claude-code-ollama | Strongest reasoning available on the unattended path. |
+| **Documenter** | `codex` (or `claude-code-ollama` with a coder-tuned model, OR `opencode-ollama` for any model) | ✅ codex / ❌ claude-code-ollama | Same trade-off as dev. **Important** (item 6.30, May 2026): `claude-code-ollama` uses Anthropic's strict Messages API parser. Some non-coder-tuned local models — confirmed: `gemma4:31b` — produce tool-use / tool-result content blocks the parser rejects with `API Error: Content block not found`, and the run exits with nothing written. **Two workable paths**: (1) keep `claude-code-ollama` and pick a coder-tuned model (`qwen3-coder`, `deepseek-coder-v2`) — verified working end-to-end; (2) keep the same model and switch to `opencode-ollama` — its OpenAI-compatible endpoint is more tolerant of variance in tool-call output, and `gemma4:31b + opencode-ollama` was confirmed to write all four documenter files cleanly. Pick (1) if you prefer Claude's tool-call format; pick (2) if you've already invested in a non-coder model. |
 
 You can mix and match freely — these are recommendations for first-run defaults, not enforced by cfcf.
 
