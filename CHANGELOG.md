@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.22.1] -- 2026-05-09
+
 ### Fixed — Item 6.34: Help Assistant + Product Architect launchers now accept `claude-code-ollama`
 
 The agent picker in `cfcf init` and the web Settings page surfaces every
