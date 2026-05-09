@@ -9,6 +9,50 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Item 6.8 (round 1): role-template management UI
+
+- **New top-level "Agents" tab** in the web UI (between Memory and
+  Settings). One sub-tab per managed role template; each tab shows
+  the template content in a scrollable monospace editor with version
+  selector, edit / save / promote / revert / delete actions, and an
+  inline help block.
+- **Versioning + promote-to-production**: every role's bundled cf²
+  default is always selectable (read-only, never deletable). Saving
+  edits creates a new labelled version under
+  `~/.cfcf/templates-managed/<name>/`. Promoting a version writes its
+  content to the existing `~/.cfcf/templates/<name>` user-global
+  override path that `getTemplate()` already reads — no runtime
+  changes to agent spawning. Reverting to default deletes the override
+  file so cf² falls back to the embedded default. Editing a
+  promoted version refreshes the override file in-place so the
+  change is live for the next agent run.
+- **Managed templates (round 1)**: `cfcf-architect-instructions.md`,
+  `cfcf-judge-instructions.md`, `cfcf-documenter-instructions.md`,
+  `cfcf-reflection-instructions.md`, `process.md`. Per-project
+  overrides at `<repo>/cfcf-templates/<name>` continue to take
+  precedence over the user-global override (the power-user escape
+  hatch, unmanaged from the UI).
+- **HTTP API**: `GET /api/role-templates`, `GET .../:name`,
+  `GET .../:name/versions/:versionId`, `POST .../:name/versions`,
+  `PUT .../:name/versions/:versionId`,
+  `DELETE .../:name/versions/:versionId`,
+  `POST .../:name/promote`. Uniform `{ error: string }` envelope.
+- **New core module** `packages/core/src/role-templates.ts` with
+  list / get / save / update / delete / promote helpers, manifest
+  self-heal on corruption, orphan detection. `getEmbeddedTemplate(name)`
+  newly exported from `templates.ts` for read-only access to the
+  bundled default.
+- **Out of scope for round 1 (deferred follow-ups)**: dev-role
+  custom-directions block (Tier-2 from the original design — needs
+  the sentinel-merge insertion-point design first), Product Architect /
+  Help Assistant system-prompt management (their prompts are
+  programmatically assembled, not file-loaded), per-project override
+  management UI, diff viewer between versions.
+- **Tests**: 30 unit tests in `role-templates.test.ts`, 15 endpoint
+  tests in `routes/role-templates.test.ts`, 3 new route-parser tests
+  for `/agents` + `?template=`.
+- **Design doc**: [`docs/design/role-template-management.md`](docs/design/role-template-management.md).
+
 ### Added — Item 6.33: ollama-models refresh
 
 - **Auto-refresh on server boot.** `cfcf server start` now calls

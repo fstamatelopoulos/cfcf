@@ -96,4 +96,27 @@ describe("parseRouteHash", () => {
       memoryDocId: undefined,
     });
   });
+
+  // Agents page (item 6.8) — role-template management.
+
+  test("/agents → agents page (no template selected)", () => {
+    expect(parseRouteHash("/agents")).toEqual({
+      page: "agents",
+      agentTemplate: undefined,
+    });
+  });
+
+  test("/agents?template=cfcf-judge-instructions.md → agents page with selected template", () => {
+    expect(parseRouteHash("/agents?template=cfcf-judge-instructions.md")).toEqual({
+      page: "agents",
+      agentTemplate: "cfcf-judge-instructions.md",
+    });
+  });
+
+  test("agents template name with URL encoding is decoded", () => {
+    expect(parseRouteHash("/agents?template=cfcf-architect-instructions.md")).toEqual({
+      page: "agents",
+      agentTemplate: "cfcf-architect-instructions.md",
+    });
+  });
 });
