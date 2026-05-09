@@ -696,7 +696,10 @@ function FullEditor({
         spellCheck={false}
         style={{
           width: "100%",
-          minHeight: "60vh",
+          // Match the augmented-mode "cf² standard template (read-only)"
+          // panel height (~25vh). Users can drag taller via the
+          // resize handle when editing a full template.
+          minHeight: "25vh",
           fontFamily: "var(--font-mono, monospace)",
           fontSize: "var(--text-sm)",
           padding: "0.75rem",
