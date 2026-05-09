@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.22.2] -- 2026-05-09
+
 ### Added — Item 6.34 round 2: filter opencode variants from PA + HA pickers
 
 - **CLI + web pickers** for the two interactive roles (Product
