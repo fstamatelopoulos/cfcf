@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.22.0] -- 2026-05-09
+
 ### Added — Item 6.8: role-template management UI (rounds 1 + 2)
 
 **Round 1: full-template editing**
