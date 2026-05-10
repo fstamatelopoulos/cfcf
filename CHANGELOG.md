@@ -96,6 +96,32 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 - **Backlog F.20** seeded for a future Cerefox `usage_log` re-audit
   once the CerefoxRemote backend lands.
 
+### Changed — Item 6.28 follow-up: clarify Anthropic policy notice
+
+The third-party-harness policy targets the **credential** (subscription
+OAuth in unattended contexts), not the `claude-code` adapter itself.
+Pre-fix, the inline warning said "subscriptions are prohibited" and
+left readers to conclude claude-code was categorically forbidden in
+unattended cf² roles. That's wrong — running `claude-code` under
+`ANTHROPIC_API_KEY` (paid API access) is the canonical "automation
+under your own credentials" pattern Anthropic supports.
+
+Three surfaces updated in lockstep:
+
+- `CLAUDE_CODE_HARNESS_WARNING` constant: explicitly says the API-key
+  path is exempt + how to enable it (`ANTHROPIC_API_KEY` env var).
+- Web `HarnessPolicyWarning.tsx`: same wording, lists "keep
+  `claude-code` + set `ANTHROPIC_API_KEY`" as a compliant option
+  alongside `codex`, `claude-code-ollama`, `opencode-ollama`,
+  `opencode`.
+- `docs/guides/anthropic-policy.md`: new section "Compliant
+  `claude-code` adapter use via the API key" with a step-by-step
+  setup walkthrough + a pricing trade-off note (per-token vs
+  flat-rate).
+
+Regression test pins the new wording so future edits can't silently
+drop the API-key escape clause.
+
 ## [0.22.2] -- 2026-05-09
 
 ### Added — Item 6.34 round 2: filter opencode variants from PA + HA pickers
