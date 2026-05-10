@@ -663,6 +663,27 @@ export async function fallbackIngestPaSessionArchive(opts: {
     `The agent didn't push it itself; cfcf preserved the session at doc id ${archiveDocId}.`,
   );
 
+  // Item 6.9 follow-up: also refresh the workspace's problem-pack
+  // files in Clio. PA's primary job is editing problem.md / success.md
+  // / etc., so a session that just ran almost certainly mutated at
+  // least one of them. sha256 dedup makes unchanged files no-ops, so
+  // calling unconditionally is cheap and predictable.
+  try {
+    const all = await listWorkspaces();
+    const ws = all.find((x) => x.id === opts.workspaceId);
+    if (ws) {
+      const { ingestProblemPack } = await import("../clio/loop-ingest.js");
+      const ppResult = await ingestProblemPack(getClioBackend(), ws, "pa-session-end");
+      if (ppResult.ingested > 0) {
+        console.error(
+          `[pa] also refreshed ${ppResult.ingested} problem-pack file(s) in Clio (${ppResult.skipped} unchanged, ${ppResult.missing} not on disk).`,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(`[pa] problem-pack post-session ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   return { archiveDocId };
 }
 

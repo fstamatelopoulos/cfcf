@@ -9,6 +9,31 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Item 6.9 follow-up: auto-ingest problem-pack files
+
+- **`ingestProblemPack()`** in `loop-ingest.ts` ingests the five
+  canonical problem-pack files (`problem.md`, `success.md`,
+  `constraints.md`, `hints.md`, `style-guide.md`) into the workspace's
+  effective Clio Project. One Clio doc per file (`<workspace-name>:
+  problem-pack <filename>`) with metadata
+  `(role: "user", artifact_type: "problem-pack", filename, workspace_id,
+  workspace_name, tier: "semantic")`. Idempotent via
+  `--update-if-exists` + sha256 dedup, so unchanged files are no-ops.
+- **Three trigger points**: server-side `POST /api/workspaces`
+  (catches Problem Packs that already existed in the repo at
+  registration), iteration-loop start (refreshes before
+  `clio-relevant.md` runs so sibling workspaces in shared Clio
+  Projects see the freshest problem statement), PA session-end
+  fallback (PA's primary job is editing these files).
+- **Cross-workspace search benefit**: workspaces in shared Clio
+  Projects (e.g. `backend-services`) now surface each other's problem
+  statements. `clio-relevant.md` top-k generation can match against
+  prior workspaces' similar problems.
+- **Templates updated**: dev role's `process.md` notes
+  problem-pack auto-ingest; `clio-guide.md`'s "auto-ingest is on"
+  principle + metadata table now list problem-pack as a known
+  `artifact_type`.
+
 ### Added — Item 6.9: rationalising Clio usage across agent roles
 
 - **`clio_usage_log`** schema (migrations 0003 + 0004): operational

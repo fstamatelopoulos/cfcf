@@ -52,6 +52,11 @@ your writes. The minimum-viable use is (item 6.9):
   auto-ingests `iteration-log-N.md`, `iteration-handoff-N.md`, your
   decision-log entries, and the iteration summary after the dev commit.
   Ingesting by hand creates duplicates.
+- **Don't ingest the problem-pack files** (`problem.md`, `success.md`,
+  `constraints.md`, `hints.md`, `style-guide.md`). cf² auto-ingests
+  them at iteration start (with sha256 dedup so unchanged files are
+  no-ops). They appear in Clio as `<workspace-name>: problem-pack
+  <filename>` with `metadata.artifact_type = "problem-pack"`.
 - **Do** ingest one-off design notes / domain knowledge / research notes
   that don't belong in the canonical artefact set:
 

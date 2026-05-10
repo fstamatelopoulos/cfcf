@@ -383,6 +383,143 @@ export async function ingestIterationSummary(
   }
 }
 
+// ── Hook: problem-pack files (item 6.9 follow-up) ─────────────────────────
+
+/**
+ * The five canonical problem-pack files cfcf auto-ingests into Clio.
+ * Order is stable for deterministic iteration in tests + logs.
+ *
+ * cfcf treats these as **read-only by convention** for agents (PA edits
+ * them; the loop roles cite them); ingesting them gives sibling
+ * workspaces in a shared Clio Project + future iterations of THIS
+ * workspace cross-cutting visibility.
+ */
+export const PROBLEM_PACK_FILES = [
+  "problem.md",
+  "success.md",
+  "constraints.md",
+  "hints.md",
+  "style-guide.md",
+] as const;
+
+export type ProblemPackFilename = (typeof PROBLEM_PACK_FILES)[number];
+
+export interface ProblemPackIngestResult {
+  /** Number of files newly created OR materially updated (action !== "skipped"). */
+  ingested: number;
+  /** Number of files where the on-disk content matched the live Clio doc (sha256-deduped). */
+  skipped: number;
+  /** Number of files that didn't exist on disk (or were empty). */
+  missing: number;
+  /** Per-file detail for logging / tests. */
+  perFile: Array<{
+    filename: ProblemPackFilename;
+    action: "created" | "updated" | "skipped" | "missing" | "failed";
+    documentId?: string;
+    error?: string;
+  }>;
+}
+
+/**
+ * Ingest the workspace's problem-pack files into Clio. ONE Clio doc
+ * per file, identified by `(role: "user", artifact_type: "problem-pack",
+ * filename: <one-of-the-five>, workspace_id)` metadata + matching
+ * title `<workspace-name>: problem-pack <filename>`.
+ *
+ * Runs at three trigger points:
+ *   - `workspace-init`: server's POST `/api/workspaces` after the
+ *     workspace gets created (catches Problem Packs that already
+ *     existed in the repo when the user registered).
+ *   - `iteration-start`: iteration loop's pre-dev hook (each iteration
+ *     re-checks; sha256 dedup means unchanged files are no-ops).
+ *   - `pa-session-end`: PA launcher's fallback (PA's primary job is
+ *     editing these files, so re-ingesting at session end captures
+ *     the freshest version).
+ *
+ * Idempotent: `--update-if-exists` looks up the doc by title within
+ * the workspace's effective Clio Project. The backend's sha256 dedup
+ * skips ingest when the file's content hash matches the live version's
+ * hash, so cost-per-call is a single SQL lookup for unchanged files.
+ *
+ * Subject to the same `clio.ingestPolicy` gate as other auto-ingests:
+ * `"off"` skips everything; `"summaries-only"` and `"all"` both
+ * include problem-pack (these files ARE the workspace's "summary"
+ * of intent, so no value in scoping them tighter).
+ *
+ * Best-effort: any single-file failure is logged + the loop continues
+ * to the next file. Returns a summary the caller can surface.
+ */
+export async function ingestProblemPack(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger: "workspace-init" | "iteration-start" | "pa-session-end" | "manual",
+): Promise<ProblemPackIngestResult> {
+  const result: ProblemPackIngestResult = {
+    ingested: 0,
+    skipped: 0,
+    missing: 0,
+    perFile: [],
+  };
+
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return result;
+
+  const project = resolveClioProject(workspace);
+  const author = actorForRole(workspace, "user");
+
+  for (const filename of PROBLEM_PACK_FILES) {
+    const path = join(workspace.repoPath, "cfcf-docs", filename);
+    const content = await readIfExists(path);
+    if (!content || !content.trim()) {
+      result.missing++;
+      result.perFile.push({ filename, action: "missing" });
+      continue;
+    }
+
+    try {
+      const ingestResult = await backend.ingest({
+        project,
+        title: `${workspace.name}: problem-pack ${filename}`,
+        content,
+        author,
+        source: `cfcf-auto:problem-pack:${filename}:${trigger}`,
+        // Workspace-singleton doc per file — look up by title inside
+        // the project + update in place when content changed. Backend
+        // dedups by sha256 so unchanged content is a fast no-op.
+        updateIfExists: true,
+        metadata: baseMetadata(workspace, {
+          role: "user",
+          artifact_type: "problem-pack",
+          filename,
+          tier: "semantic",
+          ingest_trigger: trigger,
+        }),
+      });
+      if (ingestResult.action === "skipped") {
+        result.skipped++;
+        result.perFile.push({
+          filename,
+          action: "skipped",
+          documentId: ingestResult.document?.id,
+        });
+      } else {
+        result.ingested++;
+        result.perFile.push({
+          filename,
+          action: ingestResult.action, // "created" | "updated"
+          documentId: ingestResult.document?.id,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[clio] problem-pack ingest failed for ${filename}: ${msg}`);
+      result.perFile.push({ filename, action: "failed", error: msg });
+    }
+  }
+
+  return result;
+}
+
 // ── Hook: iteration-log + iteration-handoff + judge-assessment (policy="all" only) ──
 
 export async function ingestRawIterationArtifacts(

@@ -257,6 +257,23 @@ export function createApp() {
       }
     }
 
+    // Item 6.9 follow-up: ingest any existing problem-pack files now,
+    // so a workspace registered against a repo that ALREADY has a
+    // populated `cfcf-docs/` (re-registration after delete, or a
+    // pre-fab Problem Pack) gets its memory bootstrapped immediately.
+    // Cross-workspace search becomes useful from the very next
+    // iteration's `clio-relevant.md`. For new workspaces with empty
+    // `cfcf-docs/` this is a no-op (all five files report "missing").
+    try {
+      const { ingestProblemPack } = await import("@cfcf/core");
+      const clio = getClioBackend();
+      await ingestProblemPack(clio, workspace, "workspace-init");
+    } catch (err) {
+      console.warn(
+        `[workspace-init] problem-pack ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     return c.json(workspace, 201);
   });
 

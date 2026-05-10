@@ -54,6 +54,9 @@ already figured out and you picking up where they left off.
    should ensure you never try.
 
 6. **Auto-ingest is on; supplement it.** cf² already auto-ingests
+   the **problem-pack files** (`problem.md`, `success.md`,
+   `constraints.md`, `hints.md`, `style-guide.md`; refreshed each
+   iteration with sha256-dedup so unchanged files are no-ops),
    iteration logs, iteration handoffs, judge assessments, reflection
    analyses, architect reviews, decision-log entries, and end-of-
    iteration summaries (gated by `workspace.clio.ingestPolicy`,
@@ -123,7 +126,9 @@ in its own instructions file. The patterns below are the defaults:
   digest + `pa-global-memory` (already injected). Search the
   workspace's archive of prior PA sessions when the user asks "did we
   decide X" — `cfcf clio search "X" --project cf-workspace-<id>
-  --metadata '{"artifact_type":"session-archive"}'`.
+  --metadata '{"artifact_type":"session-archive"}'`. The problem-pack
+  files you edit (`problem.md` / `success.md` / etc.) auto-ingest at
+  session end, so you don't need to push them yourself.
 - **help-assistant (interactive)** — Read your `cf-system-ha-memory`
   doc list (already injected). Stamp `cfcf_version` in metadata on
   every write so future HA sessions can spot stale entries.
@@ -133,7 +138,8 @@ in its own instructions file. The patterns below are the defaults:
 | Key             | Values                                                              |
 |-----------------|---------------------------------------------------------------------|
 | `role`          | `dev` · `judge` · `architect` · `reflection` · `documenter` · `pa` · `ha` · `user` · `cfcf` |
-| `artifact_type` | `iteration-log` · `iteration-handoff` · `judge-assessment` · `reflection-analysis` · `architect-review` · `decision-log-entry` · `iteration-summary` · `workspace-memory` · `session-archive` · `design-guideline` · `domain-knowledge` · `research-note` · `adr` · `onboarding` · `reference` · `note` · or any user-supplied string |
+| `artifact_type` | `problem-pack` · `iteration-log` · `iteration-handoff` · `judge-assessment` · `reflection-analysis` · `architect-review` · `decision-log-entry` · `iteration-summary` · `workspace-memory` · `session-archive` · `design-guideline` · `domain-knowledge` · `research-note` · `adr` · `onboarding` · `reference` · `note` · or any user-supplied string |
+| `filename`      | for `problem-pack` docs: which file (`problem.md` / `success.md` / `constraints.md` / `hints.md` / `style-guide.md`) |
 | `tier`          | `semantic` (curated, cross-iteration transfer-friendly) · `episodic` (raw trace) |
 | `iteration`     | integer — for iteration-scoped artefacts                            |
 | `workspace_id`  | cf² workspace id                                                    |
