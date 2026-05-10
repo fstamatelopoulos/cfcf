@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.23.0] -- 2026-05-10
+
 ### Fixed — Workspace + Clio Project cleanup gaps (item 6.35 follow-up round 4)
 
 Real dogfood: user deleted a workspace, then tried to clean up
