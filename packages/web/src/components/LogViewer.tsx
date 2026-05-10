@@ -9,8 +9,20 @@ export interface LogTarget {
 }
 
 export function LogViewer({ target }: { target: LogTarget | null }) {
+  // Item 6.35 follow-up (2026-05-10): a manual refresh counter
+  // bumped by the user lets them re-fetch the log when the SSE
+  // stream finished prematurely. Real dogfood: claude-code-ollama
+  // buffers stdout for the entire run; the agent transitions
+  // through "executing" → "collecting" → "completed" with file
+  // flushing intermixed; an SSE poll that happens between flush
+  // and status-transition can emit `done` before the late-arriving
+  // buffer makes it through the network. Workaround until the
+  // server-side race is closed: a Refresh button that resets the
+  // EventSource by changing the URL key.
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const url = target
-    ? `/api/workspaces/${encodeURIComponent(target.workspaceId)}/logs/${encodeURIComponent(target.logFile)}`
+    ? `/api/workspaces/${encodeURIComponent(target.workspaceId)}/logs/${encodeURIComponent(target.logFile)}` +
+      (refreshCounter > 0 ? `?_=${refreshCounter}` : "")
     : null;
   const { lines, connected, done } = useSSE(url);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,6 +78,21 @@ export function LogViewer({ target }: { target: LogTarget | null }) {
         </span>
         <span className="log-viewer__actions">
           {isLoading && <span className="log-viewer__spinner" />}
+          {/* Refresh button — re-opens the EventSource against the
+              same log file. Useful when the stream completed
+              prematurely (e.g. claude-code-ollama buffering race;
+              see useSSE / SSE handler in app.ts). Always visible
+              once the stream is done so the user has a recovery
+              path without navigating away + back. */}
+          {done && target && (
+            <button
+              className="btn btn--small btn--secondary"
+              title="Re-fetch the log file from disk (workaround for buffered-output races)"
+              onClick={() => setRefreshCounter((n) => n + 1)}
+            >
+              refresh
+            </button>
+          )}
           {!atTop && (
             <button
               className="btn btn--small btn--secondary"

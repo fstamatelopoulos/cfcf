@@ -9,7 +9,361 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed — install.sh + local-install.sh PID-file probe was wrong on macOS
+
+The "is a cfcf server running?" detection in both scripts looked
+at `$HOME/.cfcf/server.pid`, which is the **data dir** path on
+Linux but does NOT exist on macOS — the canonical location there
+is `~/Library/Application Support/cfcf/server.pid`
+(per `getConfigDir()` in `packages/core/src/constants.ts`). On
+every Mac install, both scripts silently no-op'd:
+- `install.sh`'s "Server restart needed" warning never printed
+  even when a Mac user had the server running.
+- `local-install.sh`'s active-loop pre-flight check (just added
+  in the previous commit) silently skipped — the user reported
+  running it during a live loop and seeing zero warning output.
+
+**Fix:**
+
+- `local-install.sh` now uses `cfcf server status` + `cfcf status`
+  instead of probing the PID file directly. `cfcf` already has
+  the correct per-platform `getConfigDir()` logic baked in, so
+  the check works the same on macOS, Linux, and any future
+  platform that lands. Verified end-to-end against the user's
+  actual current state (server running with `testgame: running
+  (iteration 4)`) — the warning now fires.
+- `install.sh` keeps the PID-file approach (no `cfcf` available
+  yet during a fresh install) but switches on `$(uname -s)` to
+  pick the right config-dir path: macOS → `~/Library/Application
+  Support/cfcf/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/cfcf/`.
+  Also extracts the pid via portable sed since the file is JSON,
+  not a bare integer (the previous `cat | head -1` would have
+  produced the entire `{"pid":...}` line).
+
+### Fixed — Codex seed model `gpt-5-codex` was invalid
+
+Real dogfood: the seed model registry shipped with
+`gpt-5-codex` listed under the `codex` adapter, but the Codex
+CLI rejects that name at spawn time — there is no such model.
+"Codex" is the name of the OpenAI CLI tool itself, not a model
+suffix; the underlying models are general-purpose (`gpt-5`,
+`o3`, `o3-mini`, etc.). Surfaced when the user picked
+`gpt-5-codex` from the model dropdown and the resulting agent
+spawn errored.
+
+**Fix**: `packages/core/src/adapters/seed-models.ts` —
+replaced `["gpt-5-codex", "gpt-5", "o3"]` with `["gpt-5",
+"o3", "o3-mini"]` for the `codex` adapter. Per the seed file's
+maintenance comment, user overrides on
+`CfcfGlobalConfig.agentModels.codex` are preserved across
+upgrades, so anyone who hand-added a working model isn't
+affected.
+
+**Existing user configs that selected `gpt-5-codex`** stay
+functional because the AgentModelSelect dropdown's back-compat
+`(custom)` rendering preserves unknown values on first render
+— but the next agent spawn will still fail at the codex CLI
+boundary, so users will need to switch the role's model in
+Settings → Agent roles or workspace Config. The seed
+correction means the picker no longer offers it as a default.
+
+Updated references: `packages/core/src/clio/actor.ts` example
+comment, `docs/api/server-api.md` example response,
+`docs/guides/cli-usage.md` walkthrough text, `CLAUDE.md`
+project memory, `docs/plan.md` 6.26 resolved-design entry.
+Tests in `packages/server/src/routes/agent-models.test.ts`
+updated to assert the new seed and explicitly assert
+`gpt-5-codex` is NOT in the seed (regression guard).
+
+### Investigation + observability — "Server restarted" message + workspace stuck on Failed
+
+Real dogfood: across a single `testgame` loop run, the user saw
+**three different events** (Reflection 1, Dev+Judge 2, Reflection 2)
+get temporarily marked as `failed` in the History tab while
+they were in fact still running. Each one later flipped back to
+`completed` correctly — but the spurious `Error: Server
+restarted while this event was running` text **stayed attached
+to the row** even after the agent succeeded. The user also
+reported that the workspace's overall status (on the
+workspaces-list page) **stayed pinned to "Failed"** even though
+iteration events later showed completed.
+
+**Strongest current hypothesis (user-suggested + mechanism
+verified) — `local-install.sh` mid-loop:** The user reports
+running `./scripts/local-install.sh` to update the binary
+during the loop *without* stopping the server first. This
+script does `npm remove -g @cerefox/codefactory …` followed by
+`npm install -g …` — a window of seconds during which the cfcf
+package tree on disk is half-removed.
+
+The build (`build-cli.sh`) externalizes three heavy deps:
+
+```bash
+bun build … --external @huggingface/transformers \
+            --external onnxruntime-node \
+            --external sharp
+```
+
+— meaning they're resolved from `node_modules/` at runtime, not
+bundled. The Clio ONNX embedder in
+`packages/core/src/clio/embedders/onnx-embedder.ts:76` does:
+
+```typescript
+cached = await import("@huggingface/transformers");
+```
+
+— a **lazy dynamic import**. Once the running server's loop
+hits a Clio operation that triggers this import during the
+install window, the import throws `MODULE_NOT_FOUND`, which
+becomes an `unhandledRejection`, which triggers
+`gracefulShutdown("unhandledRejection", 1)` → marks active
+events failed → `process.exit(1)`. Three loop transitions
+during the install window = three corrupted events.
+
+This explains everything the user observed: the message
+wording (after the next manual restart, boot cleanup catches
+events that gracefulShutdown's swallow-on-error skipped), the
+recurrence pattern (one corruption per Clio call during the
+window), and crucially that the user didn't manually stop —
+the unhandled rejection killed the server *for them*.
+
+**Other plausible-but-secondary candidates** (kept on the
+short list in case the install-window theory turns out not to
+be the actual cause): (a) Bun watch-mode reload from
+`bun run dev:server` if file edits happen during a live loop,
+(b) external process supervisor auto-restarting on a transient
+crash. Both would produce the same observable surface.
+
+**Observability added so the next dogfood run produces evidence:**
+
+- Boot banner — `[boot] cfcf server v… starting — pid=… ts=…`
+  printed first thing in `startServer()`. If the user observes
+  the "Server restarted" message in history, the matching
+  `[boot]` line in the server log proves whether a real restart
+  happened. Multiple `[boot]` lines = real restarts; only one =
+  the message came from somewhere else and we have a new bug.
+- Shutdown trace — `[shutdown] Received <signal> — pid=… ts=…`
+  printed at the top of `gracefulShutdown`. Includes a stack
+  trace for `unhandledRejection` / `uncaughtException` / `api`
+  triggers so we can see where the shutdown was kicked off
+  from.
+- Workspace-status transition trace — `[workspace-status]
+  <name> (id): <from> → <to>` plus a 4-frame stack hint, logged
+  on every `updateWorkspace({status: …})` call where the value
+  actually changes. Particularly: every transition INTO
+  "failed" gets a hint pointing at the call site, so we can
+  identify what wrote it.
+
+**Defense-in-depth fixes (still ship now — they're safe and
+fix observed symptoms regardless of the root-cause path):**
+
+- **Stale-error clearing on `failed → completed`**
+  (`workspace-history.ts`): `updateHistoryEvent` now clears the
+  `error` field when a patch transitions an event AWAY from
+  `failed` and doesn't explicitly carry an `error` itself. Spread
+  merge would otherwise preserve the old text. Direct fix for
+  the user-visible "lingering error" symptom.
+- **Liveness probe in cleanup** (`workspace-history.ts`): boot
+  cleanup now stat's the event's log file. If written in the
+  last 90s, the agent is alive — skip cleanup. Defends against
+  any boot-cleanup-during-live-run race regardless of why the
+  boot happens.
+- **`/api/shutdown` now routes through `gracefulShutdown`**
+  (`app.ts` + `start.ts`): the previous `setTimeout(() =>
+  process.exit(0), 100)` shortcut was a real bug — it left
+  agents orphaned to PID 1 and history events stuck "running"
+  after `cfcf server stop`. Now the same code path as
+  SIGTERM/SIGINT runs: agents get process-group SIGTERM + SIGKILL
+  grace, history events get marked failed cleanly. (Independent
+  fix — would have manifested for any user running `cfcf server
+  stop` while a loop was active.)
+- **Workspace-status self-heal** (`iteration-loop.ts`): when
+  an iteration's history event is updated to `completed`,
+  re-read the workspace config; if its status is stuck on
+  "failed" (regardless of how it got there), reset to "running".
+  Concrete evidence — an iteration just completed — lets us
+  fix the dashboard immediately without waiting for the
+  root-cause investigation. Logs the heal so we can see the
+  trigger.
+
+7 new tests in `workspace-history.test.ts` covering the
+defense-in-depth layers: stale-error clears on `failed →
+completed`, explicit error in patch is honoured, error stays
+put when status stays `failed`, liveness probe skips events
+with recent log activity, still cleans events with stale logs,
+defensive default for missing log files, iteration events stay
+alive if EITHER dev or judge log shows recent activity.
+
+**Bonus independent fix — `cfcf server stop` orphans:** while
+investigating, found that `/api/shutdown` was implemented as a
+literal `setTimeout(() => process.exit(0), 100)` — bypassing
+`gracefulShutdown` entirely. This left agents reparented to
+PID 1 and history events stuck at `running` after every `cfcf
+server stop`. Now routes through `gracefulShutdown("api", 0)`
+via the new `requestShutdown()` export. Independent bug,
+shipped together because the search for the root cause
+surfaced it.
+
+**Pre-flight check in `scripts/local-install.sh`** — detect a
+running server with a live loop BEFORE running `npm remove +
+npm install`. Prints a structured warning with a one-liner
+(`cfcf server stop` + `cfcf resume`) and prompts y/N to
+continue. Best-effort: needs `cfcf` on PATH and the server
+reachable to fire, both of which are pre-conditions for the
+issue. Catches the user-suggested install-window mechanism
+before it can corrupt history.
+
+**Hint in unhandled-rejection logging** — when an
+`unhandledRejection` matches `MODULE_NOT_FOUND` / `Cannot find
+module` / `Cannot find package`, the fatal log now points at
+the install-window scenario as the most likely cause. Saves a
+post-mortem step the next time it happens.
+
+### Changed — Per-role Clio ingest cadence (real-time visibility)
+
+Real dogfood: dev + judge ran for many minutes during iteration 1
+with **nothing landing in Clio** during that time, then a flurry
+of ingests at end-of-iteration. The user saw "Dev and Judge
+iteration 1 completed but no new docs were stored in Clio" and
+flagged the UX gap. Architect + reflection already ingest
+immediately after their commits; dev + judge were batched at
+end-of-iteration via `ingestRawIterationArtifacts`. Inconsistent
+cadence + confusing UX.
+
+**Fix**: per-role ingest hooks fire immediately after each role's
+commit, mirroring the architect/reflection pattern.
+
+| When | What |
+|---|---|
+| After **dev** commit | iteration-log + iteration-handoff + plan.md (catches `[x]` marks dev just made) |
+| After **judge** commit | judge-assessment |
+| After **reflection** commit | reflection-analysis + plan.md (rewrites) — already existed |
+| End of iteration | decision-log entries + iteration-summary + safety-net `ingestRawIterationArtifacts` |
+
+Implementation:
+- New `ingestDevIterationArtifacts(workspace, iter)` — iteration-log
+  + iteration-handoff together. Idempotent via `--update-if-exists`.
+- New `ingestJudgeArtifact(workspace, iter)` — judge-assessment.
+  Idempotent.
+- Both use `--update-if-exists` so the end-of-iteration
+  `ingestRawIterationArtifacts` safety-net call dedups via sha256
+  + becomes a no-op in the happy path.
+- `ingestRawIterationArtifacts` retained as a defensive batch in
+  case any per-role hook failed; kept calling it at end-of-
+  iteration so a partial-failure path doesn't leave artifacts
+  trapped on disk.
+- Wired into `iteration-loop.ts` post-dev-commit + post-judge-
+  commit. Plan.md ingest also fires post-dev to capture `[x]`
+  marks in real time (was previously only post-reflection +
+  iteration-start).
+
+7 new tests in `loop-ingest.test.ts` covering: dev-artifact
+ingest creates both files; idempotent across repeat calls;
+gated by `policy=summaries-only`; missing files counted
+correctly; judge-artifact ingest creates with right metadata;
+idempotent on safety-net re-call; returns false on missing
+file.
+
+### Added — Auto-ingest `plan.md` to Clio (item 6.35 follow-up)
+
+Real dogfood: SA completed with READY result, `architect-review.md`
+landed in Clio (good), but **`plan.md` — the SA's other major
+output, the implementation plan that drives the whole loop —
+was never ingested**. plan.md is high-value living content (SA
+authors, reflection rewrites pending items, dev marks `[x]` each
+iteration). Cross-workspace search benefit: "show me
+implementation plans for similar problems".
+
+New `ingestPlanMd()` mirrors `ingestProblemPack` shape — one Clio
+doc per workspace, mutable, accumulating via `--update-if-exists`
++ sha256 dedup. Title `<workspace-name>: plan.md`, metadata
+`(role: "architect", artifact_type: "plan", ingest_trigger,
+workspace_id)`. The `actorOverride` parameter carries the WRITER
+stamp for accurate audit-log attribution
+(`architect|<adapter>|<model>` after SA;
+`reflection|<adapter>|<model>` after reflection rewrites).
+
+Wired into:
+- `architect-runner` (manual `cfcf review` path) — post-SA-completion
+- `iteration-loop` pre-loop architect — post-SA-completion
+- `iteration-loop` reflection-end — captures non-destructive
+  pending-item rewrites
+- `iteration-loop` iteration-start — catches dev's `[x]` marks
+  from the prior iteration + any out-of-band user edits
+- Server `POST /api/workspaces` — catches a pre-fab plan.md the
+  user authored before registering the workspace
+
+5 new tests (canonical metadata triple, in-place updates across
+iterations, missing/empty file skip, actorOverride attribution,
+clio.ingestPolicy=off).
+
+### Fixed — Log-viewer SSE: late-arriving content after stream `done`
+
+Real dogfood: SA completed (claude-code-ollama with qwen3-coder),
+log was empty in the web UI immediately after; navigating away
+and back revealed the populated log. Symptom of a known race
+between (a) claude-code-ollama buffering all stdout for the
+entire run + dumping at exit, (b) the agent process exiting +
+the harness's stream pump finishing in milliseconds, (c) the
+SSE poll loop re-checking `isLive` and emitting `done` before
+the buffered content fully reaches the client.
+
+Two-layer mitigation:
+
+1. **Server-side**: when `isLive` transitions false, do a 200ms
+   settling wait + one final re-read of the log file before
+   emitting `done`. Catches any content that landed after the
+   last poll but before the status flipped. Cheap insurance —
+   only fires once per stream, on the close path.
+
+2. **Client-side**: a "refresh" button on the LogViewer (visible
+   once `done`) that re-opens the EventSource. Workaround for
+   any case the server-side settling pass missed — the user has
+   an explicit recovery path without navigating away and back.
+
+The fundamental claude-code-ollama buffering remains a known
+limitation (called out in `docs/guides/anthropic-policy.md`);
+this fix closes the SSE-side race that was masking the
+already-flushed-to-disk content.
+
+### Fixed — `--update-if-exists` missing from agent ingest examples
+
+Real dogfood (PA on `/tmp/cfcf-testgame`): agent followed the
+prompt's session-archive ingest example literally + created a
+DUPLICATE doc in Clio when the disk file grew between turns,
+caught itself, deleted the extra, and re-pushed with
+`--update-if-exists`. The example was missing the flag.
+
+Audited every agent surface that writes to Clio for the same gap
++ closed all of them in one pass:
+
+- **PA prompt**: added `--update-if-exists` to the session-archive
+  ingest example (was missing). The PA-memory.md + pa-global-memory
+  examples already had it. Each example now carries a
+  "load-bearing" annotation so the rule sticks.
+- **HA prompt**: added `--update-if-exists` to the user-preference
+  ingest example. Re-stating a preference now updates the existing
+  doc instead of creating duplicates.
+- **Dev role's `process.md`**: added `--update-if-exists` to the
+  supplemental design-note / domain-knowledge ingest example.
+- **`clio-guide.md`** (read by all roles): added `--update-if-exists`
+  to the generic ingest snippet + a new **seventh universal
+  principle**: "Always pass `--update-if-exists` on every ingest".
+  The principle explains why default-without-the-flag matches no
+  agent use case (always-create) while default-with matches every
+  use case (update-if-found, create-otherwise).
+- **`launcher.ts` PA session-end fallback**: was setting
+  `updateIfExists: false`. Changed to `true` so a fallback push
+  AFTER an agent's mid-session push doesn't create a duplicate
+  when the file grew between them.
+- **`boot-reconcile.ts` PA boot rescue**: same fix.
+
+Tests: 2 new prompt-assembler tests pinning the requirement (PA
+session-archive + PA-memory.md + pa-global-memory all carry the
+flag; HA preference example carries it). Anti-regression for
+future drift.
+
+All 934 tests pass.
 
 ## [0.23.0] -- 2026-05-10
 

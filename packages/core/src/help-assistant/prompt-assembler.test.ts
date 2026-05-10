@@ -43,6 +43,14 @@ describe("assembleHelpAssistantPrompt", () => {
     expect(prompt).toContain("(empty -- memory Projects don't exist yet, or no docs in them)");
   });
 
+  it("teaches `--update-if-exists` on the memory ingest example (item 6.35 round-7 fix)", () => {
+    // Symmetric to the PA fix: re-stating a preference shouldn't
+    // create a duplicate doc.
+    const prompt = assembleHelpAssistantPrompt();
+    expect(prompt).toMatch(/cfcf clio docs ingest --stdin --update-if-exists/);
+    expect(prompt).toContain("load-bearing");
+  });
+
   it("teaches the explicit-vs-inferred memory-write asymmetry (item 6.35 follow-up, 2026-05-10)", () => {
     // Pre-fix: the HA prompt said "Always prompt the user before
     // writing memory" — but the same dogfood that surfaced the PA

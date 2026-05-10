@@ -476,20 +476,25 @@ If \`${globalDocId}\` reads \`<none-yet>\`, omit
 \`--document-id\` and \`--update-if-exists\`; ingest will create it.
 Update \`.cfcf-pa/meta.json\` with the new doc ID afterwards.
 
-**Per-session archive (\`pa-session-<sessionId>\`)**: this is the
-immutable session transcript. Push it once when there's enough
-content to be worth archiving (after the first handful of meaningful
-turns; certainly before the user starts wrapping up the session):
+**Per-session archive (\`pa-session-<sessionId>\`)**: the session
+transcript. Push it whenever the disk file grows meaningfully
+(don't wait for "session end" — same continuous-mirror principle
+as the digest):
 
 \`\`\`
 cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
+    --update-if-exists \\
     --title pa-session-${sessionId} --project ${workspaceClioProject} \\
     --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
     --author "${clioActor}"
 \`\`\`
 
-Re-running this on subsequent turns is fine — sha256 dedup makes
-unchanged content a no-op; if the file grew, the doc gets updated.
+\`--update-if-exists\` is **load-bearing**: without it, repeat
+pushes with the same title (the file grew between turns) create
+DUPLICATE docs in Clio. With it, the existing doc is updated in
+place. The flag is safe to pass on the first ingest too —
+"update if found, otherwise create" is the desired behaviour
+for both branches.
 
 **On natural endpoints** ("ok, let's stop for today" / "I think
 we're done with success.md") — there's nothing special to do.

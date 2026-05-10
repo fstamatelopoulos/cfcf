@@ -12,8 +12,9 @@
  */
 
 import { join } from "path";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, stat } from "fs/promises";
 import { getWorkspaceDir } from "./workspaces.js";
+import { getLogsDir } from "./constants.js";
 import type { ArchitectSignals, ReflectionSignals, IterationHealth, JudgeSignals, DevSignals } from "./types.js";
 
 const HISTORY_FILENAME = "history.json";
@@ -261,6 +262,19 @@ export async function appendHistoryEvent(
 /**
  * Update an existing history event by id. Merges the patch into the existing event.
  * If the event doesn't exist, this is a no-op.
+ *
+ * Status-transition cleanup: when a patch transitions an event AWAY from
+ * `failed` (e.g. failed→completed, failed→running), any pre-existing `error`
+ * field is cleared automatically. Otherwise the spread merge would preserve
+ * a stale error message even though the event is no longer failed — which
+ * happens in the wild when `cleanupStaleRunningEvents` racily marks an event
+ * failed and the agent's own completion update arrives later (item 6.35
+ * follow-up: "Server restarted while this event was running" lingering on
+ * successfully-completed runs).
+ *
+ * Callers can still opt to set `error` explicitly in their patch (e.g. to
+ * pass a different error string when transitioning into `failed`); only the
+ * implicit-stale case is cleared.
  */
 export async function updateHistoryEvent(
   workspaceId: string,
@@ -270,14 +284,90 @@ export async function updateHistoryEvent(
   const events = await readHistory(workspaceId);
   const idx = events.findIndex((e) => e.id === id);
   if (idx === -1) return null;
-  events[idx] = { ...events[idx], ...patch } as HistoryEvent;
+
+  const merged = { ...events[idx], ...patch } as HistoryEvent;
+
+  // Clear stale `error` when transitioning out of `failed` and the patch
+  // didn't explicitly carry an `error` field. Without this, a successful
+  // completion still shows the previous failure's error string.
+  const transitioningOutOfFailed =
+    events[idx].status === "failed" &&
+    patch.status !== undefined &&
+    patch.status !== "failed";
+  const patchSpecifiesError = Object.prototype.hasOwnProperty.call(patch, "error");
+  if (transitioningOutOfFailed && !patchSpecifiesError) {
+    delete merged.error;
+  }
+
+  events[idx] = merged;
   await writeHistory(workspaceId, events);
   return events[idx];
 }
 
 /**
+ * How recently an event's log file must have been written for the cleanup
+ * pass to leave it alone. Tuned to be longer than the typical inter-write
+ * gap of an agent that's mid-thinking (LLM round-trips can be 20–40s of
+ * silence). 90s gives a comfortable margin without making genuinely-dead
+ * events linger forever.
+ */
+const RECENT_LOG_ACTIVITY_MS = 90_000;
+
+/**
+ * Return true if the event's log file shows recent disk-write activity.
+ * Used by `cleanupStaleRunningEvents` to skip events whose agent is
+ * almost certainly still alive even if the in-memory `active-processes`
+ * registry was wiped (e.g. the server boot raced with a still-running
+ * loop in another process — the canonical false-positive that triggered
+ * the user-visible "Server restarted while this event was running" bug).
+ *
+ * Conservative on errors: missing log file or stat failure → returns
+ * false so the event still gets cleaned (preserves prior behaviour for
+ * the normal crash-recovery case).
+ */
+async function logFileShowsRecentActivity(
+  workspaceId: string,
+  logFile: string | undefined,
+  nowMs: number,
+): Promise<boolean> {
+  if (!logFile) return false;
+  try {
+    const path = join(getLogsDir(), workspaceId, logFile);
+    const st = await stat(path);
+    return nowMs - st.mtimeMs < RECENT_LOG_ACTIVITY_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Collect every log filename associated with an event. Most event types
+ * have a single `logFile`; iteration events have separate `devLogFile`
+ * and `judgeLogFile`. Cleanup needs to check ALL of them — if EITHER
+ * shows recent activity, the agent is alive.
+ */
+function eventLogFiles(event: HistoryEvent): string[] {
+  const files: string[] = [];
+  if (event.logFile) files.push(event.logFile);
+  if (event.type === "iteration") {
+    if (event.devLogFile) files.push(event.devLogFile);
+    if (event.judgeLogFile) files.push(event.judgeLogFile);
+  }
+  return files;
+}
+
+/**
  * Clean up stale "running" events for a workspace by marking them as "failed".
  * Called on server startup to recover from crashes/restarts.
+ *
+ * Liveness check (item 6.35 follow-up): events whose log file shows
+ * disk-write activity in the last 90 seconds are skipped — those agents
+ * are almost certainly still alive (e.g. running in a parallel server
+ * process, or surviving a watch-mode reload via process-group detach).
+ * Marking them failed produces the user-visible "Server restarted while
+ * this event was running" error that lingers on successfully-completed
+ * runs.
+ *
  * Returns the number of events marked as failed.
  */
 export async function cleanupStaleRunningEvents(
@@ -287,6 +377,7 @@ export async function cleanupStaleRunningEvents(
   const events = await readHistory(workspaceId);
   let changed = 0;
   const now = new Date().toISOString();
+  const nowMs = Date.now();
   for (const event of events) {
     if (event.status !== "running") continue;
     // Skip event types that aren't tied to the server's lifecycle.
@@ -298,6 +389,19 @@ export async function cleanupStaleRunningEvents(
     // cleanup time would corrupt an actually-still-running session
     // (and the launcher's eventual update would have to undo it).
     if (event.type === "pa-session") continue;
+
+    // Liveness probe: if the log file is still being written to, the
+    // agent is alive. Skip cleanup so its eventual completion-update
+    // arrives uncorrupted.
+    let alive = false;
+    for (const lf of eventLogFiles(event)) {
+      if (await logFileShowsRecentActivity(workspaceId, lf, nowMs)) {
+        alive = true;
+        break;
+      }
+    }
+    if (alive) continue;
+
     event.status = "failed";
     event.error = reason;
     event.completedAt = now;

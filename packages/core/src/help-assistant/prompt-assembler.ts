@@ -230,9 +230,16 @@ inferences, not authorisations.
 
 Use:
 
-  \`cfcf clio docs ingest --stdin --project <project> --title "<short title>" \\
+  \`cfcf clio docs ingest --stdin --update-if-exists \\
+       --project <project> --title "<short title>" \\
        --metadata '{"role":"ha","artifact_type":"user-preference"}' \\
        --author "${actor}"\`
+
+\`--update-if-exists\` is **load-bearing**: if the user re-states
+or refines a preference you've saved before (same title), this
+flag updates the existing doc in place instead of creating a
+duplicate. Safe on first ingest too — falls through to create
+when no match is found.
 
 ## NEVER purge
 

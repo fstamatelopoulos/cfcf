@@ -265,12 +265,16 @@ export function createApp() {
     // iteration's `clio-relevant.md`. For new workspaces with empty
     // `cfcf-docs/` this is a no-op (all five files report "missing").
     try {
-      const { ingestProblemPack } = await import("@cfcf/core");
+      const { ingestProblemPack, ingestPlanMd } = await import("@cfcf/core");
       const clio = getClioBackend();
       await ingestProblemPack(clio, workspace, "workspace-init");
+      // Item 6.35 follow-up: also catch a pre-fab plan.md if the user
+      // had already authored one before registering the workspace.
+      // No-op for fresh workspaces (file missing).
+      await ingestPlanMd(clio, workspace, "workspace-init");
     } catch (err) {
       console.warn(
-        `[workspace-init] problem-pack ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        `[workspace-init] problem-pack/plan ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
@@ -990,6 +994,34 @@ export function createApp() {
           }
 
           if (!isLive) {
+            // Item 6.35 follow-up (2026-05-10): one final settling
+            // re-read before we close the stream. Hypothesis: the
+            // status transitioned to "completed" within milliseconds
+            // of the last buffered stdout flush; a brief delay +
+            // re-read catches any content that landed AFTER the
+            // last poll but before status flipped. Cheap insurance.
+            // (Note: the agent process having exited + Bun's
+            // logWriter.end() having awaited should make the file
+            // fully visible by now, but file-system / fsync ordering
+            // varies and this defensive re-read closes the gap on
+            // any platform where it doesn't.)
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            try {
+              const finalFile = Bun.file(logPath);
+              if (await finalFile.exists()) {
+                const finalContent = await finalFile.text();
+                if (finalContent.length > lastSize) {
+                  const newContent = finalContent.slice(lastSize);
+                  const newLines = newContent.split("\n");
+                  for (const line of newLines) {
+                    if (line.length > 0) {
+                      await stream.writeSSE({ event: "log", data: line });
+                    }
+                  }
+                  lastSize = finalContent.length;
+                }
+              }
+            } catch { /* fall through to done */ }
             await stream.writeSSE({
               event: "done",
               data: JSON.stringify({ message: "Log stream complete" }),
@@ -1284,8 +1316,17 @@ export function createApp() {
 
   // --- Server shutdown ---
 
-  app.post("/api/shutdown", (c) => {
-    setTimeout(() => process.exit(0), 100);
+  // Route through gracefulShutdown() (item 6.35 follow-up). The previous
+  // `setTimeout(() => process.exit(0), 100)` shortcut bypassed the
+  // active-process kill + history-event cleanup, leaving agents
+  // reparented to PID 1 and history events stuck in `running` state on
+  // disk. The next server boot's `cleanupAllStaleRunningEvents` then
+  // tagged those orphaned events with "Server restarted while this
+  // event was running" — which the user saw as a spurious failed status
+  // even on iterations that ultimately completed.
+  app.post("/api/shutdown", async (c) => {
+    const { requestShutdown } = await import("./start.js");
+    requestShutdown("api");
     return c.json({ status: "shutting down" });
   });
 

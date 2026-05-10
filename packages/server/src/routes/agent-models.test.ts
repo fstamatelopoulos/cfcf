@@ -51,7 +51,7 @@ describe("/api/agents/models", () => {
     expect(Array.isArray(body.adapters["claude-code"])).toBe(true);
     expect(body.adapters["claude-code"]).toContain("sonnet");
     expect(body.adapters["claude-code"]).toContain("opus");
-    expect(body.adapters["codex"]).toContain("gpt-5-codex");
+    expect(body.adapters["codex"]).toContain("gpt-5");
   });
 
   it("returns the user override when set + non-empty", async () => {
@@ -65,7 +65,7 @@ describe("/api/agents/models", () => {
     const body = await res.json();
     expect(body.adapters["claude-code"]).toEqual(["sonnet", "haiku", "claude-opus-4-7"]);
     // Other adapters fall through to the seed.
-    expect(body.adapters["codex"]).toContain("gpt-5-codex");
+    expect(body.adapters["codex"]).toContain("gpt-5");
   });
 
   it("includes the bundled seed alongside so the editor can show defaults", async () => {
@@ -74,7 +74,11 @@ describe("/api/agents/models", () => {
     const res = await app.request("/api/agents/models");
     const body = await res.json();
     expect(body.seed["claude-code"]).toContain("sonnet");
-    expect(body.seed["codex"]).toContain("gpt-5-codex");
+    expect(body.seed["codex"]).toContain("gpt-5");
+    // gpt-5-codex was previously seeded by mistake — "Codex" is the CLI
+    // name, not a model suffix; the codex CLI rejected it at spawn time.
+    // Removed in the 6.35 follow-up (2026-05-10).
+    expect(body.seed["codex"]).not.toContain("gpt-5-codex");
   });
 
   it("returns the seed even when no config file exists yet (pre-init)", async () => {

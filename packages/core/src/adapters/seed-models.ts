@@ -37,11 +37,16 @@ export const SEED_MODELS: SeedModelMap = {
   "claude-code": ["opus", "sonnet", "haiku"],
 
   // Codex's `--model` accepts model NAMES (no aliases like Claude).
-  // Seeded with the current production-grade Codex + general models;
-  // the long tail of variants (mini sizes, dated builds) goes via the
-  // Settings editor or the "Custom model name…" picker option.
+  // Seeded with the current production-grade general models the Codex
+  // CLI accepts; the long tail of variants (mini sizes, dated builds)
+  // goes via the Settings editor or the "Custom model name…" picker
+  // option. Note: there is NO "gpt-5-codex" model — "Codex" is the
+  // name of the CLI tool itself, not a model suffix; the underlying
+  // models are general-purpose. Earlier seeds incorrectly listed
+  // "gpt-5-codex" and the Codex CLI rejected it at spawn time
+  // (item 6.35 follow-up, 2026-05-10).
   // Ref: https://platform.openai.com/docs/models
-  "codex": ["gpt-5-codex", "gpt-5", "o3"],
+  "codex": ["gpt-5", "o3", "o3-mini"],
 };
 
 /** Returns the seed models for an adapter, or [] if none seeded. */

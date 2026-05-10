@@ -62,7 +62,20 @@ async function gracefulShutdown(signal: string, exitCode: number = 0): Promise<v
   }
   shuttingDown = true;
 
-  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+  // High-visibility log line — pairs with [boot] banner for post-mortem
+  // analysis (item 6.35 follow-up #2). If a "Server restarted" message
+  // shows up in history without a matching [shutdown] line plus a fresh
+  // [boot] banner, the cleanup got triggered by something other than
+  // a real restart.
+  console.log(`\n[shutdown] Received ${signal} — pid=${process.pid} ts=${new Date().toISOString()}`);
+  // Capture a stack trace at shutdown time so we can see WHERE the
+  // shutdown was triggered from (signal handler vs. /api/shutdown vs.
+  // uncaughtException). Trace is one-shot, low overhead.
+  if (signal === "unhandledRejection" || signal === "uncaughtException" || signal === "api") {
+    console.log(`[shutdown] Trigger trace:`);
+    console.log(new Error("shutdown-trigger").stack);
+  }
+  console.log(`Received ${signal}, shutting down gracefully...`);
 
   const active = getAllActiveProcesses();
   if (active.length > 0) {
@@ -145,18 +158,30 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
     );
   }
 
+  // Startup banner — make boots HIGHLY visible in logs so post-mortem
+  // diagnosis can tell whether an observed cleanup pass came from a real
+  // restart or from some other path. (item 6.35 follow-up #2: user
+  // reported events being marked "Server restarted…" during a single
+  // contiguous loop run with no manual restart. If the log shows only
+  // ONE banner across that run, the cleanup wasn't triggered by a
+  // restart and some other code path is writing the message — currently
+  // no such path exists in the source, so seeing it would be a new
+  // smoking gun.)
+  const bootTs = new Date().toISOString();
+  console.log(`[boot] cfcf server v${VERSION} starting — pid=${process.pid} ts=${bootTs}`);
+
   // Startup recovery: clean up state from a previous crash/restart
   const staleHistoryCount = await cleanupAllStaleRunningEvents(
     "Server restarted while this event was running",
   );
   if (staleHistoryCount > 0) {
-    console.log(`Marked ${staleHistoryCount} stale running history event(s) as failed`);
+    console.log(`[boot] Marked ${staleHistoryCount} stale running history event(s) as failed (pid=${process.pid})`);
   }
   const staleLoopCount = await cleanupStaleActiveLoops(
     "Server restarted while this loop was in progress",
   );
   if (staleLoopCount > 0) {
-    console.log(`Marked ${staleLoopCount} stale active loop(s) as failed`);
+    console.log(`[boot] Marked ${staleLoopCount} stale active loop(s) as failed (pid=${process.pid})`);
   }
 
   // Re-compose any promoted "augmented" role-template overrides
@@ -249,13 +274,40 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
     gracefulShutdown("SIGTERM", 0);
   });
 
-  // Catch-all error handlers: log then attempt graceful shutdown
+  // Catch-all error handlers: log then attempt graceful shutdown.
+  //
+  // High-visibility logging (item 6.35 follow-up #2) — the user reported
+  // a scenario where running `./scripts/local-install.sh` mid-loop
+  // (which `npm remove`s + `npm install`s the cfcf package tree)
+  // appeared to cause spurious "Server restarted…" messages on history
+  // events. The most likely path: an externalized lazy import like
+  // `@huggingface/transformers` (used by the Clio ONNX embedder) hits
+  // a deleted node_modules tree during the install window, throws
+  // MODULE_NOT_FOUND as an unhandled async rejection, and lands here.
+  // Detailed structured logging makes that case obvious in the next
+  // post-mortem.
   process.on("unhandledRejection", (reason) => {
-    console.error("Unhandled promise rejection:", reason);
+    const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    console.error(
+      `[fatal] Unhandled promise rejection — pid=${process.pid} ts=${new Date().toISOString()}`,
+    );
+    console.error(`[fatal] reason: ${msg}`);
+    if (typeof msg === "string" && (msg.includes("MODULE_NOT_FOUND") || msg.includes("Cannot find module") || msg.includes("Cannot find package"))) {
+      console.error(
+        `[fatal] HINT: this looks like a missing-module rejection. If you just ran ` +
+        `local-install.sh / npm remove / npm install while the server was up, the ` +
+        `lazy import for an externalized dep (e.g. @huggingface/transformers) likely ` +
+        `hit a half-installed node_modules tree. Restart the server and avoid ` +
+        `re-installing while a loop is active.`,
+      );
+    }
     gracefulShutdown("unhandledRejection", 1).catch(() => process.exit(1));
   });
   process.on("uncaughtException", (err) => {
-    console.error("Uncaught exception:", err);
+    console.error(
+      `[fatal] Uncaught exception — pid=${process.pid} ts=${new Date().toISOString()}`,
+    );
+    console.error(`[fatal] error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
     gracefulShutdown("uncaughtException", 1).catch(() => process.exit(1));
   });
 
@@ -347,6 +399,34 @@ export async function stopServer(): Promise<void> {
     await removePidFile();
     console.log("cfcf server stopped");
   }
+}
+
+/**
+ * Initiate a graceful shutdown from outside the signal-handler context
+ * (e.g. the `/api/shutdown` HTTP endpoint). Routes through the same
+ * `gracefulShutdown()` path as SIGTERM/SIGINT so active agents are killed
+ * via process-group SIGTERM and history events get marked failed
+ * properly. WITHOUT this routing, callers that bypassed gracefulShutdown
+ * (like the previous `setTimeout(() => process.exit(0), 100)` shortcut
+ * in `app.ts`) left agents orphaned to PID 1 and `running` events on
+ * disk — causing the next server boot's `cleanupAllStaleRunningEvents`
+ * to wrongly tag them with "Server restarted while this event was
+ * running" (item 6.35 follow-up bug).
+ *
+ * Returns immediately so the caller's HTTP handler can respond before
+ * the process exits. The shutdown then runs async; it will call
+ * `process.exit(0)` once active agents are killed and state is flushed.
+ */
+export function requestShutdown(reason: string = "api"): void {
+  // Defer one tick so the HTTP response can flush. gracefulShutdown
+  // itself awaits a 2s grace window for kills to land + 1.5s SIGKILL
+  // timer to fire, so the small additional delay here is irrelevant.
+  setTimeout(() => {
+    gracefulShutdown(reason, 0).catch((err) => {
+      console.error("requestShutdown: gracefulShutdown failed", err);
+      process.exit(1);
+    });
+  }, 50);
 }
 
 /**

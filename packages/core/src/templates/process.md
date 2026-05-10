@@ -60,10 +60,15 @@ your writes. The minimum-viable use is (item 6.9):
 - **Do** ingest one-off design notes / domain knowledge / research notes
   that don't belong in the canonical artefact set:
 
-      echo "..." | cfcf clio docs ingest --stdin --project cf-workspace-<this-workspace-id> \
+      echo "..." | cfcf clio docs ingest --stdin --update-if-exists \
+          --project cf-workspace-<this-workspace-id> \
           --title "<short title>" \
           --metadata '{"role":"dev","artifact_type":"design-guideline"}' \
           --author "dev|<your-adapter>|<your-model>"
+
+  Always pass `--update-if-exists` — it updates an existing doc with
+  the same title (in the same project) or creates a new one. Without
+  the flag, re-ingesting later creates duplicates.
 
 - **Grep, not Clio, for code.** Use `Read` / `grep` for files and
   symbols in this repo. Use Clio for cross-workspace facts +

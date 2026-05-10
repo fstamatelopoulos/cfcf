@@ -33,7 +33,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
 import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
-import { nextIteration, updateWorkspace } from "./workspaces.js";
+import { nextIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync, parseReflectionSignals } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
@@ -45,6 +45,9 @@ import {
   ingestReflectionAnalysis,
   ingestArchitectReview,
   ingestProblemPack,
+  ingestPlanMd,
+  ingestDevIterationArtifacts,
+  ingestJudgeArtifact,
   ingestDecisionLogEntries,
   ingestIterationSummary,
   ingestRawIterationArtifacts,
@@ -1197,9 +1200,18 @@ async function runLoop(
     // semantic artifact whether or not the gate accepts. Failures are
     // swallowed.
     try {
-      await ingestArchitectReview(getClioBackend(), workspace, "loop", readiness);
+      const backend = getClioBackend();
+      await ingestArchitectReview(backend, workspace, "loop", readiness);
+      // Item 6.35 follow-up (2026-05-10): mirror plan.md too — SA
+      // produces both. The architect stamp lands in the audit log.
+      await ingestPlanMd(
+        backend,
+        workspace,
+        "post-architect",
+        formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model),
+      );
     } catch (err) {
-      console.warn(`[clio] pre-loop architect-review ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[clio] pre-loop architect post-run ingest failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     if (blocked || reviewError) {
@@ -1416,6 +1428,15 @@ async function runLoop(
       console.warn(`[clio] problem-pack ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Item 6.35 follow-up: also refresh plan.md. Captures dev's `[x]`
+    // marks from the prior iteration + any out-of-band user edits
+    // between iterations. sha256 dedup → unchanged plan is a no-op.
+    try {
+      await ingestPlanMd(getClioBackend(), workspace, "iteration-start");
+    } catch (err) {
+      console.warn(`[clio] plan.md ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // Clio context preload (item 5.7 PR3): generate
     // `cfcf-docs/clio-relevant.md` with top-k cross-workspace hits matched
     // against this workspace's problem.md. Reads through the same backend
@@ -1534,6 +1555,27 @@ async function runLoop(
       );
     }
 
+    // Item 6.35 follow-up (2026-05-10): per-role Clio ingest right
+    // after the dev commit lands, instead of waiting for the
+    // end-of-iteration batch. Captures iteration-log + iteration-
+    // handoff + plan.md ([x] marks dev just made) so the user sees
+    // activity in Clio in real time. Idempotent — the end-of-
+    // iteration safety-net call dedups via sha256.
+    try {
+      const clio = getClioBackend();
+      await ingestDevIterationArtifacts(clio, workspace, iterationNum);
+      await ingestPlanMd(
+        clio,
+        workspace,
+        "iteration-start", // carries the [x]-marks delta from dev's iteration
+        formatClioActor("dev", workspace.devAgent.adapter, workspace.devAgent.model),
+      );
+    } catch (err) {
+      console.warn(
+        `[clio] post-dev artifact ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;
 
@@ -1627,6 +1669,18 @@ async function runJudgeAndDecide(
   // Archive judge assessment
   await archiveJudgeAssessment(workspace.repoPath, iterationNum);
 
+  // Item 6.35 follow-up (2026-05-10): per-role Clio ingest right after
+  // the judge commit. judge-assessment.md is now visible in Clio in
+  // real time; idempotent — the end-of-iteration safety-net dedups
+  // via sha256.
+  try {
+    await ingestJudgeArtifact(getClioBackend(), workspace, iterationNum);
+  } catch (err) {
+    console.warn(
+      `[clio] post-judge artifact ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   // Flip the iteration's history event to `completed` NOW, before
   // reflection starts. The dev and judge agents have both exited and
   // their signals are persisted -- from the user's point of view the
@@ -1645,6 +1699,25 @@ async function runJudgeAndDecide(
     devSignals: iterRecord.devSignals,
     judgeSignals: judgeSignals ?? undefined,
   } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
+
+  // Self-heal workspace status (item 6.35 follow-up #2): the user
+  // reported the workspaces-list page stuck on "Failed" even after
+  // iterations resumed completing successfully. If the workspace fell
+  // into a terminal/failed state for any reason mid-loop while the
+  // loop kept running, an iteration just completing is concrete
+  // evidence the workspace is alive — reset its status to "running" so
+  // the dashboard reflects reality. The status-transition trace in
+  // `updateWorkspace` will surface in logs WHO set it to "failed" so we
+  // can chase the original write next time it happens.
+  try {
+    const fresh = await getWorkspace(workspace.id);
+    if (fresh && fresh.status === "failed") {
+      await updateWorkspace(workspace.id, { status: "running" }).catch(() => {});
+      console.log(
+        `[iteration-loop] Workspace ${workspace.name} was stuck on "failed" — reset to "running" after iter ${iterationNum} completed`,
+      );
+    }
+  } catch { /* best-effort self-heal */ }
 
   // --- REFLECT (item 5.6) ---
   // Runs after the judge commits and before DECIDE. Decides whether to
@@ -1696,6 +1769,22 @@ async function runJudgeAndDecide(
           );
         } catch (err) {
           console.warn(`[clio] reflection-analysis ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        // Item 6.35 follow-up: reflection may have rewritten pending
+        // items in plan.md (non-destructive). Refresh plan.md in Clio
+        // with the reflection actor stamp; sha256 dedup → no-op when
+        // plan unchanged.
+        try {
+          const reflAgent = workspace.reflectionAgent ?? workspace.architectAgent ?? workspace.devAgent;
+          await ingestPlanMd(
+            getClioBackend(),
+            workspace,
+            "post-reflection",
+            formatClioActor("reflection", reflAgent.adapter, reflAgent.model),
+          );
+        } catch (err) {
+          console.warn(`[clio] plan.md post-reflection ingest failed: ${err instanceof Error ? err.message : String(err)}`);
         }
 
         // Reset the skip counter now that reflection has actually run.

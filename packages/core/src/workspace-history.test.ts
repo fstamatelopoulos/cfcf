@@ -7,7 +7,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
-import { mkdir, rm, readFile } from "fs/promises";
+import { mkdir, rm, readFile, writeFile, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import {
   appendHistoryEvent,
@@ -21,16 +21,21 @@ import {
 import type { ArchitectSignals } from "./types.js";
 
 const TEST_CONFIG_DIR = join(tmpdir(), `cfcf-history-test-${process.pid}`);
+const TEST_LOGS_DIR = join(tmpdir(), `cfcf-history-test-logs-${process.pid}`);
 const PROJECT_ID = "test-proj";
 
 beforeEach(async () => {
   process.env.CFCF_CONFIG_DIR = TEST_CONFIG_DIR;
+  process.env.CFCF_LOGS_DIR = TEST_LOGS_DIR;
   await mkdir(join(TEST_CONFIG_DIR, "workspaces", PROJECT_ID), { recursive: true });
+  await mkdir(join(TEST_LOGS_DIR, PROJECT_ID), { recursive: true });
 });
 
 afterEach(async () => {
   await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+  await rm(TEST_LOGS_DIR, { recursive: true, force: true });
   delete process.env.CFCF_CONFIG_DIR;
+  delete process.env.CFCF_LOGS_DIR;
 });
 
 function makeReviewEvent(id: string): ReviewHistoryEvent {
@@ -273,5 +278,140 @@ describe("project-history PA-session events (5.14 v2)", () => {
     const pa = events.find((e) => e.id === "pa-99");
     expect(iter?.status).toBe("failed");
     expect(pa?.status).toBe("running");
+  });
+});
+
+describe("updateHistoryEvent stale-error cleanup (item 6.35 follow-up)", () => {
+  test("clears stale error when transitioning failed -> completed", async () => {
+    // Simulate the bug: cleanupStaleRunningEvents wrongly marks an event
+    // as failed, then the agent's own completion update arrives later.
+    // Without the fix, the spread merge keeps the error string.
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("rev-stale"),
+      status: "failed",
+      error: "Server restarted while this event was running",
+      completedAt: new Date().toISOString(),
+    });
+
+    const updated = await updateHistoryEvent(PROJECT_ID, "rev-stale", {
+      status: "completed",
+      readiness: "READY",
+    } as Partial<ReviewHistoryEvent>);
+
+    expect(updated?.status).toBe("completed");
+    expect(updated?.error).toBeUndefined();
+  });
+
+  test("preserves explicit error when patch sets one", async () => {
+    // If a caller explicitly passes a new error value, honor it. Only the
+    // implicit-stale case is cleaned up.
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("rev-explicit"),
+      status: "failed",
+      error: "old error",
+    });
+
+    const updated = await updateHistoryEvent(PROJECT_ID, "rev-explicit", {
+      status: "completed",
+      error: "new explicit error",
+    } as Partial<ReviewHistoryEvent>);
+
+    expect(updated?.status).toBe("completed");
+    expect(updated?.error).toBe("new explicit error");
+  });
+
+  test("leaves error untouched when status stays 'failed'", async () => {
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("rev-stillfailed"),
+      status: "failed",
+      error: "original failure",
+    });
+
+    const updated = await updateHistoryEvent(PROJECT_ID, "rev-stillfailed", {
+      readiness: "BLOCKED",
+    } as Partial<ReviewHistoryEvent>);
+
+    expect(updated?.status).toBe("failed");
+    expect(updated?.error).toBe("original failure");
+  });
+});
+
+describe("cleanupStaleRunningEvents liveness probe (item 6.35 follow-up)", () => {
+  async function writeLog(name: string, content = "log line\n", mtimeMs?: number): Promise<void> {
+    const path = join(TEST_LOGS_DIR, PROJECT_ID, name);
+    await mkdir(join(TEST_LOGS_DIR, PROJECT_ID), { recursive: true });
+    await writeFile(path, content, "utf-8");
+    if (mtimeMs !== undefined) {
+      const t = new Date(mtimeMs);
+      await utimes(path, t, t);
+    }
+  }
+
+  test("skips events whose log file was written in the last 90s", async () => {
+    // Log written ~5s ago — agent is alive.
+    await writeLog("architect-r-alive.log", "...", Date.now() - 5_000);
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("r-alive"),
+      logFile: "architect-r-alive.log",
+    });
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(0);
+
+    const events = await readHistory(PROJECT_ID);
+    expect(events[0].status).toBe("running");
+    expect(events[0].error).toBeUndefined();
+  });
+
+  test("still cleans events whose log file is older than 90s", async () => {
+    // Log written 5 minutes ago — agent is dead.
+    await writeLog("architect-r-dead.log", "...", Date.now() - 5 * 60_000);
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("r-dead"),
+      logFile: "architect-r-dead.log",
+    });
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(1);
+
+    const events = await readHistory(PROJECT_ID);
+    expect(events[0].status).toBe("failed");
+  });
+
+  test("cleans events with no log file at all (defensive default)", async () => {
+    // No log file — can't probe, fall back to old behaviour (mark failed).
+    await appendHistoryEvent(PROJECT_ID, {
+      ...makeReviewEvent("r-nolog"),
+      logFile: "does-not-exist.log",
+    });
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(1);
+  });
+
+  test("iteration: alive if EITHER dev or judge log is recent", async () => {
+    // Dev log is old, judge log is fresh — judge is still running.
+    await writeLog("iter-100-dev.log", "...", Date.now() - 5 * 60_000);
+    await writeLog("iter-100-judge.log", "...", Date.now() - 3_000);
+    await appendHistoryEvent(PROJECT_ID, {
+      id: "iter-100",
+      type: "iteration",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      logFile: "iter-100-dev.log",
+      agent: "codex",
+      iteration: 100,
+      branch: "cfcf/iteration-100",
+      devLogFile: "iter-100-dev.log",
+      judgeLogFile: "iter-100-judge.log",
+      devAgent: "codex",
+      judgeAgent: "codex",
+    } as IterationHistoryEvent);
+
+    const failed = await cleanupStaleRunningEvents(PROJECT_ID);
+    expect(failed).toBe(0);
+
+    const events = await readHistory(PROJECT_ID);
+    expect(events[0].status).toBe("running");
   });
 });

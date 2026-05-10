@@ -285,7 +285,10 @@ async function fallbackIngestPaSessionArchiveLite(opts: {
         session_id: opts.sessionId,
         ingested_by: "cfcf-boot-reconcile",
       },
-      updateIfExists: false,
+      // Item 6.35 follow-up (2026-05-10): see launcher.ts comment
+      // — update-if-exists prevents duplicate docs when the agent
+      // pushed an earlier snapshot during the session.
+      updateIfExists: true,
     });
     archiveDocId = result.document?.id ?? "";
     // Internal-path usage log (item 6.35 follow-up): boot-reconcile
