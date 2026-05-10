@@ -936,6 +936,26 @@ async function handleStopLoopNow(
     console.warn(`[stop_loop_now] failed to append narrative to iteration-history.md: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // F.1 (v0.24) follow-up: commit the iteration-history.md narrative
+  // append + any other working-tree changes so the user doesn't end up
+  // with an uncommitted "Loop stopped at iteration N" line after every
+  // structured stop. Mirrors the manual-runner commit pattern (cfcf
+  // manual reflection / review / documentation). Best-effort — a
+  // failing commit is logged but doesn't block the stop sequence.
+  try {
+    if (await gitManager.hasChanges(workspace.repoPath)) {
+      const subject = userFeedback?.trim()
+        ? `cfcf loop stopped at iteration ${state.currentIteration}: ${userFeedback.trim().split("\n")[0].slice(0, 140)}`
+        : `cfcf loop stopped at iteration ${state.currentIteration}`;
+      const cr = await gitManager.commitAll(workspace.repoPath, subject.slice(0, 200));
+      if (!cr.success) {
+        console.warn(`[stop_loop_now] commitAll returned non-success`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[stop_loop_now] commit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   await saveLoopState(state);
   await updateWorkspace(workspace.id, { status: "stopped" });
 

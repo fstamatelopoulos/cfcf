@@ -172,6 +172,28 @@ can render a committed/no-changes badge per manual run. Best-
 effort: a failing `commitAll` is logged but doesn't fail the
 run.
 
+### Fixed — `stop_loop_now` resume action left iteration-history.md uncommitted
+
+Same shape as F.1, just on a different code path. When the user
+clicks "Stop loop now" from the FeedbackForm during a paused
+loop, `handleStopLoopNow` (in `iteration-loop.ts`) appends a
+`## Loop stopped at iteration N` narrative section to
+`cfcf-docs/iteration-history.md`. Pre-fix the append fired but
+the change was never committed — every structured stop left a
+dirty `iteration-history.md` in the user's working tree.
+
+Surfaced when the user ran a fresh testgame loop, kicked it
+during pre-loop review, hit Stop loop now, and saw `git status
+modified: cfcf-docs/iteration-history.md` after deleting the
+orphan iter-3 branch from Finding 3.
+
+`handleStopLoopNow` now commits the append + any other dirty
+working-tree changes with subject:
+`cfcf loop stopped at iteration N` (or `cfcf loop stopped at
+iteration N: <user's note>` when free-text feedback was
+provided). Best-effort — failing commit logged but doesn't
+block the stop sequence.
+
 ### Fixed — UI "(not committed)" wording → "(no changes to commit)"
 
 The documenter row in the History tab rendered "(not committed)"
