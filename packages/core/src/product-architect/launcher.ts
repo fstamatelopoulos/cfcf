@@ -714,7 +714,179 @@ export async function fallbackIngestPaSessionArchive(opts: {
     console.warn(`[pa] problem-pack post-session ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // Item 6.35 follow-up: also push PA-memory.md (the rolling digest)
+  // when the agent updated `<repo>/.cfcf-pa/workspace-summary.md` on
+  // disk but didn't run the explicit ingest. Sibling to the session-
+  // archive fallback above. PA's prompt asks the user before pushing
+  // the digest at session end; if the user declined OR the session
+  // ended before the question fired, the disk version is ahead of
+  // Clio. Real dogfood case (testgame, three sessions, no digest
+  // ever pushed). cfcf-side fallback closes the gap.
+  try {
+    await fallbackIngestPaWorkspaceMemory({
+      paCachePath: opts.paCachePath,
+      workspaceId: opts.workspaceId,
+      workspaceClioProject,
+      sessionId: opts.sessionId,
+      paAgentAdapter: opts.paAgentAdapter,
+      paAgentModel: opts.paAgentModel,
+    });
+  } catch (err) {
+    console.warn(`[pa] PA-memory.md post-session ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   return { archiveDocId };
+}
+
+/**
+ * Fallback ingest of PA's per-workspace digest (`PA-memory.md`).
+ *
+ * Item 6.35 follow-up (2026-05-10): real dogfood (testgame workspace,
+ * three PA sessions) showed each session correctly creating a
+ * `pa-session-<sessionId>` archive but never pushing the rolling
+ * `PA-memory.md` digest. PA's prompt instructs the agent to push
+ * the digest at session end via
+ *   `cfcf clio docs ingest --update-if-exists --document-id ${id} \
+ *     --title PA-memory.md --project ${project} ...`
+ * but the agent waits for explicit user approval ("DO NOT silently
+ * sync without asking"); if the user declines OR the session ends
+ * before the question gets asked, the disk version is ahead of Clio
+ * forever. PA itself reports the discrepancy on the next launch
+ * ("local summary is ahead of Clio") but doesn't fix it.
+ *
+ * cfcf-side fallback: read the agent's editorial output from
+ * `.cfcf-pa/workspace-summary.md` and push it to Clio. **The agent
+ * has already done the editorial work** by the time the file's on
+ * disk; cfcf is only responsible for the wire. Symmetric with the
+ * session-archive fallback already in place.
+ *
+ * Lookup strategy:
+ *   - Metadata search for `(role: "pa", artifact_type:
+ *     "workspace-memory", workspace_id: <id>)` to find any existing
+ *     digest doc, regardless of which Clio Project it landed in
+ *     (back-compat with pre-6.9 docs in `cf-system-pa-memory`).
+ *   - If found: deterministic update via `documentId`.
+ *   - If not: fresh ingest in the workspace's effective project
+ *     with the canonical `(role: "pa", artifact_type:
+ *     "workspace-memory")` triple.
+ *
+ * Returns the resulting doc id or null if we skipped (no disk file,
+ * empty disk file, ingest failure).
+ */
+export async function fallbackIngestPaWorkspaceMemory(opts: {
+  paCachePath: string;
+  workspaceId: string;
+  workspaceClioProject: string;
+  sessionId: string;
+  paAgentAdapter: string;
+  paAgentModel?: string;
+}): Promise<{ digestDocId: string | null; reason?: string }> {
+  const summaryFile = join(opts.paCachePath, "workspace-summary.md");
+  let content: string;
+  try {
+    content = await readFile(summaryFile, "utf-8");
+  } catch {
+    return { digestDocId: null, reason: "no-summary-file" };
+  }
+  if (content.trim().length < 100) {
+    // Below 100 chars = either an empty file the agent created on
+    // first session start, or genuinely "nothing meaningful yet".
+    // Skip rather than create a near-empty digest doc that would
+    // need editing before it's useful.
+    return { digestDocId: null, reason: "summary-too-small" };
+  }
+
+  const actor = formatClioActor(ROLE_PRODUCT_ARCHITECT, opts.paAgentAdapter, opts.paAgentModel);
+  const backend = getClioBackend();
+
+  // Look up existing digest by metadata triple. Project-agnostic
+  // search so we find docs that pre-date the 6.9 cf-workspace-<id>
+  // move (they may live in cf-system-pa-memory still).
+  let existingDocId: string | undefined;
+  try {
+    const matches = await backend.metadataSearch({
+      metadataFilter: {
+        role: "pa",
+        artifact_type: "workspace-memory",
+        workspace_id: opts.workspaceId,
+      },
+    });
+    if (matches.documents.length > 0) {
+      existingDocId = matches.documents[0].id;
+    }
+  } catch { /* fall through to create */ }
+
+  let digestDocId: string;
+  try {
+    const result = await backend.ingest({
+      project: opts.workspaceClioProject,
+      title: "PA-memory.md",
+      content,
+      source: "cfcf-auto:pa-workspace-memory-fallback",
+      author: actor,
+      // Deterministic update when we found an existing doc; otherwise
+      // fall back to update-by-title within the project (server
+      // looks up by title inside `project`).
+      documentId: existingDocId,
+      updateIfExists: existingDocId ? undefined : true,
+      metadata: {
+        role: "pa",
+        artifact_type: "workspace-memory",
+        workspace_id: opts.workspaceId,
+        session_id: opts.sessionId,
+        ingested_by: "cfcf-fallback",
+      },
+    });
+    digestDocId = result.document?.id ?? "";
+
+    // Internal-path usage log (sibling to the session-archive ingest).
+    try {
+      backend.logUsage({
+        operation: "ingest",
+        accessPath: "internal",
+        requestor: actor,
+        documentId: digestDocId || null,
+        projectId: result.document?.projectId ?? null,
+        queryText: null,
+        resultCount: null,
+        extra: {
+          artifact_type: "workspace-memory",
+          ingested_by: "cfcf-fallback",
+          action: result.action,
+        },
+      });
+    } catch { /* best-effort */ }
+  } catch (err) {
+    console.error(
+      `[pa] note: fallback PA-memory.md ingest failed (${err instanceof Error ? err.message : String(err)}). ` +
+      `Disk file at ${summaryFile} is preserved; you can ingest manually with the snippet from PA's prompt.`,
+    );
+    return { digestDocId: null, reason: "ingest-failed" };
+  }
+  if (!digestDocId) return { digestDocId: null, reason: "no-doc-id-returned" };
+
+  // Update meta.json so subsequent launches see the synced state +
+  // the discrepancy detection PA does at session start matches reality.
+  try {
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(await readFile(join(opts.paCachePath, "meta.json"), "utf-8"));
+    } catch { /* treat as new */ }
+    parsed.lastSyncAt = new Date().toISOString();
+    parsed.paWorkspaceMemoryDocId = digestDocId;
+    await writeFile(
+      join(opts.paCachePath, "meta.json"),
+      JSON.stringify(parsed, null, 2) + "\n",
+      "utf-8",
+    );
+  } catch { /* best-effort */ }
+
+  console.error(
+    `[pa] auto-saved PA-memory.md digest to Clio (${opts.workspaceClioProject}). ` +
+    `Pushed at doc id ${digestDocId} (the agent didn't run the explicit ingest itself).`,
+  );
+
+  return { digestDocId };
 }
 
 async function readMetaJsonLastSession(paCachePath: string): Promise<MetaJsonLastSession | null> {

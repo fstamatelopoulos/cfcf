@@ -204,6 +204,29 @@ export async function reconcileStalePaSessions(opts: {
           `[pa-reconcile] problem-pack ingest failed for ${paEvent.sessionId} (best-effort): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+
+      // Item 6.35 follow-up: also rescue the workspace-memory digest
+      // (`PA-memory.md`). Symmetric with the session-end fallback.
+      // If PA was mid-edit on `.cfcf-pa/workspace-summary.md` when
+      // it died, the disk version is the truth — push it.
+      try {
+        const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+        await fallbackIngestPaWorkspaceMemory({
+          paCachePath: join(ws.repoPath, ".cfcf-pa"),
+          workspaceId: ws.id,
+          workspaceClioProject: effectiveClioProject({
+            id: ws.id,
+            clioProject: ws.clioProject,
+          }),
+          sessionId: paEvent.sessionId,
+          paAgentAdapter: paEvent.agent ?? "unknown",
+          paAgentModel: paEvent.model,
+        });
+      } catch (err) {
+        console.warn(
+          `[pa-reconcile] PA-memory.md ingest failed for ${paEvent.sessionId} (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     if (stale.length > 0) {

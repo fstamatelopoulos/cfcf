@@ -9,6 +9,69 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — PA workspace-memory digest fallback (item 6.35 follow-up round 3)
+
+**Real dogfood gap surfaced**: testgame workspace, three PA sessions,
+each session correctly created a `pa-session-<sessionId>` archive
+but **`PA-memory.md` (the rolling digest) was never pushed**. PA
+itself reported the discrepancy on the next launch ("local summary
+is ahead of Clio") but didn't fix it. Cause: PA's prompt instructs
+the agent to ASK the user before pushing the digest at session end
+("DO NOT silently sync without asking"); if the user declines OR
+the session ends before the question fires, the disk version
+(`<repo>/.cfcf-pa/workspace-summary.md`) stays ahead of Clio
+forever.
+
+Pre-fix scope decision (item 6.9): I deliberately left the digest
+to the agent because I framed it as needing editorial judgement.
+Re-evaluated after dogfood: the editorial work IS the agent's job —
+composing `workspace-summary.md` turn by turn. By session end, the
+disk file IS the agent's editorial output. cfcf isn't being asked
+to compose anything; just to make sure it reaches Clio. Symmetric
+with the session-archive fallback already in place.
+
+**New `fallbackIngestPaWorkspaceMemory()`** in
+`packages/core/src/product-architect/launcher.ts`:
+
+- Reads `<repo>/.cfcf-pa/workspace-summary.md`. Skips if missing or
+  below 100 chars (treats as "not meaningfully populated yet").
+- Looks up existing digest doc via metadata search on
+  `(role: "pa", artifact_type: "workspace-memory", workspace_id)` —
+  project-agnostic so back-compat with pre-6.9 docs in
+  `cf-system-pa-memory` works.
+- Updates by `documentId` when found (deterministic, stable doc id
+  across sessions); creates fresh otherwise. **One PA-memory.md
+  per workspace**, mutable, accumulating; NOT one per session.
+- Updates `meta.json` with `paWorkspaceMemoryDocId` + `lastSyncAt`
+  so PA's discrepancy detection on the next launch sees the
+  synced state.
+- Author stamp = `product-architect|<adapter>|<model>` + ingested_by
+  metadata = `cfcf-fallback`, so the audit + usage log distinguish
+  cfcf-driven rescues from agent-driven pushes.
+- Internal-path usage log row written via `backend.logUsage` so the
+  Usage tab + `cfcf clio usage list` see these rescues.
+
+**Wired into**:
+- PA session-end fallback (in `launcher.ts`, right after the
+  problem-pack ingest; covers Ctrl-D / agent-skipped-the-question
+  / model-decided-not-to)
+- PA boot reconciliation (in `boot-reconcile.ts`; covers PA
+  process killed before session-end fallback fired)
+
+**Out of scope (still agent-only)**: `pa-global-memory` — lives
+ONLY in Clio per design (no on-disk cache), so cfcf has no source
+of truth to fall back from. The agent remains the sole writer.
+Adding a disk cache for global memory would be a larger storage-
+model change and is deferred.
+
+5 new tests in `fallback-ingest.test.ts` covering: happy path
+(digest lands with right metadata + stamp + project), in-place
+update across sessions (one doc, NOT one per session), missing-
+file skip, too-small-file skip, meta.json `paWorkspaceMemoryDocId`
+update.
+
+All 930 tests pass.
+
 ### Fixed — Item 6.35 follow-up round 2: web requestor + internal access-path
 
 Continuing dogfood feedback: the Usage tab still showed null
