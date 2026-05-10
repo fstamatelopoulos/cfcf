@@ -9,7 +9,44 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed — `--update-if-exists` missing from agent ingest examples
+
+Real dogfood (PA on `/tmp/cfcf-testgame`): agent followed the
+prompt's session-archive ingest example literally + created a
+DUPLICATE doc in Clio when the disk file grew between turns,
+caught itself, deleted the extra, and re-pushed with
+`--update-if-exists`. The example was missing the flag.
+
+Audited every agent surface that writes to Clio for the same gap
++ closed all of them in one pass:
+
+- **PA prompt**: added `--update-if-exists` to the session-archive
+  ingest example (was missing). The PA-memory.md + pa-global-memory
+  examples already had it. Each example now carries a
+  "load-bearing" annotation so the rule sticks.
+- **HA prompt**: added `--update-if-exists` to the user-preference
+  ingest example. Re-stating a preference now updates the existing
+  doc instead of creating duplicates.
+- **Dev role's `process.md`**: added `--update-if-exists` to the
+  supplemental design-note / domain-knowledge ingest example.
+- **`clio-guide.md`** (read by all roles): added `--update-if-exists`
+  to the generic ingest snippet + a new **seventh universal
+  principle**: "Always pass `--update-if-exists` on every ingest".
+  The principle explains why default-without-the-flag matches no
+  agent use case (always-create) while default-with matches every
+  use case (update-if-found, create-otherwise).
+- **`launcher.ts` PA session-end fallback**: was setting
+  `updateIfExists: false`. Changed to `true` so a fallback push
+  AFTER an agent's mid-session push doesn't create a duplicate
+  when the file grew between them.
+- **`boot-reconcile.ts` PA boot rescue**: same fix.
+
+Tests: 2 new prompt-assembler tests pinning the requirement (PA
+session-archive + PA-memory.md + pa-global-memory all carry the
+flag; HA preference example carries it). Anti-regression for
+future drift.
+
+All 934 tests pass.
 
 ## [0.23.0] -- 2026-05-10
 

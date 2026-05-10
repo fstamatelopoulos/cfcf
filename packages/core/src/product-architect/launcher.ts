@@ -628,9 +628,14 @@ export async function fallbackIngestPaSessionArchive(opts: {
         // didn't write `lastSession`), so we leave it absent. The agent
         // can edit-metadata later if it wants to add one.
       },
-      // Per-session archives are immutable. If the agent ALSO ingests
-      // (race / re-launch), backend's sha256 dedup makes it a no-op.
-      updateIfExists: false,
+      // Item 6.35 follow-up (2026-05-10): use update-if-exists.
+      // sha256 dedup handles "same content" via skipped action, but
+      // a session that grew turn-by-turn between an early agent push
+      // and this fallback has DIFFERENT sha256 → without update-if-
+      // exists we'd create a second doc with the same title. The
+      // continuous-mirror model means same-title updates are
+      // expected; immutability only applies AFTER the session ends.
+      updateIfExists: true,
     });
     archiveDocId = result.document?.id ?? "";
     // Internal-path usage log (item 6.35 follow-up): the fallback

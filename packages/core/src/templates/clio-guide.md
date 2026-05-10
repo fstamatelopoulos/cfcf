@@ -5,7 +5,7 @@ this workspace, sibling workspaces, and the user's curated notes. **Use
 it.** It is the difference between you re-deriving something the team
 already figured out and you picking up where they left off.
 
-## The six universal principles (item 6.9)
+## The seven universal principles (items 6.9 + 6.35)
 
 1. **Search before you act.** When you face a non-obvious decision, an
    unfamiliar error, a constraint whose origin you don't know, or a
@@ -67,6 +67,28 @@ already figured out and you picking up where they left off.
    metadata `artifact_type: "design-guideline"` /
    `"domain-knowledge"` / `"research-note"` / `"adr"` etc.
 
+7. **Always pass `--update-if-exists` on every ingest.** This flag
+   makes ingest "update if a doc with the same title already exists
+   in the project, otherwise create". Without it, re-running the
+   same ingest creates a duplicate doc. **There is no real downside
+   to passing it on first ingest** — when no match is found it
+   falls through to create. The default-without-the-flag behaviour
+   ("always create new") matches almost no agent use case; the
+   default-with-the-flag behaviour matches every use case. Item
+   6.35 follow-up after dogfood (PA agent created a duplicate
+   session-archive doc, caught itself, deleted the extra, then used
+   the flag on the next push). The cfcf-side fallbacks (PA session
+   archive, PA-memory.md digest, problem-pack auto-ingest) all use
+   it; agent-driven ingests should match.
+
+   Two situations where the flag is irrelevant rather than wrong:
+   - You're using `--document-id <uuid>` (deterministic update by
+     id; takes precedence; `--update-if-exists` is overridden).
+   - You're INTENTIONALLY creating a new doc despite the title
+     already existing (rare; PA's per-session archives technically
+     fit when sessionId is unique, BUT we still pass the flag
+     because in-session content grows).
+
 ## CLI surface (most-used verbs)
 
 ```bash
@@ -87,8 +109,11 @@ cfcf clio search "query" --match-count 5 --json
 # Retrieve a specific document by id (returned in search hits)
 cfcf clio docs get <document-id>
 
-# Ingest a doc (your role's stamp + the right project)
-cfcf clio docs ingest --stdin --project <project> --title "<title>" \
+# Ingest a doc (your role's stamp + the right project).
+# ALWAYS pass --update-if-exists so a re-ingest of the same title
+# updates the existing doc rather than creating a duplicate.
+cfcf clio docs ingest --stdin --update-if-exists \
+    --project <project> --title "<title>" \
     --metadata '{"role":"<role>","artifact_type":"<type>"}' \
     --author "<role>|<agent>|<model>"
 

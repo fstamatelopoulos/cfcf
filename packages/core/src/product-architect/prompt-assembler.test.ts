@@ -236,6 +236,30 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).not.toContain("DO NOT silently sync without asking");
   });
 
+  it("teaches `--update-if-exists` on every ingest example (item 6.35 round-7 fix)", () => {
+    // Real dogfood: PA agent followed the prompt's session-archive
+    // example literally → created a duplicate doc when the disk file
+    // grew between turns → caught itself, deleted the duplicate,
+    // re-pushed with --update-if-exists. The example was missing the
+    // flag. Pin it explicitly so future edits don't drop it.
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+
+    // Session archive: the flag should appear in the ingest block
+    // for `pa-session-<sessionId>`. Use multi-line-friendly regex.
+    expect(out).toMatch(/cfcf clio docs ingest --file [\s\S]+?--update-if-exists[\s\S]+?--title pa-session-/);
+    // PA-memory.md digest: same.
+    expect(out).toMatch(/--update-if-exists[\s\S]+?--title PA-memory\.md/);
+    // pa-global-memory: same.
+    expect(out).toMatch(/--update-if-exists[\s\S]+?--title pa-global-memory/);
+    // The flag is mentioned as "load-bearing" in the explanatory text
+    // so future edits can't accidentally drop the rule.
+    expect(out).toContain("load-bearing");
+  });
+
   it("session-end behaviour describes 'all set' rather than asking 'did you save?'", () => {
     const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory, clioActor: "product-architect|claude-code|opus" });
     expect(out).toContain("All set. Disk + Clio are both up to date.");
