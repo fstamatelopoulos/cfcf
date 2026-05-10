@@ -177,6 +177,33 @@ export async function reconcileStalePaSessions(opts: {
       } else {
         result.staleNoContent++;
       }
+
+      // Item 6.9 follow-up: PA's primary job is editing problem-pack
+      // files, so a stale session likely left some mid-edit state. The
+      // workspace.repoPath disk version is the truth — push it to Clio
+      // with the PA actor stamp so the audit log shows PA as the
+      // writer (not the default user-stamp). Idempotent — sha256
+      // dedup means already-ingested content is a no-op. Closes the
+      // "PA died mid-session, edits trapped on disk" gap that the
+      // session-end fallback covers in the happy path.
+      try {
+        const { ingestProblemPack } = await import("../clio/loop-ingest.js");
+        const paActor = formatClioActor(
+          ROLE_PRODUCT_ARCHITECT,
+          paEvent.agent ?? "unknown",
+          paEvent.model,
+        );
+        await ingestProblemPack(
+          getClioBackend(),
+          ws,
+          "pa-boot-reconcile",
+          paActor,
+        );
+      } catch (err) {
+        console.warn(
+          `[pa-reconcile] problem-pack ingest failed for ${paEvent.sessionId} (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     if (stale.length > 0) {

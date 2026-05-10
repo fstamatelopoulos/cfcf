@@ -667,13 +667,21 @@ export async function fallbackIngestPaSessionArchive(opts: {
   // files in Clio. PA's primary job is editing problem.md / success.md
   // / etc., so a session that just ran almost certainly mutated at
   // least one of them. sha256 dedup makes unchanged files no-ops, so
-  // calling unconditionally is cheap and predictable.
+  // calling unconditionally is cheap and predictable. We pass PA's
+  // actor stamp as the override so the audit log shows PA as the
+  // writer (not the default `user|cfcf|system` stamp the loop's
+  // iteration-start trigger uses).
   try {
     const all = await listWorkspaces();
     const ws = all.find((x) => x.id === opts.workspaceId);
     if (ws) {
       const { ingestProblemPack } = await import("../clio/loop-ingest.js");
-      const ppResult = await ingestProblemPack(getClioBackend(), ws, "pa-session-end");
+      const ppResult = await ingestProblemPack(
+        getClioBackend(),
+        ws,
+        "pa-session-end",
+        actor, // PA's `product-architect|<adapter>|<model>` stamp
+      );
       if (ppResult.ingested > 0) {
         console.error(
           `[pa] also refreshed ${ppResult.ingested} problem-pack file(s) in Clio (${ppResult.skipped} unchanged, ${ppResult.missing} not on disk).`,

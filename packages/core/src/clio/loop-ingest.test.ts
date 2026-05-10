@@ -546,4 +546,56 @@ describe("ingestProblemPack", () => {
     expect(result.ingested).toBe(0);
     expect(result.missing).toBe(PROBLEM_PACK_FILES.length); // including the empty problem.md
   });
+
+  it("default actor stamps the WRITER as user|cfcf|system (cfcf-driven, no role agent)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nDefault actor probe." });
+
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    const docId = result.perFile[0].documentId!;
+    const doc = await clio.getDocument(docId);
+    expect(doc?.author).toBe("user|cfcf|system");
+    // role: "user" stays in metadata regardless — the user OWNS the spec
+    // content even when iteration-start triggers the ingest.
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("user");
+  });
+
+  it("actorOverride stamps the actual writer (PA case) without changing the metadata role (item 6.9 follow-up)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nPA wrote this." });
+
+    const paActor = "product-architect|claude-code|sonnet";
+    const result = await ingestProblemPack(clio, ws, "pa-session-end", paActor);
+    const docId = result.perFile[0].documentId!;
+    const doc = await clio.getDocument(docId);
+
+    // author column = the OVERRIDE: the audit log shows PA as the
+    // writer, so a future search for "what did PA do?" surfaces this.
+    expect(doc?.author).toBe(paActor);
+    // role STAYS "user" because that's the semantic stakeholder of
+    // the problem-pack content, not a PA artefact.
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("user");
+    // ingest_trigger captures the entry-point separately so analytics
+    // can distinguish PA-driven from cfcf-driven from boot-reconcile.
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-session-end");
+  });
+
+  it("supports the pa-boot-reconcile trigger (item 6.9 follow-up — PA died before session-end fallback)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({
+      "problem.md": "# Problem\n\nMid-edit content that PA's killed-process left on disk.",
+    });
+
+    const result = await ingestProblemPack(
+      clio,
+      ws,
+      "pa-boot-reconcile",
+      "product-architect|claude-code|sonnet",
+    );
+    expect(result.ingested).toBe(1);
+    expect(result.perFile[0].action).toBe("created");
+    const doc = await clio.getDocument(result.perFile[0].documentId!);
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-boot-reconcile");
+    expect(doc?.source).toContain("pa-boot-reconcile");
+  });
 });

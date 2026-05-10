@@ -452,7 +452,8 @@ export interface ProblemPackIngestResult {
 export async function ingestProblemPack(
   backend: MemoryBackend,
   workspace: WorkspaceConfig,
-  trigger: "workspace-init" | "iteration-start" | "pa-session-end" | "manual",
+  trigger: "workspace-init" | "iteration-start" | "pa-session-end" | "pa-boot-reconcile" | "manual",
+  actorOverride?: string,
 ): Promise<ProblemPackIngestResult> {
   const result: ProblemPackIngestResult = {
     ingested: 0,
@@ -465,7 +466,16 @@ export async function ingestProblemPack(
   if (policy === "off") return result;
 
   const project = resolveClioProject(workspace);
-  const author = actorForRole(workspace, "user");
+  // Two-layer attribution:
+  //   - `role: "user"` (set in metadata below) — STAKEHOLDER of the
+  //     spec content. Problem-pack files describe what the user wants
+  //     built; that's the semantic owner regardless of keystroke author.
+  //   - `author` — actual WRITER. Default `user|cfcf|system` for
+  //     workspace-init / iteration-start (cfcf-driven, no role agent
+  //     specifically triggered). PA fallback / boot-reconcile pass an
+  //     override like `product-architect|<adapter>|<model>` so the
+  //     audit log can distinguish PA-driven edits from user-only ones.
+  const author = actorOverride ?? actorForRole(workspace, "user");
 
   for (const filename of PROBLEM_PACK_FILES) {
     const path = join(workspace.repoPath, "cfcf-docs", filename);

@@ -228,4 +228,53 @@ describe("reconcileStalePaSessions", () => {
     const strict = await reconcileStalePaSessions({ staleAfterMs: 10 * 1000 });
     expect(strict.staleEvents).toBe(1);
   });
+
+  it("rescues mid-edit problem-pack files when PA died before session-end fallback (item 6.9 follow-up)", async () => {
+    // Scenario: PA was running, edited problem.md + success.md, then
+    // the user Ctrl-C'd the parent shell. Session-end fallback never
+    // fired → problem-pack edits trapped on disk. Boot reconciliation
+    // should pick them up.
+    const w = await createWorkspace({ name: "pp-rescue-ws", repoPath: tempDir });
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    await seedRunningPaEvent({
+      workspaceId: w.id,
+      workspaceRepoPath: w.repoPath,
+      sessionId: "pa-2026-05-10T08-00-00-pprescue01",
+      fileMtime: tenMinAgo,
+    });
+
+    // Seed problem-pack files PA "left behind".
+    await mkdir(join(w.repoPath, "cfcf-docs"), { recursive: true });
+    await writeFile(
+      join(w.repoPath, "cfcf-docs", "problem.md"),
+      "# Problem\n\nPA was refining this when the shell got Ctrl-C'd.\n",
+      "utf-8",
+    );
+    await writeFile(
+      join(w.repoPath, "cfcf-docs", "success.md"),
+      "# Success criteria\n\nUpdated by PA right before the crash.\n",
+      "utf-8",
+    );
+
+    const result = await reconcileStalePaSessions();
+    expect(result.staleEvents).toBe(1);
+
+    // Both the session archive AND the problem-pack files should land
+    // in the workspace's effective Clio Project.
+    const docs = await clio.listDocuments({ project: `cf-workspace-${w.id}` });
+    expect(docs.find((d) => d.title.startsWith("pa-session-"))).toBeTruthy();
+
+    const problemDoc = docs.find((d) => d.title.endsWith("problem-pack problem.md"));
+    const successDoc = docs.find((d) => d.title.endsWith("problem-pack success.md"));
+    expect(problemDoc).toBeTruthy();
+    expect(successDoc).toBeTruthy();
+
+    // Author stamp should be PA's, not the default user stamp — the
+    // audit log accurately attributes the rescue write to PA.
+    expect(problemDoc?.author).toMatch(/^product-architect\|/);
+
+    // ingest_trigger metadata distinguishes boot-reconcile from the
+    // happy-path session-end + iteration-start triggers.
+    expect((problemDoc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-boot-reconcile");
+  });
 });

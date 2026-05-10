@@ -708,7 +708,42 @@ If the doc IDs in the snippets above are \`<none-yet>\`, the doc
 hasn't been created yet — your first ingest creates it. cfcf will
 discover it via metadata-search on next launch, regardless of which
 project it lands in (project-agnostic by design), but writing to
-the correct project keeps the audit log clean.`;
+the correct project keeps the audit log clean.
+
+## Problem-pack files: ingest opportunistically after each edit
+
+The five problem-pack files (\`problem.md\`, \`success.md\`,
+\`constraints.md\`, \`hints.md\`, \`style-guide.md\`) auto-ingest to
+Clio at three deterministic points: \`cfcf workspace init\`,
+iteration-loop start, and your session-end. **You do NOT need to
+ingest them on every turn.** sha256 dedup makes re-ingest of
+unchanged content a no-op, but the call is non-zero work — don't
+spam it.
+
+**However**, if you've made a substantive edit (the user just signed
+off on a major rewrite of \`success.md\`, you've finished a multi-
+turn refinement of \`constraints.md\`, etc.) and you don't expect
+another edit in the next few turns, you CAN push the change to Clio
+right away as an additional safeguard:
+
+\`\`\`
+cfcf clio docs ingest <repo>/problem-pack/<filename> \\
+    --update-if-exists \\
+    --project ${workspaceClioProject} \\
+    --title "${workspaceIdLabel}: problem-pack <filename>" \\
+    --metadata '{"role":"user","artifact_type":"problem-pack","filename":"<filename>","workspace_id":"${workspaceIdLabel}","tier":"semantic","ingest_trigger":"pa-mid-session"}' \\
+    --author "${clioActor}"
+\`\`\`
+
+This survives the session-end gap if your process gets killed (Ctrl-C
+on the parent shell, OS panic, etc.). The harness still runs its
+boot-reconcile fallback on next \`cfcf server start\`, but a
+mid-session push lands the change immediately rather than waiting
+for the next iteration / boot. **Keep this opportunistic — not every
+turn, just the "this is a real milestone" moments.**
+
+If the next harness ingest finds matching content (sha256 dedup) it
+no-ops, so there's no double-write risk.`;
 }
 
 const SESSION_START_BEHAVIOUR = `# Your behaviour at session start

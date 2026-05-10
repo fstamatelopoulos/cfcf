@@ -17,14 +17,26 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
   effective Clio Project. One Clio doc per file (`<workspace-name>:
   problem-pack <filename>`) with metadata
   `(role: "user", artifact_type: "problem-pack", filename, workspace_id,
-  workspace_name, tier: "semantic")`. Idempotent via
+  workspace_name, tier: "semantic", ingest_trigger)`. Idempotent via
   `--update-if-exists` + sha256 dedup, so unchanged files are no-ops.
-- **Three trigger points**: server-side `POST /api/workspaces`
-  (catches Problem Packs that already existed in the repo at
-  registration), iteration-loop start (refreshes before
-  `clio-relevant.md` runs so sibling workspaces in shared Clio
-  Projects see the freshest problem statement), PA session-end
-  fallback (PA's primary job is editing these files).
+- **Two-layer attribution**: `metadata.role = "user"` always (problem-
+  pack content represents the user's product intent regardless of who
+  keystroked the edit). The `author` column tracks the actual writer:
+  default `user|cfcf|system` for cfcf-driven triggers (workspace-init,
+  iteration-start), `product-architect|<adapter>|<model>` when PA
+  triggers it (session-end fallback or boot-reconcile rescue).
+- **Four trigger points**: server-side `POST /api/workspaces`
+  (catches Problem Packs that already existed at registration);
+  iteration-loop start (refreshes before `clio-relevant.md` so sibling
+  workspaces in shared Clio Projects see the freshest spec); PA
+  session-end fallback (PA's primary job is editing these files);
+  PA boot reconciliation (rescues mid-edit content when PA died
+  before its session-end fallback fired — Ctrl-C on parent shell,
+  server crash, OS panic).
+- **PA prompt addition**: optional opportunistic mid-session ingest
+  guidance — agents can push a finished spec edit immediately without
+  waiting for session-end / next iteration. sha256 dedup makes the
+  redundant harness re-ingest a no-op.
 - **Cross-workspace search benefit**: workspaces in shared Clio
   Projects (e.g. `backend-services`) now surface each other's problem
   statements. `clio-relevant.md` top-k generation can match against
@@ -32,7 +44,7 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 - **Templates updated**: dev role's `process.md` notes
   problem-pack auto-ingest; `clio-guide.md`'s "auto-ingest is on"
   principle + metadata table now list problem-pack as a known
-  `artifact_type`.
+  `artifact_type` + `filename` as a known metadata key.
 
 ### Added — Item 6.9: rationalising Clio usage across agent roles
 
