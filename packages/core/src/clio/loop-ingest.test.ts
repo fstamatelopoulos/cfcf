@@ -19,6 +19,8 @@ import {
   writeClioRelevant,
   ingestProblemPack,
   ingestPlanMd,
+  ingestDevIterationArtifacts,
+  ingestJudgeArtifact,
   PROBLEM_PACK_FILES,
 } from "./loop-ingest.js";
 import type { WorkspaceConfig } from "../types.js";
@@ -710,5 +712,111 @@ describe("ingestPlanMd", () => {
     await seedPlan("# Plan\n\n- [ ] Anything\n");
     const result = await ingestPlanMd(clio, ws, "post-architect");
     expect(result).toBeNull();
+  });
+});
+
+// ── Per-role iteration-artifact helpers (item 6.35 follow-up) ──────────────
+
+describe("ingestDevIterationArtifacts", () => {
+  async function seedDevArtifacts(iter: number, opts: { log?: boolean; handoff?: boolean }) {
+    const docs = join(repoDir, "cfcf-docs");
+    await mkdir(join(docs, "iteration-logs"), { recursive: true });
+    await mkdir(join(docs, "iteration-handoffs"), { recursive: true });
+    if (opts.log) {
+      await writeFile(
+        join(docs, "iteration-logs", `iteration-${iter}.md`),
+        "# Iteration log\n\n## Summary\n\nDid X.\n\n## Tests\n\n- All pass\n",
+        "utf-8",
+      );
+    }
+    if (opts.handoff) {
+      await writeFile(
+        join(docs, "iteration-handoffs", `iteration-${iter}.md`),
+        "# Handoff\n\nNext: do Y.\n",
+        "utf-8",
+      );
+    }
+  }
+
+  it("ingests both iteration-log + iteration-handoff after dev commit (item 6.35 round-9 fix)", async () => {
+    const ws = makeWorkspace();
+    await seedDevArtifacts(3, { log: true, handoff: true });
+
+    const count = await ingestDevIterationArtifacts(clio, ws, 3);
+    expect(count).toBe(2);
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    expect(docs.find((d) => d.title === "myws: iteration-log iter 3")).toBeTruthy();
+    expect(docs.find((d) => d.title === "myws: iteration-handoff iter 3")).toBeTruthy();
+  });
+
+  it("is idempotent across repeat calls (sha256 dedup + update-if-exists)", async () => {
+    const ws = makeWorkspace();
+    await seedDevArtifacts(3, { log: true, handoff: true });
+
+    await ingestDevIterationArtifacts(clio, ws, 3);
+    await ingestDevIterationArtifacts(clio, ws, 3); // safety-net call
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const iterLogs = docs.filter((d) => d.title === "myws: iteration-log iter 3");
+    const handoffs = docs.filter((d) => d.title === "myws: iteration-handoff iter 3");
+    expect(iterLogs).toHaveLength(1); // not 2 — sha256 dedup'd
+    expect(handoffs).toHaveLength(1);
+  });
+
+  it("returns 0 when policy=summaries-only (gated)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
+    await seedDevArtifacts(3, { log: true, handoff: true });
+    const count = await ingestDevIterationArtifacts(clio, ws, 3);
+    expect(count).toBe(0);
+  });
+
+  it("skips missing files cleanly (returns count of files actually present)", async () => {
+    const ws = makeWorkspace();
+    await seedDevArtifacts(3, { log: true, handoff: false });
+    const count = await ingestDevIterationArtifacts(clio, ws, 3);
+    expect(count).toBe(1); // only iteration-log seeded
+  });
+});
+
+describe("ingestJudgeArtifact", () => {
+  async function seedJudgeArtifact(iter: number) {
+    const dir = join(repoDir, "cfcf-docs", "iteration-reviews");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `iteration-${iter}.md`),
+      "# Judge assessment\n\n## Determination\n\nPROGRESS\n\n## Score\n\n8\n",
+      "utf-8",
+    );
+  }
+
+  it("ingests judge-assessment after judge commit (item 6.35 round-9 fix)", async () => {
+    const ws = makeWorkspace();
+    await seedJudgeArtifact(3);
+
+    const ok = await ingestJudgeArtifact(clio, ws, 3);
+    expect(ok).toBe(true);
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const assessment = docs.find((d) => d.title === "myws: judge-assessment iter 3");
+    expect(assessment).toBeTruthy();
+    expect((assessment?.metadata as Record<string, unknown>)?.role).toBe("judge");
+    expect((assessment?.metadata as Record<string, unknown>)?.artifact_type).toBe("judge-assessment");
+  });
+
+  it("is idempotent — re-call after the end-of-iteration safety-net no-ops", async () => {
+    const ws = makeWorkspace();
+    await seedJudgeArtifact(3);
+    await ingestJudgeArtifact(clio, ws, 3);
+    await ingestJudgeArtifact(clio, ws, 3); // safety-net duplicate
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    expect(docs.filter((d) => d.title === "myws: judge-assessment iter 3")).toHaveLength(1);
+  });
+
+  it("returns false when judge-assessment file missing", async () => {
+    const ws = makeWorkspace();
+    const ok = await ingestJudgeArtifact(clio, ws, 99);
+    expect(ok).toBe(false);
   });
 });

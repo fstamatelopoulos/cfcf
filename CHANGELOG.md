@@ -9,6 +9,51 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Changed — Per-role Clio ingest cadence (real-time visibility)
+
+Real dogfood: dev + judge ran for many minutes during iteration 1
+with **nothing landing in Clio** during that time, then a flurry
+of ingests at end-of-iteration. The user saw "Dev and Judge
+iteration 1 completed but no new docs were stored in Clio" and
+flagged the UX gap. Architect + reflection already ingest
+immediately after their commits; dev + judge were batched at
+end-of-iteration via `ingestRawIterationArtifacts`. Inconsistent
+cadence + confusing UX.
+
+**Fix**: per-role ingest hooks fire immediately after each role's
+commit, mirroring the architect/reflection pattern.
+
+| When | What |
+|---|---|
+| After **dev** commit | iteration-log + iteration-handoff + plan.md (catches `[x]` marks dev just made) |
+| After **judge** commit | judge-assessment |
+| After **reflection** commit | reflection-analysis + plan.md (rewrites) — already existed |
+| End of iteration | decision-log entries + iteration-summary + safety-net `ingestRawIterationArtifacts` |
+
+Implementation:
+- New `ingestDevIterationArtifacts(workspace, iter)` — iteration-log
+  + iteration-handoff together. Idempotent via `--update-if-exists`.
+- New `ingestJudgeArtifact(workspace, iter)` — judge-assessment.
+  Idempotent.
+- Both use `--update-if-exists` so the end-of-iteration
+  `ingestRawIterationArtifacts` safety-net call dedups via sha256
+  + becomes a no-op in the happy path.
+- `ingestRawIterationArtifacts` retained as a defensive batch in
+  case any per-role hook failed; kept calling it at end-of-
+  iteration so a partial-failure path doesn't leave artifacts
+  trapped on disk.
+- Wired into `iteration-loop.ts` post-dev-commit + post-judge-
+  commit. Plan.md ingest also fires post-dev to capture `[x]`
+  marks in real time (was previously only post-reflection +
+  iteration-start).
+
+7 new tests in `loop-ingest.test.ts` covering: dev-artifact
+ingest creates both files; idempotent across repeat calls;
+gated by `policy=summaries-only`; missing files counted
+correctly; judge-artifact ingest creates with right metadata;
+idempotent on safety-net re-call; returns false on missing
+file.
+
 ### Added — Auto-ingest `plan.md` to Clio (item 6.35 follow-up)
 
 Real dogfood: SA completed with READY result, `architect-review.md`

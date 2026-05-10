@@ -46,6 +46,8 @@ import {
   ingestArchitectReview,
   ingestProblemPack,
   ingestPlanMd,
+  ingestDevIterationArtifacts,
+  ingestJudgeArtifact,
   ingestDecisionLogEntries,
   ingestIterationSummary,
   ingestRawIterationArtifacts,
@@ -1553,6 +1555,27 @@ async function runLoop(
       );
     }
 
+    // Item 6.35 follow-up (2026-05-10): per-role Clio ingest right
+    // after the dev commit lands, instead of waiting for the
+    // end-of-iteration batch. Captures iteration-log + iteration-
+    // handoff + plan.md ([x] marks dev just made) so the user sees
+    // activity in Clio in real time. Idempotent — the end-of-
+    // iteration safety-net call dedups via sha256.
+    try {
+      const clio = getClioBackend();
+      await ingestDevIterationArtifacts(clio, workspace, iterationNum);
+      await ingestPlanMd(
+        clio,
+        workspace,
+        "iteration-start", // carries the [x]-marks delta from dev's iteration
+        formatClioActor("dev", workspace.devAgent.adapter, workspace.devAgent.model),
+      );
+    } catch (err) {
+      console.warn(
+        `[clio] post-dev artifact ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // --- JUDGE + DECIDE ---
     if (isStopped(state)) break;
 
@@ -1645,6 +1668,18 @@ async function runJudgeAndDecide(
 
   // Archive judge assessment
   await archiveJudgeAssessment(workspace.repoPath, iterationNum);
+
+  // Item 6.35 follow-up (2026-05-10): per-role Clio ingest right after
+  // the judge commit. judge-assessment.md is now visible in Clio in
+  // real time; idempotent — the end-of-iteration safety-net dedups
+  // via sha256.
+  try {
+    await ingestJudgeArtifact(getClioBackend(), workspace, iterationNum);
+  } catch (err) {
+    console.warn(
+      `[clio] post-judge artifact ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // Flip the iteration's history event to `completed` NOW, before
   // reflection starts. The dev and judge agents have both exited and

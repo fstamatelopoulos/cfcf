@@ -713,7 +713,75 @@ export async function ingestProblemPack(
 
 // ── Hook: iteration-log + iteration-handoff + judge-assessment (policy="all" only) ──
 
-export async function ingestRawIterationArtifacts(
+interface IterationArtifactTarget {
+  path: string;
+  title: string;
+  source: string;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Ingest one iteration-artifact target via the standard
+ * single-doc-per-iteration pattern. Idempotent (uses
+ * `--update-if-exists`) so calling this multiple times during an
+ * iteration is safe — re-runs no-op when content is unchanged + update
+ * the existing doc when content has grown / been edited.
+ *
+ * Item 6.35 follow-up (2026-05-10): split out from the original
+ * `ingestRawIterationArtifacts` batch so per-role hooks (after dev
+ * commit, after judge commit) can ingest just their own artifacts
+ * for real-time visibility — rather than waiting for the
+ * end-of-iteration batch.
+ */
+async function ingestSingleIterationArtifact(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  t: IterationArtifactTarget,
+): Promise<boolean> {
+  const content = await readIfExists(t.path);
+  if (!content || !content.trim()) return false;
+  try {
+    const requestor = actorForRole(workspace, String(t.metadata.role ?? "cfcf"));
+    const rawResult = await backend.ingest({
+      project: resolveClioProject(workspace),
+      title: t.title,
+      content,
+      author: requestor,
+      source: t.source,
+      // Idempotent: same title + same content → action="skipped" via
+      // sha256 dedup. Same title + different content (file grew) →
+      // updates the existing doc in place rather than creating a
+      // duplicate.
+      updateIfExists: true,
+      metadata: baseMetadata(workspace, t.metadata),
+    });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor,
+      documentId: rawResult.document?.id,
+      projectId: rawResult.document?.projectId,
+      extra: {
+        artifact_type: t.metadata.artifact_type,
+        iteration: t.metadata.iteration,
+        action: rawResult.action,
+      },
+    });
+    return true;
+  } catch (err) {
+    console.warn(
+      `[clio] iteration-artifact ingest failed (${t.source}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Ingest dev's iteration artifacts: iteration-log-N.md +
+ * iteration-handoff-N.md. Called immediately after the dev commit
+ * lands so the user sees activity in Clio in real time rather than
+ * waiting for end-of-iteration. Item 6.35 follow-up.
+ */
+export async function ingestDevIterationArtifacts(
   backend: MemoryBackend,
   workspace: WorkspaceConfig,
   iteration: number,
@@ -721,7 +789,7 @@ export async function ingestRawIterationArtifacts(
   const policy = await resolveIngestPolicy(workspace);
   if (policy !== "all") return 0;
 
-  const targets = [
+  const targets: IterationArtifactTarget[] = [
     {
       path: join(workspace.repoPath, "cfcf-docs", "iteration-logs", `iteration-${iteration}.md`),
       title: `${workspace.name}: iteration-log iter ${iteration}`,
@@ -734,45 +802,52 @@ export async function ingestRawIterationArtifacts(
       source: `cfcf-auto:iteration-handoff:iter-${iteration}`,
       metadata: { role: "dev", artifact_type: "iteration-handoff", tier: "episodic", iteration },
     },
-    {
-      path: join(workspace.repoPath, "cfcf-docs", "iteration-reviews", `iteration-${iteration}.md`),
-      title: `${workspace.name}: judge-assessment iter ${iteration}`,
-      source: `cfcf-auto:judge-assessment:iter-${iteration}`,
-      metadata: { role: "judge", artifact_type: "judge-assessment", tier: "episodic", iteration },
-    },
   ];
 
   let count = 0;
   for (const t of targets) {
-    const content = await readIfExists(t.path);
-    if (!content || !content.trim()) continue;
-    try {
-      const requestor = actorForRole(workspace, String(t.metadata.role ?? "cfcf"));
-      const rawResult = await backend.ingest({
-        project: resolveClioProject(workspace),
-        title: t.title,
-        content,
-        // Each `targets` entry has metadata.role identifying the
-        // role-bound artifact (dev/judge/architect/reflection/...).
-        author: requestor,
-        source: t.source,
-        metadata: baseMetadata(workspace, t.metadata),
-      });
-      recordInternalUsage(backend, {
-        operation: "ingest",
-        requestor,
-        documentId: rawResult.document?.id,
-        projectId: rawResult.document?.projectId,
-        extra: { artifact_type: t.metadata.artifact_type, iteration, action: rawResult.action },
-      });
-      count++;
-    } catch (err) {
-      console.warn(
-        `[clio] raw artifact ingest failed (${t.source}): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    if (await ingestSingleIterationArtifact(backend, workspace, t)) count++;
   }
   return count;
+}
+
+/**
+ * Ingest judge's iteration artifact: judge-assessment-N.md (archived
+ * to iteration-reviews/iteration-N.md). Called immediately after the
+ * judge commit lands. Item 6.35 follow-up.
+ */
+export async function ingestJudgeArtifact(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  iteration: number,
+): Promise<boolean> {
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy !== "all") return false;
+
+  return ingestSingleIterationArtifact(backend, workspace, {
+    path: join(workspace.repoPath, "cfcf-docs", "iteration-reviews", `iteration-${iteration}.md`),
+    title: `${workspace.name}: judge-assessment iter ${iteration}`,
+    source: `cfcf-auto:judge-assessment:iter-${iteration}`,
+    metadata: { role: "judge", artifact_type: "judge-assessment", tier: "episodic", iteration },
+  });
+}
+
+/**
+ * Backwards-compat: end-of-iteration safety-net batch. Calls both
+ * per-role helpers; each is idempotent via sha256 dedup. After the
+ * 6.35 refactor (per-role hooks fire after each commit), this is
+ * usually a no-op at end-of-iteration — every artifact has already
+ * been ingested. Kept as a defensive catch-all in case a per-role
+ * hook ever fails.
+ */
+export async function ingestRawIterationArtifacts(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  iteration: number,
+): Promise<number> {
+  const dev = await ingestDevIterationArtifacts(backend, workspace, iteration);
+  const judge = await ingestJudgeArtifact(backend, workspace, iteration);
+  return dev + (judge ? 1 : 0);
 }
 
 // ── Context preload: cfcf-docs/clio-relevant.md ───────────────────────────
