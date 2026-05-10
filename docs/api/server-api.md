@@ -244,7 +244,15 @@ Create a new workspace.
 
 List all workspaces.
 
-**Response:** `200 OK` -- Array of workspace configs, sorted by name.
+**Response:** `200 OK` -- Array of workspace configs, sorted by name. Each entry is enriched (since v0.24, F.22) with an additional read-only field:
+
+| Field | Type | Description |
+|---|---|---|
+| `activeAgent` | `"loop" \| "review" \| "document" \| "reflect" \| null` | Which agent (if any) is actively running on this workspace right now, computed server-side from the four runner state stores. `null` when nothing is running. **Priority order**: `loop` > `review` > `document` > `reflect` (loop wins when both happen to overlap during a brief race window). The `paused` loop state does NOT count as active — agents aren't running, the loop is waiting on the user. |
+
+The `activeAgent` field is intentionally absent on `GET /api/workspaces/:id` (the per-workspace endpoint), where the dedicated state objects (`/loop/status`, `/review/status`, `/document/status`, `/reflect/status`) are fetched separately.
+
+The web dashboard polls this endpoint every 5s and renders a pulse-animated chip ("● review running") on each card when `activeAgent` is non-null, alongside the loop-status `StatusBadge`.
 
 ---
 
@@ -252,7 +260,7 @@ List all workspaces.
 
 Get a workspace by ID or name (case-insensitive name match supported).
 
-**Response:** `200 OK` -- Workspace config object.
+**Response:** `200 OK` -- Workspace config object. Does NOT include the `activeAgent` enrichment from `GET /api/workspaces` — clients fetch the dedicated state endpoints (`/loop/status`, `/review/status`, `/document/status`, `/reflect/status`) instead.
 
 **Error:** `404` if not found.
 
@@ -592,6 +600,18 @@ The `sessionId` parameter is validated against `^pa-[A-Za-z0-9-]+$` to prevent p
 ---
 
 ## Solution Architect Review
+
+> **Standalone-agent state survives server restart (v0.24, F.23):** the
+> Review / Document / Reflect endpoints below back their state with a
+> per-workspace JSON file (`review-state.json` / `document-state.json` /
+> `reflect-state.json` under `<config-dir>/workspaces/<id>/`). On
+> server boot, in-memory caches are hydrated from disk and any state
+> still claiming an active phase (preparing / executing / collecting)
+> is automatically flipped to `failed` with reason `"Server restarted
+> while <runner> was running"`. So `/<runner>/status` post-restart
+> returns the right thing on the first poll instead of `404` while
+> the agent process (if it survived as an orphan) silently completes
+> in the background.
 
 ### POST /api/workspaces/:id/review
 

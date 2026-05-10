@@ -11,6 +11,141 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.24.0] -- 2026-05-10
+
+Five-phase release packaging up the v0.23.1 dogfood follow-ups: full
+status-tracking symmetry across all four agent surfaces (loop /
+review / document / reflect), Clio storage rationalisation that drops
+~20% of fragmented per-iteration docs to single growing artifacts,
+dashboard list-view active-agent indicator (F.22), and on-disk
+persistence for all three standalone-runner state stores so
+mid-flight UI never goes blank across server restart (F.23).
+
+Per-iteration commit messages on the `iteration-6/v0.24-status-clio-tracking`
+branch carry the detailed phase notes; the summary below is the
+user-facing changelog.
+
+### Added — F.22: dashboard active-agent indicator
+
+`workspace.status` (the on-disk loop-status field) only tracks the
+iteration loop. Standalone Review / Document / Reflect runs don't
+touch it by design — so a manual `cfcf reflect` against a `completed`
+workspace would show up on the dashboard list as just "completed", no
+hint that an agent was running. **v0.24**: `/api/workspaces` now
+enriches each workspace with `activeAgent: "loop" | "review" |
+"document" | "reflect" | null`, computed server-side from the four
+runner state stores. `WorkspaceCard` renders a pulse-animated chip
+("● review running") when non-null. The StatusBadge stays the source
+of truth for loop status; the chip is the source of truth for "an
+agent is alive right now".
+
+New `packages/core/src/active-agent.ts` exposes the helper
+(`getActiveAgent` / `getActiveAgentsForWorkspaces`) so the same
+priority resolution can be reused by future surfaces (CLI status,
+notification-channel filtering, etc.).
+
+### Added — F.23: standalone-agent state survives server restart
+
+Pre-v0.24 the three runners (`architect-runner`, `documenter-runner`,
+`reflection-runner`) kept state in module-level in-memory `Map`s. A
+server restart wiped them: agent processes (detached) might survive,
+but the harness had no record; the web UI's "review running" /
+"document running" / "reflect running" indicators vanished
+mid-flight; post-restart `getXxxState` returned undefined even when
+there was a meaningful prior result on disk worth surfacing.
+
+**v0.24** mirrors the existing `loop-state.json` pattern. Each runner
+write-throughs every status transition to a sibling file under
+`<config-dir>/workspaces/<id>/`:
+- `review-state.json` (architect-runner)
+- `document-state.json` (documenter-runner)
+- `reflect-state.json` (reflection-runner)
+
+On boot, three new hydrate hooks (`hydrateReviewStateStore`,
+`hydrateDocumentStateStore`, `hydrateReflectStateStore`) populate the
+in-memory caches from disk and flip any state still claiming an
+active status to `failed` with reason "Server restarted while …".
+Mirrors `cleanupStaleActiveLoops` + `cleanupStaleRunningEvents` for
+the loop + history surfaces. `getXxxState` stays sync — boot
+hydration ensures the cache is pre-populated, so the existing N
+callsites in `app.ts` don't need to become async.
+
+New `packages/core/src/agent-state-store.ts` exposes the underlying
+primitives (`persistAgentState`, `loadAgentState`,
+`cleanupStaleAgentStates`); each runner uses its own filename +
+active-status set. Disk writes are best-effort (in-memory write
+always succeeds; warns + continues on disk error).
+
+### Changed — Clio storage: decision-log + architect-review → single growing docs
+
+Real dogfood: a 5-iteration testgame run produced 37 Clio documents
+in the per-workspace project. Audit found two fragmentation problems:
+
+- **Decision log** was 7 separate documents, one per parsed entry,
+  for what's a single growing `cfcf-docs/decision-log.md` file on
+  disk. Search noise: "what decisions has this project made?"
+  returned N hits to read in chronological order. Lost narrative
+  continuity. Did not mirror the source-of-truth on disk.
+- **Architect-review** was 1 document per architect run (title
+  varied by readiness, source varied by trigger). Re-review-heavy
+  workspaces would accumulate dozens for a single living artifact.
+
+Both now follow the `plan.md` pattern: single document, stable title
+(`<workspace>: decision-log` / `<workspace>: architect-review`),
+stable source, `updateIfExists: true`. Audit trail lives in
+`clio_document_versions`. Decision-log per-entry headers (`## <ts>
+[role: …] [iter: N] [category: …]`) are preserved inside the doc's
+content — chunker + FTS still surface them for search. Doc-level
+metadata captures aggregates: `entry_count`, `categories[]`,
+`last_iter_updated` for decision-log; `readiness`, `last_trigger` for
+architect-review. `summaries-only` policy still honoured (filters
+semantic entries before assembling).
+
+`artifact_type` rename: `decision-log-entry` → `decision-log`. Agent
+prompts/templates that filter on the old value should be updated;
+existing per-entry-style docs from prior runs remain in Clio as
+historical clutter (use `cfcf clio docs delete` to clean if desired).
+
+Net effect on storage:
+- 5-iter run: 37 docs → ~30 docs (-19%)
+- 50-iter run: ~327 docs → ~258 docs (-21%)
+
+### Changed — Status-tracking symmetry across standalone agents
+
+Five symmetric fixes for the gaps that surfaced during the v0.23.1
+audit. Earlier versions only covered Review and Document; v0.24
+brings Reflect to parity.
+
+- **Stop Reflect button** in `LoopControls`. Pre-v0.24 a manual
+  reflect that the user kicked off by mistake had no kill switch in
+  the UI — `cfcf-server stop` or a `curl -X POST .../reflect/stop`
+  was the only escape. Now mirrors Stop Review / Stop Document.
+- **Workspace-detail header badge** falls through to `isReflectActive`
+  when neither loop nor review nor document is running (so a manual
+  reflect against a `completed` workspace shows "running" in the
+  header, not "completed").
+- **`PhaseIndicator` agent type**: new `"reflect"` value with a
+  three-phase array `[preparing, executing, collecting]`. Pre-v0.24
+  the else-branch silently fell through to documentPhases — wrong
+  labels at wrong moments.
+- **Workspace-detail Status panel**: new "Reflection in progress"
+  section parallel to Review / Document.
+- **`trulyEmpty` guard** now includes `reflectState`.
+- **Inline error banners** for `reviewState.error` /
+  `documentState.error` / `reflectState.error`. Pre-v0.24 these were
+  silently buried — only `loopState.error` rendered, and the next
+  standalone run replaced the in-memory state, hiding the prior
+  failure.
+
+### Backlog updates (`docs/plan.md`)
+
+- **F.22** — promoted to v0.24.0 (delivered; entry preserved with
+  delivery note).
+- **F.23** — promoted to v0.24.0 (delivered; entry preserved with
+  delivery note).
+- **F.24** — new entry: workspace-status writer trace investigation
+  (observability already in place, awaiting next repro).
+
 ## [0.23.1] -- 2026-05-10
 
 ### Fixed — install.sh + local-install.sh PID-file probe was wrong on macOS

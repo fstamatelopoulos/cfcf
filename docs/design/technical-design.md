@@ -93,9 +93,12 @@ The execution interface is designed so that swapping in a container backend does
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  <cfcf config dir>                                           │   │
 │  │    config.json               (global config, from cfcf init) │   │
-│  │    workspaces/<id>/config.json (per-workspace config)          │   │
-│  │    workspaces/<id>/loop-state.json   (persists across restarts)│   │
-│  │    workspaces/<id>/history.json      (all agent-run events)    │   │
+│  │    workspaces/<id>/config.json    (per-workspace config)       │   │
+│  │    workspaces/<id>/loop-state.json    (persists across restarts)│   │
+│  │    workspaces/<id>/history.json       (all agent-run events)   │   │
+│  │    workspaces/<id>/review-state.json  (F.23 v0.24 — Architect) │   │
+│  │    workspaces/<id>/document-state.json (F.23 v0.24 — Documenter)│   │
+│  │    workspaces/<id>/reflect-state.json (F.23 v0.24 — Reflection)│   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
