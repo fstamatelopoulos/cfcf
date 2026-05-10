@@ -273,6 +273,8 @@ Metadata is JSON, queryable via SQLite's JSON1 `json_extract`. Clio is **agent-f
 
 | Value | Source | Written by | Tier default |
 |---|---|---|---|
+| `problem-pack` | cf² auto | user | semantic (one doc per file; problem.md / success.md / constraints.md / hints.md / style-guide.md) |
+| `context-doc` | cf² auto (v0.24) | user | semantic (one doc per file under `<repo>/context-pack/**.md`; user-supplied freeform reference material) |
 | `iteration-log` | cf² auto | dev | episodic |
 | `iteration-handoff` | cf² auto | dev | episodic |
 | `judge-assessment` | cf² auto | judge | episodic |
@@ -306,6 +308,8 @@ A knob: `clio.ingestPolicy` on `CfcfGlobalConfig` / `ProjectConfig` with values 
 
 | Trigger | What is ingested | Metadata highlights |
 |---|---|---|
+| `workspace-init` / `iteration-start` / `post-architect` / `pa-session-end` (sha256 dedup → unchanged is a free no-op) | `<repo>/problem-pack/*.md` (5 canonical files) | role=user, artifact_type=problem-pack, tier=semantic — one doc per file |
+| `workspace-init` / `iteration-start` / `post-architect` / `pa-session-end` (F.27, v0.24) | `<repo>/context-pack/**/*.md` (recursive walk; user-supplied reference material — design directions, research, ADRs, domain notes) | role=user, artifact_type=context-doc, tier=semantic — one doc per file; size >1MB warns, >10MB skipped |
 | End of REFLECT phase (post-commit) | `cfcf-docs/reflection-analysis.md` | role=reflection, artifact_type=reflection-analysis, tier=semantic |
 | End of ARCHITECT review | `cfcf-docs/architect-review.md` — **single growing doc** (stable title `<workspace>: architect-review`, `updateIfExists: true` since v0.24). | role=architect, artifact_type=architect-review, tier=semantic, doc-level: readiness, last_trigger, last_updated_at |
 | Any `decision-log.md` change (when at least one `[category: lesson]`, `[category: strategy]`, `[category: resolved-question]`, or `[category: risk]` entry exists) | The whole `decision-log.md` filtered to keep only semantic entries — **single growing doc** (stable title `<workspace>: decision-log`, `updateIfExists: true` since v0.24; per-entry headers preserved inside content, doc-level metadata aggregates entries) | role=cfcf, artifact_type=decision-log, tier=semantic, doc-level: entry_count, categories[], last_iter_updated, last_updated_at |

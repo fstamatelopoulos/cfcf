@@ -769,6 +769,250 @@ export async function ingestProblemPack(
   return result;
 }
 
+// ── Hook: context-pack/ user-supplied reference docs (F.27, v0.24) ────────
+
+/**
+ * Soft warning size: files above this land as 50+ chunks each, which
+ * starts to dominate per-search embedder cost. We still ingest but log
+ * a one-line warning so the user can decide to split the file.
+ */
+const CONTEXT_PACK_WARN_SIZE_BYTES = 1_000_000; // 1 MB
+
+/**
+ * Hard skip size: above this we refuse to ingest. Protects Clio from
+ * accidental binary / log dumps that someone drops into context-pack/.
+ * A 10 MB markdown file is clearly not what the directory is for.
+ */
+const CONTEXT_PACK_SKIP_SIZE_BYTES = 10_000_000; // 10 MB
+
+/**
+ * File extensions auto-ingested from `context-pack/`. Markdown only for
+ * now — the Clio chunker is tuned for it. Extending to `.txt` / `.rst`
+ * / `.pdf` is a future task; would need chunker validation.
+ */
+const CONTEXT_PACK_EXTENSIONS = [".md"] as const;
+
+export interface ContextPackIngestResult {
+  /** Number of files newly created OR materially updated. */
+  ingested: number;
+  /** Files where the on-disk sha256 matched the live Clio doc (no-op). */
+  skipped: number;
+  /** Files refused due to the 10 MB hard skip. */
+  oversized: number;
+  /** Per-file detail for tests / logging. */
+  perFile: Array<{
+    relpath: string;
+    action: "created" | "updated" | "skipped" | "oversized" | "failed";
+    sizeBytes: number;
+    documentId?: string;
+    error?: string;
+  }>;
+}
+
+/**
+ * Recursively list markdown files under a root, returning relative paths.
+ * Skips dotfiles + dot-directories so `context-pack/.git/`,
+ * `context-pack/.DS_Store` etc. never leak in. Skips symlinks for
+ * safety (a misconfigured symlink could pull in arbitrary disk).
+ */
+async function listContextPackFiles(
+  root: string,
+): Promise<Array<{ relpath: string; absPath: string; sizeBytes: number }>> {
+  const { readdir, stat } = await import("node:fs/promises");
+  const out: Array<{ relpath: string; absPath: string; sizeBytes: number }> = [];
+  async function walk(dir: string, prefix: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // dir doesn't exist or perm-denied; treat as empty
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue; // dotfiles / hidden dirs
+      const abs = join(dir, e.name);
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        await walk(abs, rel);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const ext = e.name.slice(e.name.lastIndexOf(".")).toLowerCase();
+      if (!CONTEXT_PACK_EXTENSIONS.includes(ext as ".md")) continue;
+      try {
+        const st = await stat(abs);
+        out.push({ relpath: rel, absPath: abs, sizeBytes: st.size });
+      } catch {
+        // Race: file was deleted between readdir + stat. Skip.
+      }
+    }
+  }
+  await walk(root, "");
+  out.sort((a, b) => a.relpath.localeCompare(b.relpath)); // deterministic
+  return out;
+}
+
+/**
+ * Ingest the workspace's user-supplied reference docs under
+ * `<repo>/context-pack/` into Clio. One doc per .md file, identified by
+ * title `<workspace>: context-pack/<relpath>` and source
+ * `cfcf-auto:context-pack:<relpath>` (stable per file across triggers).
+ * Idempotent: `updateIfExists: true` + the backend's sha256 dedup means
+ * unchanged content is a single SQL lookup.
+ *
+ * Surfaced 2026-05-10 (F.27): user ran PA on a project where they had
+ * a freeform design-direction.md sitting outside the formal problem-
+ * pack/. PA could find it on disk but Clio's search couldn't — the
+ * doc wasn't in any auto-ingest path. `context-pack/` is the
+ * conventional location for those freeform docs going forward; this
+ * function picks them up.
+ *
+ * Trigger points (mirrors `ingestProblemPack`):
+ *   - `iteration-start`: every iteration's pre-dev hook
+ *   - `post-architect`: after a successful architect review (SA may
+ *     produce a synthesis doc the user drops into context-pack/)
+ *   - `pa-session-end`: PA launcher's session-end hook (PA may edit
+ *     or create context-pack/ docs during its session)
+ *   - `workspace-init`: catches docs already present at workspace
+ *     registration time
+ *
+ * Subject to the same `clio.ingestPolicy` gate as other auto-ingests.
+ *
+ * Size limits: files >1 MB log a warning (large semantic chunks can
+ * dominate embedder cost); files >10 MB are refused entirely (more
+ * likely a misplaced binary / log dump than a real reference doc).
+ *
+ * Best-effort: any single-file failure is logged + the loop continues.
+ * Returns a summary the caller can surface.
+ */
+export async function ingestContextPack(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger:
+    | "workspace-init"
+    | "iteration-start"
+    | "post-architect"
+    | "pa-session-end"
+    | "pa-boot-reconcile"
+    | "manual",
+  actorOverride?: string,
+): Promise<ContextPackIngestResult> {
+  const result: ContextPackIngestResult = {
+    ingested: 0,
+    skipped: 0,
+    oversized: 0,
+    perFile: [],
+  };
+
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return result;
+
+  const root = join(workspace.repoPath, "context-pack");
+  const files = await listContextPackFiles(root);
+  if (files.length === 0) return result; // directory missing or empty — no-op
+
+  const project = resolveClioProject(workspace);
+  // Same two-layer attribution as problem-pack: user is the semantic
+  // owner of these docs (it's THEIR reference material), the writer is
+  // either cfcf-system or the role that triggered the ingest.
+  const author = actorOverride ?? actorForRole(workspace, "user");
+
+  for (const f of files) {
+    if (f.sizeBytes > CONTEXT_PACK_SKIP_SIZE_BYTES) {
+      console.warn(
+        `[clio] context-pack skipping oversize file ${f.relpath} (${(f.sizeBytes / 1_000_000).toFixed(1)} MB > 10 MB limit). Drop the file or split it if its content is real reference material.`,
+      );
+      result.oversized++;
+      result.perFile.push({
+        relpath: f.relpath,
+        action: "oversized",
+        sizeBytes: f.sizeBytes,
+      });
+      continue;
+    }
+    if (f.sizeBytes > CONTEXT_PACK_WARN_SIZE_BYTES) {
+      console.warn(
+        `[clio] context-pack: ${f.relpath} is ${(f.sizeBytes / 1_000_000).toFixed(1)} MB — will produce 50+ chunks and may dominate per-search embedder cost. Consider splitting.`,
+      );
+    }
+
+    const content = await readIfExists(f.absPath);
+    if (!content || !content.trim()) {
+      // Empty markdown — skip silently, neither warning nor stat.
+      continue;
+    }
+
+    try {
+      const ingestResult = await backend.ingest({
+        project,
+        title: `${workspace.name}: context-pack/${f.relpath}`,
+        content,
+        author,
+        source: `cfcf-auto:context-pack:${f.relpath}`,
+        updateIfExists: true,
+        metadata: baseMetadata(workspace, {
+          role: "user",
+          artifact_type: "context-doc",
+          relpath: f.relpath,
+          file_size: f.sizeBytes,
+          tier: "semantic",
+          ingest_trigger: trigger,
+          // Note: deliberately no `last_ingested_at` here — mirrors
+          // problem-pack metadata shape. If we included a timestamp
+          // that changes on every call, the backend would treat every
+          // re-ingest as an update + bump version, defeating sha256
+          // dedup. The `clio_usage_log` records each ingest event
+          // separately with its own timestamp, so the audit trail is
+          // intact regardless.
+        }),
+      });
+
+      const action = ingestResult.action;
+      if (action === "skipped") {
+        result.skipped++;
+        result.perFile.push({
+          relpath: f.relpath,
+          action: "skipped",
+          sizeBytes: f.sizeBytes,
+          documentId: ingestResult.document?.id,
+        });
+      } else {
+        result.ingested++;
+        result.perFile.push({
+          relpath: f.relpath,
+          action: action as "created" | "updated",
+          sizeBytes: f.sizeBytes,
+          documentId: ingestResult.document?.id,
+        });
+      }
+
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor: author,
+        documentId: ingestResult.document?.id,
+        projectId: ingestResult.document?.projectId,
+        extra: {
+          artifact_type: "context-doc",
+          relpath: f.relpath,
+          ingest_trigger: trigger,
+          action,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[clio] context-pack ingest failed for ${f.relpath}: ${msg}`);
+      result.perFile.push({
+        relpath: f.relpath,
+        action: "failed",
+        sizeBytes: f.sizeBytes,
+        error: msg,
+      });
+    }
+  }
+
+  return result;
+}
+
 // ── Hook: iteration-log + iteration-handoff + judge-assessment (policy="all" only) ──
 
 interface IterationArtifactTarget {

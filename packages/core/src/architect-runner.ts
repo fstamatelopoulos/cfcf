@@ -567,8 +567,9 @@ async function runReview(
     // Clio ingest (item 5.7 PR3): auto-ingest user-invoked `cfcf review`
     // architect-review.md. Failures are swallowed -- never break a review.
     try {
-      const { getClioBackend, ingestArchitectReview, ingestPlanMd, formatClioActor } = await import("./clio/index.js");
+      const { getClioBackend, ingestArchitectReview, ingestPlanMd, ingestContextPack, formatClioActor } = await import("./clio/index.js");
       const backend = getClioBackend();
+      const architectActor = formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model);
       await ingestArchitectReview(backend, workspace, "manual", signals?.readiness);
       // Item 6.35 follow-up (2026-05-10): SA writes plan.md too, not just
       // architect-review.md. Mirror the plan to Clio with the SA actor
@@ -577,8 +578,15 @@ async function runReview(
         backend,
         workspace,
         "post-architect",
-        formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model),
+        architectActor,
       );
+      // F.27 (v0.24): SA may produce / point at a synthesis doc the
+      // user wants searchable (e.g. a "what the constraints really
+      // imply" walkthrough). Re-scan `context-pack/` so any edits the
+      // SA hinted at or directly made land in Clio without waiting
+      // for the next iteration. sha256 dedup → unchanged files are
+      // a no-op.
+      await ingestContextPack(backend, workspace, "post-architect", architectActor);
     } catch (err) {
       console.warn(`[clio] manual architect post-run ingest failed: ${err instanceof Error ? err.message : String(err)}`);
     }

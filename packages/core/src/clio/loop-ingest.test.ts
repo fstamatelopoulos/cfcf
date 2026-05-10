@@ -18,6 +18,7 @@ import {
   ingestRawIterationArtifacts,
   writeClioRelevant,
   ingestProblemPack,
+  ingestContextPack,
   ingestPlanMd,
   ingestDevIterationArtifacts,
   ingestJudgeArtifact,
@@ -903,5 +904,128 @@ describe("ingestJudgeArtifact", () => {
     const ws = makeWorkspace();
     const ok = await ingestJudgeArtifact(clio, ws, 99);
     expect(ok).toBe(false);
+  });
+});
+
+// ── ingestContextPack (F.27, v0.24) ──────────────────────────────────────
+
+describe("ingestContextPack", () => {
+  it("returns an empty result when context-pack/ doesn't exist", async () => {
+    const ws = makeWorkspace();
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(0);
+    expect(r.skipped).toBe(0);
+    expect(r.oversized).toBe(0);
+    expect(r.perFile).toEqual([]);
+  });
+
+  it("returns an empty result when context-pack/ exists but is empty", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(0);
+    expect(r.perFile).toEqual([]);
+  });
+
+  it("ingests a single .md file as a context-doc", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    await writeFile(
+      join(ws.repoPath, "context-pack", "design-direction.md"),
+      "# Design direction\n\nWe pick a TUI with blessed.\n",
+      "utf-8",
+    );
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(1);
+    expect(r.perFile[0].relpath).toBe("design-direction.md");
+    expect(r.perFile[0].action).toBe("created");
+
+    const docs = await clio.listDocuments({ project: "test-project", limit: 50 });
+    const ctxDoc = docs.find((d) => d.metadata.artifact_type === "context-doc");
+    expect(ctxDoc).toBeDefined();
+    expect(ctxDoc!.title).toBe(`${ws.name}: context-pack/design-direction.md`);
+    expect(ctxDoc!.metadata.relpath).toBe("design-direction.md");
+    expect(ctxDoc!.metadata.role).toBe("user");
+    expect(ctxDoc!.metadata.tier).toBe("semantic");
+  });
+
+  it("walks subdirectories recursively and preserves relpath", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack", "research", "competitors"), { recursive: true });
+    await writeFile(join(ws.repoPath, "context-pack", "overview.md"), "# Overview\n", "utf-8");
+    await writeFile(
+      join(ws.repoPath, "context-pack", "research", "competitors", "snake-classic.md"),
+      "# Snake (classic Nokia)\n",
+      "utf-8",
+    );
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(2);
+    const paths = r.perFile.map((p) => p.relpath).sort();
+    expect(paths).toEqual(["overview.md", "research/competitors/snake-classic.md"]);
+  });
+
+  it("filters non-markdown files (CONTEXT_PACK_EXTENSIONS = ['.md'])", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    await writeFile(join(ws.repoPath, "context-pack", "notes.md"), "# Notes\n", "utf-8");
+    await writeFile(join(ws.repoPath, "context-pack", "data.txt"), "raw\n", "utf-8");
+    await writeFile(join(ws.repoPath, "context-pack", "diagram.png"), "fake-binary", "utf-8");
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(1);
+    expect(r.perFile[0].relpath).toBe("notes.md");
+  });
+
+  it("skips dotfiles and dot-directories (so .git etc. doesn't leak in)", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack", ".git"), { recursive: true });
+    await writeFile(join(ws.repoPath, "context-pack", ".git", "HEAD.md"), "stray\n", "utf-8");
+    await writeFile(join(ws.repoPath, "context-pack", ".secret.md"), "shh\n", "utf-8");
+    await writeFile(join(ws.repoPath, "context-pack", "ok.md"), "# OK\n", "utf-8");
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(1);
+    expect(r.perFile[0].relpath).toBe("ok.md");
+  });
+
+  it("is idempotent — re-ingest of unchanged content reports skipped, not duplicated", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    await writeFile(join(ws.repoPath, "context-pack", "stable.md"), "# Stable\n", "utf-8");
+
+    const first = await ingestContextPack(clio, ws, "iteration-start");
+    expect(first.ingested).toBe(1);
+
+    const second = await ingestContextPack(clio, ws, "iteration-start");
+    expect(second.ingested).toBe(0);
+    expect(second.skipped).toBe(1);
+
+    // One doc total, not two.
+    const docs = await clio.listDocuments({ project: "test-project", limit: 50 });
+    const ctxDocs = docs.filter((d) => d.metadata.artifact_type === "context-doc");
+    expect(ctxDocs).toHaveLength(1);
+  });
+
+  it("updates an existing doc when content changes (updateIfExists semantics)", async () => {
+    const ws = makeWorkspace();
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    const path = join(ws.repoPath, "context-pack", "draft.md");
+
+    await writeFile(path, "# Draft v1\n", "utf-8");
+    const first = await ingestContextPack(clio, ws, "iteration-start");
+    expect(first.perFile[0].action).toBe("created");
+    const firstId = first.perFile[0].documentId!;
+
+    await writeFile(path, "# Draft v2 (revised)\n", "utf-8");
+    const second = await ingestContextPack(clio, ws, "iteration-start");
+    expect(second.perFile[0].action).toBe("updated");
+    expect(second.perFile[0].documentId).toBe(firstId); // same doc, version bumped
+  });
+
+  it("respects clio.ingestPolicy === 'off' (no-op)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "off" } });
+    await mkdir(join(ws.repoPath, "context-pack"), { recursive: true });
+    await writeFile(join(ws.repoPath, "context-pack", "x.md"), "# X\n", "utf-8");
+    const r = await ingestContextPack(clio, ws, "iteration-start");
+    expect(r.ingested).toBe(0);
+    expect(r.perFile).toEqual([]);
   });
 });

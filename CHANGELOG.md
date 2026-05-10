@@ -13,7 +13,7 @@ _No changes yet._
 
 ## [0.24.0] -- 2026-05-10
 
-Six-phase release packaging up the v0.23.1 dogfood follow-ups: full
+Seven-phase release packaging up the v0.23.1 dogfood follow-ups: full
 status-tracking symmetry across all four agent surfaces (loop /
 review / document / reflect), Clio storage rationalisation that drops
 ~20% of fragmented per-iteration docs to single growing artifacts,
@@ -136,6 +136,65 @@ brings Reflect to parity.
   silently buried — only `loopState.error` rendered, and the next
   standalone run replaced the in-memory state, hiding the prior
   failure.
+
+### Added — F.27: auto-ingest `<repo>/context-pack/` user-supplied reference docs
+
+User feedback (~/src/gmbot): "I had a large md document with the
+concept and initial design direction. Such documents are not
+covered by our cfcf ingestion policy but it is clearly useful."
+The PA ingested it manually at user request; v0.24 makes that
+automatic.
+
+**Convention.** A new `<repo>/context-pack/` directory (parallel
+sibling to `problem-pack/`). Anything-goes markdown lives here:
+design directions, research findings, competitive analyses,
+domain-knowledge dumps, meeting notes the agents should index.
+cf² walks it recursively + auto-ingests every `.md` file as a
+`context-doc` Clio document.
+
+**Hooks** (same cadence as `ingestProblemPack`):
+- `iteration-start` — every iteration's pre-dev hook
+- `post-architect` — after a successful manual `cfcf review` or
+  web Review-button run (SA may have produced a synthesis doc)
+- `pa-session-end` — PA launcher's session-end (PA's gmbot use
+  case — the agent edits / creates `context-pack/` docs during
+  the session)
+- `workspace-init` — catches docs already present at registration
+
+**Clio shape** — one doc per markdown file:
+- title: `<workspace>: context-pack/<relpath>`
+- source: `cfcf-auto:context-pack:<relpath>` (stable across triggers)
+- artifact_type: `context-doc`
+- role: `user` (semantic owner — these are the user's reference
+  material; writer attribution via author stamp)
+- tier: `semantic`
+- metadata: `relpath`, `file_size`, `ingest_trigger`
+- `updateIfExists: true` + sha256 dedup → unchanged files are
+  free no-ops; content edits land as version snapshots in
+  `clio_document_versions`
+
+**Safety limits.** Files >1 MB log a one-line warning (large
+semantic chunks dominate per-search embedder cost); files >10 MB
+are refused entirely (likely a misplaced binary / log dump,
+not real reference material). Dotfiles + dot-directories
+(`context-pack/.git/`, `.secret.md`, etc.) skipped. Symlinks
+ignored. Non-`.md` files ignored (extensible to `.txt` / `.pdf`
+later when chunker support is validated).
+
+**Backward compat.** Workspaces without a `context-pack/`
+directory are no-ops — zero new disk artifacts, zero behaviour
+change.
+
+**Agent integration.** The bundled `clio-guide.md` template
+(read by all iteration roles) now points agents at
+`context-pack/` as the conventional location for workspace-scoped
+reference docs.
+
+8 unit tests in `loop-ingest.test.ts`: empty dir / missing dir
+(no-op); single .md ingested as context-doc; recursive walk
+preserves relpath; non-.md filtered; dotfiles + dot-dirs
+skipped; sha256 dedup on re-ingest (idempotent); updateIfExists
+on content change; `policy: "off"` respected.
 
 ### Added — F.1: standalone runners now commit their on-disk outputs
 

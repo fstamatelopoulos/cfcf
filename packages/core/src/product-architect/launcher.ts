@@ -702,7 +702,7 @@ export async function fallbackIngestPaSessionArchive(opts: {
     const all = await listWorkspaces();
     const ws = all.find((x) => x.id === opts.workspaceId);
     if (ws) {
-      const { ingestProblemPack } = await import("../clio/loop-ingest.js");
+      const { ingestProblemPack, ingestContextPack } = await import("../clio/loop-ingest.js");
       const ppResult = await ingestProblemPack(
         getClioBackend(),
         ws,
@@ -712,6 +712,24 @@ export async function fallbackIngestPaSessionArchive(opts: {
       if (ppResult.ingested > 0) {
         console.error(
           `[pa] also refreshed ${ppResult.ingested} problem-pack file(s) in Clio (${ppResult.skipped} unchanged, ${ppResult.missing} not on disk).`,
+        );
+      }
+      // F.27 (v0.24): PA may have created / edited freeform reference
+      // docs in `context-pack/` during the session. Push them to Clio
+      // alongside the problem-pack so the next iteration's search +
+      // sibling-workspace lookups see them immediately. Triggered the
+      // feature: user ran PA on ~/src/gmbot, dropped a large design-
+      // direction.md there, wanted it searchable. Same dedup +
+      // best-effort semantics as problem-pack.
+      const cpResult = await ingestContextPack(
+        getClioBackend(),
+        ws,
+        "pa-session-end",
+        actor,
+      );
+      if (cpResult.ingested > 0) {
+        console.error(
+          `[pa] also refreshed ${cpResult.ingested} context-pack doc(s) in Clio (${cpResult.skipped} unchanged${cpResult.oversized > 0 ? `, ${cpResult.oversized} oversized` : ""}).`,
         );
       }
     }

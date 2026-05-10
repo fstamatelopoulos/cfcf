@@ -45,6 +45,7 @@ import {
   ingestReflectionAnalysis,
   ingestArchitectReview,
   ingestProblemPack,
+  ingestContextPack,
   ingestPlanMd,
   ingestDevIterationArtifacts,
   ingestJudgeArtifact,
@@ -1446,6 +1447,15 @@ async function runLoop(
       await ingestProblemPack(getClioBackend(), workspace, "iteration-start");
     } catch (err) {
       console.warn(`[clio] problem-pack ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // F.27 (v0.24): also refresh `context-pack/` (user-supplied
+    // reference docs). Same dedup-makes-unchanged-files-no-op semantics
+    // as problem-pack; safe to call every iteration.
+    try {
+      await ingestContextPack(getClioBackend(), workspace, "iteration-start");
+    } catch (err) {
+      console.warn(`[clio] context-pack ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Item 6.35 follow-up: also refresh plan.md. Captures dev's `[x]`

@@ -57,15 +57,24 @@ already figured out and you picking up where they left off.
    the **problem-pack files** (`problem.md`, `success.md`,
    `constraints.md`, `hints.md`, `style-guide.md`; refreshed each
    iteration with sha256-dedup so unchanged files are no-ops),
-   iteration logs, iteration handoffs, judge assessments, reflection
-   analyses, architect reviews, decision-log entries, and end-of-
+   any markdown files under **`context-pack/`** (the user's freeform
+   reference docs — design directions, research notes, competitive
+   analyses, etc.; recursive walk, also sha256-deduped), iteration
+   logs, iteration handoffs, judge assessments, reflection analyses,
+   architect reviews, a single growing decision-log per workspace
+   (was per-entry pre-v0.24; now mirrors the on-disk file as one doc
+   with the per-entry headers preserved inside content), and end-of-
    iteration summaries (gated by `workspace.clio.ingestPolicy`,
    default `all`). You don't need to re-ingest those. **Do** ingest
    anything *outside* the canonical artifact set that future you (or
    future siblings) will want — cross-cutting design notes, an ADR
-   you wrote, a research finding, a domain-knowledge dump. Use
-   metadata `artifact_type: "design-guideline"` /
-   `"domain-knowledge"` / `"research-note"` / `"adr"` etc.
+   you wrote, a research finding, a domain-knowledge dump. If the
+   doc is reference material for THIS workspace, the simplest path
+   is to write it into `<repo>/context-pack/<name>.md`; cf² will
+   pick it up at the next iteration-start, post-architect, or
+   post-PA-session. Otherwise use metadata
+   `artifact_type: "design-guideline"` / `"domain-knowledge"` /
+   `"research-note"` / `"adr"` etc.
 
 7. **Always pass `--update-if-exists` on every ingest.** This flag
    makes ingest "update if a doc with the same title already exists
@@ -163,7 +172,7 @@ in its own instructions file. The patterns below are the defaults:
 | Key             | Values                                                              |
 |-----------------|---------------------------------------------------------------------|
 | `role`          | `dev` · `judge` · `architect` · `reflection` · `documenter` · `pa` · `ha` · `user` · `cfcf` |
-| `artifact_type` | `problem-pack` · `iteration-log` · `iteration-handoff` · `judge-assessment` · `reflection-analysis` · `architect-review` · `decision-log-entry` · `iteration-summary` · `workspace-memory` · `session-archive` · `design-guideline` · `domain-knowledge` · `research-note` · `adr` · `onboarding` · `reference` · `note` · or any user-supplied string |
+| `artifact_type` | `problem-pack` · `context-doc` (v0.24, user-supplied refs under `context-pack/`) · `iteration-log` · `iteration-handoff` · `judge-assessment` · `reflection-analysis` · `architect-review` · `decision-log` (v0.24, single growing doc — was `decision-log-entry` per-entry pre-v0.24) · `iteration-summary` · `workspace-memory` · `session-archive` · `design-guideline` · `domain-knowledge` · `research-note` · `adr` · `onboarding` · `reference` · `note` · or any user-supplied string |
 | `filename`      | for `problem-pack` docs: which file (`problem.md` / `success.md` / `constraints.md` / `hints.md` / `style-guide.md`) |
 | `tier`          | `semantic` (curated, cross-iteration transfer-friendly) · `episodic` (raw trace) |
 | `iteration`     | integer — for iteration-scoped artefacts                            |
