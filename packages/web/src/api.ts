@@ -762,6 +762,95 @@ export interface ClioMetadataKey {
   sampleValues: (string | number | boolean)[];
 }
 
+// ── Usage log (item 6.35; backend shipped in 6.9) ────────────────────
+
+/**
+ * One row of `clio_usage_log`. Mirrors `UsageLogRow` in `@cfcf/core`'s
+ * `usage-log.ts`. Captures BOTH reads and writes — the parallel lens
+ * to `clio_audit_log` (which only records mutations).
+ */
+export interface ClioUsageRow {
+  id: number;
+  loggedAt: string;
+  /** Operation name; matches the canonical `UsageOperation` set. */
+  operation: string;
+  /** `cli` | `agent-cli` | `web` | `internal` — where the call came from. */
+  accessPath: string;
+  /** Free-form actor stamp; `<role>|<adapter>|<model>` or `user` or null. */
+  requestor: string | null;
+  documentId: string | null;
+  projectId: string | null;
+  /** For search / metadata-search: the query string. NULL otherwise. */
+  queryText: string | null;
+  /** For reads: hit count. For writes: typically null. */
+  resultCount: number | null;
+  extra: Record<string, unknown> | null;
+}
+
+/**
+ * Aggregate response from `GET /api/clio/usage/summary`. Mirrors
+ * Cerefox `cerefox_usage_summary` JSON shape.
+ */
+export interface ClioUsageSummary {
+  totalCount: number;
+  opsByDay: Array<{ day: string; count: number }>;
+  opsByOperation: Array<{ operation: string; count: number }>;
+  opsByAccessPath: Array<{ accessPath: string; count: number }>;
+  opsByRequestor: Array<{ requestor: string; count: number }>;
+  topDocuments: Array<{ documentId: string; docTitle: string | null; count: number }>;
+}
+
+/**
+ * Fetch usage-log entries with optional filters. Mirrors the shape of
+ * `cfcf clio usage list`.
+ */
+export function fetchClioUsageLog(
+  opts: {
+    operation?: string;
+    accessPath?: string;
+    requestor?: string;
+    reads?: boolean;
+    writes?: boolean;
+    zeroHits?: boolean;
+    documentId?: string;
+    projectId?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+  } = {},
+): Promise<ClioUsageRow[]> {
+  const params = new URLSearchParams();
+  if (opts.operation) params.set("operation", opts.operation);
+  if (opts.accessPath) params.set("access_path", opts.accessPath);
+  if (opts.requestor) params.set("requestor", opts.requestor);
+  if (opts.reads) params.set("reads", "true");
+  if (opts.writes) params.set("writes", "true");
+  if (opts.zeroHits) params.set("zero_hits", "true");
+  if (opts.documentId) params.set("document_id", opts.documentId);
+  if (opts.projectId) params.set("project_id", opts.projectId);
+  if (opts.since) params.set("since", opts.since);
+  if (opts.until) params.set("until", opts.until);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<{ entries: ClioUsageRow[] }>(`/api/clio/usage${qs ? `?${qs}` : ""}`).then(
+    (r) => r.entries,
+  );
+}
+
+/**
+ * Fetch the aggregated usage summary. Powers the dashboard panel.
+ */
+export function fetchClioUsageSummary(
+  opts: { since?: string; until?: string; projectId?: string } = {},
+): Promise<ClioUsageSummary> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set("since", opts.since);
+  if (opts.until) params.set("until", opts.until);
+  if (opts.projectId) params.set("project_id", opts.projectId);
+  const qs = params.toString();
+  return request<ClioUsageSummary>(`/api/clio/usage/summary${qs ? `?${qs}` : ""}`);
+}
+
 export function fetchClioMetadataKeys(project?: string): Promise<ClioMetadataKey[]> {
   const params = project ? `?project=${encodeURIComponent(project)}` : "";
   return request<{ keys: ClioMetadataKey[] }>(`/api/clio/metadata-keys${params}`).then((r) => r.keys);

@@ -9,6 +9,41 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Item 6.35: Web UI viewer for clio_audit_log + clio_usage_log
+
+The Memory page gains a **Usage** tab sibling to the existing Audit
+tab. The two now cover the full Clio observability surface: Audit =
+mutation history (the "what changed" lens, sourced from
+`clio_audit_log`); Usage = operational lens (the "what ran" lens,
+sourced from `clio_usage_log` — both reads and writes with
+`access_path`, `requestor`, `query_text`, `result_count`).
+
+- **Usage tab** with summary dashboard + filter form + entry table.
+  Filters mirror the `cfcf clio usage list` CLI flags: operation /
+  access_path / requestor / reads-only / writes-only / zero-hits /
+  since / until. Color-coded operation + access-path badges so
+  cli-vs-agent-cli-vs-web traffic is visually scannable. Newest-
+  first, 100 rows per page.
+- **Summary dashboard** consumes `GET /api/clio/usage/summary` —
+  five cards (total events, by operation, by access path, top
+  requestors, top documents). Re-fetches when the since/until window
+  changes.
+- **Per-document drilldown** in `DocumentDetail`: new "Usage history
+  (reads + writes)" accordion section sibling to the existing Audit
+  trail. Lazy-loaded via `fetchClioUsageLog({ documentId })` on
+  open. Captures every read + write that mentions this doc — agent
+  searches that surfaced it, direct `cfcf clio docs get` calls, the
+  ingests that created/updated it, etc.
+- **API client**: new `fetchClioUsageLog()` + `fetchClioUsageSummary()`
+  in `packages/web/src/api.ts` mirroring `fetchClioAuditLog()`.
+  Types: `ClioUsageRow`, `ClioUsageSummary`.
+- **Routing**: `MemoryTab` extended with `"usage"`; `parseRouteHash`
+  accepts `?tab=usage` + the standard `&doc=<id>` overlay. Two new
+  unit tests pin the route handling.
+- **No CLI work**: the usage-log CLI verbs (`cfcf clio usage list` +
+  `cfcf clio usage summary`) shipped in 6.9. This release is purely
+  the web UI surface.
+
 ### Added — Item 6.9 follow-up: auto-ingest problem-pack files
 
 - **`ingestProblemPack()`** in `loop-ingest.ts` ingests the five
