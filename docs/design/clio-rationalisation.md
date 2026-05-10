@@ -1,7 +1,8 @@
 # Item 6.9 — Rationalising Clio usage across agent roles
 
 > Design doc for item 6.9. Started 2026-05-09 on
-> `iteration-6/clio-rationalisation-6.9`.
+> `iteration-6/clio-rationalisation-6.9`. **All open questions
+> resolved 2026-05-09**; implementation can proceed.
 
 ## Problem
 
@@ -122,10 +123,11 @@ name. The user's brainstorm has these baked in:
   iterations and multiple `cfcf run` sessions over the lifetime of
   the workspace.
 - Examples: design constraints discovered while solving this problem,
-  failed approaches that didn't work in this codebase, the
-  user's specific quirks for THIS project ("user wants tests
-  co-located, not in `__tests__/`"), patterns the dev figured out in
-  iteration 3 that iteration 8 needs to remember.
+  failed approaches that didn't work in this codebase, the user's
+  specific quirks for THIS project ("user wants tests co-located, not
+  in `__tests__/`"), patterns the dev figured out in iteration 3 that
+  iteration 8 needs to remember, AND **PA's per-workspace memory file**
+  (`PA-memory.md`, see "PA / HA memory simplification" below).
 - Read by: every role in the workspace, on every iteration.
 - Written by: any role when the knowledge is workspace-bound.
 
@@ -138,9 +140,55 @@ name. The user's brainstorm has these baked in:
 - Read across iterations of the same workspace; not generally read
   cross-workspace.
 
-The existing `cf-system-pa-memory` and `cf-system-ha-memory` stay as
-specialised PA / HA memory and don't change behaviour. The four
-existing system projects remain.
+#### PA memory simplification (refined 2026-05-09)
+
+Round-1 of this design kept `cf-system-pa-memory` as the dual-purpose
+home for PA's per-workspace AND cross-workspace memory. **Refined**:
+
+- `cf-system-pa-memory` keeps **only PA's cross-workspace state** —
+  PA-specific role preferences, workflow heuristics PA learned across
+  multiple workspaces, the agent-side stuff that's portable.
+- PA's **per-workspace memory** (workspace-summary, session
+  scratchpads, decisions made about THIS workspace's Problem Pack)
+  moves into the workspace's own `cf-workspace-<id>` project as a
+  `PA-memory.md` document. PA reads + writes this file the same way
+  the dev role reads + writes iteration-log.md.
+- Effect: when iteration roles search "cf-workspace-<id> +
+  cf-system-memory-global" they pick up PA's workspace context too;
+  PA's workspace-bound knowledge stops being siloed in a
+  PA-only-readable project.
+
+#### HA memory (kept, with staleness disclaimer)
+
+The user raised a real concern: HA's saved Q&A history can go stale as
+cf² evolves (an answer about feature X that's accurate today may be
+wrong next month after the feature changes).
+
+**Decision: keep `cf-system-ha-memory`, address staleness in HA's
+prompt.** Reasoning:
+- HA still benefits from cross-session conversation continuity ("you
+  asked about X yesterday, here's a follow-up").
+- HA still benefits from persisting user preferences ("user prefers
+  terse explanations").
+- HA's **answers** are synthesised fresh each turn from current docs +
+  state — HA doesn't quote saved answers verbatim. The risk is
+  bounded.
+
+**Staleness mitigation in HA's prompt** (Phase 1):
+- "Saved Q&A history is for conversation continuity, not as
+  authoritative. Always verify against current docs / state before
+  quoting an old answer."
+- HA's saved entries get a `cfcfVersion` stamp so HA can deprioritise
+  hits from older versions.
+
+Drop is on the table for a later iteration if the staleness concern
+turns out to bite in practice — for now, keep + warn.
+
+The four existing system projects remain. **Lock list unchanged**:
+`cf-system-default`, `cf-system-memory-global`, `cf-system-pa-memory`,
+`cf-system-ha-memory`. The new `cf-workspace-<id>` projects are NOT
+locked (workspaces are user-deletable; the project should go with the
+workspace eventually — separate cleanup item).
 
 ### 2. Per-workspace project convention
 
@@ -223,6 +271,42 @@ its instructions, with a role-tuned set of triggers:
 **Help Assistant** (already wired via `cf-system-ha-memory`):
 - Reads global + per-workspace for user-context. Already wired.
 
+### 3a. Default ingest policy (DECIDED 2026-05-09)
+
+The `clio.ingestPolicy` global config field today defaults to
+`"summaries-only"` (auto-ingests iteration-summary +
+reflection-analysis + architect-review + decision-log entries; skips
+iteration-log + iteration-handoff + full judge-assessment).
+
+**Flipped to `"all"` in this PR.** Storage is cheap (~20-50 KB per
+iteration); searchable full history across months is high-value
+(matches the multi-loop-over-time use case where users come back to
+the same workspace later). Existing workspaces auto-pick-up the new
+default since none have an explicit override; with the clean wipe the
+user is doing first, this is the cleanest moment to flip.
+
+### 3b. Pre-iteration `clio-relevant.md` query (documented)
+
+Each iteration generates `cfcf-docs/clio-relevant.md` via
+`writeClioRelevant()` in `loop-ingest.ts`. The query is built from the
+**first ~40 words of `problem.md`** (whitespace-normalised, punctuation
+stripped, words ≤ 2 chars filtered out). It runs:
+
+1. A **broad** semantic+FTS hybrid search across ALL Clio Projects,
+   top-5 hits.
+2. For each of `reflection-analysis` and `architect-review`
+   artefact-types: a **scoped** search restricted to the workspace's
+   own project, top-3 hits.
+
+Result is rendered as a markdown doc with hit content, headings, and
+scores. Agents read this file as part of Tier-2 context.
+
+**Improvement opportunity** (not in this PR): the query could include
+the current iteration's task description from `plan.md` (the next
+pending `[ ]` item) for task-specific matches instead of
+problem-domain-only matches. Track as a Backlog item if dogfood
+suggests it's missing things.
+
 ### 4. Ingest patterns (what each role writes vs reads)
 
 Most ingest paths are already covered by the iteration-loop's auto-ingest
@@ -289,23 +373,51 @@ necessary in normal flows — it's the workspace's own bucket and the
 user usually wants to either keep it as-is (default) or pick a shared
 team/project name (e.g. `cf-team-foo`) for cross-workspace grouping.
 
-### 7. Read-audit (deferred decision)
+### 7. Read-audit / usage_log (REVISED 2026-05-09 — IN SCOPE FOR THIS PR)
 
-Cerefox's `usage_log` records every search + docs-get with the
-requestor + query. cfcf's audit log records mutations only.
+Cerefox's `usage_log` records every read (search + docs-get) AND every
+write (mutation). cfcf's `clio_audit_log` today records mutations
+only — reads are invisible.
 
-**Decision: defer to a follow-up.** Rationale:
-- Adding read-audit doubles the audit volume + introduces a privacy
-  question (do we log the query text? agent prompts may quote
-  problem.md content; some workspaces will have sensitive context).
-- The cross-role pattern guidance shipped here is the actual user value;
-  read-audit is internal observability for analytics that we don't
-  have a current consumer for.
-- If we ship read-audit later we'll want a config flag to disable it
-  (privacy-conscious users) + a separate retention policy.
+**Decision: implement read-audit in this PR (not deferred).**
+Reasoning (all from the user, 2026-05-09):
+- No privacy concerns — cfcf runs in the user's space; the user owns
+  the data. No multi-tenant or shared-host pattern to gate around.
+- Read-audit is **how we'll measure whether the new role guidance is
+  working**. After Phase 1 ships, the user wants to look at the
+  usage log to see "are agents actually searching Clio? which roles?
+  what queries? are queries returning hits?" Without a read log we
+  can't measure it.
+- Size concern is bounded: assume ~5-10 read events per iteration
+  × 100 iterations × 7 workspaces = ~7000 entries / year. SQLite
+  handles millions of rows fine; not a concern.
 
-Tracked as a future Backlog item (`F.X — Clio read-audit log + privacy
-gating`). Not in scope for the 6.9 PR.
+**Implementation**:
+- Either extend the existing `clio_audit_log` table with new event
+  types `search` and `docs-get`, OR add a sibling `clio_usage_log`
+  table. Decision deferred to implementation review — leaning toward a
+  sibling table because reads have a different shape (query text +
+  match count + zero-hits flag) from mutations (before/after diffs)
+  and mixing them complicates queries.
+- Migration: new table OR new event-type values + new payload columns
+  on the existing table. Either way: clean SQLite migration.
+- **Recorded fields**: timestamp, actor (the existing
+  `<role>|<agent>|<model>` stamp), event type (`search` /
+  `docs-get`), query text, project filter (if any), result count,
+  zero-hits flag, latency.
+- **CLI surface**: `cfcf clio audit --reads` (filter to read events)
+  and `cfcf clio audit --writes` (filter to mutations). Plus `--actor
+  <pattern>` for "show me dev's searches", `--zero-hits` for
+  "queries that returned nothing" (training signal for what's
+  missing from Clio).
+
+**Alignment review with Cerefox** (Backlog item):
+- Cerefox's `usage_log` schema is the reference. Once cfcf's read-audit
+  ships, we should compare field-by-field with Cerefox's schema and
+  capture any divergence in the design doc + decisions log.
+- New Backlog row: `F.X — Cerefox usage_log alignment review`.
+- Not blocking for this PR; the PR ships the working surface and the
+  alignment review tightens it.
 
 ## Per-role Clio interaction matrix
 
@@ -334,16 +446,60 @@ projects (back-compat behaviour). When the agent wants the recommended
 `--project cf-workspace-<id>,cf-system-memory-global` (multi-project
 search added in Phase 2).
 
+### Universal ingest principles (the rules every role's template gets)
+
+These apply across every role and are surfaced in `clio-guide.md` as
+the universal rules. The role-specific templates reference them by
+pointer.
+
+1. **The harness auto-ingests the canonical files you write** — when
+   you append to `decision-log.md`, write `iteration-log.md`, write
+   `architect-review.md` etc., the next loop-boundary auto-ingest
+   hook picks it up with the correct actor stamp + project routing.
+   You don't need to call `cfcf clio docs ingest` for these.
+2. **When in doubt, ingest.** The cost of an extra Clio doc is ~20 KB
+   of disk; the cost of a future agent re-deriving a lesson because
+   it's not in Clio is way higher. If you discover something useful
+   for a future iteration of THIS workspace OR a future workspace,
+   write it down — either as a `decision-log.md` entry (auto-ingests
+   to the per-workspace project) or via direct `cfcf clio docs
+   ingest` to `cf-system-memory-global` for portable preferences.
+3. **Always pick the right project.** Rules:
+   - Workspace-specific knowledge (decisions about THIS problem,
+     lessons from THIS codebase) → per-workspace project
+     (`cf-workspace-<id>`, also the auto-ingest default).
+   - Cross-workspace-portable knowledge (user preferences, broadly-
+     applicable lessons) → `cf-system-memory-global`.
+   - **Never leave the project blank** — auto-routing falls back to
+     `cf-system-default` (a shared catch-all) which makes searches
+     noisy. Your workspace already has its `cf-workspace-<id>`
+     project configured; reference it by name when you ingest
+     directly.
+4. **Always pass `--update-if-exists`** on direct ingest of "live"
+   files (decision-log.md, PA-memory.md, anything that grows over
+   time and should stay as a single Clio doc). Without the flag,
+   each ingest creates a NEW Clio doc — you end up with 50 copies of
+   `decision-log.md` at different points in time. The auto-ingest
+   paths set this flag for you; only direct calls need it explicit.
+5. **Always pass `--author "<role>|<agent>|<model>"`** on direct
+   ingest. Auto-ingest paths set this for you. The audit log + future
+   analytics filter on this stamp; missing or inconsistent stamps
+   make your writes invisible to those filters.
+6. **Search before deciding.** When you face a non-obvious choice,
+   search Clio FIRST in the workspace + global projects. Often the
+   user (or a prior agent) has already decided this; re-deriving
+   wastes a turn.
+
 ### Write matrix — what each role produces, and where it lands
 
 | Role | Trigger | What they write | Canonical destination | Mechanism |
 |---|---|---|---|---|
-| **All iteration roles** | Every run | Tagged entries appended to `cfcf-docs/decision-log.md` (`[lesson]`, `[risk]`, `[observation]`, `[strategy]`, `[resolved-question]`) | per-workspace project | Auto-ingest (`ingestDecisionLogEntries`) |
+| **All iteration roles** | Every run | Tagged entries appended to `cfcf-docs/decision-log.md` (`[lesson]`, `[risk]`, `[observation]`, `[strategy]`, `[resolved-question]`, `[decision]`) — single growing file, ingested as ONE Clio doc with `--update-if-exists` so the doc stays canonical | per-workspace project | Auto-ingest (`ingestDecisionLogEntries`) |
 | **All iteration roles** | Discovered cross-workspace-portable user preference (e.g. "user prefers vertical-slice tests", "always commit before bun-link") | Short note via `cfcf clio docs ingest --project cf-system-memory-global --author "<role-stamp>" --tier semantic --artifact-type lesson` | global memory | **Direct** (no auto path) |
 | **Dev (`process.md`)** | Every iteration | `cfcf-docs/iteration-logs/iteration-N.md` (curated changelog) | per-workspace project | Auto-ingest (`ingestIterationLog` under `clio.ingestPolicy = "all"`) |
 | **Dev** | Every iteration | `cfcf-docs/iteration-handoff.md` (forward-looking notes for next iteration's dev) | per-workspace project | Auto-ingest (`ingestIterationHandoff` under "all") |
 | **Dev** | Decision worth remembering (env quirk, failed approach, "we tried X, didn't work") | `decision-log.md` `[lesson]` entry — describe what was tried, what failed, what worked instead | per-workspace project | Auto-ingest |
-| **Judge** | Every iteration | `cfcf-docs/judge-assessment.md` | per-workspace project | Auto-ingest (under "all" policy) |
+| **Judge** | Every iteration | `cfcf-docs/judge-assessment.md` (live file overwritten per iteration) PLUS the loop archives a per-iteration copy at `cfcf-docs/iteration-reviews/iteration-N.md` | per-workspace project | Auto-ingest of the per-iteration archive (separate Clio doc per iteration) under default `"all"` policy |
 | **Judge** | Every iteration | `cfcf-docs/cfcf-judge-signals.json` → loop synthesises an iteration-summary doc | per-workspace project | Auto-ingest (`ingestIterationSummary`, ALWAYS — not gated by ingestPolicy) |
 | **Judge** | Notices regression / recurring flake / drift across iterations | `decision-log.md` `[risk]` or `[observation]` entry | per-workspace project | Auto-ingest |
 | **Solution Architect** | Every review (pre-loop, refine_plan, manual) | `cfcf-docs/architect-review.md` | per-workspace project | Auto-ingest (`ingestArchitectReview`) |
@@ -392,13 +548,23 @@ against `problem.md`). The role-specific triggers below are for
 - **Don't ingest secrets / credentials / API keys** — Clio is plaintext SQLite, not encrypted. If you find them in scope, scrub them or skip the ingest.
 - **Don't ingest large transient files** (full log files, raw stdouts > 50 KB). Decision-log entries are short summaries, not raw traces.
 - **Always pass `--author "<role>|<agent>|<model>"` on direct ingest** so the audit log + future analytics can attribute writes correctly. Auto-ingest paths handle this for you.
-- **Don't search every turn** — token + latency cost. The preloaded `clio-relevant.md` handles the "I just want some context" case; on-demand search is for specific triggers.
+- **Always pass `--update-if-exists` on direct ingest of growing files** (decision-log.md, PA-memory.md). Auto-ingest paths handle this for you.
 - **Don't write the same lesson twice** — Clio dedups by sha256 of full content, but you should still phrase deliberately. If a prior search returned the lesson, you don't need to re-ingest it.
+
+**Note on search frequency**: an earlier draft of this doc included a
+"don't search every turn — token cost" constraint. Removed
+deliberately. Under-searching is the bigger risk (it's why we're doing
+this work). Search liberally; the `cfcf clio audit --reads` log
+shipping in the same PR will let us measure actual usage in the
+clean-wipe test workspace and add a brake later if needed.
 
 ## Implementation plan
 
-Two phases. Phase 1 is the bulk of the user-visible work; phase 2 is
-the structural per-workspace-project + picker filtering.
+Three phases, shipped together in one PR. Phase 1 is the
+user-facing template work; Phase 2 is the structural per-workspace-
+project + picker filtering + multi-project search; Phase 3 is the
+read-audit log + tests + docs. All gated on user testing in the
+clean-wipe workspace before merge.
 
 ### Phase 1 — Instruction template additions (the main delivery)
 
@@ -433,30 +599,61 @@ Templates touched (the four iteration-role templates + dev's
 `clio-guide.md` gets the new sections (memory tiers, search heuristic
 table, role-specific cheat sheets).
 
-### Phase 2 — Per-workspace Project auto-create + picker filter
+### Phase 2 — Structural changes
 
 1. **`cfcf workspace init`**: when the user doesn't explicitly pass
    `--project <name>`, auto-create `cf-workspace-<workspace-id>` and set
-   it as the workspace's `clioProject`. Existing workspaces unchanged.
-2. **Picker filter**: hide `cf-system-*` from the
+   it as the workspace's `clioProject`. Existing workspaces unchanged
+   (no migration).
+2. **Default ingest policy flip**: `clio.ingestPolicy` default
+   changes from `"summaries-only"` → `"all"`. One-line change in
+   `loop-ingest.ts`'s `resolveIngestPolicy()` + a CLAUDE.md note.
+3. **PA per-workspace memory moves to `cf-workspace-<id>/PA-memory.md`**.
+   PA prompt-assembler + memory-protocol layer updated; `cf-system-pa-memory`
+   keeps PA's cross-workspace state only.
+4. **Picker filter**: hide `cf-system-*` from the
    workspace-creation Clio Project dropdown + the "Change Clio
    Project" dialog. They remain visible in the Memory page's Projects
    tab + accessible via `cfcf clio projects list`.
-3. **Multi-project search**: extend `cfcf clio search` to accept a
-   comma-separated `--project` list so an agent can search both its
+5. **Multi-project search**: extend `cfcf clio search --project` to
+   accept a comma-separated list so an agent can search both its
    per-workspace project AND `cf-system-memory-global` in one call.
-4. **Auto-ingest routing**: confirm `loop-ingest.ts` correctly resolves
-   the workspace's project (already does — `resolveClioProject` reads
-   `workspace.clioProject?.trim() || DEFAULT_PROJECT`).
+   Backend already accepts arrays internally.
+6. **Auto-ingest routing**: confirm `loop-ingest.ts` correctly resolves
+   the new `cf-workspace-<id>` projects (existing
+   `resolveClioProject` reads `workspace.clioProject?.trim() ||
+   DEFAULT_PROJECT` — already correct).
 
-### Phase 3 — Tests + docs
+### Phase 3 — Read-audit + tests + docs
 
-- Unit tests for the per-workspace-project auto-create path (fresh
-  workspace gets a `cf-workspace-<id>` project; existing workspaces
-  unchanged).
-- Tests for the multi-project search path.
-- Update the `clio-quickstart.md` guide with the memory-tier model.
-- Update CLAUDE.md with the per-workspace-project convention.
+1. **Read-audit log** (item 7 in the design):
+   - Schema migration adding either a `clio_usage_log` table OR new
+     event types + payload columns on `clio_audit_log` (final shape at
+     implementation review).
+   - Hooks in `LocalClio.searchFts` / `searchHybrid` /
+     `searchSemantic` and `getDocument` to record reads.
+   - CLI surface: `cfcf clio audit --reads` / `--writes` / `--actor` /
+     `--zero-hits` filters.
+   - HTTP surface: `GET /api/clio/audit?type=reads&...` for the web
+     UI's Audit tab to surface read events alongside mutations.
+2. **HA staleness disclaimer**: small prompt update in
+   `packages/core/src/help-assistant/prompt-assembler.ts` (add the
+   "saved Q&A is for continuity, not authoritative" line) +
+   `cfcfVersion` stamp on saved entries.
+3. **Tests**:
+   - Unit tests for the per-workspace-project auto-create path.
+   - Tests for the multi-project search path (single project and
+     multi-project both return expected hits).
+   - Tests for read-audit hooks + CLI filters.
+   - Tests for the new ingest-policy default.
+4. **Docs**:
+   - Update `clio-quickstart.md` with the memory-tier model.
+   - Update CLAUDE.md with the per-workspace-project convention +
+     ingest policy change.
+   - Update `clio-guide.md` with the universal ingest principles
+     (the 6-rule list).
+   - Update `docs/api/server-api.md` with the new audit endpoint
+     parameters.
 
 ## Out of scope (intentionally)
 
@@ -501,28 +698,56 @@ table, role-specific cheat sheets).
 Total: ~2.5 sessions. Phase 1 alone is shippable as the headline
 delivery; Phase 2 is the structural cleanup; Phase 3 is housekeeping.
 
-## Open questions for the user
+## Resolved questions (2026-05-09)
 
-1. **Per-workspace project name**: `cf-workspace-<workspace-id>` (UUID
-   suffix, opaque) vs `cf-workspace-<sanitised-workspace-name>`
-   (human-readable, can collide if workspace names collide). Lean
-   toward the UUID form for collision-safety; the user rarely needs to
-   type this name. Confirm?
+1. **Per-workspace project name** → `cf-workspace-<workspace-id>` (UUID
+   suffix, opaque, collision-safe). User rarely types it.
 
-2. **Auto-create on existing workspaces**: when the user upgrades to
-   the version with this change, should existing workspaces (with
-   `clioProject` unset, currently routing to `cf-system-default`)
-   migrate to a `cf-workspace-<id>` project? Or stay as-is until the
-   user manually changes them? Lean toward staying as-is (no mass
-   migration; new workspaces get the new default; users can pick
-   explicitly via the Change dialog if they want).
+2. **Migration policy for existing workspaces** → no migration. The
+   user is wiping `~/.cfcf/clio.db` and starting clean to test the new
+   memory model end-to-end. Existing workspaces (none in production
+   beyond the user's own dogfood) don't need a backfill path.
 
-3. **Multi-project `--project` syntax**: `--project a,b,c` (comma)
-   vs `--project a --project b --project c` (repeated flag). Lean
-   toward comma-separated for terseness in agent prompts; commander.js
-   needs a small parser tweak.
+3. **Multi-project `--project` syntax** → comma-separated
+   (`--project a,b,c`). Commander.js parser tweak: split on comma in
+   the action handler; the underlying `searchDocuments(...)` backend
+   already accepts an array.
 
-4. **Phase rollout**: ship Phase 1 + Phase 2 in the same PR (one
-   v0.23.0 release with all the guidance + the structural change), or
-   split (Phase 1 → v0.23.0, Phase 2 → v0.23.1)? Lean toward one PR
-   since the guidance references the structural pieces.
+4. **Phase rollout** → one PR. All three phases ship together once
+   testing on the clean-wipe workspace confirms the design works.
+
+## Additional design refinements (2026-05-09)
+
+These came out of the Clio-interaction-matrix review:
+
+5. **Default `clio.ingestPolicy` flips from `"summaries-only"` to
+   `"all"`.** Disk is cheap; cross-iteration full-history searches are
+   high-value. Existing workspaces auto-pick-up the new default since
+   none have an explicit override.
+
+6. **PA's per-workspace memory moves from `cf-system-pa-memory` into
+   the workspace's own `cf-workspace-<id>` project as `PA-memory.md`.**
+   PA's CROSS-workspace state stays in `cf-system-pa-memory` (PA-only
+   patterns + role preferences). This makes PA's workspace knowledge
+   visible to iteration roles via the same per-workspace search.
+
+7. **HA memory kept** with a staleness disclaimer baked into HA's
+   prompt. Drop is on the table for a later iteration if dogfood shows
+   the stale-Q&A risk biting.
+
+8. **Read-audit (`cfcf clio audit --reads`) shipped in this PR**, not
+   deferred. The user wants to measure agent Clio usage in the
+   clean-wipe test workspace. New `clio_usage_log` table
+   (or new event types on `clio_audit_log`; final shape decided at
+   implementation review). Schema records timestamp + actor + event
+   type + query text + project filter + result count + zero-hits flag
+   + latency. CLI: `cfcf clio audit --reads / --writes / --actor X /
+   --zero-hits`.
+
+9. **Cerefox usage_log alignment review** = new Backlog item (`F.X`)
+   to compare cf²'s read-audit schema field-by-field with Cerefox's
+   `usage_log` once the cf² version ships. Not blocking for this PR.
+
+10. **Dropped the "don't search every turn" constraint.**
+    Under-searching is the bigger risk; the read-audit log will
+    measure actual usage so we can decide if a brake is needed later.
