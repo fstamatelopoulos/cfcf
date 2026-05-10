@@ -223,11 +223,19 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const isPaused = currentPhase === "paused";
 
   // Which state drives the top-of-page indicator + header badge?
+  // Standalone Review / Document / Reflect runs override whatever the
+  // underlying workspace.status says — those are loop states, not
+  // "is anything running right now". Without the reflect branch here,
+  // a manual `cfcf reflect` against a `completed` workspace left the
+  // header still reading "completed" while the reflection ran (item
+  // 6.12 follow-up, surfaced 2026-05-10).
   const headerBadgeStatus = isReviewActive
     ? "running"
     : isDocumentActive
       ? "running"
-      : currentPhase || workspace.status;
+      : isReflectActive
+        ? "running"
+        : currentPhase || workspace.status;
 
   return (
     <div className="project-detail">
@@ -239,6 +247,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         <StatusBadge status={headerBadgeStatus} />
         {isReviewActive && <span className="project-detail__active-tag">review running</span>}
         {isDocumentActive && <span className="project-detail__active-tag">document running</span>}
+        {isReflectActive && <span className="project-detail__active-tag">reflect running</span>}
       </div>
 
       <LoopControls

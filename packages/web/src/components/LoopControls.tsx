@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { LoopPhase } from "../types";
 import * as api from "../api";
 
-export type AgentAction = "review" | "start" | "resume" | "stop" | "document" | "stopReview" | "stopDocument" | "reflect";
+export type AgentAction = "review" | "start" | "resume" | "stop" | "document" | "stopReview" | "stopDocument" | "reflect" | "stopReflect";
 
 /**
  * Which agent is currently active (running).
@@ -54,6 +54,7 @@ export function LoopControls({
   const isLoopRunning = activeAgent === "loop";
   const isReviewRunning = activeAgent === "review";
   const isDocumentRunning = activeAgent === "document";
+  const isReflectRunning = activeAgent === "reflect";
   const isPaused = phase === "paused";
   const isBusy = activeAgent !== null;
   const canStart = !phase || ["idle", "completed", "failed", "stopped"].includes(phase);
@@ -118,16 +119,30 @@ export function LoopControls({
             the standalone "I want a reflection right now" case. Disabled
             while ANY agent is running so we don't compete for stdout/the
             log surface. Hidden while paused -- the FeedbackForm's
-            consult_reflection action is the right routing surface there. */}
+            consult_reflection action is the right routing surface there.
+            While running, button becomes Stop Reflect (red) — mirrors the
+            Stop Review / Stop Document affordance so an accidentally-
+            spawned reflection isn't stuck running for ~10 min with no
+            kill switch (item 6.35 follow-up, 2026-05-10). */}
         {!isPaused && (
-          <button
-            className="btn btn--primary"
-            disabled={loading !== null || isBusy}
-            onClick={() => doAction("reflect", () => api.startReflect(workspaceId))}
-            title="Run an ad-hoc Reflection pass over the workspace's history (mirrors `cfcf reflect`)."
-          >
-            {loading === "reflect" ? "Starting reflect..." : "Reflect"}
-          </button>
+          isReflectRunning ? (
+            <button
+              className="btn btn--danger"
+              disabled={loading !== null}
+              onClick={() => doAction("stopReflect", () => api.stopReflect(workspaceId))}
+            >
+              {loading === "stopReflect" ? "Stopping..." : "Stop Reflect"}
+            </button>
+          ) : (
+            <button
+              className="btn btn--primary"
+              disabled={loading !== null || isBusy}
+              onClick={() => doAction("reflect", () => api.startReflect(workspaceId))}
+              title="Run an ad-hoc Reflection pass over the workspace's history (mirrors `cfcf reflect`)."
+            >
+              {loading === "reflect" ? "Starting reflect..." : "Reflect"}
+            </button>
+          )
         )}
 
         {/* Document button: visible when loop is NOT paused (post-loop
