@@ -9,6 +9,10 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.23.1] -- 2026-05-10
+
 ### Fixed — install.sh + local-install.sh PID-file probe was wrong on macOS
 
 The "is a cfcf server running?" detection in both scripts looked
