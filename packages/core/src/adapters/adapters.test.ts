@@ -326,6 +326,18 @@ describe("UNATTENDED_ROLE_NAMES + CLAUDE_CODE_HARNESS_WARNING", () => {
     expect(CLAUDE_CODE_HARNESS_WARNING.toLowerCase()).toContain("anthropic");
     expect(CLAUDE_CODE_HARNESS_WARNING.toLowerCase()).toContain("harness");
   });
+
+  it("CLAUDE_CODE_HARNESS_WARNING distinguishes subscription OAuth from API-key auth (item 6.28 refinement, 2026-05-10)", () => {
+    // The policy targets the credential, not the adapter. The warning
+    // must say so explicitly — readers shouldn't conclude that
+    // claude-code is categorically forbidden in unattended roles.
+    // A future edit that drops the API-key escape clause regresses
+    // the UX for users who could compliantly run claude-code under
+    // ANTHROPIC_API_KEY auth.
+    expect(CLAUDE_CODE_HARNESS_WARNING.toLowerCase()).toContain("subscription");
+    expect(CLAUDE_CODE_HARNESS_WARNING).toContain("ANTHROPIC_API_KEY");
+    expect(CLAUDE_CODE_HARNESS_WARNING.toLowerCase()).toContain("exempt");
+  });
 });
 
 describe("detectAvailableAgents", () => {

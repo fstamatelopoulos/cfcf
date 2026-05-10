@@ -101,10 +101,20 @@ export function isClaudeCodeHarnessRisk(adapterName: string): boolean {
 /**
  * Centralised warning text used by both CLI (init / config edit) and
  * web (Settings, workspace Config) so the wording stays in lockstep.
- * (item 6.28)
+ * (item 6.28; refined 2026-05-10 to clarify the API-key escape hatch.)
+ *
+ * Key distinction: the policy targets **subscription OAuth credentials
+ * in third-party harnesses**, not the `claude-code` adapter itself.
+ * Running claude-code with `ANTHROPIC_API_KEY` set (so the CLI
+ * authenticates via the paid Anthropic API rather than your Pro/Max
+ * subscription) is policy-compliant — that's the canonical "unattended
+ * automation under your own credentials" pattern Anthropic supports.
+ *
+ * The warning therefore distinguishes the two cases instead of
+ * tarring the whole adapter as forbidden.
  */
 export const CLAUDE_CODE_HARNESS_WARNING =
-  "Anthropic's third-party-harness policy prohibits using Claude Code subscriptions in unattended/headless contexts (the cfcf iteration loop is exactly that pattern). For limited testing only — do not use for production. See docs/guides/anthropic-policy.md.";
+  "Anthropic's third-party-harness policy prohibits using a Claude Pro/Max **subscription** OAuth credential in unattended/headless contexts (the cfcf iteration loop is exactly that pattern). The **API-key path is exempt** — set `ANTHROPIC_API_KEY` in your environment and claude-code will authenticate via the paid API instead of your subscription. That's the compliant way to run claude-code on unattended roles. If you're on subscription OAuth: limited testing only — switch to `codex` / `claude-code-ollama` / `opencode-ollama` / `opencode` for production. See docs/guides/anthropic-policy.md.";
 
 /**
  * Returns true when the picked adapter routes through claude-code-ollama,
