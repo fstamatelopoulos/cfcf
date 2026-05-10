@@ -9,6 +9,41 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — Codex seed model `gpt-5-codex` was invalid
+
+Real dogfood: the seed model registry shipped with
+`gpt-5-codex` listed under the `codex` adapter, but the Codex
+CLI rejects that name at spawn time — there is no such model.
+"Codex" is the name of the OpenAI CLI tool itself, not a model
+suffix; the underlying models are general-purpose (`gpt-5`,
+`o3`, `o3-mini`, etc.). Surfaced when the user picked
+`gpt-5-codex` from the model dropdown and the resulting agent
+spawn errored.
+
+**Fix**: `packages/core/src/adapters/seed-models.ts` —
+replaced `["gpt-5-codex", "gpt-5", "o3"]` with `["gpt-5",
+"o3", "o3-mini"]` for the `codex` adapter. Per the seed file's
+maintenance comment, user overrides on
+`CfcfGlobalConfig.agentModels.codex` are preserved across
+upgrades, so anyone who hand-added a working model isn't
+affected.
+
+**Existing user configs that selected `gpt-5-codex`** stay
+functional because the AgentModelSelect dropdown's back-compat
+`(custom)` rendering preserves unknown values on first render
+— but the next agent spawn will still fail at the codex CLI
+boundary, so users will need to switch the role's model in
+Settings → Agent roles or workspace Config. The seed
+correction means the picker no longer offers it as a default.
+
+Updated references: `packages/core/src/clio/actor.ts` example
+comment, `docs/api/server-api.md` example response,
+`docs/guides/cli-usage.md` walkthrough text, `CLAUDE.md`
+project memory, `docs/plan.md` 6.26 resolved-design entry.
+Tests in `packages/server/src/routes/agent-models.test.ts`
+updated to assert the new seed and explicitly assert
+`gpt-5-codex` is NOT in the seed (regression guard).
+
 ### Investigation + observability — "Server restarted" message + workspace stuck on Failed
 
 Real dogfood: across a single `testgame` loop run, the user saw

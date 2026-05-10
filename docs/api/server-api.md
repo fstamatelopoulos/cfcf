@@ -1378,7 +1378,7 @@ Returns the resolved per-adapter model registry. Each entry is a list of model n
 {
   "adapters": {
     "claude-code": ["sonnet", "opus", "haiku"],
-    "codex": ["gpt-5-codex", "gpt-5", "o3"],
+    "codex": ["gpt-5", "o3", "o3-mini"],
     "claude-code-ollama": ["gemma4:31b", "qwen3-coder:latest"],
     "...": []
   },

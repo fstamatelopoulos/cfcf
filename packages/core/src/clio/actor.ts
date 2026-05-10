@@ -9,8 +9,8 @@
  *   - role:  "product-architect" / "help-assistant" / "dev" / "judge" /
  *            "architect" / "reflection" / "documenter" / "user"
  *   - agent: the AgentAdapter name ("claude-code" / "codex")
- *   - model: the resolved model alias ("opus" / "sonnet" / "gpt-5-codex"
- *            / etc.) or "default" when no explicit override was set
+ *   - model: the resolved model alias ("opus" / "sonnet" / "gpt-5" /
+ *            "o3" / etc.) or "default" when no explicit override was set
  *
  * Mirrors Cerefox's actor-stamp convention so a future swap-in to a
  * Cerefox-backed Clio doesn't break audit-log filters or analytics.
