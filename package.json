@@ -24,7 +24,7 @@
     "dev:server": "bun run --watch packages/server/src/index.ts",
     "dev:web": "cd packages/web && bun run dev",
     "dev:cli": "bun run packages/cli/src/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && cd packages/web && tsc -b",
     "build:web": "cd packages/web && bun run build && cd ../.. && bun run scripts/embed-web-dist.ts",
     "build": "scripts/build-cli.sh"
   },

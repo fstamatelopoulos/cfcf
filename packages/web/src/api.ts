@@ -463,14 +463,28 @@ export function promoteRoleTemplateVersion(name: string, versionId: string): Pro
 
 // --- Reflect (item 5.6 / web surface in 6.12) ---
 
+/**
+ * Shape mirrors `ReflectState` in `packages/core/src/reflection-runner.ts`
+ * (server-side). Kept in sync manually — pre-v0.24 the web type
+ * omitted `sequence`, `iteration`, `trigger`, and `historyEventId`, and
+ * marked `startedAt` / `logFile` as optional; that mismatch was harmless
+ * until v0.24's WorkspaceDetail used those fields for the new
+ * Reflection PhaseIndicator + status panel, at which point the web
+ * build broke.
+ */
 export interface ReflectState {
   workspaceId: string;
-  status: "preparing" | "executing" | "collecting" | "completed" | "failed" | "stopped";
-  startedAt?: string;
+  workspaceName?: string;
+  status: "preparing" | "executing" | "collecting" | "completed" | "failed";
+  startedAt: string;
   completedAt?: string;
   exitCode?: number;
-  logFile?: string;
-  logFileName?: string;
+  logFile: string;
+  logFileName: string;
+  sequence: number;
+  historyEventId: string;
+  iteration: number;
+  trigger: "loop" | "manual";
   error?: string;
 }
 
