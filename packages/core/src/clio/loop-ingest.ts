@@ -246,6 +246,91 @@ export async function ingestArchitectReview(
   }
 }
 
+// ── Hook: plan.md (the implementation plan; living doc) ──────────────────
+
+/**
+ * Mirror `cfcf-docs/plan.md` to Clio. Item 6.35 follow-up after
+ * dogfood: SA creates plan.md but the harness wasn't auto-ingesting
+ * it — only architect-review.md (the readiness assessment) was
+ * mirrored. Plan.md is high-value living content (SA authors it,
+ * reflection optionally rewrites pending items, dev marks `[x]`
+ * each iteration). Cross-workspace search benefits: "show me
+ * implementation plans for similar problems".
+ *
+ * One Clio doc per workspace, mutable, accumulating edits via
+ * `--update-if-exists` (lookup by title within the project) +
+ * sha256 dedup (unchanged file = no-op).
+ *
+ * Trigger points (mirrors `ingestProblemPack`):
+ *   - `workspace-init`: catches a pre-fab plan.md the user already
+ *     authored before registering the workspace
+ *   - `iteration-start`: catches dev's `[x]` marks from the prior
+ *     iteration + any out-of-band user edits
+ *   - `post-architect`: SA just wrote/refined the plan
+ *   - `post-reflection`: reflection may have rewritten pending items
+ *
+ * `actorOverride` carries the WRITER stamp for accurate audit-log
+ * attribution (`architect|<adapter>|<model>` after SA, etc.); the
+ * default `cfcf|system` covers cfcf-driven triggers.
+ */
+export async function ingestPlanMd(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger:
+    | "workspace-init"
+    | "iteration-start"
+    | "post-architect"
+    | "post-reflection"
+    | "manual",
+  actorOverride?: string,
+): Promise<IngestResult | null> {
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return null;
+
+  const path = join(workspace.repoPath, "cfcf-docs", "plan.md");
+  const content = await readIfExists(path);
+  if (!content || !content.trim()) return null;
+
+  const project = resolveClioProject(workspace);
+  const author = actorOverride ?? actorForRole(workspace, "architect");
+
+  try {
+    const result = await backend.ingest({
+      project,
+      title: `${workspace.name}: plan.md`,
+      content,
+      author,
+      source: `cfcf-auto:plan-md:${trigger}`,
+      // Singleton-per-workspace doc — `--update-if-exists` looks up
+      // by title within the project and updates in place. sha256
+      // dedup makes unchanged content a no-op.
+      updateIfExists: true,
+      metadata: baseMetadata(workspace, {
+        // `architect` is the canonical author (SA creates it); reflection
+        // and dev modify but the role stamp tracks ownership semantically.
+        // The actual writer of the current revision is in `author`.
+        role: "architect",
+        artifact_type: "plan",
+        tier: "semantic",
+        ingest_trigger: trigger,
+      }),
+    });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: author,
+      documentId: result.document?.id,
+      projectId: result.document?.projectId,
+      extra: { artifact_type: "plan", ingest_trigger: trigger, action: result.action },
+    });
+    return result;
+  } catch (err) {
+    console.warn(
+      `[clio] plan.md ingest failed (${trigger}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
 // ── Hook: decision-log.md (tagged semantic entries) ───────────────────────
 
 const DECISION_LOG_HEADER_RE =

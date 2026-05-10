@@ -9,6 +9,68 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Auto-ingest `plan.md` to Clio (item 6.35 follow-up)
+
+Real dogfood: SA completed with READY result, `architect-review.md`
+landed in Clio (good), but **`plan.md` — the SA's other major
+output, the implementation plan that drives the whole loop —
+was never ingested**. plan.md is high-value living content (SA
+authors, reflection rewrites pending items, dev marks `[x]` each
+iteration). Cross-workspace search benefit: "show me
+implementation plans for similar problems".
+
+New `ingestPlanMd()` mirrors `ingestProblemPack` shape — one Clio
+doc per workspace, mutable, accumulating via `--update-if-exists`
++ sha256 dedup. Title `<workspace-name>: plan.md`, metadata
+`(role: "architect", artifact_type: "plan", ingest_trigger,
+workspace_id)`. The `actorOverride` parameter carries the WRITER
+stamp for accurate audit-log attribution
+(`architect|<adapter>|<model>` after SA;
+`reflection|<adapter>|<model>` after reflection rewrites).
+
+Wired into:
+- `architect-runner` (manual `cfcf review` path) — post-SA-completion
+- `iteration-loop` pre-loop architect — post-SA-completion
+- `iteration-loop` reflection-end — captures non-destructive
+  pending-item rewrites
+- `iteration-loop` iteration-start — catches dev's `[x]` marks
+  from the prior iteration + any out-of-band user edits
+- Server `POST /api/workspaces` — catches a pre-fab plan.md the
+  user authored before registering the workspace
+
+5 new tests (canonical metadata triple, in-place updates across
+iterations, missing/empty file skip, actorOverride attribution,
+clio.ingestPolicy=off).
+
+### Fixed — Log-viewer SSE: late-arriving content after stream `done`
+
+Real dogfood: SA completed (claude-code-ollama with qwen3-coder),
+log was empty in the web UI immediately after; navigating away
+and back revealed the populated log. Symptom of a known race
+between (a) claude-code-ollama buffering all stdout for the
+entire run + dumping at exit, (b) the agent process exiting +
+the harness's stream pump finishing in milliseconds, (c) the
+SSE poll loop re-checking `isLive` and emitting `done` before
+the buffered content fully reaches the client.
+
+Two-layer mitigation:
+
+1. **Server-side**: when `isLive` transitions false, do a 200ms
+   settling wait + one final re-read of the log file before
+   emitting `done`. Catches any content that landed after the
+   last poll but before the status flipped. Cheap insurance —
+   only fires once per stream, on the close path.
+
+2. **Client-side**: a "refresh" button on the LogViewer (visible
+   once `done`) that re-opens the EventSource. Workaround for
+   any case the server-side settling pass missed — the user has
+   an explicit recovery path without navigating away and back.
+
+The fundamental claude-code-ollama buffering remains a known
+limitation (called out in `docs/guides/anthropic-policy.md`);
+this fix closes the SSE-side race that was masking the
+already-flushed-to-disk content.
+
 ### Fixed — `--update-if-exists` missing from agent ingest examples
 
 Real dogfood (PA on `/tmp/cfcf-testgame`): agent followed the

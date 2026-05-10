@@ -45,6 +45,7 @@ import {
   ingestReflectionAnalysis,
   ingestArchitectReview,
   ingestProblemPack,
+  ingestPlanMd,
   ingestDecisionLogEntries,
   ingestIterationSummary,
   ingestRawIterationArtifacts,
@@ -1197,9 +1198,18 @@ async function runLoop(
     // semantic artifact whether or not the gate accepts. Failures are
     // swallowed.
     try {
-      await ingestArchitectReview(getClioBackend(), workspace, "loop", readiness);
+      const backend = getClioBackend();
+      await ingestArchitectReview(backend, workspace, "loop", readiness);
+      // Item 6.35 follow-up (2026-05-10): mirror plan.md too — SA
+      // produces both. The architect stamp lands in the audit log.
+      await ingestPlanMd(
+        backend,
+        workspace,
+        "post-architect",
+        formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model),
+      );
     } catch (err) {
-      console.warn(`[clio] pre-loop architect-review ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[clio] pre-loop architect post-run ingest failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     if (blocked || reviewError) {
@@ -1414,6 +1424,15 @@ async function runLoop(
       await ingestProblemPack(getClioBackend(), workspace, "iteration-start");
     } catch (err) {
       console.warn(`[clio] problem-pack ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Item 6.35 follow-up: also refresh plan.md. Captures dev's `[x]`
+    // marks from the prior iteration + any out-of-band user edits
+    // between iterations. sha256 dedup → unchanged plan is a no-op.
+    try {
+      await ingestPlanMd(getClioBackend(), workspace, "iteration-start");
+    } catch (err) {
+      console.warn(`[clio] plan.md ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Clio context preload (item 5.7 PR3): generate
@@ -1696,6 +1715,22 @@ async function runJudgeAndDecide(
           );
         } catch (err) {
           console.warn(`[clio] reflection-analysis ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        // Item 6.35 follow-up: reflection may have rewritten pending
+        // items in plan.md (non-destructive). Refresh plan.md in Clio
+        // with the reflection actor stamp; sha256 dedup → no-op when
+        // plan unchanged.
+        try {
+          const reflAgent = workspace.reflectionAgent ?? workspace.architectAgent ?? workspace.devAgent;
+          await ingestPlanMd(
+            getClioBackend(),
+            workspace,
+            "post-reflection",
+            formatClioActor("reflection", reflAgent.adapter, reflAgent.model),
+          );
+        } catch (err) {
+          console.warn(`[clio] plan.md post-reflection ingest failed: ${err instanceof Error ? err.message : String(err)}`);
         }
 
         // Reset the skip counter now that reflection has actually run.

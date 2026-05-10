@@ -18,6 +18,7 @@ import {
   ingestRawIterationArtifacts,
   writeClioRelevant,
   ingestProblemPack,
+  ingestPlanMd,
   PROBLEM_PACK_FILES,
 } from "./loop-ingest.js";
 import type { WorkspaceConfig } from "../types.js";
@@ -625,5 +626,89 @@ describe("ingestProblemPack", () => {
     const doc = await clio.getDocument(result.perFile[0].documentId!);
     expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-boot-reconcile");
     expect(doc?.source).toContain("pa-boot-reconcile");
+  });
+});
+
+// ── ingestPlanMd (item 6.35 follow-up) ────────────────────────────────────
+
+describe("ingestPlanMd", () => {
+  async function seedPlan(content: string) {
+    const cfcfDocs = join(repoDir, "cfcf-docs");
+    await mkdir(cfcfDocs, { recursive: true });
+    await writeFile(join(cfcfDocs, "plan.md"), content, "utf-8");
+  }
+
+  it("creates a Clio doc per workspace with the canonical metadata triple", async () => {
+    const ws = makeWorkspace();
+    await seedPlan(
+      "# Implementation Plan\n\n## Iteration 1 -- Foundation\n\n- [ ] Task A\n- [ ] Task B\n",
+    );
+
+    const result = await ingestPlanMd(clio, ws, "post-architect");
+    expect(result).toBeTruthy();
+
+    const doc = await clio.getDocument(result!.document!.id);
+    expect(doc?.title).toBe(`${ws.name}: plan.md`);
+    expect(doc?.projectName).toBe("test-project");
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("architect");
+    expect((doc?.metadata as Record<string, unknown>)?.artifact_type).toBe("plan");
+    expect((doc?.metadata as Record<string, unknown>)?.workspace_id).toBe(ws.id);
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("post-architect");
+  });
+
+  it("updates the existing plan in place across iterations (one doc, NOT one per call)", async () => {
+    const ws = makeWorkspace();
+    await seedPlan("# Plan v1\n\n- [ ] Task A\n- [ ] Task B\n- [ ] Task C\n");
+    const r1 = await ingestPlanMd(clio, ws, "post-architect");
+    const docId1 = r1?.document?.id;
+    expect(docId1).toBeTruthy();
+
+    // Dev marks Task A complete, runs the loop again.
+    await seedPlan("# Plan v1\n\n- [x] Task A (done in iter 1)\n- [ ] Task B\n- [ ] Task C\n");
+    const r2 = await ingestPlanMd(clio, ws, "iteration-start");
+    expect(r2?.document?.id).toBe(docId1); // SAME doc, updated in place
+
+    // Verify only ONE plan doc exists for this workspace.
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const planDocs = docs.filter(
+      (d) => (d.metadata as { artifact_type?: string })?.artifact_type === "plan",
+    );
+    expect(planDocs).toHaveLength(1);
+  });
+
+  it("returns null on missing or empty plan.md (no doc created)", async () => {
+    const ws = makeWorkspace();
+    const result = await ingestPlanMd(clio, ws, "workspace-init");
+    expect(result).toBeNull();
+
+    await seedPlan("   \n\n  \n");
+    const result2 = await ingestPlanMd(clio, ws, "workspace-init");
+    expect(result2).toBeNull();
+  });
+
+  it("respects actorOverride for accurate audit-log attribution (item 6.35)", async () => {
+    const ws = makeWorkspace();
+    await seedPlan("# Plan\n\n- [ ] Task A\n");
+
+    // SA path: actor stamp = architect|<adapter>|<model>
+    const archStamp = "architect|claude-code|sonnet";
+    const r1 = await ingestPlanMd(clio, ws, "post-architect", archStamp);
+    const doc1 = await clio.getDocument(r1!.document!.id);
+    expect(doc1?.author).toBe(archStamp);
+
+    // Reflection path: same doc, different actor
+    await seedPlan("# Plan\n\n- [ ] Task A\n- [ ] Task B (added by reflection)\n");
+    const reflStamp = "reflection|codex|gpt-5";
+    const r2 = await ingestPlanMd(clio, ws, "post-reflection", reflStamp);
+    expect(r2?.document?.id).toBe(r1?.document?.id); // same doc
+    const doc2 = await clio.getDocument(r2!.document!.id);
+    expect(doc2?.author).toBe(reflStamp); // updated stamp reflects last writer
+  });
+
+  it("respects clio.ingestPolicy = 'off'", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "off" } });
+    await seedPlan("# Plan\n\n- [ ] Anything\n");
+    const result = await ingestPlanMd(clio, ws, "post-architect");
+    expect(result).toBeNull();
   });
 });
