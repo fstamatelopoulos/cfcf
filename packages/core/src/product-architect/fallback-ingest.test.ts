@@ -261,3 +261,170 @@ describe("fallbackIngestPaSessionArchive", () => {
     expect(r2.reason).toBe("agent-already-synced");
   });
 });
+
+// ── fallbackIngestPaWorkspaceMemory (item 6.35 follow-up) ──────────
+
+describe("fallbackIngestPaWorkspaceMemory", () => {
+  it("ingests workspace-summary.md as PA-memory.md when the agent skipped the explicit push (happy path)", async () => {
+    // Real dogfood: testgame workspace, three sessions, no PA-memory.md
+    // ever pushed because the agent waits for user approval before
+    // syncing the digest. Disk is ahead of Clio. Fallback closes the gap.
+    const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+    const w = await createWorkspace({ name: "digest-happy-path", repoPath: tempDir });
+    const paCachePath = join(tempDir, ".cfcf-pa");
+    await mkdir(paCachePath, { recursive: true });
+    await writeFile(
+      join(paCachePath, "workspace-summary.md"),
+      "# PA Workspace Memory\n\n## Current state\n\n" +
+      "Tracker workspace, three PA sessions completed. Auth flow is the focus.\n\n" +
+      "## Decisions\n\n- Use OAuth2 with PKCE\n- Refresh-token rotation: 7-day TTL\n",
+      "utf-8",
+    );
+
+    const result = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-2026-05-10T13-00-00-test01",
+      paAgentAdapter: "claude-code",
+      paAgentModel: "sonnet",
+    });
+
+    expect(result.digestDocId).toBeTruthy();
+
+    const doc = await clio.getDocument(result.digestDocId!);
+    expect(doc?.title).toBe("PA-memory.md");
+    expect(doc?.projectName).toBe(`cf-workspace-${w.id}`);
+    expect(doc?.author).toBe("product-architect|claude-code|sonnet");
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("pa");
+    expect((doc?.metadata as Record<string, unknown>)?.artifact_type).toBe("workspace-memory");
+    expect((doc?.metadata as Record<string, unknown>)?.workspace_id).toBe(w.id);
+    expect((doc?.metadata as Record<string, unknown>)?.ingested_by).toBe("cfcf-fallback");
+  });
+
+  it("updates the existing digest in place across sessions (one doc per workspace, not one per session)", async () => {
+    // The digest is mutable — sessions should accumulate into one
+    // doc, not pile up new ones. update-by-metadata-search keeps the
+    // doc-id stable across pushes regardless of session_id.
+    const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+    const w = await createWorkspace({ name: "digest-update", repoPath: tempDir });
+    const paCachePath = join(tempDir, ".cfcf-pa");
+    await mkdir(paCachePath, { recursive: true });
+
+    // Session 1's digest content (>100 chars so it passes the
+    // empty-file threshold).
+    await writeFile(
+      join(paCachePath, "workspace-summary.md"),
+      "# PA Workspace Memory v1\n\n## Current state\n\nInitial spec, three weeks of refinement.\n\n" +
+      "## Decisions\n\n- OAuth2 with PKCE\n- Refresh-token rotation: 7-day TTL\n- Audit log retention: 90 days\n",
+      "utf-8",
+    );
+    const r1 = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-session-1",
+      paAgentAdapter: "claude-code",
+    });
+    const docId1 = r1.digestDocId;
+
+    // Session 2: agent updated the digest with new decisions.
+    await writeFile(
+      join(paCachePath, "workspace-summary.md"),
+      "# PA Workspace Memory v2\n\n## Current state\n\nInitial spec + added rate-limiting constraint.\n\n" +
+      "## Decisions\n\n- OAuth2 with PKCE\n- Refresh-token rotation: 7-day TTL\n- Audit log retention: 90 days\n" +
+      "- NEW: Rate-limit auth endpoints to 100/min per IP\n",
+      "utf-8",
+    );
+    const r2 = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-session-2",
+      paAgentAdapter: "claude-code",
+    });
+    expect(r2.digestDocId).toBe(docId1); // SAME doc, updated in place
+
+    // Verify only one PA-memory.md doc exists (no duplicates from
+    // session_id varying between calls).
+    const docs = await clio.listDocuments({ project: `cf-workspace-${w.id}` });
+    const digestDocs = docs.filter(
+      (d) => (d.metadata as { artifact_type?: string })?.artifact_type === "workspace-memory",
+    );
+    expect(digestDocs).toHaveLength(1);
+  });
+
+  it("skips when workspace-summary.md is missing", async () => {
+    const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+    const w = await createWorkspace({ name: "digest-missing", repoPath: tempDir });
+    const paCachePath = join(tempDir, ".cfcf-pa");
+    await mkdir(paCachePath, { recursive: true });
+
+    const result = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-no-summary",
+      paAgentAdapter: "claude-code",
+    });
+
+    expect(result.digestDocId).toBeNull();
+    expect(result.reason).toBe("no-summary-file");
+  });
+
+  it("skips when workspace-summary.md is below the 100-char threshold (treats as empty)", async () => {
+    const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+    const w = await createWorkspace({ name: "digest-tiny", repoPath: tempDir });
+    const paCachePath = join(tempDir, ".cfcf-pa");
+    await mkdir(paCachePath, { recursive: true });
+    await writeFile(join(paCachePath, "workspace-summary.md"), "# tiny\n", "utf-8");
+
+    const result = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-tiny",
+      paAgentAdapter: "claude-code",
+    });
+
+    expect(result.digestDocId).toBeNull();
+    expect(result.reason).toBe("summary-too-small");
+  });
+
+  it("updates meta.json's paWorkspaceMemoryDocId so the next launch's discrepancy check sees the synced state", async () => {
+    const { fallbackIngestPaWorkspaceMemory } = await import("./launcher.js");
+    const w = await createWorkspace({ name: "digest-meta", repoPath: tempDir });
+    const paCachePath = join(tempDir, ".cfcf-pa");
+    await mkdir(paCachePath, { recursive: true });
+    await writeFile(
+      join(paCachePath, "workspace-summary.md"),
+      "# PA Workspace Memory\n\n## Current state\n\nReal content here, multi-paragraph.\n\n" +
+      "## Decisions\n\n- Decision A: chose option X for reason Y\n" +
+      "- Decision B: deferred Z to a later iteration\n" +
+      "- Decision C: aligned with workspace spec on auth boundaries\n",
+      "utf-8",
+    );
+    // Pre-existing meta.json (matches what a fresh PA session writes).
+    await writeFile(
+      join(paCachePath, "meta.json"),
+      JSON.stringify({ currentSessionId: "pa-prev", lastSyncAt: null, paWorkspaceMemoryDocId: null }),
+      "utf-8",
+    );
+
+    const result = await fallbackIngestPaWorkspaceMemory({
+      paCachePath,
+      workspaceId: w.id,
+      workspaceClioProject: `cf-workspace-${w.id}`,
+      sessionId: "pa-meta-test",
+      paAgentAdapter: "claude-code",
+    });
+
+    expect(result.digestDocId).toBeTruthy();
+
+    const { readFile } = await import("fs/promises");
+    const metaRaw = await readFile(join(paCachePath, "meta.json"), "utf-8");
+    const meta = JSON.parse(metaRaw);
+    expect(meta.paWorkspaceMemoryDocId).toBe(result.digestDocId);
+    expect(meta.lastSyncAt).toBeTruthy();
+  });
+});

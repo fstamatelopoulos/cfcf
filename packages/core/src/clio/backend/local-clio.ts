@@ -429,7 +429,10 @@ export class LocalClio implements MemoryBackend {
     return updated;
   }
 
-  async deleteProject(idOrName: string): Promise<{ deleted: true }> {
+  async deleteProject(
+    idOrName: string,
+    opts?: { force?: boolean },
+  ): Promise<{ deleted: true; purgedTombstones?: number }> {
     const target = await this.getProject(idOrName);
     if (!target) throw new Error(`Clio Project "${idOrName}" not found`);
 
@@ -454,17 +457,52 @@ export class LocalClio implements MemoryBackend {
     ).get(target.id);
     const live = counts?.live ?? 0;
     const tombstones = counts?.deleted ?? 0;
-    if (live + tombstones > 0) {
+
+    // Item 6.35 follow-up (2026-05-10): `force` mode purges
+    // tombstones first so the user doesn't have to chase them down
+    // one-by-one. Live documents STILL block — force doesn't
+    // promote a "destroy live data" path, just gives tombstones the
+    // same treatment a manual `cfcf clio docs purge` would.
+    let purgedTombstones = 0;
+    if (opts?.force && tombstones > 0 && live === 0) {
+      // Purge each tombstone via the standard path so audit-log
+      // entries get written. Direct SQL would skip that.
+      const tombstoneIds = this.db
+        .query<{ id: string }, [string]>(
+          `SELECT id FROM clio_documents WHERE project_id = ? AND deleted_at IS NOT NULL`,
+        )
+        .all(target.id);
+      for (const row of tombstoneIds) {
+        await this.purgeDocument(row.id, { actor: "user|cli|delete-project-force" });
+        purgedTombstones++;
+      }
+    }
+
+    // Re-check after the optional purge.
+    const after = this.db.query<{ live: number; deleted: number }, [string]>(
+      `SELECT
+         SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS live,
+         SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted
+       FROM clio_documents WHERE project_id = ?`,
+    ).get(target.id);
+    const liveAfter = after?.live ?? 0;
+    const tombstonesAfter = after?.deleted ?? 0;
+    if (liveAfter + tombstonesAfter > 0) {
       const parts: string[] = [];
-      if (live > 0) parts.push(`${live} live document${live === 1 ? "" : "s"}`);
-      if (tombstones > 0) parts.push(`${tombstones} soft-deleted (recoverable) document${tombstones === 1 ? "" : "s"}`);
+      if (liveAfter > 0) parts.push(`${liveAfter} live document${liveAfter === 1 ? "" : "s"}`);
+      if (tombstonesAfter > 0) parts.push(
+        `${tombstonesAfter} soft-deleted (recoverable) document${tombstonesAfter === 1 ? "" : "s"}` +
+        ` (re-run with force=true to purge them along with the project)`,
+      );
       throw new Error(
         `Clio Project "${target.name}" still has ${parts.join(" + ")}; reassign or remove them first.`,
       );
     }
 
     this.db.prepare(`DELETE FROM clio_projects WHERE id = ?`).run(target.id);
-    return { deleted: true };
+    return purgedTombstones > 0
+      ? { deleted: true, purgedTombstones }
+      : { deleted: true };
   }
 
   // ── Documents ──────────────────────────────────────────────────────────

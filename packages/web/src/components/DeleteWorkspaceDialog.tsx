@@ -31,23 +31,35 @@ export function DeleteWorkspaceDialog({
   const [confirmText, setConfirmText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Item 6.35 follow-up (2026-05-10): cascade-delete the workspace's
+  // dedicated `cf-workspace-<id>` Clio Project + force-purge any
+  // soft-deleted documents in it. Default false so we don't surprise
+  // users who want to preserve the workspace's memory after deleting
+  // the workspace itself.
+  const [cascadeClio, setCascadeClio] = useState(false);
 
   useEffect(() => {
     if (open) {
       setConfirmText("");
       setError(null);
       setSubmitting(false);
+      setCascadeClio(false);
     }
   }, [open]);
 
   const enabled = confirmText.trim() === workspace.name && !submitting;
+
+  // Cascade only matches the per-workspace project shape — shared
+  // projects (e.g. `backend-services`) stay untouched even if the
+  // checkbox is ticked, because sibling workspaces may pin them.
+  const cascadeApplies = workspace.clioProject === `cf-workspace-${workspace.id}`;
 
   async function submit() {
     if (!enabled) return;
     setSubmitting(true);
     setError(null);
     try {
-      await deleteWorkspace(workspace.id);
+      await deleteWorkspace(workspace.id, { cascadeClio });
       onDeleted();
       onClose();
     } catch (err) {
@@ -80,8 +92,37 @@ export function DeleteWorkspaceDialog({
         <li>The repo folder at <code>{workspace.repoPath}</code> is <strong>not touched</strong>.</li>
         <li>cfcf-state files (history, signals, logs) for this workspace are removed.</li>
         <li>Iteration branches in your repo (<code>cfcf/iteration-N</code>) are <strong>not touched</strong>.</li>
-        <li>Clio docs ingested under this workspace are <strong>not touched</strong>; they stay in the Clio Project.</li>
+        <li>By default, Clio docs ingested under this workspace are <strong>not touched</strong>; they stay in the Clio Project. Tick the cascade box below to also delete the dedicated project.</li>
       </ul>
+      {cascadeApplies && (
+        <div className="form-row" style={{ marginTop: "0.75rem" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={cascadeClio}
+              onChange={(e) => setCascadeClio(e.target.checked)}
+            />
+            <span>
+              Also delete the dedicated Clio Project <code>{workspace.clioProject}</code>
+              {" "}(force-purges any soft-deleted documents)
+            </span>
+          </label>
+          <span className="form-row__hint">
+            The cascade only applies to per-workspace projects
+            (<code>cf-workspace-&lt;id&gt;</code>). If you'd shared this
+            workspace's memory with siblings under a named project, the
+            cascade would be skipped automatically.
+          </span>
+        </div>
+      )}
+      {!cascadeApplies && workspace.clioProject && (
+        <div className="form-row__hint" style={{ marginTop: "0.75rem" }}>
+          This workspace uses the shared Clio Project{" "}
+          <code>{workspace.clioProject}</code> — sibling workspaces may
+          still pin it, so cfcf won't auto-delete it. Use the Memory
+          page's Projects tab to delete it manually if you want.
+        </div>
+      )}
       <div className="form-row" style={{ marginTop: "1rem" }}>
         <label htmlFor="delete-ws-confirm">
           Type <code>{workspace.name}</code> to confirm:

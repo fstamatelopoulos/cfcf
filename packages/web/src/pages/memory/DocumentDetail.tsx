@@ -4,11 +4,13 @@ import {
   fetchClioAuditLog,
   fetchClioDocumentContent,
   fetchClioDocumentVersions,
+  fetchClioUsageLog,
   purgeClioDocument,
   restoreClioDocument,
   type ClioAuditEntry,
   type ClioDocumentContent,
   type ClioDocumentVersion,
+  type ClioUsageRow,
 } from "../../api";
 import { Modal } from "../../components/Modal";
 import { EditDocumentDialog } from "./EditDocumentDialog";
@@ -45,6 +47,12 @@ export function DocumentDetail({
   const [auditOpen, setAuditOpen] = useState(false);
   const [audit, setAudit] = useState<ClioAuditEntry[] | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
+  // Per-document usage history (item 6.35). Sibling to audit. Lazy-
+  // loaded on accordion open. Same dataset as the global Usage tab,
+  // scoped to this document via the `document_id` filter.
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [usage, setUsage] = useState<ClioUsageRow[] | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [acting, setActing] = useState(false);
@@ -61,6 +69,8 @@ export function DocumentDetail({
     setVersions(null);
     setAuditOpen(false);
     setAudit(null);
+    setUsageOpen(false);
+    setUsage(null);
     setConfirmDelete(false);
     setActionError(null);
   }, [documentId]);
@@ -80,6 +90,18 @@ export function DocumentDetail({
       .then(setAudit)
       .catch((e) => setAuditError(e instanceof Error ? e.message : String(e)));
   }, [auditOpen, audit, documentId]);
+
+  // Lazy-load usage history when the section opens (item 6.35).
+  // Captures every read + write recorded in `clio_usage_log` that
+  // mentions this document — agent searches that surfaced it,
+  // direct `cfcf clio docs get` calls, the ingests that created /
+  // updated it, etc. Complements the audit trail (mutation-only).
+  useEffect(() => {
+    if (!usageOpen || usage !== null) return;
+    fetchClioUsageLog({ documentId, limit: 50 })
+      .then(setUsage)
+      .catch((e) => setUsageError(e instanceof Error ? e.message : String(e)));
+  }, [usageOpen, usage, documentId]);
 
   async function handleDelete() {
     setActing(true);
@@ -282,6 +304,24 @@ export function DocumentDetail({
             )}
           </details>
 
+          <details onToggle={(e) => setUsageOpen((e.currentTarget as HTMLDetailsElement).open)}
+            style={{ marginBottom: "0.85rem" }}>
+            <summary className="section-title" style={{ cursor: "pointer", padding: "0.4rem 0", fontSize: "var(--text-sm)" }}>
+              Usage history (reads + writes)
+            </summary>
+            {usageOpen && (
+              usageError ? (
+                <div className="form-row__error">{usageError}</div>
+              ) : usage === null ? (
+                <div className="form-row__hint">loading…</div>
+              ) : usage.length === 0 ? (
+                <div className="form-row__hint">No usage events recorded for this document.</div>
+              ) : (
+                <UsageTable entries={usage} />
+              )
+            )}
+          </details>
+
           <details open>
             <summary className="section-title" style={{ cursor: "pointer", padding: "0.4rem 0", fontSize: "var(--text-sm)" }}>
               Content ({content.totalChars.toLocaleString()} chars, {content.chunkCount} chunk{content.chunkCount === 1 ? "" : "s"})
@@ -409,4 +449,76 @@ function summariseAuditMetadata(m: Record<string, unknown>): string {
     parts.push(`${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
   }
   return parts.join(", ");
+}
+
+/**
+ * Per-document usage table (item 6.35). Renders the rows from
+ * `clio_usage_log` filtered to one document. Same dataset as the
+ * global Usage tab but trimmed to the columns relevant when the
+ * document is fixed (no need to re-show document_id every row;
+ * project_id similarly elided since it's implicit from the doc).
+ */
+function UsageTable({ entries }: { entries: ClioUsageRow[] }) {
+  return (
+    <table className="project-history__table" style={{ marginTop: "0.4rem" }}>
+      <thead>
+        <tr>
+          <th style={{ minWidth: "12rem" }}>Time</th>
+          <th>Operation</th>
+          <th>Access path</th>
+          <th>Requestor</th>
+          <th>Query</th>
+          <th>Hits</th>
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((e) => (
+          <tr key={e.id} className="project-history__row">
+            <td className="project-history__time">{e.loggedAt}</td>
+            <td>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+                {e.operation}
+              </span>
+            </td>
+            <td>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+                {e.accessPath}
+              </span>
+            </td>
+            <td>
+              {e.requestor ? (
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
+                  {e.requestor}
+                </span>
+              ) : (
+                <span className="form-row__hint">—</span>
+              )}
+            </td>
+            <td>
+              {e.queryText ? (
+                <code style={{ fontSize: "var(--text-xs)" }}>
+                  {e.queryText.length > 60 ? e.queryText.slice(0, 57) + "…" : e.queryText}
+                </code>
+              ) : (
+                <span className="form-row__hint">—</span>
+              )}
+            </td>
+            <td>
+              {e.resultCount === null || e.resultCount === undefined ? (
+                <span className="form-row__hint">—</span>
+              ) : (
+                <span style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "var(--text-xs)",
+                  color: e.resultCount === 0 ? "var(--color-warning)" : "inherit",
+                }}>
+                  {e.resultCount}
+                </span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }

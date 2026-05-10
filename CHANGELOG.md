@@ -9,6 +9,274 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — Workspace + Clio Project cleanup gaps (item 6.35 follow-up round 4)
+
+Real dogfood: user deleted a workspace, then tried to clean up
+its dedicated `cf-workspace-<id>` Clio Project. Two distinct
+blockers surfaced:
+
+1. **Tombstone gate**: project deletion was blocked by soft-deleted
+   documents (recoverable trash-bin entries) the user had already
+   "removed". The `clio_documents.project_id` FK is `ON DELETE
+   RESTRICT` — tombstones still hold the FK reference, so the SQL
+   fails. The user has to manually purge each tombstone.
+2. **No cascade**: deleting a workspace via
+   `DELETE /api/workspaces/:id` didn't touch its Clio Project.
+   Even after fixing the tombstone gate, the user has to delete
+   the project as a separate step.
+
+**Both fixed:**
+
+- **`deleteProject(idOrName, { force })`** — backend extension that
+  purges tombstones first when `force=true`. Live documents still
+  block (force isn't a "destroy live data" path; it just gives
+  tombstones the same treatment as a manual `cfcf clio docs purge`).
+  Reports `purgedTombstones` count in the response.
+- **HTTP**: `DELETE /api/clio/projects/:id?force=true` exposes the
+  new option.
+- **CLI**: new `cfcf clio projects delete <name> [--force] [--yes]`
+  verb (didn't exist before — only list/create/show were available).
+- **Web**: `DeleteProjectDialog` gets a "Force mode" checkbox.
+- **`DELETE /api/workspaces/:id?cascade_clio=true`** — new query
+  param. When set, the server auto-deletes the workspace's
+  dedicated `cf-workspace-<id>` project (force-purges any
+  tombstones in one go). **Only triggers for per-workspace projects**
+  — shared projects (e.g. `backend-services`) are never auto-deleted
+  because sibling workspaces may pin them. The response carries a
+  `cascadeClio` summary block (attempted, deleted, purgedTombstones,
+  reason).
+- **CLI**: `cfcf workspace delete <name> --cascade-clio`.
+- **Web**: `DeleteWorkspaceDialog` gets a checkbox + asymmetric
+  hint text (cascade option only shown for per-workspace projects;
+  shared-project workspaces get an explanatory note instead).
+
+5 new tests in `clio.test.ts` covering: force-purges tombstones
++ deletes project; force still blocks on live docs; cascade
+deletes per-workspace project + reports purge count; cascade
+skipped for shared projects with reason; default (no cascade)
+leaves project orphaned. All 932 tests pass.
+
+### Changed — Drop approval-gating + "session end" framing for PA + HA memory writes
+
+Real dogfood (testgame, three sessions, no `PA-memory.md` ever
+pushed) showed two interacting problems with the original
+agent-driven memory model:
+
+1. **Agent-side approval gate added friction without protection.**
+   PA's prompt said "DO NOT silently sync without asking — Memory
+   writes are user-impactful enough that an explicit acknowledgement
+   makes the user feel in control." But: Clio is a local SQLite
+   file under `~/.cfcf/`; the disk file at `<repo>/.cfcf-pa/` is
+   already there with the same content; pushing to Clio is
+   mirroring, not authorship. The user already accepted the content
+   when it landed on disk. The opt-out path (`clio.ingestPolicy =
+   "off"`) already exists for users who want to skip Clio entirely.
+2. **"Session end" was an unreliable trigger.** The agent has no
+   clean signal for "session end" — Ctrl-D, terminal close, and
+   process kill all bypass the agent's next turn. Asking the agent
+   to "save at session end" was asking it to detect something it
+   largely can't.
+
+**PA refactor**: rewrote three sections of the PA prompt to teach
+a **continuous-mirror** model:
+- Disk + Clio move in lockstep. Push every meaningful digest
+  update at the same cadence as disk writes; sha256 dedup makes
+  redundant calls free.
+- **Local→Clio direction is silent + automatic** (mirroring is a
+  wire concern, not a content concern).
+- **Clio→local direction still asks** — pulling Clio's version
+  could clobber local work-in-progress. Asymmetric rule.
+- "Session end save" deleted. The model says "all set, both up to
+  date" instead of asking "did you save?". Optional `lastSession`
+  block in `meta.json` for the workspace-history entry — courtesy
+  metadata, not a save action.
+- "did you save?" framing removed throughout.
+
+**HA refinement**: HA's pattern is different (sparse Q&A writes,
+no continuous disk file). But the same dogfood logic applies for
+**explicit** preference signals — "always TypeScript", "I prefer
+pytest", "skip the welcome message". Tightened "Always prompt
+the user before writing memory" to:
+- **Save silently** when the user's intent is unambiguous (explicit
+  preference signals + direct configuration requests)
+- **Ask first** when inferring (casual remarks, ambiguous scope)
+
+Iteration roles (dev / judge / architect / reflection / documenter)
+already had no approval-gating language — harness auto-ingests
+post-commit, agent isn't in the decision loop. No changes needed
+there.
+
+3 new tests pinning the new wording (PA: continuous-mirror model
++ "all set" session-end framing + asymmetric Clio/local rule;
+HA: explicit-vs-inferred asymmetry).
+
+### Added — PA workspace-memory digest fallback (item 6.35 follow-up round 3)
+
+**Real dogfood gap surfaced**: testgame workspace, three PA sessions,
+each session correctly created a `pa-session-<sessionId>` archive
+but **`PA-memory.md` (the rolling digest) was never pushed**. PA
+itself reported the discrepancy on the next launch ("local summary
+is ahead of Clio") but didn't fix it. Cause: PA's prompt instructs
+the agent to ASK the user before pushing the digest at session end
+("DO NOT silently sync without asking"); if the user declines OR
+the session ends before the question fires, the disk version
+(`<repo>/.cfcf-pa/workspace-summary.md`) stays ahead of Clio
+forever.
+
+Pre-fix scope decision (item 6.9): I deliberately left the digest
+to the agent because I framed it as needing editorial judgement.
+Re-evaluated after dogfood: the editorial work IS the agent's job —
+composing `workspace-summary.md` turn by turn. By session end, the
+disk file IS the agent's editorial output. cfcf isn't being asked
+to compose anything; just to make sure it reaches Clio. Symmetric
+with the session-archive fallback already in place.
+
+**New `fallbackIngestPaWorkspaceMemory()`** in
+`packages/core/src/product-architect/launcher.ts`:
+
+- Reads `<repo>/.cfcf-pa/workspace-summary.md`. Skips if missing or
+  below 100 chars (treats as "not meaningfully populated yet").
+- Looks up existing digest doc via metadata search on
+  `(role: "pa", artifact_type: "workspace-memory", workspace_id)` —
+  project-agnostic so back-compat with pre-6.9 docs in
+  `cf-system-pa-memory` works.
+- Updates by `documentId` when found (deterministic, stable doc id
+  across sessions); creates fresh otherwise. **One PA-memory.md
+  per workspace**, mutable, accumulating; NOT one per session.
+- Updates `meta.json` with `paWorkspaceMemoryDocId` + `lastSyncAt`
+  so PA's discrepancy detection on the next launch sees the
+  synced state.
+- Author stamp = `product-architect|<adapter>|<model>` + ingested_by
+  metadata = `cfcf-fallback`, so the audit + usage log distinguish
+  cfcf-driven rescues from agent-driven pushes.
+- Internal-path usage log row written via `backend.logUsage` so the
+  Usage tab + `cfcf clio usage list` see these rescues.
+
+**Wired into**:
+- PA session-end fallback (in `launcher.ts`, right after the
+  problem-pack ingest; covers Ctrl-D / agent-skipped-the-question
+  / model-decided-not-to)
+- PA boot reconciliation (in `boot-reconcile.ts`; covers PA
+  process killed before session-end fallback fired)
+
+**Out of scope (still agent-only)**: `pa-global-memory` — lives
+ONLY in Clio per design (no on-disk cache), so cfcf has no source
+of truth to fall back from. The agent remains the sole writer.
+Adding a disk cache for global memory would be a larger storage-
+model change and is deferred.
+
+5 new tests in `fallback-ingest.test.ts` covering: happy path
+(digest lands with right metadata + stamp + project), in-place
+update across sessions (one doc, NOT one per session), missing-
+file skip, too-small-file skip, meta.json `paWorkspaceMemoryDocId`
+update.
+
+All 930 tests pass.
+
+### Fixed — Item 6.35 follow-up round 2: web requestor + internal access-path
+
+Continuing dogfood feedback: the Usage tab still showed null
+`requestor` on web entries (the web client doesn't run the CLI's
+header-stamping path), and the `internal` access-path was reserved
+but never populated.
+
+1. **Web `requestor`**: web `api.ts` `request()` helper now sends
+   `X-CFCF-Actor: user|web|browser` on every request via a single
+   `WEB_AUTH_HEADERS` constant. Memory-tab activity now lands with
+   a recognisable identity instead of a null column.
+
+2. **`internal` access-path now populated**: auto-ingest hooks call
+   `backend.ingest(...)` directly (not via HTTP), so they bypass
+   the `/api/clio/*` middleware that writes `clio_usage_log`. Pre-
+   fix, the Audit tab saw these writes (audit-log is internal to
+   LocalClio) but the Usage tab missed them — confusing
+   inconsistency. New `recordInternalUsage()` helper writes a row
+   with `accessPath: "internal"` after each cfcf-driven ingest.
+   Wired into:
+   - reflection-analysis ingest
+   - architect-review ingest
+   - decision-log entry ingest
+   - iteration-summary ingest
+   - raw iteration-artifacts ingest (iteration-log, handoff,
+     judge-assessment under `policy=all`)
+   - problem-pack ingest (the new 6.9 follow-up auto-ingest)
+   - PA session-end fallback ingest
+   - PA boot-reconcile rescue ingest
+
+Tests: 1 new in loop-ingest.test.ts pinning the internal-row
+behaviour for problem-pack ingest. All 925 tests pass.
+
+### Fixed — Item 6.35 follow-up: usage-log requestor + result-count gaps
+
+Three issues spotted during dogfood (PA on /tmp/cfcf-testgame):
+
+1. **`requestor` always null**. The middleware reads `X-CFCF-Actor`,
+   but the CLI never sent the header. Pre-existing — uncovered when
+   the new Usage tab made the missing column visible. Fixed by:
+   - CLI `client.ts` now reads `CFCF_ACTOR` env (defaulting to
+     `user|cli|default`) and stamps every request with
+     `X-CFCF-Actor: <stamp>` — paired with the existing
+     `X-CFCF-Access-Path` plumbing under a single `authHeaders()`
+     helper.
+   - All seven spawn sites (PA + HA launchers, dev/judge/architect/
+     reflection/documenter loop spawns, server's manual single-
+     iteration runner) now set `CFCF_ACTOR` to the role's
+     `formatClioActor()` stamp so shell-outs to `cfcf clio …` from
+     inside an agent carry the right identity.
+   - 3 new CLI client tests pin the header behaviour (default, env
+     override, whitespace fallback) using an in-process Bun.serve
+     to capture headers from real fetches.
+
+2. **`result_count` null on non-search reads**. Only the search
+   handler populated it. `get-document` / `list-projects` /
+   `list-documents` / `list-versions` / `metadata-search` /
+   `metadata-keys` / `get-document-content` / `audit-log` /
+   `usage` all now stamp resultCount via `clioUsageExtras`. The
+   Usage tab's `--zero-hits` filter now finds typos / 404s; the
+   dashboard's hit-distribution panels get useful signal.
+
+3. **`metadata-search` query column was empty**. Now stamps the
+   serialised metadata filter as `queryText` so the Usage tab
+   shows what was searched.
+
+7 new tests across `clio.test.ts` (server) + `client.test.ts` (CLI).
+All 924 tests pass.
+
+### Added — Item 6.35: Web UI viewer for clio_audit_log + clio_usage_log
+
+The Memory page gains a **Usage** tab sibling to the existing Audit
+tab. The two now cover the full Clio observability surface: Audit =
+mutation history (the "what changed" lens, sourced from
+`clio_audit_log`); Usage = operational lens (the "what ran" lens,
+sourced from `clio_usage_log` — both reads and writes with
+`access_path`, `requestor`, `query_text`, `result_count`).
+
+- **Usage tab** with summary dashboard + filter form + entry table.
+  Filters mirror the `cfcf clio usage list` CLI flags: operation /
+  access_path / requestor / reads-only / writes-only / zero-hits /
+  since / until. Color-coded operation + access-path badges so
+  cli-vs-agent-cli-vs-web traffic is visually scannable. Newest-
+  first, 100 rows per page.
+- **Summary dashboard** consumes `GET /api/clio/usage/summary` —
+  five cards (total events, by operation, by access path, top
+  requestors, top documents). Re-fetches when the since/until window
+  changes.
+- **Per-document drilldown** in `DocumentDetail`: new "Usage history
+  (reads + writes)" accordion section sibling to the existing Audit
+  trail. Lazy-loaded via `fetchClioUsageLog({ documentId })` on
+  open. Captures every read + write that mentions this doc — agent
+  searches that surfaced it, direct `cfcf clio docs get` calls, the
+  ingests that created/updated it, etc.
+- **API client**: new `fetchClioUsageLog()` + `fetchClioUsageSummary()`
+  in `packages/web/src/api.ts` mirroring `fetchClioAuditLog()`.
+  Types: `ClioUsageRow`, `ClioUsageSummary`.
+- **Routing**: `MemoryTab` extended with `"usage"`; `parseRouteHash`
+  accepts `?tab=usage` + the standard `&doc=<id>` overlay. Two new
+  unit tests pin the route handling.
+- **No CLI work**: the usage-log CLI verbs (`cfcf clio usage list` +
+  `cfcf clio usage summary`) shipped in 6.9. This release is purely
+  the web UI surface.
+
 ### Added — Item 6.9 follow-up: auto-ingest problem-pack files
 
 - **`ingestProblemPack()`** in `loop-ingest.ts` ingests the five

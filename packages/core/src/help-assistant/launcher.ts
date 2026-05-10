@@ -36,6 +36,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getAdapter } from "../adapters/index.js";
 import type { AgentConfig } from "../types.js";
+import { formatClioActor, ROLE_HELP_ASSISTANT } from "../clio/actor.js";
 
 export interface LaunchOptions {
   /** Resolved Help Assistant agent config (already backfilled by validateConfig). */
@@ -222,7 +223,16 @@ export async function launchHelpAssistant(opts: LaunchOptions): Promise<LaunchRe
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
-      env: { ...process.env, CFCF_ACCESS_PATH: "agent-cli" },
+      env: {
+        ...process.env,
+        CFCF_ACCESS_PATH: "agent-cli",
+        // item 6.35 follow-up: HA shell-outs to `cfcf clio …`
+        // (memory ingest after user-confirmed turns) get the HA
+        // actor identity so the usage-log `requestor` column carries
+        // help-assistant|<adapter>|<model> rather than the user
+        // fallback.
+        CFCF_ACTOR: formatClioActor(ROLE_HELP_ASSISTANT, opts.agent.adapter, opts.agent.model),
+      },
     });
     const exitCode = await proc.exited;
 

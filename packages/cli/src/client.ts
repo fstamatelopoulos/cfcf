@@ -26,6 +26,37 @@ function accessPathHeader(): Record<string, string> {
   return { "X-CFCF-Access-Path": value };
 }
 
+/**
+ * Stamp every CLI -> server call with an actor identity (item 6.35
+ * follow-up). The server's Clio usage-log middleware reads the
+ * `X-CFCF-Actor` header to populate the `requestor` column. Without
+ * this, the column is null on every entry and "show me what PA did"
+ * style queries don't work.
+ *
+ * The CFCF_ACTOR env var carries the stamp set by whoever spawned us:
+ *   - PA launcher → `product-architect|<adapter>|<model>`
+ *   - HA launcher → `help-assistant|<adapter>|<model>`
+ *   - iteration runner → `<role>|<adapter>|<model>` per role
+ *   - human user → unset → defaults to `user|cli|default`
+ *
+ * Mirrors the role-stamp convention from `formatClioActor()` so the
+ * audit log + usage log filter on the same shape.
+ */
+function actorHeader(): Record<string, string> {
+  const raw = process.env.CFCF_ACTOR?.trim();
+  const value = raw && raw.length > 0 ? raw : "user|cli|default";
+  return { "X-CFCF-Actor": value };
+}
+
+/**
+ * Combined access-path + actor headers. Every fetch uses this — the
+ * two are a pair (you always want both stamped together) so a single
+ * helper avoids drift.
+ */
+function authHeaders(): Record<string, string> {
+  return { ...accessPathHeader(), ...actorHeader() };
+}
+
 export interface ClientResponse<T = unknown> {
   ok: boolean;
   status: number;
@@ -86,7 +117,7 @@ function mapFetchError(err: unknown): ClientResponse<never> {
  */
 export async function get<T = unknown>(path: string): Promise<ClientResponse<T>> {
   try {
-    const res = await fetch(`${getBaseUrl()}${path}`, { headers: accessPathHeader() });
+    const res = await fetch(`${getBaseUrl()}${path}`, { headers: authHeaders() });
     return await readJsonOrTextError<T>(res);
   } catch (err: unknown) {
     return mapFetchError(err);
@@ -98,7 +129,7 @@ export async function get<T = unknown>(path: string): Promise<ClientResponse<T>>
  */
 export async function post<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
-    const headers: Record<string, string> = { ...accessPathHeader() };
+    const headers: Record<string, string> = { ...authHeaders() };
     if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "POST",
@@ -116,7 +147,7 @@ export async function post<T = unknown>(path: string, body?: unknown): Promise<C
  */
 export async function put<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
-    const headers: Record<string, string> = { ...accessPathHeader() };
+    const headers: Record<string, string> = { ...authHeaders() };
     if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "PUT",
@@ -135,7 +166,7 @@ export async function put<T = unknown>(path: string, body?: unknown): Promise<Cl
  */
 export async function patch<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
-    const headers: Record<string, string> = { ...accessPathHeader() };
+    const headers: Record<string, string> = { ...authHeaders() };
     if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "PATCH",
@@ -156,7 +187,7 @@ export async function patch<T = unknown>(path: string, body?: unknown): Promise<
  */
 export async function del<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
-    const headers: Record<string, string> = { ...accessPathHeader() };
+    const headers: Record<string, string> = { ...authHeaders() };
     if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "DELETE",

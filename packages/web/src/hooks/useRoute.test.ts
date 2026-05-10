@@ -97,6 +97,25 @@ describe("parseRouteHash", () => {
     });
   });
 
+  test("/memory?tab=usage → memory page with usage tab (item 6.35)", () => {
+    // Item 6.35 added a sibling tab to Audit covering clio_usage_log
+    // (reads + writes, the operational lens). Route validation accepts
+    // "usage" as a valid memoryTab value alongside the original six.
+    expect(parseRouteHash("/memory?tab=usage")).toEqual({
+      page: "memory",
+      memoryTab: "usage",
+      memoryDocId: undefined,
+    });
+  });
+
+  test("/memory?tab=usage&doc=<id> preserves both for per-doc usage drilldown", () => {
+    expect(parseRouteHash("/memory?tab=usage&doc=abc-123")).toEqual({
+      page: "memory",
+      memoryTab: "usage",
+      memoryDocId: "abc-123",
+    });
+  });
+
   // Agents page (item 6.8) — role-template management.
 
   test("/agents → agents page (no template selected)", () => {

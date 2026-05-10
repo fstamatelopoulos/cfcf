@@ -410,11 +410,76 @@ export function createApp() {
   });
 
   app.delete("/api/workspaces/:id", async (c) => {
-    const success = await deleteWorkspace(c.req.param("id"));
+    const id = c.req.param("id");
+
+    // Item 6.35 follow-up (2026-05-10): optional cascade-delete for
+    // the workspace's dedicated Clio Project. Surfaced from dogfood:
+    // user deletes a workspace, then can't delete the orphaned
+    // `cf-workspace-<id>` project because tombstones from the
+    // workspace's docs still pin it. With `?cascade_clio=true`,
+    // we attempt to also delete the dedicated project + force-purge
+    // any tombstones in one go. Only triggers when the workspace's
+    // `clioProject` matches the auto-default `cf-workspace-<id>`
+    // shape — explicit shared projects (e.g. `backend-services`)
+    // are never auto-deleted because other workspaces may still
+    // pin them. Live documents in the project still block — we
+    // surface that error to the caller.
+    const cascadeClio = c.req.query("cascade_clio") === "true";
+
+    let cascadeReport: {
+      attempted: boolean;
+      deleted?: boolean;
+      purgedTombstones?: number;
+      reason?: string;
+    } = { attempted: false };
+
+    if (cascadeClio) {
+      // Look up the workspace BEFORE deleting it so we have its
+      // clioProject field.
+      const { getWorkspace } = await import("@cfcf/core");
+      const ws = await getWorkspace(id);
+      if (ws && ws.clioProject) {
+        // Only auto-cascade for per-workspace projects (cf-workspace-<id>
+        // shape). Shared projects stay untouched — sibling workspaces
+        // may still pin them.
+        const isPerWorkspace = ws.clioProject === `cf-workspace-${ws.id}`;
+        if (isPerWorkspace) {
+          try {
+            const clio = getClioBackend();
+            const result = await clio.deleteProject(ws.clioProject, { force: true });
+            cascadeReport = {
+              attempted: true,
+              deleted: true,
+              purgedTombstones: result.purgedTombstones,
+            };
+          } catch (err) {
+            // Don't block the workspace delete on Clio cleanup
+            // failure — surface the error in the response so the
+            // caller knows manual cleanup is needed. Most likely
+            // cause: live (non-deleted) documents still in the
+            // project; the user has to remove or reassign those
+            // first.
+            cascadeReport = {
+              attempted: true,
+              deleted: false,
+              reason: err instanceof Error ? err.message : String(err),
+            };
+          }
+        } else {
+          cascadeReport = {
+            attempted: true,
+            deleted: false,
+            reason: `clioProject is "${ws.clioProject}" — shared with siblings, not auto-deleted. Use \`cfcf clio projects delete\` if you really want to remove it.`,
+          };
+        }
+      }
+    }
+
+    const success = await deleteWorkspace(id);
     if (!success) {
       return c.json({ error: "Workspace not found" }, 404);
     }
-    return c.json({ deleted: true });
+    return c.json({ deleted: true, cascadeClio: cascadeReport });
   });
 
   // --- Iterate (async) ---

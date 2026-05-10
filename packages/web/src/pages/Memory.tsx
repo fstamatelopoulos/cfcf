@@ -6,6 +6,7 @@ import { SearchTab } from "./memory/SearchTab";
 import { BrowseTab } from "./memory/BrowseTab";
 import { IngestTab } from "./memory/IngestTab";
 import { AuditTab } from "./memory/AuditTab";
+import { UsageTab } from "./memory/UsageTab";
 import { ProjectsTab } from "./memory/ProjectsTab";
 import { TrashTab } from "./memory/TrashTab";
 import { DocumentDetail } from "./memory/DocumentDetail";
@@ -15,6 +16,7 @@ const TABS: { key: MemoryTab; label: string }[] = [
   { key: "browse", label: "Browse" },
   { key: "ingest", label: "Ingest" },
   { key: "audit", label: "Audit" },
+  { key: "usage", label: "Usage" },
   { key: "projects", label: "Projects" },
   { key: "trash", label: "Trash" },
 ];
@@ -105,6 +107,9 @@ export function MemoryPage() {
             )}
             {activeTab === "audit" && (
               <AuditTab activeProject={activeProject} />
+            )}
+            {activeTab === "usage" && (
+              <UsageTab activeProject={activeProject} />
             )}
             {activeTab === "projects" && (
               <ProjectsTab onCreated={bumpCorpus} />

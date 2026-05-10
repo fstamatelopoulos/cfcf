@@ -20,6 +20,7 @@ import {
   parseHandoffDocument,
   parseSignalFile,
   getAdapter,
+  formatClioActor,
   type IterationContext,
 } from "@cfcf/core";
 import * as gitManager from "@cfcf/core";
@@ -197,7 +198,10 @@ async function runIterationAsync(
     args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("dev", workspace.devAgent.adapter, workspace.devAgent.model),
+    },
   });
 
   const result = await managed.result;

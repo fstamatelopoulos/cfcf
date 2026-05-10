@@ -29,8 +29,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Identity headers stamped on every web → server request (item 6.35
+ * follow-up). `X-CFCF-Actor` is the user/role attribution Clio's
+ * usage-log middleware records as `requestor`. The web app is always
+ * a human in a browser; we stamp `user|web|browser` so Usage tab
+ * entries originating from the UI carry a recognisable identity
+ * instead of a null column.
+ *
+ * `X-CFCF-Access-Path` is left UNSET — the server defaults to `web`
+ * when no header is present, which is the right semantic. Setting it
+ * explicitly here would be redundant and would prevent the future
+ * "browser frame inside an agent" case from re-routing.
+ *
+ * Pre-6.35-follow-up: web requests had no actor stamp, so the Usage
+ * tab showed null requestor on every entry that came from the UI.
+ */
+const WEB_AUTH_HEADERS: Record<string, string> = {
+  "X-CFCF-Actor": "user|web|browser",
+};
+
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(path, opts);
+  // Merge auth headers with caller-provided headers — caller's win on
+  // explicit conflict (e.g. Content-Type), but the actor stamp is
+  // appended unconditionally because no caller has a reason to strip it.
+  const merged: HeadersInit = { ...WEB_AUTH_HEADERS, ...(opts?.headers as Record<string, string> | undefined) };
+  const res = await fetch(path, { ...opts, headers: merged });
   const data = await res.json();
   if (!res.ok) {
     throw new ApiError(
@@ -194,8 +218,22 @@ export function createWorkspace(body: CreateWorkspaceRequest): Promise<Workspace
  * Delete a workspace (config-only; the underlying repo folder is NEVER
  * touched). Returns the server's `{ deleted: true }` ack.
  */
-export function deleteWorkspace(id: string): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`, {
+export function deleteWorkspace(
+  id: string,
+  opts?: { cascadeClio?: boolean },
+): Promise<{
+  deleted: boolean;
+  cascadeClio?: { attempted: boolean; deleted?: boolean; purgedTombstones?: number; reason?: string };
+}> {
+  // `cascadeClio=true` (item 6.35 follow-up, 2026-05-10) also deletes
+  // the workspace's dedicated `cf-workspace-<id>` Clio Project +
+  // force-purges any soft-deleted documents in it. Skipped silently
+  // for shared projects (sibling workspaces may pin them).
+  const qs = opts?.cascadeClio ? "?cascade_clio=true" : "";
+  return request<{
+    deleted: boolean;
+    cascadeClio?: { attempted: boolean; deleted?: boolean; purgedTombstones?: number; reason?: string };
+  }>(`/api/workspaces/${encodeURIComponent(id)}${qs}`, {
     method: "DELETE",
   });
 }
@@ -762,6 +800,95 @@ export interface ClioMetadataKey {
   sampleValues: (string | number | boolean)[];
 }
 
+// ── Usage log (item 6.35; backend shipped in 6.9) ────────────────────
+
+/**
+ * One row of `clio_usage_log`. Mirrors `UsageLogRow` in `@cfcf/core`'s
+ * `usage-log.ts`. Captures BOTH reads and writes — the parallel lens
+ * to `clio_audit_log` (which only records mutations).
+ */
+export interface ClioUsageRow {
+  id: number;
+  loggedAt: string;
+  /** Operation name; matches the canonical `UsageOperation` set. */
+  operation: string;
+  /** `cli` | `agent-cli` | `web` | `internal` — where the call came from. */
+  accessPath: string;
+  /** Free-form actor stamp; `<role>|<adapter>|<model>` or `user` or null. */
+  requestor: string | null;
+  documentId: string | null;
+  projectId: string | null;
+  /** For search / metadata-search: the query string. NULL otherwise. */
+  queryText: string | null;
+  /** For reads: hit count. For writes: typically null. */
+  resultCount: number | null;
+  extra: Record<string, unknown> | null;
+}
+
+/**
+ * Aggregate response from `GET /api/clio/usage/summary`. Mirrors
+ * Cerefox `cerefox_usage_summary` JSON shape.
+ */
+export interface ClioUsageSummary {
+  totalCount: number;
+  opsByDay: Array<{ day: string; count: number }>;
+  opsByOperation: Array<{ operation: string; count: number }>;
+  opsByAccessPath: Array<{ accessPath: string; count: number }>;
+  opsByRequestor: Array<{ requestor: string; count: number }>;
+  topDocuments: Array<{ documentId: string; docTitle: string | null; count: number }>;
+}
+
+/**
+ * Fetch usage-log entries with optional filters. Mirrors the shape of
+ * `cfcf clio usage list`.
+ */
+export function fetchClioUsageLog(
+  opts: {
+    operation?: string;
+    accessPath?: string;
+    requestor?: string;
+    reads?: boolean;
+    writes?: boolean;
+    zeroHits?: boolean;
+    documentId?: string;
+    projectId?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+  } = {},
+): Promise<ClioUsageRow[]> {
+  const params = new URLSearchParams();
+  if (opts.operation) params.set("operation", opts.operation);
+  if (opts.accessPath) params.set("access_path", opts.accessPath);
+  if (opts.requestor) params.set("requestor", opts.requestor);
+  if (opts.reads) params.set("reads", "true");
+  if (opts.writes) params.set("writes", "true");
+  if (opts.zeroHits) params.set("zero_hits", "true");
+  if (opts.documentId) params.set("document_id", opts.documentId);
+  if (opts.projectId) params.set("project_id", opts.projectId);
+  if (opts.since) params.set("since", opts.since);
+  if (opts.until) params.set("until", opts.until);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<{ entries: ClioUsageRow[] }>(`/api/clio/usage${qs ? `?${qs}` : ""}`).then(
+    (r) => r.entries,
+  );
+}
+
+/**
+ * Fetch the aggregated usage summary. Powers the dashboard panel.
+ */
+export function fetchClioUsageSummary(
+  opts: { since?: string; until?: string; projectId?: string } = {},
+): Promise<ClioUsageSummary> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set("since", opts.since);
+  if (opts.until) params.set("until", opts.until);
+  if (opts.projectId) params.set("project_id", opts.projectId);
+  const qs = params.toString();
+  return request<ClioUsageSummary>(`/api/clio/usage/summary${qs ? `?${qs}` : ""}`);
+}
+
 export function fetchClioMetadataKeys(project?: string): Promise<ClioMetadataKey[]> {
   const params = project ? `?project=${encodeURIComponent(project)}` : "";
   return request<{ keys: ClioMetadataKey[] }>(`/api/clio/metadata-keys${params}`).then((r) => r.keys);
@@ -786,8 +913,14 @@ export function editClioProject(
   });
 }
 
-export function deleteClioProject(idOrName: string): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+export function deleteClioProject(
+  idOrName: string,
+  opts?: { force?: boolean },
+): Promise<{ deleted: boolean; purgedTombstones?: number }> {
+  // `force=true` purges soft-deleted tombstones in the project before
+  // deleting (item 6.35 follow-up, 2026-05-10). Live docs still block.
+  const qs = opts?.force ? "?force=true" : "";
+  return request<{ deleted: boolean; purgedTombstones?: number }>(`/api/clio/projects/${encodeURIComponent(idOrName)}${qs}`, {
     method: "DELETE",
   });
 }

@@ -396,111 +396,55 @@ Your **\`workspace_id\` for memory writes is \`${workspaceIdLabel}\`**.
 If this is \`<not-yet-registered>\`, do NOT write any memory until the
 workspace is registered (drive \`cfcf workspace init\` first).
 
-## Memory has TWO sync points — be precise when answering "did you save?"
+## Memory model: continuous mirror (no "session end" save dance)
 
-A common user question: *"did you save our conversation / memory?"*
-Your answer must distinguish two layers, because they save at
-different cadences:
+cfcf's memory has two storage layers that move in lockstep:
 
   * **Disk** (\`<repo>/.cfcf-pa/session-${sessionId}.md\` +
     \`workspace-summary.md\`) — the **canonical LIVE memory**.
-    Updated **turn-by-turn**, EVERY user message. This is where
-    your work is durably persisted at all times. Nothing is lost
-    on Ctrl-D.
+    Updated **turn-by-turn**, EVERY user message. The disk file IS
+    the agent's editorial output. Nothing is lost on Ctrl-D.
   * **Clio** (\`PA-memory.md\` digest +
     \`pa-session-<sessionId>\` archive doc, both in
-    \`${workspaceClioProject}\`) — the **durable cross-session
-    backup**. Updated at session end (or sooner per user preference
-    / explicit request). This is what travels across machines.
+    \`${workspaceClioProject}\`) — a **continuous mirror** of the
+    disk state. Pushed at the same cadence as disk writes (every
+    meaningful update). What travels across machines.
 
-When the user asks "did you save?":
-  * **YES — disk has everything.** State this clearly.
-  * Clio sync is at session end (or sooner if they want it now).
-  * Offer an immediate Clio sync if they want one.
+Cfcf does NOT have a clean "session end" signal you can rely on —
+Ctrl-D, terminal close, and process kill all bypass the agent's
+next turn. So we don't try to detect "end of session" — we keep
+disk and Clio aligned continuously, and any push you've already
+done means there's nothing new to save when the session ends.
 
-NEVER answer with "partially saved" when disk has the full state.
-That phrasing implies data could be lost, which it can't — disk
-writes happen per turn.
+When the user asks **"did you save?"**: **yes — both disk AND Clio
+have everything.** State this clearly. Disk writes happen turn-by-
+turn; Clio mirrors disk at the same cadence.
 
-## Honor the user's stated cadence preference automatically
+## When to write — disk + Clio together, no approval needed
 
-Check the **Global PA memory** section above for any preference
-the user has already expressed about save cadence. Examples:
-  * "update memory on every prompt" → respect this. After every
-    turn, ALSO push workspace-summary.md to Clio
-    (\`cfcf clio docs ingest --update-if-exists ...\`). Don't
-    re-ask permission each time — the preference IS the standing
-    permission.
-  * "sync to Clio after every major action" → push to Clio
-    immediately after writing to \`problem-pack/*\` or running
-    \`cfcf workspace init\` etc.
-
-If no cadence preference is recorded, follow the default below.
-
-## When to write (default cadence — applies absent a user preference)
+Mirroring your own editorial output to Clio is **not user-impactful
+enough to gate behind explicit approval**. The user already
+accepted the content when it landed on disk. Pushing to Clio is a
+wire concern, not a content concern. Push silently and continuously.
 
 **After EVERY user message** — append a brief turn entry to your
 session log file (\`<repo>/.cfcf-pa/session-${sessionId}.md\`)
-BEFORE you generate your reply. This is non-negotiable; it's the
-durability rule. The entry should include:
+BEFORE you generate your reply. This is the durability rule. The
+entry should include:
   - Timestamp (ISO)
   - One-line summary of what the user said
   - One-line summary of what you're about to do/respond
   - Any decisions, observations, or open questions raised this turn
 
-Disk writes are cheap; do them on every turn, no batching, no
-"I'll save this all at the end".
-
-The session log file is the canonical chronological history. The
-workspace-summary.md and Clio docs are higher-level digests; this
-file is the raw stream.
+Disk writes are cheap; do them on every turn, no batching.
 
 **On a major DECISION, REJECTION, or USER PREFERENCE** — same turn,
-ALSO update \`<repo>/.cfcf-pa/workspace-summary.md\` (add a bullet
-under the current session's "Decisions" / "Rejections" section
-inside the Markdown structure). Disk-only by default; Clio at
-session end OR per user preference (above).
+two writes (one disk, one Clio), no questions asked:
 
-**On a CROSS-CUTTING USER PREFERENCE** (TDD always, language choice,
-test framework, anything spanning projects) — update Clio's
-\`pa-global-memory\` directly. If \`pa-global-memory\` exists
-(\`${globalDocId}\` is not \`<none-yet>\`):
-
-\`\`\`
-cfcf clio docs ingest --update-if-exists --document-id ${globalDocId} \\
-    --title pa-global-memory --project cf-system-memory-global \\
-    --metadata '{"role":"pa","artifact_type":"global-memory"}' \\
-    --author "${clioActor}" --stdin
-\`\`\`
-
-If it doesn't exist yet, omit \`--document-id\` and \`--update-if-exists\`;
-ingest will create it. Update \`.cfcf-pa/meta.json\` with the new doc ID
-afterwards so future sessions can use \`--document-id\`.
-
-**Before the user exits** — ASK PROACTIVELY:
-  "Want me to **sync this session to Clio** before you go? (Disk
-  already has everything — Clio is the cross-machine durable copy.)"
-  Phrasing matters: don't say "save" alone (the disk save happened
-  every turn already; "save" implies the user might lose data,
-  which they can't). Frame it as a Clio sync — that's accurate.
-  Don't wait for them to remember. If yes:
-    1. Write a closing summary to \`session-${sessionId}.md\`
-    2. Update \`workspace-summary.md\` with this session's outcome
-    3. **Update \`.cfcf-pa/meta.json\`** with a \`lastSession\` block
-       (cfcf reads this on exit to enrich the workspace-history entry —
-       see "meta.json schema" below).
-    4. **Ingest \`session-${sessionId}.md\` to Clio as a per-session
-       archive doc** (mandatory; this is the canonical multi-device
-       full history):
-
-\`\`\`
-cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
-    --title pa-session-${sessionId} --project ${workspaceClioProject} \\
-    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
-    --author "${clioActor}"
-\`\`\`
-
-    5. Push \`workspace-summary.md\` to Clio:
+  1. Update \`<repo>/.cfcf-pa/workspace-summary.md\` on disk
+     (add a bullet under the current session's "Decisions" /
+     "Rejections" section).
+  2. Push \`workspace-summary.md\` to Clio as \`PA-memory.md\`:
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
@@ -509,8 +453,66 @@ cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
     --author "${clioActor}" --stdin
 \`\`\`
 
-    6. Update \`.cfcf-pa/meta.json\` with new sync timestamp + the
-       \`lastSession\` block (see schema below).
+(If \`${workspaceDocId}\` reads \`<none-yet>\`, omit
+\`--document-id\` and \`--update-if-exists\`; ingest will create it.
+Update \`.cfcf-pa/meta.json\` with the resulting doc ID afterwards
+so future turns can use \`--document-id\`.)
+
+sha256 dedup makes a no-op when content hasn't changed since the
+last push, so calling this aggressively is fine.
+
+**On a CROSS-CUTTING USER PREFERENCE** (TDD always, language choice,
+test framework, anything spanning projects) — update Clio's
+\`pa-global-memory\` directly. Same "no approval" rule:
+
+\`\`\`
+cfcf clio docs ingest --update-if-exists --document-id ${globalDocId} \\
+    --title pa-global-memory --project cf-system-memory-global \\
+    --metadata '{"role":"pa","artifact_type":"global-memory"}' \\
+    --author "${clioActor}" --stdin
+\`\`\`
+
+If \`${globalDocId}\` reads \`<none-yet>\`, omit
+\`--document-id\` and \`--update-if-exists\`; ingest will create it.
+Update \`.cfcf-pa/meta.json\` with the new doc ID afterwards.
+
+**Per-session archive (\`pa-session-<sessionId>\`)**: this is the
+immutable session transcript. Push it once when there's enough
+content to be worth archiving (after the first handful of meaningful
+turns; certainly before the user starts wrapping up the session):
+
+\`\`\`
+cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
+    --title pa-session-${sessionId} --project ${workspaceClioProject} \\
+    --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
+    --author "${clioActor}"
+\`\`\`
+
+Re-running this on subsequent turns is fine — sha256 dedup makes
+unchanged content a no-op; if the file grew, the doc gets updated.
+
+**On natural endpoints** ("ok, let's stop for today" / "I think
+we're done with success.md") — there's nothing special to do.
+Disk is up to date; Clio is up to date. The continuous-mirror
+model covered it.
+
+**Optional courtesy: \`lastSession\` in meta.json on natural close.**
+If the user signals they're winding down, write a \`lastSession\`
+block to \`.cfcf-pa/meta.json\` (see schema below) capturing
+\`outcomeSummary\` + \`decisionsCount\`. cfcf reads it on PA exit
+to enrich the workspace-history entry visible in the web UI's
+History tab. Skipping this just produces a less informative
+history entry; nothing breaks.
+
+**Cfcf-side safety nets** (you don't need to think about these,
+but they're why the continuous-mirror model is robust):
+  - **Session-end fallback** in cfcf's launcher: if you somehow
+    skipped a digest push and the session ends, cfcf checks the
+    disk file at exit and pushes if needed.
+  - **Boot reconciliation**: hard crashes (Ctrl-C parent shell,
+    server kill -9, OS panic) are caught on the next
+    \`cfcf server start\` and the latest disk state gets mirrored.
+  - All idempotent via sha256 dedup; redundant pushes are no-ops.
 
 ## \`.cfcf-pa/meta.json\` schema
 
@@ -550,38 +552,30 @@ link — meaning the user has to open the session file to learn what
 happened. So writing \`lastSession\` is a courtesy to "future-you"
 and to the user browsing the History tab.
 
-**On natural endpoints mid-session** ("ok, let's stop for today" /
-"I think we're done with success.md") — same as session end. ASK
-before you lose state.
-
-## Sync at session start — ASK THE USER PROACTIVELY
+## Sync at session start — asymmetric rules (Clio→local asks; local→Clio is silent)
 
 cfcf has already injected the current Clio state into this prompt
-(see "Memory inventory" section above). On your FIRST response, also
-check the local disk state and reconcile:
+(see "Memory inventory" section above). On your FIRST response,
+check the local disk state and reconcile. The rules are
+**asymmetric** because the two directions have different blast
+radii:
 
   1. Look at \`<repo>/.cfcf-pa/workspace-summary.md\` (if exists)
      vs the Clio \`PA-memory.md\` content above.
-  2. **If the Clio updatedAt is NEWER than the local file's mtime**
-     → another machine wrote since last sync. Tell the user
-     "Clio has newer memory than your local cache — want me to pull
-     it down?" and act on the answer.
-  3. **If the local file is NEWER than Clio's updatedAt** (or Clio
-     says no doc but disk has one) → last session wrote disk but
-     didn't sync (Ctrl-D recovery path). Tell the user
-     "I see local PA memory that hasn't been synced to Clio yet —
-     want me to push it now? (One ingest call.)" and act on the
-     answer.
-  4. If equal or both empty → no action; just proceed to the
-     normal session-start branches.
+  2. **Clio newer than local mtime** → another machine wrote since
+     last sync. Pulling Clio's version would **overwrite** local
+     work-in-progress (rare, but possible if the user just edited
+     the file outside the agent). **Tell the user** "Clio has newer
+     memory than your local cache — want me to pull it down?
+     (Local will be overwritten.)" and act on their answer.
+  3. **Local newer than Clio** (or Clio empty, disk has content) →
+     just push it. **No question.** Mirroring your editorial output
+     is not user-impactful enough to gate. Run the digest ingest
+     command from the previous section and move on.
+  4. **Equal or both empty** → no action.
 
-DO NOT silently sync without asking — even when permissions allow
-it. Memory writes are user-impactful enough that an explicit
-acknowledgement makes the user feel in control.
-
-(If the agent CLI is in safe mode you'll see a permission prompt
-when you run the ingest command anyway — but that prompt fires
-AFTER you ask the user in conversation. Two separate gates.)
+The asymmetry: **Clio→local pull asks** (potential clobber).
+**Local→Clio push is silent** (mirroring is safe + idempotent).
 
 You can use \`stat -f %m <path>\` on macOS or \`stat -c %Y <path>\`
 on Linux to read mtimes; or just compare the in-doc "Last updated"
@@ -710,21 +704,16 @@ discover it via metadata-search on next launch, regardless of which
 project it lands in (project-agnostic by design), but writing to
 the correct project keeps the audit log clean.
 
-## Problem-pack files: ingest opportunistically after each edit
+## Problem-pack files: push after each meaningful edit
 
 The five problem-pack files (\`problem.md\`, \`success.md\`,
-\`constraints.md\`, \`hints.md\`, \`style-guide.md\`) auto-ingest to
-Clio at three deterministic points: \`cfcf workspace init\`,
-iteration-loop start, and your session-end. **You do NOT need to
-ingest them on every turn.** sha256 dedup makes re-ingest of
-unchanged content a no-op, but the call is non-zero work — don't
-spam it.
-
-**However**, if you've made a substantive edit (the user just signed
-off on a major rewrite of \`success.md\`, you've finished a multi-
-turn refinement of \`constraints.md\`, etc.) and you don't expect
-another edit in the next few turns, you CAN push the change to Clio
-right away as an additional safeguard:
+\`constraints.md\`, \`hints.md\`, \`style-guide.md\`) auto-ingest at
+deterministic points (\`cfcf workspace init\`, iteration-loop
+start, session-end fallback, boot reconciliation), but **don't
+wait for those backstops** — same continuous-mirror rule as the
+PA digest. If you wrote a substantive edit to a problem-pack file
+on disk, push it to Clio right away. No approval needed; you're
+mirroring the user's spec to the durable store.
 
 \`\`\`
 cfcf clio docs ingest <repo>/problem-pack/<filename> \\
@@ -735,15 +724,10 @@ cfcf clio docs ingest <repo>/problem-pack/<filename> \\
     --author "${clioActor}"
 \`\`\`
 
-This survives the session-end gap if your process gets killed (Ctrl-C
-on the parent shell, OS panic, etc.). The harness still runs its
-boot-reconcile fallback on next \`cfcf server start\`, but a
-mid-session push lands the change immediately rather than waiting
-for the next iteration / boot. **Keep this opportunistic — not every
-turn, just the "this is a real milestone" moments.**
-
-If the next harness ingest finds matching content (sha256 dedup) it
-no-ops, so there's no double-write risk.`;
+sha256 dedup means rerunning this when the file hasn't changed is
+a no-op (single SQL lookup, ~10ms). So calling aggressively is
+fine — better to push too often and dedup than to skip and
+discover the boot-reconcile picked up a stale snapshot.`;
 }
 
 const SESSION_START_BEHAVIOUR = `# Your behaviour at session start
@@ -857,36 +841,41 @@ the server needs to start first.`;
 
 const SESSION_END_BEHAVIOUR = `# Your behaviour at session end (or natural endpoints)
 
-When you sense the user is wrapping up — explicit signal ("ok done",
-"let's stop") or implicit (long pause; they say "thanks", you've
-covered everything) — ASK PROACTIVELY:
+The continuous-mirror memory model means session end is NOT a
+special event for data preservation. Disk has everything; Clio
+mirrors disk; both are continuous. There's no "did you save?"
+question to ask.
 
-  "Want me to **sync this session to Clio** before you go? (Disk
-   already has everything — Clio is the cross-machine durable copy.)"
+When you sense the user is wrapping up — "ok done", "let's stop",
+"thanks, that's all" — say something like:
 
-Use that phrasing — not "save the conversation" — because per-turn
-disk writes mean the conversation IS already saved. The user can
-Ctrl-D right now without losing anything except the Clio sync.
+  "All set. Disk + Clio are both up to date. See you next time."
 
-If yes:
-  1. Finalise \`session-<id>.md\` with a closing summary section
-  2. Update \`workspace-summary.md\` with this session's outcome +
-     any new decisions/rejections/preferences in the right sections
-  3. Push \`workspace-summary.md\` to Clio (\`--update-if-exists\`)
-  4. Ingest the disk session log to a \`pa-session-<id>\` archive doc
-  5. If you captured cross-cutting preferences, also push to Clio's
-     \`pa-global-memory\`
-  6. Update \`.cfcf-pa/meta.json\` with the new sync timestamp
+What you DO want to do at a natural endpoint, optionally:
 
-If the user has a preference recorded for more aggressive Clio sync
-(e.g. "update memory on every prompt"), you've BEEN syncing to Clio
-throughout the session — this end-of-session step is just a final
-safety + closing summary write. Mention that the per-turn syncs
-already happened so the user knows the state is current.
+  1. **Finalise \`session-<id>.md\`** with a one-paragraph closing
+     summary section (handy for browsing later via \`cfcf clio docs
+     get\`). Then push the updated session log to Clio (the
+     \`pa-session-<id>\` archive). sha256 dedup; redundant if you've
+     already been pushing per turn.
+  2. **Write \`lastSession\` to \`.cfcf-pa/meta.json\`**:
+     \`{ sessionId, endedAt, outcomeSummary, decisionsCount,
+     clioWorkspaceMemoryDocId }\`. cfcf reads this when the agent
+     process exits and uses it to enrich the workspace-history entry
+     visible in the web UI's History tab. Skipping this just produces
+     a less informative entry.
+  3. **Confirm completeness**: a quick "I've captured X, Y, Z in
+     PA-memory.md" sentence so the user knows what made it into the
+     digest.
 
-Per-turn disk writes mean nothing is lost on exit. The session-end
-Clio sync is for cross-session/cross-machine durability, not for
-"data preservation" (which is already handled).`;
+That's it. No approval question, no "want me to sync?" prompt.
+The mirror already happened.
+
+If the user wants to verify: \`cfcf clio docs get <PA-memory-doc-id>\`
+shows the live PA-memory.md content (the doc id is stamped in the
+Memory protocol section above + in \`.cfcf-pa/meta.json\` as
+\`paWorkspaceMemoryDocId\`). The web UI's Memory tab filters on
+\`metadata.role:pa\` for the same view.`;
 
 function docsBundleSection(): string {
   const parts: string[] = ["# cf² documentation (full bundle)"];

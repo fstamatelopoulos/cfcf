@@ -1186,6 +1186,56 @@ function registerUnder(root: Command): void {
       if (p.documentCount != null) console.log(`  documents:    ${p.documentCount}`);
     });
 
+  // Item 6.35 follow-up (2026-05-10): added delete after dogfood
+  // showed a workspace-cleanup gap. Refuses if any workspace pins
+  // the project name, OR if any documents (live or soft-deleted)
+  // still belong to it. `--force` purges soft-deleted tombstones
+  // first; live documents still block.
+  projectsCmd
+    .command("delete <nameOrId>")
+    .description(
+      "Delete a Clio Project. Refuses if a workspace pins it OR if " +
+      "documents still belong to it. Use --force to purge soft-deleted " +
+      "tombstones along with the project (irreversible for the " +
+      "tombstoned docs; live docs still block).",
+    )
+    .option("--force", "Purge soft-deleted documents in the project before deleting")
+    .option("-y, --yes", "Skip the confirmation prompt")
+    .action(async (nameOrId: string, opts) => {
+      if (!(await checkServer())) return;
+
+      // Confirmation gate (skipped with --yes). Project deletion is
+      // user-initiated cleanup, not an automated path; an explicit
+      // confirm is the right friction.
+      if (!opts.yes) {
+        const confirmed = await promptYesNo(
+          opts.force
+            ? `Delete Clio Project "${nameOrId}" AND purge any soft-deleted documents in it? This cannot be undone for the tombstoned docs.`
+            : `Delete Clio Project "${nameOrId}"? Refused if any documents still belong to it; pass --force to also purge soft-deleted tombstones.`,
+        );
+        if (!confirmed) {
+          console.log("Aborted.");
+          return;
+        }
+      }
+
+      const qs = opts.force ? "?force=true" : "";
+      const res = await del<{ deleted: boolean; purgedTombstones?: number }>(
+        `/api/clio/projects/${encodeURIComponent(nameOrId)}${qs}`,
+      );
+      if (!res.ok) {
+        console.error(`Delete failed: ${res.error}`);
+        process.exit(1);
+      }
+      if (res.data?.purgedTombstones && res.data.purgedTombstones > 0) {
+        console.log(
+          `Deleted Clio Project "${nameOrId}" + purged ${res.data.purgedTombstones} soft-deleted document(s) along with it.`,
+        );
+      } else {
+        console.log(`Deleted Clio Project "${nameOrId}".`);
+      }
+    });
+
   // ── embedder ──────────────────────────────────────────────────────────
   // (`embedderCmd` is hoisted at the top of registerUnder.)
   embedderCmd

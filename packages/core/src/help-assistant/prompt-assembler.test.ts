@@ -43,6 +43,23 @@ describe("assembleHelpAssistantPrompt", () => {
     expect(prompt).toContain("(empty -- memory Projects don't exist yet, or no docs in them)");
   });
 
+  it("teaches the explicit-vs-inferred memory-write asymmetry (item 6.35 follow-up, 2026-05-10)", () => {
+    // Pre-fix: the HA prompt said "Always prompt the user before
+    // writing memory" — but the same dogfood that surfaced the PA
+    // approval-gate friction applies here when the user explicitly
+    // says "remember that I prefer X". Refactored to mirror PA's
+    // model: silent on explicit signals, ask only when inferring.
+    const prompt = assembleHelpAssistantPrompt();
+    expect(prompt).toContain("Save silently");
+    expect(prompt).toContain("Ask first");
+    expect(prompt).toContain("explicitly authorised");
+    // The blanket "Always prompt the user before writing memory"
+    // language must be GONE. (`prompt the user` may still appear
+    // for other UX cues — e.g. before running shell commands — but
+    // not as a memory-write blanket rule.)
+    expect(prompt).not.toContain("Always prompt the user before writing memory");
+  });
+
   it("inlines the provided memory inventory verbatim", () => {
     const inv = [
       "### Project: `cf-system-memory-global` (1 doc)\n- **always TS** (`abc-123`)\n  user prefers TypeScript",

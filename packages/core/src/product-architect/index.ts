@@ -55,6 +55,7 @@ export {
   buildLaunchArgs as buildPaLaunchArgs,
   launchProductArchitect,
   fallbackIngestPaSessionArchive,
+  fallbackIngestPaWorkspaceMemory,
   type LaunchOptions as PaLaunchOptions,
   type LaunchResult as PaLaunchResult,
   type LaunchArgs as PaLaunchArgs,

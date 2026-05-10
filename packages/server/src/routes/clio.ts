@@ -30,6 +30,7 @@ export function registerClioRoutes(app: Hono): void {
   app.get("/api/clio/projects", async (c) => {
     const backend = getClioBackend();
     const projects = await backend.listProjects();
+    c.set("clioUsageExtras", { resultCount: projects.length });
     // 6.18 round-2: stamp each project with `isSystem` so the web UI
     // can hide the Edit / Delete affordances for system-managed
     // projects without needing to ship the SYSTEM_PROJECTS set down to
@@ -66,6 +67,7 @@ export function registerClioRoutes(app: Hono): void {
     const idOrName = c.req.param("idOrName");
     const backend = getClioBackend();
     const project = await backend.getProject(idOrName);
+    c.set("clioUsageExtras", { resultCount: project ? 1 : 0 });
     if (!project) return c.json({ error: "Clio Project not found" }, 404);
     return c.json(project);
   });
@@ -142,8 +144,13 @@ export function registerClioRoutes(app: Hono): void {
       }, 409);
     }
 
+    // `?force=true` purges soft-deleted tombstones in the project
+    // before the delete. Live documents still block (force is not a
+    // "destroy live data" path). Item 6.35 follow-up.
+    const force = c.req.query("force") === "true";
+
     try {
-      const result = await backend.deleteProject(target.id);
+      const result = await backend.deleteProject(target.id, { force });
       return c.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -405,6 +412,10 @@ export function registerClioRoutes(app: Hono): void {
     const id = c.req.param("id");
     const backend = getClioBackend();
     const doc = await backend.getDocument(id);
+    // Item 6.35 follow-up: stamp the usage log with hit count
+    // (1=found, 0=not found). Lets the Usage tab + `cfcf clio usage
+    // --zero-hits` find typos / stale doc-id references.
+    c.set("clioUsageExtras", { resultCount: doc ? 1 : 0 });
     if (!doc) return c.json({ error: "Document not found" }, 404);
     return c.json(doc);
   });
@@ -437,6 +448,7 @@ export function registerClioRoutes(app: Hono): void {
         since,
         limit,
       });
+      c.set("clioUsageExtras", { resultCount: entries.length });
       return c.json({ entries });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -496,6 +508,7 @@ export function registerClioRoutes(app: Hono): void {
         zeroHitsOnly,
         limit,
       });
+      c.set("clioUsageExtras", { resultCount: entries.length });
       return c.json({ entries });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -548,6 +561,10 @@ export function registerClioRoutes(app: Hono): void {
         includeDeleted: body.includeDeleted,
         matchCount: body.matchCount,
       });
+      c.set("clioUsageExtras", {
+        resultCount: result.documents.length,
+        queryText: JSON.stringify(body.metadataFilter),
+      });
       return c.json(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -562,6 +579,7 @@ export function registerClioRoutes(app: Hono): void {
     const backend = getClioBackend();
     try {
       const keys = await backend.listMetadataKeys({ project });
+      c.set("clioUsageExtras", { resultCount: keys.length });
       return c.json({ keys });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -708,6 +726,7 @@ export function registerClioRoutes(app: Hono): void {
     const versionId = c.req.query("version_id") || undefined;
     const backend = getClioBackend();
     const result = await backend.getDocumentContent(id, versionId ? { versionId } : undefined);
+    c.set("clioUsageExtras", { resultCount: result ? 1 : 0 });
     if (!result) {
       return c.json(
         { error: versionId ? `Document or version ${versionId} not found` : "Document not found" },
@@ -724,8 +743,12 @@ export function registerClioRoutes(app: Hono): void {
     const id = c.req.param("id");
     const backend = getClioBackend();
     const doc = await backend.getDocument(id);
-    if (!doc) return c.json({ error: "Document not found" }, 404);
+    if (!doc) {
+      c.set("clioUsageExtras", { resultCount: 0 });
+      return c.json({ error: "Document not found" }, 404);
+    }
     const versions = await backend.listDocumentVersions(id);
+    c.set("clioUsageExtras", { resultCount: versions.length });
     return c.json({ versions });
   });
 
@@ -756,6 +779,7 @@ export function registerClioRoutes(app: Hono): void {
     const backend = getClioBackend();
     try {
       const docs = await backend.listDocuments({ project, limit, offset, deletedFilter });
+      c.set("clioUsageExtras", { resultCount: docs.length });
       return c.json({ documents: docs });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

@@ -25,6 +25,7 @@ import type {
 } from "./types.js";
 import { getTemplate, writeTemplate } from "./templates.js";
 import { effectiveClioProject } from "./clio/system-projects.js";
+import { formatClioActor } from "./clio/actor.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import {
@@ -401,7 +402,13 @@ async function runReflectionAsync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: (() => {
+      const a = resolveReflectionAgent(workspace);
+      return {
+        CFCF_ACCESS_PATH: "agent-cli",
+        CFCF_ACTOR: formatClioActor("reflection", a.adapter, a.model),
+      };
+    })(),
   });
   reflectProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
@@ -540,7 +547,13 @@ export async function runReflectionSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: (() => {
+      const a = resolveReflectionAgent(workspace);
+      return {
+        CFCF_ACCESS_PATH: "agent-cli",
+        CFCF_ACTOR: formatClioActor("reflection", a.adapter, a.model),
+      };
+    })(),
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,

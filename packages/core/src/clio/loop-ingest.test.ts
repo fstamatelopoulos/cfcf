@@ -537,6 +537,34 @@ describe("ingestProblemPack", () => {
     }
   });
 
+  it("writes a `internal` access-path usage row alongside the audit-log row (item 6.35 follow-up)", async () => {
+    // Pre-fix: auto-ingest hooks called backend.ingest() directly,
+    // bypassing the HTTP middleware. The Audit tab saw the writes
+    // (audit-log is internal to LocalClio) but the Usage tab missed
+    // them — confusing inconsistency. This test pins the new
+    // recordInternalUsage() behaviour: each problem-pack ingest
+    // produces a clio_usage_log row with accessPath="internal" so
+    // the Usage tab + `cfcf clio usage` see them.
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nProbe." });
+
+    await ingestProblemPack(clio, ws, "iteration-start");
+
+    const usage = await clio.getUsageLog({ accessPath: "internal" });
+    const ingestRow = usage.find((u) =>
+      u.operation === "ingest" &&
+      typeof u.extra === "object" &&
+      u.extra !== null &&
+      (u.extra as Record<string, unknown>).artifact_type === "problem-pack",
+    );
+    expect(ingestRow).toBeTruthy();
+    // Requestor stamp follows the role|cfcf|system convention for
+    // user-stakeholder problem-pack writes (NOT user|cli|default —
+    // the auto-ingest path is cfcf-driven, not human-CLI-driven).
+    expect(ingestRow?.requestor).toBe("user|cfcf|system");
+    expect(ingestRow?.accessPath).toBe("internal");
+  });
+
   it("treats whitespace-only content as missing (won't create empty docs)", async () => {
     const ws = makeWorkspace();
     await seedProblemPack({
