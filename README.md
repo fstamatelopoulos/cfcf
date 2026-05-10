@@ -237,6 +237,12 @@ cfcf Server (Hono on Bun, serves API + static web GUI)
     +-- Runners                   (architect [first-run or re-review], judge, reflection, documenter)
     +-- Process Manager           (spawn agents, capture logs)
     +-- Active Processes Registry (track + kill on shutdown)
+    +-- Standalone-Agent State    (per-workspace review-/document-/reflect-state.json;
+    |                              hydrate-on-boot pattern flips stale active states
+    |                              to failed; F.23 v0.24)
+    +-- Active-Agent Resolver     (server-side aggregation across loop+review+document
+    |                              +reflect stores; powers /api/workspaces enrichment +
+    |                              dashboard active-agent chip; F.22 v0.24)
     +-- Context Assembler         (merge sentinel block into CLAUDE.md/AGENTS.md, build cfcf-docs/)
     +-- Plan Validator            (non-destructive rewrite check for architect + reflection)
     +-- Workspace History         (persistent audit trail: review / iteration / reflection / document)
