@@ -202,6 +202,22 @@ export async function ingestReflectionAnalysis(
 
 // ── Hook: architect-review.md ingest ──────────────────────────────────────
 
+/**
+ * Mirror `cfcf-docs/architect-review.md` to Clio.
+ *
+ * Pre-v0.24: every architect run created a NEW Clio document (title
+ * varied by readiness — "architect review (READY)" vs "(NEEDS_REFINEMENT)" —
+ * and source varied by trigger). A re-review-heavy workspace accumulated
+ * dozens of architect-review docs in Clio for what's a single living
+ * artifact on disk (`cfcf-docs/architect-review.md` is rewritten each
+ * time, not appended).
+ *
+ * v0.24: single growing doc with `updateIfExists: true`. Title +
+ * source are stable across runs; readiness + trigger move to
+ * doc-level metadata (still searchable, still auditable, but the doc
+ * count stays at 1 per workspace). Version snapshots in
+ * `clio_document_versions` capture the audit trail.
+ */
 export async function ingestArchitectReview(
   backend: MemoryBackend,
   workspace: WorkspaceConfig,
@@ -218,16 +234,18 @@ export async function ingestArchitectReview(
   try {
     const result = await backend.ingest({
       project: resolveClioProject(workspace),
-      title: `${workspace.name}: architect review (${readiness ?? "unknown"})`,
+      title: `${workspace.name}: architect-review`,
       content,
       author: actorForRole(workspace, "architect"),
-      source: `cfcf-auto:architect-review:${trigger}`,
+      source: `cfcf-auto:architect-review`,
+      updateIfExists: true,
       metadata: baseMetadata(workspace, {
         role: "architect",
         artifact_type: "architect-review",
         tier: "semantic",
-        trigger,
+        last_trigger: trigger,
         readiness: readiness ?? null,
+        last_updated_at: new Date().toISOString(),
       }),
     });
     recordInternalUsage(backend, {
@@ -385,15 +403,29 @@ export function parseDecisionLog(raw: string): DecisionEntry[] {
 }
 
 /**
- * Ingest decision-log entries that appended during the iteration. The
- * harness passes the raw file's content from BEFORE + AFTER the iteration;
- * we ingest any entries whose header block changed (simplest: ingest new
- * semantic entries only, by iteration number match).
+ * Mirror `cfcf-docs/decision-log.md` to Clio.
  *
- * "Semantic" = category ∈ {lesson, strategy, resolved-question, risk}.
+ * Pre-v0.24: each entry in the file was ingested as a SEPARATE Clio
+ * document (title varied by category + iter + role; source varied
+ * by entry timestamp). A 5-iteration loop produced 7+ separate
+ * decision-log docs in Clio — fragmenting what's one growing file
+ * on disk. Search noise: "what decisions has this project made?"
+ * returned N hits to read in order. Lost narrative continuity (each
+ * entry was authored aware of prior ones; the collective is the
+ * value). Did not mirror the on-disk source.
  *
- * In `summaries-only` mode only semantic entries are ingested. In `all`
- * mode every category is ingested.
+ * v0.24: single growing doc with `updateIfExists: true`. Per-entry
+ * metadata (role, iter, category, timestamp) lives INSIDE the
+ * content via the existing `## <ts>  [role: …]  [iter: N]  [category: …]`
+ * markdown header that cf² writes in the file — chunker + FTS
+ * preserve those for search. Doc-level metadata captures aggregate
+ * info: entry_count, categories present, last_iter_updated.
+ *
+ * Policy still honoured: in `summaries-only` we ingest only the
+ * semantic entries (lesson / strategy / resolved-question / risk).
+ * In `all` we ingest the full file as-is.
+ *
+ * Returns 1 when a doc was created/updated, 0 when no-op.
  */
 export async function ingestDecisionLogEntries(
   backend: MemoryBackend,
@@ -407,50 +439,76 @@ export async function ingestDecisionLogEntries(
   const content = await readIfExists(path);
   if (!content) return 0;
 
-  const iterLabel = String(iteration);
-  const entries = parseDecisionLog(content).filter((e) => {
-    if (e.iteration !== iterLabel) return false;
-    if (policy === "all") return true;
-    return SEMANTIC_CATEGORIES.has(e.category);
-  });
+  const allEntries = parseDecisionLog(content);
+  if (allEntries.length === 0) return 0;
 
-  let count = 0;
-  for (const e of entries) {
-    try {
-      // Build the ingested body so it stands alone: include the header in
-      // the content for readability when the doc is retrieved via
-      // `cfcf clio get`.
-      const body = `## ${e.timestamp}  [role: ${e.role}]  [iter: ${e.iteration}]  [category: ${e.category}]\n\n${e.body}`;
-      const dlResult = await backend.ingest({
-        project: resolveClioProject(workspace),
-        title: `${workspace.name}: decision-log ${e.category} (iter ${iteration}, ${e.role})`,
-        content: body,
-        author: actorForRole(workspace, e.role),
-        source: `cfcf-auto:decision-log:iter-${iteration}:${e.timestamp}`,
-        metadata: baseMetadata(workspace, {
-          role: e.role,
-          artifact_type: "decision-log-entry",
-          tier: SEMANTIC_CATEGORIES.has(e.category) ? "semantic" : "episodic",
-          iteration,
-          category: e.category,
-          timestamp: e.timestamp,
-        }),
-      });
-      recordInternalUsage(backend, {
-        operation: "ingest",
-        requestor: actorForRole(workspace, e.role),
-        documentId: dlResult.document?.id,
-        projectId: dlResult.document?.projectId,
-        extra: { artifact_type: "decision-log-entry", iteration, category: e.category, action: dlResult.action },
-      });
-      count++;
-    } catch (err) {
-      console.warn(
-        `[clio] decision-log entry ingest failed (iter ${iteration}, ${e.category}): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  // In summaries-only mode, build a filtered file containing only
+  // semantic entries. In `all`, ingest the original file content
+  // unchanged so search hits reflect what's on disk.
+  let body: string;
+  let entries: DecisionEntry[];
+  if (policy === "summaries-only") {
+    entries = allEntries.filter((e) => SEMANTIC_CATEGORIES.has(e.category));
+    if (entries.length === 0) return 0;
+    body = renderDecisionLog(entries);
+  } else {
+    entries = allEntries;
+    body = content;
   }
-  return count;
+
+  const categories = Array.from(new Set(entries.map((e) => e.category))).sort();
+  const author = actorForRole(workspace, "cfcf");
+
+  try {
+    const result = await backend.ingest({
+      project: resolveClioProject(workspace),
+      title: `${workspace.name}: decision-log`,
+      content: body,
+      author,
+      source: `cfcf-auto:decision-log`,
+      updateIfExists: true,
+      metadata: baseMetadata(workspace, {
+        artifact_type: "decision-log",
+        tier: "semantic",
+        last_iter_updated: iteration,
+        entry_count: entries.length,
+        categories,
+        last_updated_at: new Date().toISOString(),
+      }),
+    });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: author,
+      documentId: result.document?.id,
+      projectId: result.document?.projectId,
+      extra: {
+        artifact_type: "decision-log",
+        last_iter_updated: iteration,
+        entry_count: entries.length,
+        action: result.action,
+      },
+    });
+    return 1;
+  } catch (err) {
+    console.warn(
+      `[clio] decision-log ingest failed (iter ${iteration}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
+  }
+}
+
+/**
+ * Reconstruct a markdown decision-log file from parsed entries.
+ * Used by `ingestDecisionLogEntries` in `summaries-only` mode to
+ * build a filtered version containing only semantic entries.
+ */
+function renderDecisionLog(entries: DecisionEntry[]): string {
+  return entries
+    .map(
+      (e) =>
+        `## ${e.timestamp}  [role: ${e.role}]  [iter: ${e.iteration}]  [category: ${e.category}]\n\n${e.body}`,
+    )
+    .join("\n\n");
 }
 
 // ── Hook: end-of-iteration summary (cfcf-generated) ───────────────────────

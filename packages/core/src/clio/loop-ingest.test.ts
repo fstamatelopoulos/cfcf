@@ -176,7 +176,7 @@ describe("ingestReflectionAnalysis", () => {
 // ── ingestArchitectReview ────────────────────────────────────────────────
 
 describe("ingestArchitectReview", () => {
-  it("ingests pre-loop architect-review.md", async () => {
+  it("ingests architect-review.md as a single growing doc with stable title (v0.24)", async () => {
     const ws = makeWorkspace();
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "architect-review.md"),
@@ -186,15 +186,41 @@ describe("ingestArchitectReview", () => {
     const r = await ingestArchitectReview(clio, ws, "loop", "READY");
     expect(r?.created).toBe(true);
     expect(r?.document.metadata.artifact_type).toBe("architect-review");
-    expect(r?.document.metadata.trigger).toBe("loop");
+    expect(r?.document.metadata.last_trigger).toBe("loop");
     expect(r?.document.metadata.readiness).toBe("READY");
+    // Stable title — no readiness suffix. Re-running with a different
+    // readiness must update the SAME doc, not create a new one.
+    expect(r?.document.title).toBe(`${ws.name}: architect-review`);
+  });
+
+  it("updates the same doc across re-reviews instead of creating new ones (v0.24)", async () => {
+    const ws = makeWorkspace();
+    await writeFile(
+      join(ws.repoPath, "cfcf-docs", "architect-review.md"),
+      "Run 1 content",
+      "utf-8",
+    );
+    const first = await ingestArchitectReview(clio, ws, "loop", "NEEDS_REFINEMENT");
+    expect(first?.created).toBe(true);
+
+    // Architect re-runs after user edited the spec → fresh content + new readiness.
+    await writeFile(
+      join(ws.repoPath, "cfcf-docs", "architect-review.md"),
+      "Run 2 content",
+      "utf-8",
+    );
+    const second = await ingestArchitectReview(clio, ws, "manual", "READY");
+    expect(second?.created).toBe(false); // updateIfExists hit
+    expect(second?.document.id).toBe(first?.document.id); // same doc
+    expect(second?.document.metadata.readiness).toBe("READY"); // metadata refreshed
+    expect(second?.document.metadata.last_trigger).toBe("manual");
   });
 });
 
 // ── ingestDecisionLogEntries ─────────────────────────────────────────────
 
-describe("ingestDecisionLogEntries", () => {
-  it("summaries-only: only semantic-category entries for this iteration", async () => {
+describe("ingestDecisionLogEntries (v0.24: single growing doc)", () => {
+  it("summaries-only: ingests one doc with only semantic-category entries", async () => {
     const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "decision-log.md"),
@@ -209,15 +235,23 @@ O1 (should NOT ingest under summaries-only)
 S1
 
 ## 2026-04-01T10:15Z  [role: dev]  [iter: 4]  [category: lesson]
-L2 (different iter -- should NOT ingest)
+L2 (different iter — but v0.24 ingests the WHOLE log, so this DOES land)
 `,
       "utf-8",
     );
-    const count = await ingestDecisionLogEntries(clio, ws, 3);
-    expect(count).toBe(2); // lesson + strategy for iter 3
+    const count = await ingestDecisionLogEntries(clio, ws, 4);
+    expect(count).toBe(1); // single doc
+
+    // Doc-level metadata: only semantic entries kept; observation filtered.
+    const docs = await clio.listDocuments({ project: "test-project", limit: 50 });
+    const log = docs.find((d) => d.metadata.artifact_type === "decision-log");
+    expect(log).toBeDefined();
+    expect(log!.metadata.entry_count).toBe(3); // L1 + S1 + L2
+    expect(log!.metadata.categories).toEqual(["lesson", "strategy"]);
+    expect(log!.metadata.last_iter_updated).toBe(4);
   });
 
-  it("policy=all: ingests every entry for this iteration", async () => {
+  it("policy=all: ingests one doc with every entry from the file", async () => {
     const ws = makeWorkspace({ clio: { ingestPolicy: "all" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "decision-log.md"),
@@ -234,7 +268,41 @@ S1
       "utf-8",
     );
     const count = await ingestDecisionLogEntries(clio, ws, 3);
-    expect(count).toBe(3);
+    expect(count).toBe(1);
+    const docs = await clio.listDocuments({ project: "test-project", limit: 50 });
+    const log = docs.find((d) => d.metadata.artifact_type === "decision-log");
+    expect(log!.metadata.entry_count).toBe(3);
+    expect(log!.metadata.categories).toEqual(["lesson", "observation", "strategy"]);
+  });
+
+  it("updates the same doc across iterations instead of creating new ones (v0.24)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "all" } });
+    // Iter 3 — first write
+    await writeFile(
+      join(ws.repoPath, "cfcf-docs", "decision-log.md"),
+      "## 2026-04-01T10:00Z  [role: dev]  [iter: 3]  [category: lesson]\nL1\n",
+      "utf-8",
+    );
+    await ingestDecisionLogEntries(clio, ws, 3);
+
+    // Iter 4 — appended entry
+    await writeFile(
+      join(ws.repoPath, "cfcf-docs", "decision-log.md"),
+      `## 2026-04-01T10:00Z  [role: dev]  [iter: 3]  [category: lesson]
+L1
+
+## 2026-04-02T11:00Z  [role: reflection]  [iter: 4]  [category: strategy]
+S2
+`,
+      "utf-8",
+    );
+    await ingestDecisionLogEntries(clio, ws, 4);
+
+    const docs = await clio.listDocuments({ project: "test-project", limit: 50 });
+    const decisionLogs = docs.filter((d) => d.metadata.artifact_type === "decision-log");
+    expect(decisionLogs).toHaveLength(1); // ONE doc, not two
+    expect(decisionLogs[0].metadata.entry_count).toBe(2);
+    expect(decisionLogs[0].metadata.last_iter_updated).toBe(4);
   });
 
   it("policy=off returns 0", async () => {
@@ -252,6 +320,23 @@ S1
     const ws = makeWorkspace();
     const count = await ingestDecisionLogEntries(clio, ws, 3);
     expect(count).toBe(0);
+  });
+
+  it("returns 0 when summaries-only mode finds no semantic entries", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
+    await writeFile(
+      join(ws.repoPath, "cfcf-docs", "decision-log.md"),
+      `
+## 2026-04-01T10:00Z  [role: dev]  [iter: 3]  [category: decision]
+D1
+
+## 2026-04-01T10:05Z  [role: dev]  [iter: 3]  [category: observation]
+O1
+`,
+      "utf-8",
+    );
+    const count = await ingestDecisionLogEntries(clio, ws, 3);
+    expect(count).toBe(0); // both episodic; nothing ingested under summaries-only
   });
 });
 
