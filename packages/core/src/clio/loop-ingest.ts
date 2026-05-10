@@ -102,6 +102,55 @@ async function readIfExists(path: string): Promise<string | null> {
   }
 }
 
+// ── Internal-path usage logging (item 6.35 follow-up) ─────────────────────
+
+/**
+ * Auto-ingest hooks call `backend.ingest(...)` directly (not via
+ * HTTP), so they bypass the `/api/clio/*` middleware that writes the
+ * `clio_usage_log` row for HTTP-path activity. Without an explicit
+ * call here, the Usage tab + `cfcf clio usage list` would miss
+ * every cfcf-driven write — a confusing inconsistency vs the Audit
+ * tab which DOES capture them (LocalClio writes audit rows
+ * internally). This helper restores symmetry: after every
+ * auto-ingest, log the same operation to the usage log with
+ * `accessPath: "internal"` so the row is distinguishable from the
+ * three HTTP-path values (`cli` / `agent-cli` / `web`).
+ *
+ * Best-effort: logging failures never break the auto-ingest flow.
+ * The backend's `logUsage()` already swallows errors internally,
+ * but we double-wrap defensively in case future implementations
+ * tighten that.
+ */
+function recordInternalUsage(
+  backend: MemoryBackend,
+  args: {
+    operation:
+      | "ingest"
+      | "edit-document"
+      | "delete"
+      | "restore"
+      | "purge"
+      | "create-project";
+    requestor: string;
+    documentId?: string | null;
+    projectId?: string | null;
+    extra?: Record<string, unknown>;
+  },
+): void {
+  try {
+    backend.logUsage({
+      operation: args.operation,
+      accessPath: "internal",
+      requestor: args.requestor,
+      documentId: args.documentId ?? null,
+      projectId: args.projectId ?? null,
+      queryText: null,
+      resultCount: null,
+      extra: args.extra ?? null,
+    });
+  } catch { /* best-effort */ }
+}
+
 // ── Hook: reflection-analysis.md ingest ───────────────────────────────────
 
 export async function ingestReflectionAnalysis(
@@ -119,7 +168,7 @@ export async function ingestReflectionAnalysis(
   if (!content || !content.trim()) return null;
 
   try {
-    return await backend.ingest({
+    const result = await backend.ingest({
       project: resolveClioProject(workspace),
       title: `${workspace.name}: reflection iter ${iteration}`,
       content,
@@ -135,6 +184,14 @@ export async function ingestReflectionAnalysis(
         key_observation: signals?.key_observation ?? null,
       }),
     });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: actorForRole(workspace, "reflection"),
+      documentId: result.document?.id,
+      projectId: result.document?.projectId,
+      extra: { artifact_type: "reflection-analysis", iteration, action: result.action },
+    });
+    return result;
   } catch (err) {
     console.warn(
       `[clio] reflection ingest failed for iter ${iteration}: ${err instanceof Error ? err.message : String(err)}`,
@@ -159,7 +216,7 @@ export async function ingestArchitectReview(
   if (!content || !content.trim()) return null;
 
   try {
-    return await backend.ingest({
+    const result = await backend.ingest({
       project: resolveClioProject(workspace),
       title: `${workspace.name}: architect review (${readiness ?? "unknown"})`,
       content,
@@ -173,6 +230,14 @@ export async function ingestArchitectReview(
         readiness: readiness ?? null,
       }),
     });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: actorForRole(workspace, "architect"),
+      documentId: result.document?.id,
+      projectId: result.document?.projectId,
+      extra: { artifact_type: "architect-review", trigger, readiness, action: result.action },
+    });
+    return result;
   } catch (err) {
     console.warn(
       `[clio] architect-review ingest failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -271,7 +336,7 @@ export async function ingestDecisionLogEntries(
       // the content for readability when the doc is retrieved via
       // `cfcf clio get`.
       const body = `## ${e.timestamp}  [role: ${e.role}]  [iter: ${e.iteration}]  [category: ${e.category}]\n\n${e.body}`;
-      await backend.ingest({
+      const dlResult = await backend.ingest({
         project: resolveClioProject(workspace),
         title: `${workspace.name}: decision-log ${e.category} (iter ${iteration}, ${e.role})`,
         content: body,
@@ -285,6 +350,13 @@ export async function ingestDecisionLogEntries(
           category: e.category,
           timestamp: e.timestamp,
         }),
+      });
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor: actorForRole(workspace, e.role),
+        documentId: dlResult.document?.id,
+        projectId: dlResult.document?.projectId,
+        extra: { artifact_type: "decision-log-entry", iteration, category: e.category, action: dlResult.action },
       });
       count++;
     } catch (err) {
@@ -359,7 +431,7 @@ export async function ingestIterationSummary(
   if (lineCount <= 1) return null;
 
   try {
-    return await backend.ingest({
+    const itrResult = await backend.ingest({
       project: resolveClioProject(input.workspace),
       title: `${input.workspace.name}: iteration ${input.iteration} summary`,
       content,
@@ -375,6 +447,14 @@ export async function ingestIterationSummary(
         iteration_health: input.reflectionSignals?.iteration_health ?? null,
       }),
     });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: actorForRole(input.workspace, "cfcf"),
+      documentId: itrResult.document?.id,
+      projectId: itrResult.document?.projectId,
+      extra: { artifact_type: "iteration-summary", iteration: input.iteration, action: itrResult.action },
+    });
+    return itrResult;
   } catch (err) {
     console.warn(
       `[clio] iteration-summary ingest failed for iter ${input.iteration}: ${err instanceof Error ? err.message : String(err)}`,
@@ -520,6 +600,22 @@ export async function ingestProblemPack(
           documentId: ingestResult.document?.id,
         });
       }
+      // Internal-path usage log entry so the Usage tab sees these
+      // writes (problem-pack auto-ingest fires from iteration-start
+      // / pa-session-end / pa-boot-reconcile / workspace-init —
+      // none of which go through the HTTP middleware).
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor: author,
+        documentId: ingestResult.document?.id,
+        projectId: ingestResult.document?.projectId,
+        extra: {
+          artifact_type: "problem-pack",
+          filename,
+          ingest_trigger: trigger,
+          action: ingestResult.action,
+        },
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[clio] problem-pack ingest failed for ${filename}: ${msg}`);
@@ -566,15 +662,23 @@ export async function ingestRawIterationArtifacts(
     const content = await readIfExists(t.path);
     if (!content || !content.trim()) continue;
     try {
-      await backend.ingest({
+      const requestor = actorForRole(workspace, String(t.metadata.role ?? "cfcf"));
+      const rawResult = await backend.ingest({
         project: resolveClioProject(workspace),
         title: t.title,
         content,
         // Each `targets` entry has metadata.role identifying the
         // role-bound artifact (dev/judge/architect/reflection/...).
-        author: actorForRole(workspace, String(t.metadata.role ?? "cfcf")),
+        author: requestor,
         source: t.source,
         metadata: baseMetadata(workspace, t.metadata),
+      });
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor,
+        documentId: rawResult.document?.id,
+        projectId: rawResult.document?.projectId,
+        extra: { artifact_type: t.metadata.artifact_type, iteration, action: rawResult.action },
       });
       count++;
     } catch (err) {

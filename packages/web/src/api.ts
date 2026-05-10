@@ -29,8 +29,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Identity headers stamped on every web → server request (item 6.35
+ * follow-up). `X-CFCF-Actor` is the user/role attribution Clio's
+ * usage-log middleware records as `requestor`. The web app is always
+ * a human in a browser; we stamp `user|web|browser` so Usage tab
+ * entries originating from the UI carry a recognisable identity
+ * instead of a null column.
+ *
+ * `X-CFCF-Access-Path` is left UNSET — the server defaults to `web`
+ * when no header is present, which is the right semantic. Setting it
+ * explicitly here would be redundant and would prevent the future
+ * "browser frame inside an agent" case from re-routing.
+ *
+ * Pre-6.35-follow-up: web requests had no actor stamp, so the Usage
+ * tab showed null requestor on every entry that came from the UI.
+ */
+const WEB_AUTH_HEADERS: Record<string, string> = {
+  "X-CFCF-Actor": "user|web|browser",
+};
+
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(path, opts);
+  // Merge auth headers with caller-provided headers — caller's win on
+  // explicit conflict (e.g. Content-Type), but the actor stamp is
+  // appended unconditionally because no caller has a reason to strip it.
+  const merged: HeadersInit = { ...WEB_AUTH_HEADERS, ...(opts?.headers as Record<string, string> | undefined) };
+  const res = await fetch(path, { ...opts, headers: merged });
   const data = await res.json();
   if (!res.ok) {
     throw new ApiError(

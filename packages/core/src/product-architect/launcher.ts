@@ -633,6 +633,21 @@ export async function fallbackIngestPaSessionArchive(opts: {
       updateIfExists: false,
     });
     archiveDocId = result.document?.id ?? "";
+    // Internal-path usage log (item 6.35 follow-up): the fallback
+    // path bypasses the HTTP middleware, so without this call the
+    // Usage tab wouldn't see the rescue.
+    try {
+      backend.logUsage({
+        operation: "ingest",
+        accessPath: "internal",
+        requestor: actor,
+        documentId: archiveDocId || null,
+        projectId: result.document?.projectId ?? null,
+        queryText: null,
+        resultCount: null,
+        extra: { artifact_type: "session-archive", ingested_by: "cfcf-fallback", action: result.action },
+      });
+    } catch { /* best-effort */ }
   } catch (err) {
     console.error(
       `[pa] note: fallback session-archive ingest failed (${err instanceof Error ? err.message : String(err)}). ` +

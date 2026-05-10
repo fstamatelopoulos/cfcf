@@ -9,6 +9,39 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — Item 6.35 follow-up round 2: web requestor + internal access-path
+
+Continuing dogfood feedback: the Usage tab still showed null
+`requestor` on web entries (the web client doesn't run the CLI's
+header-stamping path), and the `internal` access-path was reserved
+but never populated.
+
+1. **Web `requestor`**: web `api.ts` `request()` helper now sends
+   `X-CFCF-Actor: user|web|browser` on every request via a single
+   `WEB_AUTH_HEADERS` constant. Memory-tab activity now lands with
+   a recognisable identity instead of a null column.
+
+2. **`internal` access-path now populated**: auto-ingest hooks call
+   `backend.ingest(...)` directly (not via HTTP), so they bypass
+   the `/api/clio/*` middleware that writes `clio_usage_log`. Pre-
+   fix, the Audit tab saw these writes (audit-log is internal to
+   LocalClio) but the Usage tab missed them — confusing
+   inconsistency. New `recordInternalUsage()` helper writes a row
+   with `accessPath: "internal"` after each cfcf-driven ingest.
+   Wired into:
+   - reflection-analysis ingest
+   - architect-review ingest
+   - decision-log entry ingest
+   - iteration-summary ingest
+   - raw iteration-artifacts ingest (iteration-log, handoff,
+     judge-assessment under `policy=all`)
+   - problem-pack ingest (the new 6.9 follow-up auto-ingest)
+   - PA session-end fallback ingest
+   - PA boot-reconcile rescue ingest
+
+Tests: 1 new in loop-ingest.test.ts pinning the internal-row
+behaviour for problem-pack ingest. All 925 tests pass.
+
 ### Fixed — Item 6.35 follow-up: usage-log requestor + result-count gaps
 
 Three issues spotted during dogfood (PA on /tmp/cfcf-testgame):

@@ -265,6 +265,21 @@ async function fallbackIngestPaSessionArchiveLite(opts: {
       updateIfExists: false,
     });
     archiveDocId = result.document?.id ?? "";
+    // Internal-path usage log (item 6.35 follow-up): boot-reconcile
+    // bypasses the HTTP middleware, so the Usage tab wouldn't see
+    // the rescue without this call.
+    try {
+      backend.logUsage({
+        operation: "ingest",
+        accessPath: "internal",
+        requestor: actor,
+        documentId: archiveDocId || null,
+        projectId: result.document?.projectId ?? null,
+        queryText: null,
+        resultCount: null,
+        extra: { artifact_type: "session-archive", ingested_by: "cfcf-boot-reconcile", action: result.action },
+      });
+    } catch { /* best-effort */ }
   } catch (err) {
     console.warn(
       `[pa-reconcile] couldn't ingest session archive for ${opts.sessionId}: ${err instanceof Error ? err.message : String(err)}`,
