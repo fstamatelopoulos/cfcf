@@ -18,6 +18,7 @@ import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureWorkspaceLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
+import { persistAgentState, loadAgentState } from "./agent-state-store.js";
 import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
@@ -50,8 +51,67 @@ export interface ReviewState {
 const reviewStore = new Map<string, ReviewState>();
 const reviewProcessStore = new Map<string, ManagedProcess>();
 
+/**
+ * Disk-backed store filename + active-status set for the F.23
+ * persistence layer. The state file lives next to `loop-state.json`
+ * under `~/.cfcf/workspaces/<id>/`. `setReviewState` writes through
+ * (memory + disk); `getReviewState` is sync because the cache is
+ * pre-hydrated from disk at server boot via `hydrateReviewStateStore`.
+ */
+const REVIEW_STATE_FILE = "review-state.json";
+const REVIEW_ACTIVE_STATUSES = new Set(["preparing", "executing", "collecting"]);
+
+/**
+ * In-memory + on-disk write-through. Every place that mutates a
+ * `ReviewState` (start, status transitions, signals attached, error
+ * thrown) must funnel through this so the disk file stays in sync.
+ * Best-effort on disk errors — the in-memory write always succeeds.
+ */
+async function setReviewState(state: ReviewState): Promise<void> {
+  reviewStore.set(state.workspaceId, state);
+  try {
+    await persistAgentState(REVIEW_STATE_FILE, state);
+  } catch (err) {
+    console.warn(
+      `[architect-runner] persistAgentState failed for ${state.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function getReviewState(workspaceId: string): ReviewState | undefined {
   return reviewStore.get(workspaceId);
+}
+
+/**
+ * Server-boot hook (item F.23): load every workspace's persisted
+ * review state into the in-memory cache. Any state still in an active
+ * phase from the prior server is flipped to `failed` (with the supplied
+ * reason) — the agent process didn't survive the restart, so the
+ * "running" claim is stale.
+ *
+ * Returns the number of states that needed cleanup. Best-effort:
+ * missing/malformed files are silently skipped so a single corrupt
+ * state file doesn't block server boot.
+ */
+export async function hydrateReviewStateStore(
+  staleReason: string = "Server restarted while review was running",
+): Promise<number> {
+  const { listWorkspaces } = await import("./workspaces.js");
+  const workspaces = await listWorkspaces();
+  let cleaned = 0;
+  for (const w of workspaces) {
+    const state = await loadAgentState<ReviewState>(REVIEW_STATE_FILE, w.id);
+    if (!state) continue;
+    if (REVIEW_ACTIVE_STATUSES.has(state.status)) {
+      state.status = "failed";
+      state.error = staleReason;
+      state.completedAt = new Date().toISOString();
+      await persistAgentState(REVIEW_STATE_FILE, state).catch(() => {});
+      cleaned++;
+    }
+    reviewStore.set(w.id, state);
+  }
+  return cleaned;
 }
 
 /**
@@ -60,7 +120,7 @@ export function getReviewState(workspaceId: string): ReviewState | undefined {
 export async function stopReview(workspaceId: string): Promise<ReviewState | null> {
   const state = reviewStore.get(workspaceId);
   if (!state) return null;
-  if (!["preparing", "executing", "collecting"].includes(state.status)) {
+  if (!REVIEW_ACTIVE_STATUSES.has(state.status)) {
     return state; // already terminal
   }
 
@@ -73,6 +133,7 @@ export async function stopReview(workspaceId: string): Promise<ReviewState | nul
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
+  await setReviewState(state);
 
   await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
@@ -309,7 +370,7 @@ export async function startReview(
     historyEventId,
   };
 
-  reviewStore.set(workspace.id, state);
+  await setReviewState(state);
 
   // Run in background. Wrap the error handler itself in try/catch so that
   // a failure to update state (e.g., disk write error) doesn't result in
@@ -319,6 +380,7 @@ export async function startReview(
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
+      await setReviewState(state);
       await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
@@ -397,6 +459,7 @@ async function runReview(
 
   // Build and run the architect agent
   state.status = "executing";
+  await setReviewState(state);
 
   const prompt = reReviewMode
     ? `Read cfcf-docs/cfcf-architect-instructions.md and follow the instructions exactly. This is a RE-REVIEW of an existing workspace -- cfcf-docs/plan.md already has completed iterations. Review the problem definition alongside the existing plan, completed-iteration logs under cfcf-docs/iteration-logs/, the decision log, and any iteration_history. Decide whether the current problem pack matches what has already been delivered. If new requirements warrant it, APPEND new pending iterations to cfcf-docs/plan.md; otherwise leave the plan untouched and say so in the review. Never delete completed items or existing iteration headers. Produce cfcf-docs/architect-review.md and cfcf-docs/cfcf-architect-signals.json before exiting.`
@@ -432,6 +495,7 @@ async function runReview(
 
     // Collect results
     state.status = "collecting";
+    await setReviewState(state);
 
     // Re-review non-destructive check: if the architect rewrote plan.md in
     // a way that removes a completed item or an iteration header, revert
@@ -460,6 +524,7 @@ async function runReview(
 
     state.status = "completed";
     state.completedAt = new Date().toISOString();
+    await setReviewState(state);
 
     // Update history event with final status.
     // We persist the full signals inline so prior reviews remain viewable

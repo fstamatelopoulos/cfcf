@@ -35,6 +35,7 @@ import {
   getWorkspaceLogDir,
 } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
+import { persistAgentState, loadAgentState } from "./agent-state-store.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import * as gitManager from "./git-manager.js";
@@ -81,8 +82,51 @@ export interface ReflectState {
 const reflectStore = new Map<string, ReflectState>();
 const reflectProcessStore = new Map<string, ManagedProcess>();
 
+/**
+ * Disk-backed store filename + active-status set (item F.23, v0.24).
+ * Same shape as architect-runner / documenter-runner.
+ */
+const REFLECT_STATE_FILE = "reflect-state.json";
+const REFLECT_ACTIVE_STATUSES = new Set(["preparing", "executing", "collecting"]);
+
+async function setReflectState(state: ReflectState): Promise<void> {
+  reflectStore.set(state.workspaceId, state);
+  try {
+    await persistAgentState(REFLECT_STATE_FILE, state);
+  } catch (err) {
+    console.warn(
+      `[reflection-runner] persistAgentState failed for ${state.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function getReflectState(workspaceId: string): ReflectState | undefined {
   return reflectStore.get(workspaceId);
+}
+
+/**
+ * Server-boot hook (item F.23): hydrate the in-memory cache from disk
+ * and clean up any state still claiming to be active.
+ */
+export async function hydrateReflectStateStore(
+  staleReason: string = "Server restarted while reflection was running",
+): Promise<number> {
+  const { listWorkspaces } = await import("./workspaces.js");
+  const workspaces = await listWorkspaces();
+  let cleaned = 0;
+  for (const w of workspaces) {
+    const state = await loadAgentState<ReflectState>(REFLECT_STATE_FILE, w.id);
+    if (!state) continue;
+    if (REFLECT_ACTIVE_STATUSES.has(state.status)) {
+      state.status = "failed";
+      state.error = staleReason;
+      state.completedAt = new Date().toISOString();
+      await persistAgentState(REFLECT_STATE_FILE, state).catch(() => {});
+      cleaned++;
+    }
+    reflectStore.set(w.id, state);
+  }
+  return cleaned;
 }
 
 // --- Template helpers ---
@@ -319,13 +363,14 @@ export async function startReflection(
     iteration,
     trigger: "manual",
   };
-  reflectStore.set(workspace.id, state);
+  await setReflectState(state);
 
   runReflectionAsync(workspace, state, opts).catch(async (err) => {
     try {
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
+      await setReflectState(state);
       await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
@@ -366,6 +411,7 @@ export async function stopReflection(workspaceId: string): Promise<ReflectState 
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
+  await setReflectState(state);
   await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
     error: "Stopped by user",
@@ -390,6 +436,7 @@ async function runReflectionAsync(
   await writeReflectionContext(workspace.repoPath, workspace.id, state.iteration);
 
   state.status = "executing";
+  await setReflectState(state);
 
   const focusHint = opts?.prompt
     ? ` The user has supplied this focus hint: "${opts.prompt.replace(/"/g, '\\"')}". Weigh it against the cross-iteration evidence; it is advisory, not binding.`
@@ -426,10 +473,12 @@ async function runReflectionAsync(
     if ((state.status as string) === "failed") return; // externally stopped
 
     state.status = "collecting";
+    await setReflectState(state);
     const signals = await parseReflectionSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
     state.status = "completed";
     state.completedAt = new Date().toISOString();
+    await setReflectState(state);
 
     await updateHistoryEvent(workspace.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",

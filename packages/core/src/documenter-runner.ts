@@ -13,6 +13,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureWorkspaceLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
+import { persistAgentState, loadAgentState } from "./agent-state-store.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getTemplate } from "./templates.js";
@@ -57,8 +58,53 @@ export interface DocumentState {
 const documentStore = new Map<string, DocumentState>();
 const documentProcessStore = new Map<string, ManagedProcess>();
 
+/**
+ * Disk-backed store filename + active-status set (item F.23, v0.24).
+ * Same shape as `architect-runner`'s persistence layer; see
+ * agent-state-store.ts for the broader rationale.
+ */
+const DOCUMENT_STATE_FILE = "document-state.json";
+const DOCUMENT_ACTIVE_STATUSES = new Set(["preparing", "executing"]);
+
+async function setDocumentState(state: DocumentState): Promise<void> {
+  documentStore.set(state.workspaceId, state);
+  try {
+    await persistAgentState(DOCUMENT_STATE_FILE, state);
+  } catch (err) {
+    console.warn(
+      `[documenter-runner] persistAgentState failed for ${state.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function getDocumentState(workspaceId: string): DocumentState | undefined {
   return documentStore.get(workspaceId);
+}
+
+/**
+ * Server-boot hook (item F.23): hydrate the in-memory cache from disk
+ * and clean up any state still claiming to be active. Returns the
+ * count cleaned.
+ */
+export async function hydrateDocumentStateStore(
+  staleReason: string = "Server restarted while document run was active",
+): Promise<number> {
+  const { listWorkspaces } = await import("./workspaces.js");
+  const workspaces = await listWorkspaces();
+  let cleaned = 0;
+  for (const w of workspaces) {
+    const state = await loadAgentState<DocumentState>(DOCUMENT_STATE_FILE, w.id);
+    if (!state) continue;
+    if (DOCUMENT_ACTIVE_STATUSES.has(state.status)) {
+      state.status = "failed";
+      state.error = staleReason;
+      state.completedAt = new Date().toISOString();
+      await persistAgentState(DOCUMENT_STATE_FILE, state).catch(() => {});
+      cleaned++;
+    }
+    documentStore.set(w.id, state);
+  }
+  return cleaned;
 }
 
 /**
@@ -68,7 +114,7 @@ export function getDocumentState(workspaceId: string): DocumentState | undefined
 export async function stopDocument(workspaceId: string): Promise<DocumentState | null> {
   const state = documentStore.get(workspaceId);
   if (!state) return null;
-  if (!["preparing", "executing"].includes(state.status)) {
+  if (!DOCUMENT_ACTIVE_STATUSES.has(state.status)) {
     return state;
   }
 
@@ -81,6 +127,7 @@ export async function stopDocument(workspaceId: string): Promise<DocumentState |
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
+  await setDocumentState(state);
 
   await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
@@ -155,7 +202,7 @@ export async function startDocument(
     historyEventId,
   };
 
-  documentStore.set(workspace.id, state);
+  await setDocumentState(state);
 
   // Run in background. Error handler is itself wrapped in try/catch so that
   // a failure to record the error (disk write, etc.) doesn't silently swallow it.
@@ -164,6 +211,7 @@ export async function startDocument(
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
+      await setDocumentState(state);
       await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
@@ -281,6 +329,7 @@ async function runDocument(
   state: DocumentState,
 ): Promise<void> {
   state.status = "executing";
+  await setDocumentState(state);
 
   const adapter = getAdapter(workspace.documenterAgent.adapter);
   if (!adapter) {
@@ -320,6 +369,7 @@ async function runDocument(
 
     state.status = "completed";
     state.completedAt = new Date().toISOString();
+    await setDocumentState(state);
 
     const docsFileCount = await countDocsFiles(workspace.repoPath);
 
