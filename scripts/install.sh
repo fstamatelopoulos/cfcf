@@ -259,12 +259,29 @@ case ":$ORIGINAL_PATH:" in
   *":$CFCF_INSTALL_PREFIX/bin:"*) parent_shell_will_find_cfcf=1 ;;
 esac
 
-# Detect whether a cfcf server was running before this install. If
-# there's a PID file under ~/.cfcf/, the running server still has the
-# OLD bundled JS in memory; the user needs to restart it.
+# Detect whether a cfcf server was running before this install. If so,
+# the running server still has the OLD bundled JS in memory and the user
+# needs to restart it.
+#
+# PID file path is platform-dependent (`getConfigDir()` in
+# packages/core/src/constants.ts):
+#   - macOS:   ~/Library/Application Support/cfcf/server.pid
+#   - Linux:   ${XDG_CONFIG_HOME:-~/.config}/cfcf/server.pid
+#   - Windows: %APPDATA%/cfcf/server.pid (not supported by this script)
+#
+# Earlier versions of this script checked $HOME/.cfcf/server.pid which
+# is the DATA dir, not the CONFIG dir, on macOS — silently no-op'd on
+# every Mac install (item 6.35 follow-up, 2026-05-10).
 server_was_running=0
-if [[ -f "$HOME/.cfcf/server.pid" ]]; then
-  pid="$(cat "$HOME/.cfcf/server.pid" 2>/dev/null || true)"
+case "$(uname -s)" in
+  Darwin) pid_file="$HOME/Library/Application Support/cfcf/server.pid" ;;
+  Linux)  pid_file="${XDG_CONFIG_HOME:-$HOME/.config}/cfcf/server.pid" ;;
+  *)      pid_file="" ;;
+esac
+if [[ -n "$pid_file" && -f "$pid_file" ]]; then
+  # PID file is JSON: {"pid":12345,"port":7233,"startedAt":"..."} —
+  # extract the pid field with a portable sed.
+  pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p' "$pid_file" 2>/dev/null | head -1 || true)"
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
     server_was_running=1
   fi

@@ -9,6 +9,37 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — install.sh + local-install.sh PID-file probe was wrong on macOS
+
+The "is a cfcf server running?" detection in both scripts looked
+at `$HOME/.cfcf/server.pid`, which is the **data dir** path on
+Linux but does NOT exist on macOS — the canonical location there
+is `~/Library/Application Support/cfcf/server.pid`
+(per `getConfigDir()` in `packages/core/src/constants.ts`). On
+every Mac install, both scripts silently no-op'd:
+- `install.sh`'s "Server restart needed" warning never printed
+  even when a Mac user had the server running.
+- `local-install.sh`'s active-loop pre-flight check (just added
+  in the previous commit) silently skipped — the user reported
+  running it during a live loop and seeing zero warning output.
+
+**Fix:**
+
+- `local-install.sh` now uses `cfcf server status` + `cfcf status`
+  instead of probing the PID file directly. `cfcf` already has
+  the correct per-platform `getConfigDir()` logic baked in, so
+  the check works the same on macOS, Linux, and any future
+  platform that lands. Verified end-to-end against the user's
+  actual current state (server running with `testgame: running
+  (iteration 4)`) — the warning now fires.
+- `install.sh` keeps the PID-file approach (no `cfcf` available
+  yet during a fresh install) but switches on `$(uname -s)` to
+  pick the right config-dir path: macOS → `~/Library/Application
+  Support/cfcf/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/cfcf/`.
+  Also extracts the pid via portable sed since the file is JSON,
+  not a bare integer (the previous `cat | head -1` would have
+  produced the entire `{"pid":...}` line).
+
 ### Fixed — Codex seed model `gpt-5-codex` was invalid
 
 Real dogfood: the seed model registry shipped with

@@ -127,25 +127,48 @@ fi
 # events with stale "Server restarted" messages on the next boot.
 #
 # Detecting an active loop here lets us warn the user BEFORE the damage,
-# with a one-liner to stop the server first. Best-effort: this needs the
-# freshly-built cfcf to be on PATH AND the server to be reachable, both
-# of which are pre-conditions for the issue. If the check itself fails
-# (no cfcf on PATH yet, jq missing, etc.) we just continue silently —
-# the warning is a courtesy, not a hard gate.
-if command -v cfcf >/dev/null 2>&1 && [[ -f "$HOME/.cfcf/server.pid" ]]; then
-  pid_file_pid="$(cat "$HOME/.cfcf/server.pid" 2>/dev/null | head -1 || true)"
-  if [[ -n "$pid_file_pid" ]] && kill -0 "$pid_file_pid" 2>/dev/null; then
-    # Server is running. Probe for any active loop.
+# with a one-liner to stop the server first.
+#
+# Implementation: use `cfcf server status` + `cfcf status` rather than
+# probing the PID file directly — the PID file path is platform-
+# dependent (macOS: ~/Library/Application Support/cfcf/server.pid;
+# Linux: ~/.config/cfcf/server.pid; the user-visible ~/.cfcf is the
+# DATA dir, not the config dir, on macOS — earlier versions of this
+# script and install.sh both got this wrong + silently no-op'd on Mac).
+# `cfcf` already has the correct per-platform logic baked in.
+#
+# Best-effort: needs `cfcf` on PATH (true in the upgrade scenario this
+# is meant for). If the check itself fails for any reason, we continue
+# silently — the warning is a courtesy, not a hard gate.
+if command -v cfcf >/dev/null 2>&1; then
+  # Probe the server. `cfcf server status` prints "cfcf server v..."
+  # when running, "cfcf server is not running." otherwise. We grep on
+  # the running marker so a config-dir mismatch doesn't false-positive.
+  server_status="$(cfcf server status 2>/dev/null || true)"
+  if echo "$server_status" | grep -q "^cfcf server v"; then
+    # Server is running. Check `cfcf status` for any workspace whose
+    # status is "running" or "paused" (i.e. has a live or paused loop
+    # we don't want to disturb). Output looks like:
+    #   Workspaces:
+    #     testgame: running (iteration 3)
+    #     other: idle
     has_active_loop=0
-    if status_json="$(cfcf status --json 2>/dev/null)"; then
-      # Active phases per the loop-state phase enum. Match anywhere in
-      # the JSON so we don't depend on jq being installed.
-      if echo "$status_json" | grep -qE '"phase"\s*:\s*"(preparing|dev_executing|judging|deciding|reflecting|documenting)"'; then
+    active_workspaces=""
+    if status_output="$(cfcf status 2>/dev/null)"; then
+      # Strip the leading 2-space indent + extract `<name>: <status>`
+      # lines whose status is running or paused.
+      active_workspaces="$(echo "$status_output" \
+        | grep -E '^[[:space:]]+[^[:space:]]+:[[:space:]]+(running|paused)' \
+        || true)"
+      if [[ -n "$active_workspaces" ]]; then
         has_active_loop=1
       fi
     fi
     if (( has_active_loop )); then
-      echo "[local-install] ⚠️  WARNING: cfcf server is running AND a loop is mid-iteration." >&2
+      echo "[local-install] ⚠️  WARNING: cfcf server is running with an active or paused loop:" >&2
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && echo "[local-install]    $line" >&2
+      done <<< "$active_workspaces"
       echo "[local-install]" >&2
       echo "[local-install]   Re-installing now will break the running server's externalized" >&2
       echo "[local-install]   dependencies (@huggingface/transformers, etc.) for a few seconds" >&2
@@ -154,10 +177,12 @@ if command -v cfcf >/dev/null 2>&1 && [[ -f "$HOME/.cfcf/server.pid" ]]; then
       echo "[local-install]   Active history events get marked failed with a stale error." >&2
       echo "[local-install]" >&2
       echo "[local-install]   Recommended:" >&2
-      echo "[local-install]     cfcf server stop      # let the loop pause first if you want to resume" >&2
+      echo "[local-install]     cfcf server stop      # if you want to resume the loop, do" >&2
+      echo "[local-install]                           # 'cfcf resume <workspace>' AFTER the new" >&2
+      echo "[local-install]                           # server starts" >&2
       echo "[local-install]     ./scripts/local-install.sh" >&2
       echo "[local-install]     cfcf server start" >&2
-      echo "[local-install]     cfcf resume <workspace>" >&2
+      echo "[local-install]     cfcf resume <workspace>   # if the loop was paused" >&2
       echo "[local-install]" >&2
       printf "[local-install]   Continue anyway? [y/N] " >&2
       read -r answer
