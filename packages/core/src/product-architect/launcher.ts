@@ -320,7 +320,14 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
-      env: { ...process.env, CFCF_ACCESS_PATH: "agent-cli" },
+      env: {
+        ...process.env,
+        CFCF_ACCESS_PATH: "agent-cli",
+        // item 6.35 follow-up: stamp every `cfcf clio …` shell-out
+        // PA makes during the session with the PA actor identity so
+        // the usage-log middleware writes the right `requestor`.
+        CFCF_ACTOR: formatClioActor(ROLE_PRODUCT_ARCHITECT, opts.agent.adapter, opts.agent.model),
+      },
     });
     const code = await proc.exited;
     exitCode = code ?? null;

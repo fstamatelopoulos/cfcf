@@ -1286,6 +1286,77 @@ describe("Clio HTTP: usage log (item 6.9)", () => {
     expect(body.entries.length).toBeGreaterThan(0);
     for (const e of body.entries) expect(e.documentId).toBe(docId);
   });
+
+  it("captures `requestor` from X-CFCF-Actor header (item 6.35 follow-up)", async () => {
+    // Pre-fix: the column was always null because the CLI never sent
+    // the header. The middleware always read it, but no client set
+    // it. Stamping every CLI call (`actorHeader()` reads CFCF_ACTOR
+    // env) closed the loop. Verify the wire still works.
+    const app = createApp();
+    await app.request("/api/clio/search?q=anything", {
+      headers: {
+        "X-CFCF-Access-Path": "agent-cli",
+        "X-CFCF-Actor": "product-architect|claude-code|sonnet",
+      },
+    });
+    const res = await app.request("/api/clio/usage?requestor=product-architect%7Cclaude-code%7Csonnet");
+    const body = await res.json();
+    expect(body.entries.length).toBeGreaterThan(0);
+    for (const e of body.entries) {
+      expect(e.requestor).toBe("product-architect|claude-code|sonnet");
+    }
+  });
+
+  it("captures `result_count` for non-search reads (get-document, list-projects, list-documents)", async () => {
+    // Pre-fix: only the search route populated resultCount. Other
+    // reads recorded null even when the count was knowable. Now the
+    // route handlers stamp it via clioUsageExtras so the Usage tab's
+    // `--zero-hits` filter + the dashboard's hit-distribution charts
+    // get useful signal from every read.
+    const app = createApp();
+
+    // Seed: one project + one doc so the list / get calls have data.
+    const ingestRes = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "rc-test", title: "x", content: "# x\n" }),
+    });
+    const docId = (await ingestRes.json()).document.id;
+
+    // get-document → resultCount = 1 (found).
+    await app.request(`/api/clio/documents/${docId}`);
+    // get-document → resultCount = 0 (not found).
+    await app.request(`/api/clio/documents/00000000-0000-0000-0000-000000000000`);
+    // list-projects → resultCount = number of projects.
+    await app.request(`/api/clio/projects`);
+    // list-documents → resultCount = number of docs.
+    await app.request(`/api/clio/documents?project=rc-test`);
+
+    const usageRes = await app.request("/api/clio/usage?reads=true");
+    const usageBody = await usageRes.json();
+
+    const getOk = usageBody.entries.find(
+      (e: { operation: string; documentId: string | null }) =>
+        e.operation === "get-document" && e.documentId === docId,
+    );
+    expect(getOk?.resultCount).toBe(1);
+
+    const get404 = usageBody.entries.find(
+      (e: { operation: string; documentId: string | null }) =>
+        e.operation === "get-document" && e.documentId === "00000000-0000-0000-0000-000000000000",
+    );
+    expect(get404?.resultCount).toBe(0);
+
+    const listProjects = usageBody.entries.find(
+      (e: { operation: string }) => e.operation === "list-projects",
+    );
+    expect(listProjects?.resultCount).toBeGreaterThan(0);
+
+    const listDocs = usageBody.entries.find(
+      (e: { operation: string }) => e.operation === "list-documents",
+    );
+    expect(listDocs?.resultCount).toBeGreaterThan(0);
+  });
 });
 
 describe("POST /api/workspaces accepts clioProject", () => {

@@ -17,6 +17,7 @@ import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getTemplate } from "./templates.js";
 import { effectiveClioProject } from "./clio/system-projects.js";
+import { formatClioActor } from "./clio/actor.js";
 
 /**
  * Count markdown files in the workspace's docs/ directory.
@@ -239,7 +240,10 @@ export async function runDocumentSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("documenter", workspace.documenterAgent.adapter, workspace.documenterAgent.model),
+    },
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,
@@ -293,7 +297,10 @@ async function runDocument(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("documenter", workspace.documenterAgent.adapter, workspace.documenterAgent.model),
+    },
   });
   documentProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({

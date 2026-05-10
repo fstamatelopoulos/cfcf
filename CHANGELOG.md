@@ -9,6 +9,42 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — Item 6.35 follow-up: usage-log requestor + result-count gaps
+
+Three issues spotted during dogfood (PA on /tmp/cfcf-testgame):
+
+1. **`requestor` always null**. The middleware reads `X-CFCF-Actor`,
+   but the CLI never sent the header. Pre-existing — uncovered when
+   the new Usage tab made the missing column visible. Fixed by:
+   - CLI `client.ts` now reads `CFCF_ACTOR` env (defaulting to
+     `user|cli|default`) and stamps every request with
+     `X-CFCF-Actor: <stamp>` — paired with the existing
+     `X-CFCF-Access-Path` plumbing under a single `authHeaders()`
+     helper.
+   - All seven spawn sites (PA + HA launchers, dev/judge/architect/
+     reflection/documenter loop spawns, server's manual single-
+     iteration runner) now set `CFCF_ACTOR` to the role's
+     `formatClioActor()` stamp so shell-outs to `cfcf clio …` from
+     inside an agent carry the right identity.
+   - 3 new CLI client tests pin the header behaviour (default, env
+     override, whitespace fallback) using an in-process Bun.serve
+     to capture headers from real fetches.
+
+2. **`result_count` null on non-search reads**. Only the search
+   handler populated it. `get-document` / `list-projects` /
+   `list-documents` / `list-versions` / `metadata-search` /
+   `metadata-keys` / `get-document-content` / `audit-log` /
+   `usage` all now stamp resultCount via `clioUsageExtras`. The
+   Usage tab's `--zero-hits` filter now finds typos / 404s; the
+   dashboard's hit-distribution panels get useful signal.
+
+3. **`metadata-search` query column was empty**. Now stamps the
+   serialised metadata filter as `queryText` so the Usage tab
+   shows what was searched.
+
+7 new tests across `clio.test.ts` (server) + `client.test.ts` (CLI).
+All 924 tests pass.
+
 ### Added — Item 6.35: Web UI viewer for clio_audit_log + clio_usage_log
 
 The Memory page gains a **Usage** tab sibling to the existing Audit

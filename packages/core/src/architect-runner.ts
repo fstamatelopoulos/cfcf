@@ -12,6 +12,7 @@ import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 import { getTemplate, writeTemplate } from "./templates.js";
 import { getAdapter } from "./adapters/index.js";
 import { effectiveClioProject } from "./clio/system-projects.js";
+import { formatClioActor } from "./clio/actor.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
@@ -407,7 +408,10 @@ async function runReview(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model),
+    },
   });
   reviewProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
@@ -606,7 +610,10 @@ export async function runReviewSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("architect", workspace.architectAgent.adapter, workspace.architectAgent.model),
+    },
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,

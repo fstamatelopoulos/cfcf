@@ -49,6 +49,7 @@ import {
   ingestIterationSummary,
   ingestRawIterationArtifacts,
   writeClioRelevant,
+  formatClioActor,
 } from "./clio/index.js";
 import { randomBytes } from "crypto";
 
@@ -1461,7 +1462,15 @@ async function runLoop(
       args: devCmd.args,
       cwd: workspace.repoPath,
       logFile: devLogFile,
-      env: { CFCF_ACCESS_PATH: "agent-cli" },
+      env: {
+        CFCF_ACCESS_PATH: "agent-cli",
+        // item 6.35 follow-up: stamp the dev role's actor on every
+        // `cfcf clio …` shell-out the agent makes so the usage log's
+        // `requestor` column carries `dev|<adapter>|<model>` rather
+        // than the default user fallback. Read by the CLI client's
+        // actorHeader().
+        CFCF_ACTOR: formatClioActor("dev", workspace.devAgent.adapter, workspace.devAgent.model),
+      },
     });
     const unregisterDev = registerProcess({
       workspaceId: workspace.id,
@@ -1573,7 +1582,10 @@ async function runJudgeAndDecide(
     args: judgeCmd.args,
     cwd: workspace.repoPath,
     logFile: judgeLogFile,
-    env: { CFCF_ACCESS_PATH: "agent-cli" },
+    env: {
+      CFCF_ACCESS_PATH: "agent-cli",
+      CFCF_ACTOR: formatClioActor("judge", workspace.judgeAgent.adapter, workspace.judgeAgent.model),
+    },
   });
   const unregisterJudge = registerProcess({
     workspaceId: workspace.id,
