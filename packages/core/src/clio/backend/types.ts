@@ -54,8 +54,22 @@ export interface MemoryBackend {
    * name** — same reason as `editProject`. The server route layer
    * (`DELETE /api/clio/projects/:idOrName`) does the workspace-
    * dependent check before calling this method.
+   *
+   * `opts.force = true` (item 6.35 follow-up, 2026-05-10) performs a
+   * destructive cleanup pass before the project delete: hard-deletes
+   * (purges) any soft-deleted tombstones in the project, then
+   * proceeds IF no live documents remain. Live documents still
+   * block — `force` doesn't promote a "destroy live data" path; it
+   * just gives tombstones the same treatment they'd get from a
+   * manual `cfcf clio docs purge`. Surfaced from dogfood: user
+   * cleaned up a workspace's docs (soft-delete), then tried to
+   * delete the dedicated `cf-workspace-<id>` project, blocked by
+   * tombstones still holding the FK.
    */
-  deleteProject(idOrName: string): Promise<{ deleted: true }>;
+  deleteProject(
+    idOrName: string,
+    opts?: { force?: boolean },
+  ): Promise<{ deleted: true; purgedTombstones?: number }>;
 
   // ── Documents ─────────────────────────────────────────────────────────
   ingest(req: IngestRequest): Promise<IngestResult>;

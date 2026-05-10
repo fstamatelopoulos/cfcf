@@ -31,6 +31,11 @@ export function DeleteProjectDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dependents, setDependents] = useState<{ id: string; name: string }[]>([]);
+  // Item 6.35 follow-up (2026-05-10): force-mode also purges soft-
+  // deleted tombstones in the project. Surfaced from dogfood: user
+  // soft-deleted docs to clean up, then couldn't delete the project
+  // because the FK gate counts tombstones too. Live docs still block.
+  const [forceMode, setForceMode] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -38,6 +43,7 @@ export function DeleteProjectDialog({
       setError(null);
       setDependents([]);
       setSubmitting(false);
+      setForceMode(false);
     }
   }, [open]);
 
@@ -49,7 +55,14 @@ export function DeleteProjectDialog({
     setError(null);
     setDependents([]);
     try {
-      await deleteClioProject(project.id);
+      const result = await deleteClioProject(project.id, { force: forceMode });
+      if (result.purgedTombstones && result.purgedTombstones > 0) {
+        // Surface the side-effect so the user sees what force mode did.
+        // Brief inline notice — the dialog is about to close on success
+        // anyway, but the toast is a nicety we can add later.
+        // For now we just log; onDeleted() will refresh the project list.
+        console.info(`Purged ${result.purgedTombstones} soft-deleted document(s) along with the project.`);
+      }
       onDeleted();
       onClose();
     } catch (err) {
@@ -86,10 +99,28 @@ export function DeleteProjectDialog({
       </p>
       <ul style={{ paddingLeft: "1.25rem", margin: "0.5rem 0", fontSize: "var(--text-sm)", lineHeight: 1.55 }}>
         <li>The project row is removed from the Clio DB.</li>
-        <li>The server refuses if any documents (live or soft-deleted) still belong to it -- reassign or remove docs first.</li>
-        <li>The server also refuses if any cfcf workspace still pins this project's name -- reassign each workspace via its <strong>Config</strong> tab first.</li>
+        <li>The server refuses if any <strong>live</strong> documents still belong to it — reassign or remove them first.</li>
+        <li>By default, <strong>soft-deleted</strong> tombstones also block; tick the box below to purge them along with the project.</li>
+        <li>The server also refuses if any cfcf workspace still pins this project's name — reassign each workspace via its <strong>Config</strong> tab first.</li>
         <li>This action is <strong>not</strong> reversible.</li>
       </ul>
+      <div className="form-row" style={{ marginTop: "0.75rem" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={forceMode}
+            onChange={(e) => setForceMode(e.target.checked)}
+          />
+          <span>
+            <strong>Force mode</strong> — also purge soft-deleted (recoverable) documents in this project
+          </span>
+        </label>
+        <span className="form-row__hint">
+          Use this to clean up after a workspace deletion when documents
+          were soft-deleted but their tombstones still pin the project.
+          Live documents still block — force only purges tombstones.
+        </span>
+      </div>
       <div className="form-row" style={{ marginTop: "1rem" }}>
         <label htmlFor="proj-delete-confirm">
           Type <code>{project.name}</code> to confirm:

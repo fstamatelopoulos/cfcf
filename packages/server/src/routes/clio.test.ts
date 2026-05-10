@@ -183,6 +183,120 @@ describe("Clio HTTP: projects", () => {
     const res = await app.request("/api/clio/projects/no-such", { method: "DELETE" });
     expect(res.status).toBe(404);
   });
+
+  it("DELETE ?force=true purges soft-deleted tombstones along with the project (item 6.35 follow-up)", async () => {
+    // Real dogfood scenario: user soft-deleted a workspace's docs to
+    // clean up, then tried to delete the dedicated `cf-workspace-<id>`
+    // project — blocked because tombstones still hold the FK.
+    // `force=true` purges the tombstones first (irreversible), then
+    // deletes the project.
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "tombstoned" }),
+    });
+    // Ingest then soft-delete: leaves a tombstone in the project.
+    const ingestRes = await app.request("/api/clio/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "tombstoned", title: "doomed", content: "# T\n\nbody" }),
+    });
+    const docId = (await ingestRes.json()).document.id;
+    await app.request(`/api/clio/documents/${docId}`, { method: "DELETE" });
+
+    // Without force: blocked.
+    const blocked = await app.request("/api/clio/projects/tombstoned", { method: "DELETE" });
+    expect(blocked.status).toBe(409);
+    const blockedBody = await blocked.json();
+    expect(blockedBody.error).toMatch(/soft-deleted/);
+    expect(blockedBody.error).toMatch(/force=true/);
+
+    // With force: succeeds + reports the purge count.
+    const forced = await app.request("/api/clio/projects/tombstoned?force=true", { method: "DELETE" });
+    expect(forced.status).toBe(200);
+    const forcedBody = await forced.json();
+    expect(forcedBody.deleted).toBe(true);
+    expect(forcedBody.purgedTombstones).toBe(1);
+  });
+
+  it("DELETE ?force=true STILL refuses if there are LIVE documents (force only purges tombstones, not live data)", async () => {
+    const app = createApp();
+    await app.request("/api/clio/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "occupied-live" }),
+    });
+    await app.request("/api/clio/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "occupied-live", title: "alive", content: "# T\n\nbody" }),
+    });
+
+    const res = await app.request("/api/clio/projects/occupied-live?force=true", { method: "DELETE" });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/live document/i);
+  });
+});
+
+describe("DELETE /api/workspaces/:id ?cascade_clio=true (item 6.35 follow-up)", () => {
+  it("cascade-deletes the dedicated cf-workspace-<id> project + force-purges its tombstones", async () => {
+    const app = createApp();
+    const w = await seedWorkspace(app, "cascade-target");
+    // The workspace's clioProject is auto-defaulted to cf-workspace-<id>.
+    expect(w.clioProject).toMatch(/^cf-workspace-/);
+    // Ingest + soft-delete to create a tombstone in the dedicated project.
+    const ingestRes = await app.request("/api/clio/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: w.clioProject, title: "doomed", content: "# T\n\nbody" }),
+    });
+    const docId = (await ingestRes.json()).document.id;
+    await app.request(`/api/clio/documents/${docId}`, { method: "DELETE" });
+
+    const delRes = await app.request(`/api/workspaces/${w.id}?cascade_clio=true`, { method: "DELETE" });
+    expect(delRes.status).toBe(200);
+    const body = await delRes.json();
+    expect(body.deleted).toBe(true);
+    expect(body.cascadeClio.attempted).toBe(true);
+    expect(body.cascadeClio.deleted).toBe(true);
+    expect(body.cascadeClio.purgedTombstones).toBe(1);
+
+    // Project should be gone from the listing.
+    const projectsRes = await app.request("/api/clio/projects");
+    const { projects } = await projectsRes.json();
+    expect(projects.find((p: { name: string }) => p.name === w.clioProject)).toBeFalsy();
+  });
+
+  it("DOES NOT cascade-delete a shared Clio Project (sibling workspaces may pin it)", async () => {
+    const app = createApp();
+    const w = await seedWorkspace(app, "shared-target", "backend-services");
+    expect(w.clioProject).toBe("backend-services");
+
+    const delRes = await app.request(`/api/workspaces/${w.id}?cascade_clio=true`, { method: "DELETE" });
+    expect(delRes.status).toBe(200);
+    const body = await delRes.json();
+    expect(body.deleted).toBe(true);
+    expect(body.cascadeClio.attempted).toBe(true);
+    expect(body.cascadeClio.deleted).toBe(false);
+    expect(body.cascadeClio.reason).toMatch(/shared with siblings/);
+
+    // Shared project survives.
+    const projectsRes = await app.request("/api/clio/projects");
+    const { projects } = await projectsRes.json();
+    expect(projects.find((p: { name: string }) => p.name === "backend-services")).toBeTruthy();
+  });
+
+  it("without ?cascade_clio=true, the per-workspace project is left orphaned (default behaviour)", async () => {
+    const app = createApp();
+    const w = await seedWorkspace(app, "no-cascade");
+    const delRes = await app.request(`/api/workspaces/${w.id}`, { method: "DELETE" });
+    expect(delRes.status).toBe(200);
+    const body = await delRes.json();
+    expect(body.deleted).toBe(true);
+    expect(body.cascadeClio.attempted).toBe(false);
+
+    // Project still in the listing.
+    const projectsRes = await app.request("/api/clio/projects");
+    const { projects } = await projectsRes.json();
+    expect(projects.find((p: { name: string }) => p.name === w.clioProject)).toBeTruthy();
+  });
 });
 
 describe("Clio HTTP: ingest + search + get + stats", () => {

@@ -9,6 +9,53 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — Workspace + Clio Project cleanup gaps (item 6.35 follow-up round 4)
+
+Real dogfood: user deleted a workspace, then tried to clean up
+its dedicated `cf-workspace-<id>` Clio Project. Two distinct
+blockers surfaced:
+
+1. **Tombstone gate**: project deletion was blocked by soft-deleted
+   documents (recoverable trash-bin entries) the user had already
+   "removed". The `clio_documents.project_id` FK is `ON DELETE
+   RESTRICT` — tombstones still hold the FK reference, so the SQL
+   fails. The user has to manually purge each tombstone.
+2. **No cascade**: deleting a workspace via
+   `DELETE /api/workspaces/:id` didn't touch its Clio Project.
+   Even after fixing the tombstone gate, the user has to delete
+   the project as a separate step.
+
+**Both fixed:**
+
+- **`deleteProject(idOrName, { force })`** — backend extension that
+  purges tombstones first when `force=true`. Live documents still
+  block (force isn't a "destroy live data" path; it just gives
+  tombstones the same treatment as a manual `cfcf clio docs purge`).
+  Reports `purgedTombstones` count in the response.
+- **HTTP**: `DELETE /api/clio/projects/:id?force=true` exposes the
+  new option.
+- **CLI**: new `cfcf clio projects delete <name> [--force] [--yes]`
+  verb (didn't exist before — only list/create/show were available).
+- **Web**: `DeleteProjectDialog` gets a "Force mode" checkbox.
+- **`DELETE /api/workspaces/:id?cascade_clio=true`** — new query
+  param. When set, the server auto-deletes the workspace's
+  dedicated `cf-workspace-<id>` project (force-purges any
+  tombstones in one go). **Only triggers for per-workspace projects**
+  — shared projects (e.g. `backend-services`) are never auto-deleted
+  because sibling workspaces may pin them. The response carries a
+  `cascadeClio` summary block (attempted, deleted, purgedTombstones,
+  reason).
+- **CLI**: `cfcf workspace delete <name> --cascade-clio`.
+- **Web**: `DeleteWorkspaceDialog` gets a checkbox + asymmetric
+  hint text (cascade option only shown for per-workspace projects;
+  shared-project workspaces get an explanatory note instead).
+
+5 new tests in `clio.test.ts` covering: force-purges tombstones
++ deletes project; force still blocks on live docs; cascade
+deletes per-workspace project + reports purge count; cascade
+skipped for shared projects with reason; default (no cascade)
+leaves project orphaned. All 932 tests pass.
+
 ### Changed — Drop approval-gating + "session end" framing for PA + HA memory writes
 
 Real dogfood (testgame, three sessions, no `PA-memory.md` ever

@@ -144,8 +144,13 @@ export function registerClioRoutes(app: Hono): void {
       }, 409);
     }
 
+    // `?force=true` purges soft-deleted tombstones in the project
+    // before the delete. Live documents still block (force is not a
+    // "destroy live data" path). Item 6.35 follow-up.
+    const force = c.req.query("force") === "true";
+
     try {
-      const result = await backend.deleteProject(target.id);
+      const result = await backend.deleteProject(target.id, { force });
       return c.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

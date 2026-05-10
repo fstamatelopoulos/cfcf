@@ -215,7 +215,14 @@ export function registerWorkspaceCommands(program: Command): void {
   workspace
     .command("delete <name>")
     .description("Delete a cfcf workspace (removes config only, not the repo)")
-    .action(async (name) => {
+    .option(
+      "--cascade-clio",
+      "Also delete the workspace's dedicated `cf-workspace-<id>` Clio Project " +
+      "(force-purges any soft-deleted documents). Skipped silently if the " +
+      "workspace uses a shared project — those stay because sibling workspaces " +
+      "may pin them. Item 6.35 follow-up.",
+    )
+    .action(async (name, opts) => {
       if (!(await isServerReachable())) {
         console.error("cfcf server is not running. Start it with: cfcf server start");
         process.exit(1);
@@ -232,8 +239,11 @@ export function registerWorkspaceCommands(program: Command): void {
 
       // Confirm deletion
       const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const cascadeNote = opts.cascadeClio
+        ? ` Also deleting the dedicated Clio Project (with force-purge of any soft-deleted docs).`
+        : "";
       const answer = await new Promise<string>((resolve) => {
-        rl.question(`Delete workspace "${w.name}" (${w.id})? This does not delete the repo. [yes/no]: `, resolve);
+        rl.question(`Delete workspace "${w.name}" (${w.id})? This does not delete the repo.${cascadeNote} [yes/no]: `, resolve);
       });
       rl.close();
 
@@ -242,12 +252,24 @@ export function registerWorkspaceCommands(program: Command): void {
         return;
       }
 
-      const res = await fetch(`http://localhost:${process.env.CFCF_PORT || "7233"}/api/workspaces/${w.id}`, {
-        method: "DELETE",
-      });
+      const url = `http://localhost:${process.env.CFCF_PORT || "7233"}/api/workspaces/${w.id}` +
+        (opts.cascadeClio ? "?cascade_clio=true" : "");
+      const res = await fetch(url, { method: "DELETE" });
 
       if (res.ok) {
+        const body = await res.json().catch(() => ({})) as {
+          cascadeClio?: { attempted: boolean; deleted?: boolean; purgedTombstones?: number; reason?: string };
+        };
         console.log(`Deleted workspace: ${w.name}`);
+        if (body.cascadeClio?.attempted) {
+          if (body.cascadeClio.deleted) {
+            const purged = body.cascadeClio.purgedTombstones ?? 0;
+            const purgedNote = purged > 0 ? ` (purged ${purged} soft-deleted document${purged === 1 ? "" : "s"})` : "";
+            console.log(`  also deleted Clio Project ${w.clioProject}${purgedNote}`);
+          } else if (body.cascadeClio.reason) {
+            console.log(`  Clio Project NOT auto-deleted: ${body.cascadeClio.reason}`);
+          }
+        }
       } else {
         console.error("Failed to delete workspace.");
         process.exit(1);

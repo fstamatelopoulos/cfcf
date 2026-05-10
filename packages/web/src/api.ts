@@ -218,8 +218,22 @@ export function createWorkspace(body: CreateWorkspaceRequest): Promise<Workspace
  * Delete a workspace (config-only; the underlying repo folder is NEVER
  * touched). Returns the server's `{ deleted: true }` ack.
  */
-export function deleteWorkspace(id: string): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`, {
+export function deleteWorkspace(
+  id: string,
+  opts?: { cascadeClio?: boolean },
+): Promise<{
+  deleted: boolean;
+  cascadeClio?: { attempted: boolean; deleted?: boolean; purgedTombstones?: number; reason?: string };
+}> {
+  // `cascadeClio=true` (item 6.35 follow-up, 2026-05-10) also deletes
+  // the workspace's dedicated `cf-workspace-<id>` Clio Project +
+  // force-purges any soft-deleted documents in it. Skipped silently
+  // for shared projects (sibling workspaces may pin them).
+  const qs = opts?.cascadeClio ? "?cascade_clio=true" : "";
+  return request<{
+    deleted: boolean;
+    cascadeClio?: { attempted: boolean; deleted?: boolean; purgedTombstones?: number; reason?: string };
+  }>(`/api/workspaces/${encodeURIComponent(id)}${qs}`, {
     method: "DELETE",
   });
 }
@@ -899,8 +913,14 @@ export function editClioProject(
   });
 }
 
-export function deleteClioProject(idOrName: string): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/api/clio/projects/${encodeURIComponent(idOrName)}`, {
+export function deleteClioProject(
+  idOrName: string,
+  opts?: { force?: boolean },
+): Promise<{ deleted: boolean; purgedTombstones?: number }> {
+  // `force=true` purges soft-deleted tombstones in the project before
+  // deleting (item 6.35 follow-up, 2026-05-10). Live docs still block.
+  const qs = opts?.force ? "?force=true" : "";
+  return request<{ deleted: boolean; purgedTombstones?: number }>(`/api/clio/projects/${encodeURIComponent(idOrName)}${qs}`, {
     method: "DELETE",
   });
 }
