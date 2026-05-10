@@ -14,6 +14,7 @@ import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureWorkspaceLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { persistAgentState, loadAgentState } from "./agent-state-store.js";
+import * as gitManager from "./git-manager.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getTemplate } from "./templates.js";
@@ -373,12 +374,38 @@ async function runDocument(
 
     const docsFileCount = await countDocsFiles(workspace.repoPath);
 
+    // F.1 (v0.24): commit the documenter's on-disk outputs (docs/*.md
+    // plus any cfcf-docs/ instructions/signals files it touched) on
+    // the current branch. Pre-v0.24 standalone `cfcf document` and the
+    // web Document button left these files dirty — the in-loop
+    // documenter already commits via iteration-loop's gitManager call,
+    // but the async / manual path explicitly set committed:false with
+    // a "don't auto-commit" comment. That decision created the gap.
+    // Best-effort: failing commit is logged but doesn't fail the run.
+    let committed = false;
+    if (result.exitCode === 0) {
+      try {
+        if (await gitManager.hasChanges(workspace.repoPath)) {
+          const subject = `cfcf manual documentation (${workspace.documenterAgent.adapter})`;
+          const cr = await gitManager.commitAll(workspace.repoPath, subject);
+          committed = cr.success;
+          if (!cr.success) {
+            console.warn(`[documenter-runner] commitAll returned non-success`);
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[documenter-runner] post-run commit failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     await updateHistoryEvent(workspace.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
       completedAt: state.completedAt,
       exitCode: result.exitCode,
       docsFileCount,
-      committed: false, // standalone document runs don't auto-commit
+      committed,
     } as Partial<import("./workspace-history.js").DocumentHistoryEvent>);
   } finally {
     documentProcessStore.delete(workspace.id);

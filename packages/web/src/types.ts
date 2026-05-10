@@ -271,6 +271,13 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
   signals?: ArchitectSignals;
   /** Added in 0.7.2: `"loop"` = pre-loop review phase; `"manual"` = user-invoked. */
   trigger?: "loop" | "manual";
+  /**
+   * Whether the standalone (`trigger: "manual"`) review committed its
+   * on-disk outputs to the current branch. Set by architect-runner.ts
+   * since v0.24 (F.1). Absent / undefined on in-loop pre-loop review
+   * events — those commit via the iteration-loop driver itself.
+   */
+  committed?: boolean;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {
@@ -309,6 +316,14 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   /** Reason the non-destructive validator rejected a rewrite (added in 0.6.0). */
   planRejectionReason?: string;
   exitCode?: number;
+  /**
+   * Whether the standalone (`trigger: "manual"`) reflection committed
+   * its on-disk outputs to the current branch. Set by reflection-
+   * runner.ts since v0.24 (F.1). Absent / undefined on in-loop
+   * reflection events — those commit via the iteration-loop driver
+   * itself.
+   */
+  committed?: boolean;
 }
 
 /**

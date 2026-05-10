@@ -214,6 +214,24 @@ function HistoryRow({
         </td>
         <td>
           {readinessCell}
+          {/* Committed badge for MANUAL review runs (F.1, v0.24). The
+              in-loop pre-loop review commits via the iteration-loop's
+              own `cfcf pre-loop review (<readiness>)` commit and
+              doesn't set `committed` on the event; only the manual
+              architect-runner path sets it explicitly. */}
+          {reviewEvent?.trigger === "manual" && reviewEvent?.committed === true && (
+            <span className="project-history__merged" title="Review outputs committed to the current branch.">
+              {" "}✓ committed
+            </span>
+          )}
+          {reviewEvent?.trigger === "manual" && reviewEvent?.committed === false && event.status === "completed" && (
+            <span
+              style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)", marginLeft: "0.5rem" }}
+              title="Review ran successfully but produced no on-disk changes — nothing to commit."
+            >
+              (no changes to commit)
+            </span>
+          )}
           {iterationEvent?.judgeDetermination && (() => {
             // Summarise judge result: quality + (when available) test counts.
             // E.g. "PROGRESS (8/10 · 5/5)". Tests come from judge signals if
@@ -420,7 +438,15 @@ function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
     );
   }
 
-  // Committed flag (only set when run via iteration loop post-SUCCESS)
+  // Committed flag. Set by both the in-loop documenter (after a
+  // SUCCESS) and (since v0.24) the standalone documenter via the
+  // F.1 commit-on-success path. The `committed=false && docs>0` case
+  // is no longer "the harness forgot to commit" — it's "the
+  // documenter re-wrote the same content that's already in git, so
+  // there was nothing to commit". Pre-v0.24 the label read "(not
+  // committed)" which implied a missed step; now it reflects what
+  // actually happened ("no changes to commit"). Same wording change
+  // applied to the parallel rendering on ReviewResult / ReflectionResult.
   if (event.committed) {
     parts.push(
       <span key="committed" className="project-history__merged">
@@ -430,8 +456,12 @@ function DocumentResult({ event }: { event: DocumentHistoryEvent }) {
     );
   } else if (event.committed === false && event.docsFileCount && event.docsFileCount > 0) {
     parts.push(
-      <span key="uncommitted" style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)" }}>
-        {" "}(not committed)
+      <span
+        key="no-changes"
+        style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)" }}
+        title="The documenter ran successfully but produced no changes vs the working tree — nothing to commit."
+      >
+        {" "}(no changes to commit)
       </span>,
     );
   }
@@ -470,6 +500,23 @@ function ReflectionResult({ event }: { event: ReflectionHistoryEvent }) {
           title="Reflection recommends stopping the loop"
         >
           ! stop
+        </span>
+      )}
+      {/* Committed badge — only present on manual / standalone runs
+          (in-loop reflections commit via the iteration-loop's own
+          gitManager call and don't surface `committed` on this event).
+          F.1 v0.24. */}
+      {event.committed === true && (
+        <span className="project-history__merged" title="Reflection outputs committed to the current branch.">
+          {" "}✓ committed
+        </span>
+      )}
+      {event.committed === false && event.trigger === "manual" && event.exitCode === 0 && (
+        <span
+          style={{ color: "var(--color-text-muted)", fontSize: "var(--text-xs)", marginLeft: "0.5rem" }}
+          title="Reflection ran successfully but produced no on-disk changes — nothing to commit."
+        >
+          (no changes to commit)
         </span>
       )}
       {event.signals?.key_observation && (

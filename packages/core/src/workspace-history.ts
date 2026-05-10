@@ -73,6 +73,17 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
    * undefined as `"manual"` for backward compat.
    */
   trigger?: "loop" | "manual";
+  /**
+   * Whether the standalone review committed its on-disk outputs
+   * (architect-review.md, plan.md, cfcf-architect-signals.json,
+   * cfcf-architect-instructions.md). `true` when a commit landed;
+   * `false` when there were no changes to commit OR the commit failed.
+   * Only set for `trigger: "manual"` runs — in-loop reviews commit via
+   * the iteration-loop driver itself (the existing
+   * `cfcf pre-loop review (<readiness>)` commit). Field added in v0.24
+   * (F.1 follow-up).
+   */
+  committed?: boolean;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {
@@ -133,6 +144,16 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   planRejectionReason?: string;
   /** Exit code of the reflection process */
   exitCode?: number;
+  /**
+   * Whether the standalone reflection committed its on-disk outputs
+   * (reflection-analysis.md + decision-log.md append + plan.md rewrite
+   * if any). `true` when a commit landed; `false` when there were no
+   * changes to commit OR the commit failed. Only set for `trigger:
+   * "manual"` runs — in-loop reflections commit via the iteration-loop
+   * driver itself and don't surface `committed` on this event (the
+   * iteration commit covers that). Field added in v0.24 (F.1 follow-up).
+   */
+  committed?: boolean;
 }
 
 /**

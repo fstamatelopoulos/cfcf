@@ -13,7 +13,7 @@ _No changes yet._
 
 ## [0.24.0] -- 2026-05-10
 
-Five-phase release packaging up the v0.23.1 dogfood follow-ups: full
+Six-phase release packaging up the v0.23.1 dogfood follow-ups: full
 status-tracking symmetry across all four agent surfaces (loop /
 review / document / reflect), Clio storage rationalisation that drops
 ~20% of fragmented per-iteration docs to single growing artifacts,
@@ -137,14 +137,80 @@ brings Reflect to parity.
   standalone run replaced the in-memory state, hiding the prior
   failure.
 
+### Added — F.1: standalone runners now commit their on-disk outputs
+
+Real dogfood (testgame): after the loop completed, the user
+accidentally clicked Reflect (the manual / standalone path).
+`reflection-analysis.md`, `decision-log.md`, `cfcf-reflection-
+context.md`, `cfcf-reflection-instructions.md`, and
+`cfcf-reflection-signals.json` were rewritten on disk — but
+**none of the three standalone runners commits**. The user came
+back to a "modified files" git status with no harness-side
+record that those changes were from a manual reflect.
+
+**Diagnosis**: `gitManager` is imported only in `iteration-loop.ts`
+(for in-loop commits) and as read-only in `reflection-runner.ts`
+(for log inspection). Architect-runner and documenter-runner
+have no git import at all. The in-loop variants of all three
+commit via the iteration-loop driver; the standalone /
+async-spawn paths skip git entirely.
+
+**Fix**: each standalone runner now commits at the end of a
+successful run, mirroring the in-loop pattern. Commit-message
+convention distinguishes manual from in-loop runs:
+
+| Runner | Trigger | Commit message |
+|---|---|---|
+| `reflection-runner.runReflectionAsync` | exit=0, hasChanges | `cfcf manual reflection (<health>): <key_observation>` |
+| `architect-runner.runReview` (async) | exit=0, hasChanges | `cfcf manual review (<readiness>)` |
+| `documenter-runner.runDocument` | exit=0, hasChanges | `cfcf manual documentation (<adapter>)` |
+
+`committed` field added to `ReviewHistoryEvent` and
+`ReflectionHistoryEvent` (already existed on
+`DocumentHistoryEvent`); set on the history event so the web UI
+can render a committed/no-changes badge per manual run. Best-
+effort: a failing `commitAll` is logged but doesn't fail the
+run.
+
+### Fixed — UI "(not committed)" wording → "(no changes to commit)"
+
+The documenter row in the History tab rendered "(not committed)"
+when `committed=false && docsFileCount>0`. With F.1 in place
+that combination now only occurs when the documenter ran
+successfully but produced no on-disk changes vs. what's already
+in git (re-wrote identical content). The label is "(no changes
+to commit)" with a tooltip explaining the case. Same wording
+extended to the new `committed` indicators on review +
+reflection rows for the standalone-runner badges.
+
+### Investigated — Finding 3: orphan `cfcf/iteration-3` branch on testgame
+
+Surfaced during the same dogfood pass. Root cause traced back
+to the original v0.23.1 "Server restarted" bug: iter-3 started
+at 08:07:51, was killed mid-flight by a server restart, marked
+`failed` by boot cleanup. The `cfcf/iteration-3` git branch
+that was created for it sits at the pre-loop review commit
+with no dev/judge work. Iter-4 created its own branch + ran +
+merged successfully; iter-3's branch is dead weight.
+
+Not a new bug — confirmed it's a side effect of the v0.23.1
+gap, which is already fixed for history-event state. The branch
+cleanup itself is a separate, lower-priority polish task. New
+backlog item **F.25** captures the fix sketch (boot-time scan
+for orphan iteration branches, surface via a `cfcf
+orphan-branches` CLI command rather than auto-deleting silently).
+
+**Workaround**: `git branch -D cfcf/iteration-N` manually after
+a failed iteration.
+
 ### Backlog updates (`docs/plan.md`)
 
-- **F.22** — promoted to v0.24.0 (delivered; entry preserved with
-  delivery note).
-- **F.23** — promoted to v0.24.0 (delivered; entry preserved with
-  delivery note).
-- **F.24** — new entry: workspace-status writer trace investigation
-  (observability already in place, awaiting next repro).
+- **F.22** — promoted to v0.24.0 (delivered).
+- **F.23** — promoted to v0.24.0 (delivered).
+- **F.24** — workspace-status writer trace investigation
+  (observability already in place; awaiting next repro).
+- **F.25** — new entry: boot-time cleanup of orphan iteration
+  branches.
 
 ## [0.23.1] -- 2026-05-10
 

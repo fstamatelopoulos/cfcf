@@ -23,6 +23,7 @@ import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
 import { writeContextToRepo, type IterationContext } from "./context-assembler.js";
 import { validatePlanRewrite, planHasCompletedItems } from "./plan-validation.js";
+import * as gitManager from "./git-manager.js";
 
 // Templates are resolved via the central templates module (embedded at build
 // time with per-repo / per-user filesystem overrides).
@@ -522,6 +523,32 @@ async function runReview(
     const signals = await parseArchitectSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
 
+    // F.1 (v0.24): commit the architect's on-disk outputs
+    // (architect-review.md, plan.md possibly rewritten, cfcf-architect-
+    // signals.json, cfcf-architect-instructions.md) on the current
+    // branch. Pre-v0.24 standalone `cfcf review` and the web Review
+    // button left these files dirty — the in-loop pre-loop review
+    // already commits via iteration-loop's own gitManager call, but
+    // the async / manual path didn't. Best-effort: failing commit is
+    // logged but doesn't fail the run.
+    let committed = false;
+    if (result.exitCode === 0) {
+      try {
+        if (await gitManager.hasChanges(workspace.repoPath)) {
+          const subject = `cfcf manual review (${signals?.readiness ?? "unknown"})`;
+          const cr = await gitManager.commitAll(workspace.repoPath, subject);
+          committed = cr.success;
+          if (!cr.success) {
+            console.warn(`[architect-runner] commitAll returned non-success`);
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[architect-runner] post-run commit failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     state.status = "completed";
     state.completedAt = new Date().toISOString();
     await setReviewState(state);
@@ -534,6 +561,7 @@ async function runReview(
       completedAt: state.completedAt,
       readiness: signals?.readiness,
       signals: signals ?? undefined,
+      committed,
     } as Partial<import("./workspace-history.js").ReviewHistoryEvent>);
 
     // Clio ingest (item 5.7 PR3): auto-ingest user-invoked `cfcf review`

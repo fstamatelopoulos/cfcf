@@ -476,6 +476,42 @@ async function runReflectionAsync(
     await setReflectState(state);
     const signals = await parseReflectionSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
+
+    // F.1 (v0.24): commit the reflection's outputs (reflection-analysis.md,
+    // decision-log.md append, plan.md rewrite, cfcf-reflection-{context,
+    // instructions}.md, cfcf-reflection-signals.json) on the current
+    // branch. Pre-v0.24 the standalone reflect path left these files
+    // dirty in the working tree — the user accidentally triggered a
+    // reflect, came back to a "modified files" git status with no way
+    // to undo without manual cleanup. The in-loop reflect already
+    // commits via `iteration-loop.ts`; this matches the pattern. Best-
+    // effort: a failing commit is logged but doesn't fail the run.
+    let committed = false;
+    if (result.exitCode === 0) {
+      try {
+        if (await gitManager.hasChanges(workspace.repoPath)) {
+          const health = signals?.iteration_health ?? "inconclusive";
+          const obs = signals?.key_observation || "manual reflection";
+          const subject = `cfcf manual reflection (${health}): ${obs}`.slice(0, 200);
+          const cr = await gitManager.commitAll(workspace.repoPath, subject);
+          committed = cr.success;
+          if (!cr.success) {
+            console.warn(`[reflection-runner] commitAll returned non-success`);
+          }
+        } else {
+          // No changes to commit — the agent produced no on-disk output.
+          // Surface this distinctly from "commit failed" by setting
+          // committed=undefined; the history-event update below sends
+          // `committed` only when we attempted a commit.
+          committed = false;
+        }
+      } catch (err) {
+        console.warn(
+          `[reflection-runner] post-run commit failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     state.status = "completed";
     state.completedAt = new Date().toISOString();
     await setReflectState(state);
@@ -487,6 +523,7 @@ async function runReflectionAsync(
       signals: signals ?? undefined,
       iterationHealth: signals?.iteration_health,
       planModified: signals?.plan_modified,
+      committed,
     } as Partial<import("./workspace-history.js").ReflectionHistoryEvent>);
   } finally {
     reflectProcessStore.delete(workspace.id);
