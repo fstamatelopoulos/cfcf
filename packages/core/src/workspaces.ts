@@ -176,6 +176,15 @@ export async function listWorkspaces(): Promise<WorkspaceConfig[]> {
 
 /**
  * Update a workspace config.
+ *
+ * Status transitions are logged with a stack trace (item 6.35 follow-up
+ * #2). The user reported workspace status getting stuck at "failed" even
+ * though individual iteration history events later completed. The only
+ * code paths writing `status: "failed"` are: (a) `cleanupStaleActiveLoops`
+ * at boot, (b) `runLoop().catch()` in `startLoop`/`resumeLoop`. If the
+ * workspace lands on "failed" outside those paths — or if it lands there
+ * and then iterations succeed — the trace tells us where the write came
+ * from.
  */
 export async function updateWorkspace(
   workspaceId: string,
@@ -183,6 +192,22 @@ export async function updateWorkspace(
 ): Promise<WorkspaceConfig | null> {
   const existing = await getWorkspace(workspaceId);
   if (!existing) return null;
+
+  // Trace status transitions — particularly into "failed" — so we can
+  // see in the server log who/where set it.
+  if (
+    typeof updates.status === "string" &&
+    updates.status !== existing.status
+  ) {
+    const stackHint = new Error("workspace-status-trace").stack
+      ?.split("\n")
+      .slice(2, 6)
+      .join("\n    ")
+      ?? "(no stack)";
+    console.log(
+      `[workspace-status] ${existing.name} (${workspaceId.slice(0, 8)}): ${existing.status} → ${updates.status}\n    ${stackHint}`,
+    );
+  }
 
   const updated = { ...existing, ...updates };
   await writeFile(

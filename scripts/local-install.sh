@@ -116,6 +116,60 @@ if [[ ! -d "$REPO_DIR/node_modules" ]]; then
   exit 1
 fi
 
+# ── Pre-flight: warn if a server is running with a live loop ───────────
+#
+# Item 6.35 follow-up #2 (2026-05-10). The `npm remove` step temporarily
+# breaks the cfcf package tree on disk. Externalized lazy imports
+# (notably `@huggingface/transformers` via the Clio ONNX embedder) will
+# resolve to a missing module if the running server tries to load them
+# during the install window — that surfaces as an `unhandledRejection`,
+# triggers `gracefulShutdown`, kills active agents, and corrupts history
+# events with stale "Server restarted" messages on the next boot.
+#
+# Detecting an active loop here lets us warn the user BEFORE the damage,
+# with a one-liner to stop the server first. Best-effort: this needs the
+# freshly-built cfcf to be on PATH AND the server to be reachable, both
+# of which are pre-conditions for the issue. If the check itself fails
+# (no cfcf on PATH yet, jq missing, etc.) we just continue silently —
+# the warning is a courtesy, not a hard gate.
+if command -v cfcf >/dev/null 2>&1 && [[ -f "$HOME/.cfcf/server.pid" ]]; then
+  pid_file_pid="$(cat "$HOME/.cfcf/server.pid" 2>/dev/null | head -1 || true)"
+  if [[ -n "$pid_file_pid" ]] && kill -0 "$pid_file_pid" 2>/dev/null; then
+    # Server is running. Probe for any active loop.
+    has_active_loop=0
+    if status_json="$(cfcf status --json 2>/dev/null)"; then
+      # Active phases per the loop-state phase enum. Match anywhere in
+      # the JSON so we don't depend on jq being installed.
+      if echo "$status_json" | grep -qE '"phase"\s*:\s*"(preparing|dev_executing|judging|deciding|reflecting|documenting)"'; then
+        has_active_loop=1
+      fi
+    fi
+    if (( has_active_loop )); then
+      echo "[local-install] ⚠️  WARNING: cfcf server is running AND a loop is mid-iteration." >&2
+      echo "[local-install]" >&2
+      echo "[local-install]   Re-installing now will break the running server's externalized" >&2
+      echo "[local-install]   dependencies (@huggingface/transformers, etc.) for a few seconds" >&2
+      echo "[local-install]   while npm remove + npm install run. Any Clio operation hitting" >&2
+      echo "[local-install]   a lazy import in that window will throw, triggering gracefulShutdown." >&2
+      echo "[local-install]   Active history events get marked failed with a stale error." >&2
+      echo "[local-install]" >&2
+      echo "[local-install]   Recommended:" >&2
+      echo "[local-install]     cfcf server stop      # let the loop pause first if you want to resume" >&2
+      echo "[local-install]     ./scripts/local-install.sh" >&2
+      echo "[local-install]     cfcf server start" >&2
+      echo "[local-install]     cfcf resume <workspace>" >&2
+      echo "[local-install]" >&2
+      printf "[local-install]   Continue anyway? [y/N] " >&2
+      read -r answer
+      case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) echo "[local-install]   continuing at user request" >&2 ;;
+        *) echo "[local-install]   aborted" >&2; exit 1 ;;
+      esac
+      echo
+    fi
+  fi
+fi
+
 # ── Step 1: clean (default) ────────────────────────────────────────────
 
 if (( DO_CLEAN )); then

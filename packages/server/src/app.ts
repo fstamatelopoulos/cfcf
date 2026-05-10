@@ -1316,8 +1316,17 @@ export function createApp() {
 
   // --- Server shutdown ---
 
-  app.post("/api/shutdown", (c) => {
-    setTimeout(() => process.exit(0), 100);
+  // Route through gracefulShutdown() (item 6.35 follow-up). The previous
+  // `setTimeout(() => process.exit(0), 100)` shortcut bypassed the
+  // active-process kill + history-event cleanup, leaving agents
+  // reparented to PID 1 and history events stuck in `running` state on
+  // disk. The next server boot's `cleanupAllStaleRunningEvents` then
+  // tagged those orphaned events with "Server restarted while this
+  // event was running" — which the user saw as a spurious failed status
+  // even on iterations that ultimately completed.
+  app.post("/api/shutdown", async (c) => {
+    const { requestShutdown } = await import("./start.js");
+    requestShutdown("api");
     return c.json({ status: "shutting down" });
   });
 

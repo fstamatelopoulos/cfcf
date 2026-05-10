@@ -33,7 +33,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
 import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
-import { nextIteration, updateWorkspace } from "./workspaces.js";
+import { nextIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync, parseReflectionSignals } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
@@ -1699,6 +1699,25 @@ async function runJudgeAndDecide(
     devSignals: iterRecord.devSignals,
     judgeSignals: judgeSignals ?? undefined,
   } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
+
+  // Self-heal workspace status (item 6.35 follow-up #2): the user
+  // reported the workspaces-list page stuck on "Failed" even after
+  // iterations resumed completing successfully. If the workspace fell
+  // into a terminal/failed state for any reason mid-loop while the
+  // loop kept running, an iteration just completing is concrete
+  // evidence the workspace is alive — reset its status to "running" so
+  // the dashboard reflects reality. The status-transition trace in
+  // `updateWorkspace` will surface in logs WHO set it to "failed" so we
+  // can chase the original write next time it happens.
+  try {
+    const fresh = await getWorkspace(workspace.id);
+    if (fresh && fresh.status === "failed") {
+      await updateWorkspace(workspace.id, { status: "running" }).catch(() => {});
+      console.log(
+        `[iteration-loop] Workspace ${workspace.name} was stuck on "failed" — reset to "running" after iter ${iterationNum} completed`,
+      );
+    }
+  } catch { /* best-effort self-heal */ }
 
   // --- REFLECT (item 5.6) ---
   // Runs after the judge commits and before DECIDE. Decides whether to
