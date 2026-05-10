@@ -373,51 +373,154 @@ necessary in normal flows — it's the workspace's own bucket and the
 user usually wants to either keep it as-is (default) or pick a shared
 team/project name (e.g. `cf-team-foo`) for cross-workspace grouping.
 
-### 7. Read-audit / usage_log (REVISED 2026-05-09 — IN SCOPE FOR THIS PR)
+### 6a. Grep-vs-Clio guidance (the rule for agents)
+
+A clean rule based on TASK rather than source-of-truth:
+
+| Task | Tool | Why |
+|---|---|---|
+| Read a specific known file (`decision-log.md`, `iteration-log-3.md`, `problem.md`, `architect-review.md`) | **Disk** (`cat` / Read tool) | Local, fast, full content. **Fresher than Clio for current-iteration files** — auto-ingest fires at iteration boundary; disk has the latest writes. |
+| Search across THIS workspace's history (decisions, lessons, prior iterations on a topic) | **Clio** scoped to `cf-workspace-<id>` | Hybrid semantic+FTS handles paraphrases ("flaky" matches "intermittent"); results ranked by relevance. |
+| Search across PRIOR workspaces (cross-workspace patterns, user preferences) | **Clio** scoped to `cf-system-memory-global` | Only Clio has cross-workspace data. |
+| Search **code** in the current repo (symbols, function usages, imports) | **grep** | Clio doesn't index code; iteration logs may *mention* a symbol but the source itself isn't there. |
+
+**No fallback chain** — they cover different ground. If Clio returns no
+hits for `"caching decisions"`, the answer is *"no prior caching
+decisions"*, not *"now grep what's already auto-ingested"* (the
+workspace's `cfcf-docs/*` files ARE in Clio; grep would find the same
+nothing because it's the same content).
+
+**One exception** — current-iteration files written by THIS very run.
+Auto-ingest happens at iteration boundary, so an agent reading its own
+decision-log entries from earlier in the same iteration → disk (the
+filesystem has the latest writes; Clio has the previous iteration's
+snapshot until this iteration commits + the next iteration boots).
+
+This rule goes in `clio-guide.md` as a top-level rubric, referenced
+from each role template.
+
+### 7. Audit log + usage log (REVISED 2026-05-09 — IN SCOPE FOR THIS PR)
 
 Cerefox's `usage_log` records every read (search + docs-get) AND every
 write (mutation). cfcf's `clio_audit_log` today records mutations
 only — reads are invisible.
 
-**Decision: implement read-audit in this PR (not deferred).**
-Reasoning (all from the user, 2026-05-09):
-- No privacy concerns — cfcf runs in the user's space; the user owns
-  the data. No multi-tenant or shared-host pattern to gate around.
-- Read-audit is **how we'll measure whether the new role guidance is
-  working**. After Phase 1 ships, the user wants to look at the
-  usage log to see "are agents actually searching Clio? which roles?
-  what queries? are queries returning hits?" Without a read log we
-  can't measure it.
-- Size concern is bounded: assume ~5-10 read events per iteration
-  × 100 iterations × 7 workspaces = ~7000 entries / year. SQLite
-  handles millions of rows fine; not a concern.
+**Decision: implement Cerefox's two-table model verbatim.** After
+inspecting Cerefox's schema (2026-05-09), the right design is clear —
+**adopt the two-table split** rather than extending `clio_audit_log`
+with read events.
 
-**Implementation**:
-- Either extend the existing `clio_audit_log` table with new event
-  types `search` and `docs-get`, OR add a sibling `clio_usage_log`
-  table. Decision deferred to implementation review — leaning toward a
-  sibling table because reads have a different shape (query text +
-  match count + zero-hits flag) from mutations (before/after diffs)
-  and mixing them complicates queries.
-- Migration: new table OR new event-type values + new payload columns
-  on the existing table. Either way: clean SQLite migration.
-- **Recorded fields**: timestamp, actor (the existing
-  `<role>|<agent>|<model>` stamp), event type (`search` /
-  `docs-get`), query text, project filter (if any), result count,
-  zero-hits flag, latency.
-- **CLI surface**: `cfcf clio audit --reads` (filter to read events)
-  and `cfcf clio audit --writes` (filter to mutations). Plus `--actor
-  <pattern>` for "show me dev's searches", `--zero-hits` for
-  "queries that returned nothing" (training signal for what's
-  missing from Clio).
+#### Cerefox's two-table design (the reference)
 
-**Alignment review with Cerefox** (Backlog item):
-- Cerefox's `usage_log` schema is the reference. Once cfcf's read-audit
-  ships, we should compare field-by-field with Cerefox's schema and
-  capture any divergence in the design doc + decisions log.
-- New Backlog row: `F.X — Cerefox usage_log alignment review`.
-- Not blocking for this PR; the PR ships the working surface and the
-  alignment review tightens it.
+Cerefox has TWO tables, distinct purposes:
+
+**`cerefox_audit_log`** (mutations only — current cf² parity):
+```
+id, document_id, version_id, operation, author, author_type,
+size_before, size_after, description, created_at
+```
+- Operations: `create`, `update-content`, `update-metadata`,
+  `delete`, `status-change`, `archive`, `unarchive`
+- Per-document scope; tracks WHAT changed about a doc + size deltas
+  + free-form description
+- Lens: "how has this doc evolved?"
+
+**`cerefox_usage_log`** (reads AND writes — operational log):
+```
+id, logged_at, operation, access_path, requestor,
+document_id, project_id, query_text, result_count, extra (JSONB)
+```
+- Operations include: `search`, `get_document`, `list_versions`,
+  `list_projects`, `metadata_search`, `list_metadata_keys`,
+  `get_audit_log`, `ingest`, `update-metadata`, `status-change`
+- `access_path`: `'cli'` | `'webapp'` | `'local-mcp'` | `'remote-mcp'`
+  | `'edge-function'`
+- `requestor`: actor stamp (`<role>|<agent>|<model>` for cf²) or
+  `'user'`
+- `query_text`: search query (when applicable)
+- `result_count`: hits returned
+- Lens: "who's calling Clio and what are they asking?"
+
+The same write event (`ingest`) appears in **both** tables — different
+filters in the UI, different consumers. Cerefox also has a
+`cerefox_usage_summary` RPC that returns aggregate JSON for analytics
+dashboards (ops by day, by operation, by access_path, top documents,
+top requestors).
+
+Cerefox gates `usage_log` writes with a `cerefox_config.usage_tracking_enabled`
+flag (off by default; opt-in). For cf² we'll keep it **always on** —
+single-user space, no privacy gating needed — but preserve the
+column structure so a future `CerefoxRemote` backend swap-in stays
+clean.
+
+#### cf² implementation
+
+1. **Keep `clio_audit_log` as-is** (mutations only — already mirrors
+   Cerefox).
+2. **Add a sibling `clio_usage_log` table** mirroring Cerefox's
+   schema:
+   ```sql
+   CREATE TABLE clio_usage_log (
+     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+     logged_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     operation    TEXT NOT NULL,
+     access_path  TEXT NOT NULL,    -- 'cli' | 'web' | 'agent-cli'
+     requestor    TEXT,              -- actor stamp '<role>|<agent>|<model>' OR 'user'
+     document_id  TEXT REFERENCES clio_documents(id) ON DELETE SET NULL,
+     project_id   INTEGER REFERENCES clio_projects(id) ON DELETE SET NULL,
+     query_text   TEXT,
+     result_count INTEGER,
+     extra        TEXT                -- JSON; latency, zero-hits flag, etc.
+   );
+   CREATE INDEX idx_usage_log_logged_at  ON clio_usage_log (logged_at DESC);
+   CREATE INDEX idx_usage_log_operation  ON clio_usage_log (operation, logged_at DESC);
+   CREATE INDEX idx_usage_log_requestor  ON clio_usage_log (requestor) WHERE requestor IS NOT NULL;
+   CREATE INDEX idx_usage_log_document   ON clio_usage_log (document_id) WHERE document_id IS NOT NULL;
+   ```
+3. **Hooks** in `LocalClio` for every public read + write method:
+   - Reads: `searchFts`, `searchHybrid`, `searchSemantic`, `getDocument`,
+     `listVersions`, `listProjects`, `searchMetadata`, `listMetadataKeys`,
+     `getAuditLog`.
+   - Writes: existing `ingest` / `updateContent` / `updateMetadata` /
+     `softDelete` / `restore` (already log to `clio_audit_log`; add a
+     usage-log mirror).
+   - All hooks fire-and-forget (try/catch swallow); usage logging
+     never blocks the actual operation.
+4. **`access_path` plumbing**:
+   - `cli` — direct `cfcf clio …` invocations from the user's shell.
+   - `agent-cli` — `cfcf clio …` invocations from inside an agent's
+     spawn (detected via the existing actor-stamp; if `requestor` is
+     a role-stamp it's `agent-cli`).
+   - `web` — every `/api/clio/*` HTTP call.
+5. **CLI surface**:
+   ```
+   cfcf clio audit                   # mutations only (today's behaviour, unchanged)
+   cfcf clio usage                   # reads + writes (NEW)
+   cfcf clio usage --reads           # filter to reads
+   cfcf clio usage --writes          # filter to writes
+   cfcf clio usage --actor "<stamp>" # who-did-what
+   cfcf clio usage --zero-hits       # search queries that returned nothing
+   cfcf clio usage --since 1d        # time window
+   cfcf clio usage --json
+   ```
+   Plus aggregate command (mirrors Cerefox's `usage_summary` RPC):
+   ```
+   cfcf clio usage summary --since 7d
+   ```
+6. **HTTP surface**: `GET /api/clio/usage` and `GET /api/clio/usage/summary`
+   with the same filter shapes.
+
+**`get_document`** etc. via the web's `DocumentDetail` panel = `web` access path; via the dev's
+`cfcf clio docs get` = `agent-cli` access path. The same lens that
+shows up in `cerefox_usage_log` gives us "who is reading what".
+
+**Out of scope for this PR (separate plan items)**:
+- Web UI for usage-log browsing (item TBD in the plan; the Memory
+  page's existing Audit tab gets a "Usage" sibling tab + read-event
+  filters).
+- Cerefox `usage_log` field-by-field alignment review (Backlog item
+  `F.X`) — schema may want micro-tweaks once we ship + run side-by-
+  side.
 
 ## Per-role Clio interaction matrix
 
@@ -624,18 +727,22 @@ table, role-specific cheat sheets).
    `resolveClioProject` reads `workspace.clioProject?.trim() ||
    DEFAULT_PROJECT` — already correct).
 
-### Phase 3 — Read-audit + tests + docs
+### Phase 3 — Usage-log + tests + docs
 
-1. **Read-audit log** (item 7 in the design):
-   - Schema migration adding either a `clio_usage_log` table OR new
-     event types + payload columns on `clio_audit_log` (final shape at
-     implementation review).
-   - Hooks in `LocalClio.searchFts` / `searchHybrid` /
-     `searchSemantic` and `getDocument` to record reads.
-   - CLI surface: `cfcf clio audit --reads` / `--writes` / `--actor` /
-     `--zero-hits` filters.
-   - HTTP surface: `GET /api/clio/audit?type=reads&...` for the web
-     UI's Audit tab to surface read events alongside mutations.
+1. **`clio_usage_log` table** (Cerefox parity — see §7 of the design):
+   - Schema migration adding the `clio_usage_log` table with the
+     Cerefox-mirroring shape (`logged_at`, `operation`, `access_path`,
+     `requestor`, `document_id`, `project_id`, `query_text`,
+     `result_count`, `extra`).
+   - Hooks in every `LocalClio` public read + write method
+     (fire-and-forget; never blocks the operation).
+   - `access_path` plumbing across `cli` / `agent-cli` / `web`
+     callers.
+   - **CLI**: `cfcf clio usage` (with `--reads` / `--writes` / `--actor` /
+     `--zero-hits` / `--since` filters) + `cfcf clio usage summary`.
+   - **HTTP**: `GET /api/clio/usage` + `GET /api/clio/usage/summary`.
+   - `clio_audit_log` keeps its existing scope (mutations only); both
+     tables coexist, different filters in the UI.
 2. **HA staleness disclaimer**: small prompt update in
    `packages/core/src/help-assistant/prompt-assembler.ts` (add the
    "saved Q&A is for continuity, not authoritative" line) +
