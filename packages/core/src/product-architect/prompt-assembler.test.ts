@@ -100,6 +100,42 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).toContain("no global memory yet");
   });
 
+  it("uses the per-workspace default project (cf-workspace-<id>) in --project flags when clioProject is unset (item 6.9)", () => {
+    // Pre-6.9 workspaces have `clioProject: null` on the registration —
+    // the prompt should still tell the agent to write to
+    // `cf-workspace-<id>`, not auto-route to default.
+    const stateNoExplicit: AssessedState = {
+      ...baseState,
+      workspace: { ...baseState.workspace, clioProject: null },
+    };
+    const out = assembleProductArchitectPrompt({
+      state: stateNoExplicit,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    expect(out).toContain("--project cf-workspace-ws-uuid-1");
+    // The PA-memory.md write specifically should target the workspace's
+    // own project, not cf-system-pa-memory or cf-system-default.
+    expect(out).toContain("--title PA-memory.md --project cf-workspace-ws-uuid-1");
+  });
+
+  it("respects an explicit shared clioProject (e.g. backend-services) over the per-workspace default", () => {
+    // When the user has assigned the workspace to a shared project,
+    // PA's writes should land there — pooling memory with siblings.
+    const stateShared: AssessedState = {
+      ...baseState,
+      workspace: { ...baseState.workspace, clioProject: "backend-services" },
+    };
+    const out = assembleProductArchitectPrompt({
+      state: stateShared,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    expect(out).toContain("--project backend-services");
+    // And NOT the per-workspace default — explicit wins.
+    expect(out).not.toContain("--project cf-workspace-ws-uuid-1");
+  });
+
   it("renders the workspace memory content when present", () => {
     const memory: MemoryInventory = {
       workspace: {

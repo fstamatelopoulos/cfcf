@@ -31,6 +31,7 @@ import { join, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { listWorkspaces } from "../workspaces.js";
 import { readPidFile, isProcessRunning } from "../pid-file.js";
+import { effectiveClioProject } from "../clio/system-projects.js";
 
 /**
  * Resolve a path through any symlinks (`realpath`); fall back to a
@@ -390,7 +391,22 @@ export function formatAssessedState(s: AssessedState): string {
     out.push(`- **Registered**.`);
     out.push(`  - Workspace ID: \`${s.workspace.workspaceId}\``);
     out.push(`  - Name: \`${s.workspace.name}\``);
-    out.push(`  - Clio Project: ${s.workspace.clioProject ? `\`${s.workspace.clioProject}\`` : "_(none — auto-routes to 'default')_"}`);
+    // Item 6.9: per-workspace Clio Project. New workspaces store it
+    // explicitly as `cf-workspace-<id>`; pre-6.9 workspaces stored
+    // nothing and the iteration loop now auto-routes to the same
+    // effective name via `effectiveClioProject()`. Surface the
+    // effective name either way + flag explicit vs default so the
+    // user knows whether they need to pick one.
+    const effective = s.workspace.workspaceId
+      ? effectiveClioProject({ id: s.workspace.workspaceId, clioProject: s.workspace.clioProject ?? undefined })
+      : null;
+    if (s.workspace.clioProject) {
+      out.push(`  - Clio Project: \`${s.workspace.clioProject}\` _(explicit)_`);
+    } else if (effective) {
+      out.push(`  - Clio Project: \`${effective}\` _(default for this workspace; not stored on the config)_`);
+    } else {
+      out.push(`  - Clio Project: _(unset)_`);
+    }
     out.push(`  - Current iteration counter: ${s.workspace.currentIteration ?? 0}`);
   }
   out.push("");

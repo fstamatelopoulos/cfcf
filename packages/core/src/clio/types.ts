@@ -303,8 +303,22 @@ export interface ClioDocumentVersion {
 
 export interface SearchRequest {
   query: string;
-  /** Optional: limit results to this Project (by name or id; resolved server-side). */
+  /**
+   * Optional: limit results to this Project (by name or id; resolved
+   * server-side). Single-project filter — superseded by `projects`
+   * for the multi-project case (item 6.9). When BOTH `project` and
+   * `projects` are set, `projects` wins.
+   */
   project?: string;
+  /**
+   * Optional: limit results to this set of Projects (item 6.9 multi-
+   * project search — agents typically pass `[cf-workspace-<id>,
+   * cf-system-memory-global]` to search per-workspace + global
+   * together). Each entry is a name or id, resolved server-side.
+   * Empty array = no filter (same as undefined). Project names that
+   * don't resolve are dropped (the search just sees the ones that do).
+   */
+  projects?: string[];
   /** Max number of hits to return. */
   matchCount?: number;
   /** v1 supports "fts" only. PR2 adds "hybrid" and "semantic". */

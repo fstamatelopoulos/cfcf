@@ -9,6 +9,23 @@ function getBaseUrl(): string {
   return `http://localhost:${port}`;
 }
 
+/**
+ * Tag every CLI -> server call with an access-path header so the server's
+ * Clio usage log can distinguish:
+ *   - `cli`        — human-driven CLI invocation (default)
+ *   - `agent-cli`  — an agent process invoking the CLI (set CFCF_ACCESS_PATH=agent-cli
+ *                    when the iteration runner spawns an agent that may shell
+ *                    out to `cfcf clio …`)
+ *   - `web`        — browser → server (no header set; server defaults to web)
+ *
+ * Read once per call; respects an explicit env override but falls back to "cli".
+ */
+function accessPathHeader(): Record<string, string> {
+  const raw = process.env.CFCF_ACCESS_PATH?.trim();
+  const value = raw === "agent-cli" || raw === "cli" || raw === "web" ? raw : "cli";
+  return { "X-CFCF-Access-Path": value };
+}
+
 export interface ClientResponse<T = unknown> {
   ok: boolean;
   status: number;
@@ -69,7 +86,7 @@ function mapFetchError(err: unknown): ClientResponse<never> {
  */
 export async function get<T = unknown>(path: string): Promise<ClientResponse<T>> {
   try {
-    const res = await fetch(`${getBaseUrl()}${path}`);
+    const res = await fetch(`${getBaseUrl()}${path}`, { headers: accessPathHeader() });
     return await readJsonOrTextError<T>(res);
   } catch (err: unknown) {
     return mapFetchError(err);
@@ -81,9 +98,11 @@ export async function get<T = unknown>(path: string): Promise<ClientResponse<T>>
  */
 export async function post<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
+    const headers: Record<string, string> = { ...accessPathHeader() };
+    if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "POST",
-      headers: body ? { "Content-Type": "application/json" } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
     return await readJsonOrTextError<T>(res);
@@ -97,9 +116,11 @@ export async function post<T = unknown>(path: string, body?: unknown): Promise<C
  */
 export async function put<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
+    const headers: Record<string, string> = { ...accessPathHeader() };
+    if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "PUT",
-      headers: body ? { "Content-Type": "application/json" } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
     return await readJsonOrTextError<T>(res);
@@ -114,9 +135,11 @@ export async function put<T = unknown>(path: string, body?: unknown): Promise<Cl
  */
 export async function patch<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
+    const headers: Record<string, string> = { ...accessPathHeader() };
+    if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "PATCH",
-      headers: body ? { "Content-Type": "application/json" } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
     return await readJsonOrTextError<T>(res);
@@ -133,9 +156,11 @@ export async function patch<T = unknown>(path: string, body?: unknown): Promise<
  */
 export async function del<T = unknown>(path: string, body?: unknown): Promise<ClientResponse<T>> {
   try {
+    const headers: Record<string, string> = { ...accessPathHeader() };
+    if (body) headers["Content-Type"] = "application/json";
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: "DELETE",
-      headers: body ? { "Content-Type": "application/json" } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
     return await readJsonOrTextError<T>(res);

@@ -34,13 +34,36 @@ In re-review mode you are NOT scaffolding `docs/architecture.md`, `docs/api-refe
 
 Read ALL of the following files carefully:
 
-1. **Problem definition**: `cfcf-docs/problem.md` -- what needs to be built
-2. **Success criteria**: `cfcf-docs/success.md` -- how success is measured
-3. **Constraints**: `cfcf-docs/constraints.md` (if present) -- guardrails and limitations
-4. **Hints**: `cfcf-docs/hints.md` (if present) -- technical hints and preferred approaches
-5. **Style guide**: `cfcf-docs/style-guide.md` (if present) -- code style guidelines
-6. **Context files**: `cfcf-docs/context/` (if present) -- architecture docs, API specs, etc.
-7. **Existing codebase**: Browse the project source code to understand what already exists
+1. **Cross-workspace memory hits**: `cfcf-docs/clio-relevant.md` (if present) — top-k Clio search hits matched against `problem.md`. Read this BEFORE you read the rest. It's how you find prior workspaces' answers to similar problems.
+2. **Clio cue card**: `cfcf-docs/clio-guide.md` — how to invoke Clio yourself when the pre-built top-k isn't enough.
+3. **Problem definition**: `cfcf-docs/problem.md` -- what needs to be built
+4. **Success criteria**: `cfcf-docs/success.md` -- how success is measured
+5. **Constraints**: `cfcf-docs/constraints.md` (if present) -- guardrails and limitations
+6. **Hints**: `cfcf-docs/hints.md` (if present) -- technical hints and preferred approaches
+7. **Style guide**: `cfcf-docs/style-guide.md` (if present) -- code style guidelines
+8. **Context files**: `cfcf-docs/context/` (if present) -- architecture docs, API specs, etc.
+9. **Existing codebase**: Browse the project source code to understand what already exists
+
+## Clio (cross-workspace memory) — the architect's lens
+
+Before you classify readiness or sketch a plan, run a couple of Clio
+searches for problem-shape precedents (item 6.9):
+
+- **Read the pre-built top-k first**. cfcf wrote `cfcf-docs/clio-relevant.md`
+  by searching every Clio Project the user has against the first 40 words
+  of `problem.md`. Skim it; if a hit looks useful, follow up with
+  `cfcf clio docs get <id>` for the full context.
+- **If the top-k is thin**, run a manual cross-workspace search for the
+  problem's key phrases:
+
+      cfcf clio search "<central phrase from problem.md>" \
+          --metadata '{"role":"architect","artifact_type":"architect-review"}'
+
+- **Ingest is automatic.** cfcf captures your `architect-review.md` into
+  Clio after this run with `metadata.artifact_type = "architect-review"`
+  and the actor stamp `architect|<adapter>|<model>`. You don't need to
+  ingest it yourself. **Don't** call `cfcf clio docs ingest` for the
+  review file; that creates a duplicate.
 
 ## What to Produce
 

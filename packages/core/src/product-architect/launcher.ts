@@ -30,7 +30,7 @@
  * §"System-prompt injection: Pattern A".
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { getAdapter } from "../adapters/index.js";
@@ -43,7 +43,7 @@ import {
 import type { AssessedState } from "./state-assessor.js";
 import { listWorkspaces } from "../workspaces.js";
 import { ensurePaClioProjects } from "./memory.js";
-import { getClioBackend } from "../clio/index.js";
+import { getClioBackend, effectiveClioProject, formatClioActor, ROLE_PRODUCT_ARCHITECT } from "../clio/index.js";
 
 export interface LaunchOptions {
   /** Resolved Product Architect agent config (already backfilled by validateConfig). */
@@ -239,15 +239,21 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
   const paCachePath = join(opts.state.repoPath, ".cfcf-pa");
   await mkdir(paCachePath, { recursive: true });
 
-  // Pre-create the PA + global Clio Projects so the agent's
-  // `cfcf clio docs ingest --project cf-system-pa-memory` command lands in
-  // the right place. Without this the auto-route-on-missing semantics
-  // would push the doc into the `default` Project, which produces the
-  // "Clio says no memory but disk has memory" discrepancy users hit
-  // in dogfood. Idempotent + best-effort.
+  // Pre-create the Clio Projects PA writes to:
+  //   - the workspace's OWN project (`cf-workspace-<id>`) for
+  //     PA-memory.md + session archives (item 6.9 move)
+  //   - cf-system-memory-global for pa-global-memory
+  //   - cf-system-pa-memory as a placeholder (kept for back-compat
+  //     even though it's no longer the per-workspace home)
+  // Without this the auto-route-on-missing semantics would push the
+  // doc into the `default` Project, producing the "Clio says no
+  // memory but disk has memory" discrepancy users hit in dogfood.
+  // Idempotent + best-effort.
   try {
     const backend = getClioBackend();
-    await ensurePaClioProjects(backend);
+    await ensurePaClioProjects(backend, {
+      workspaceId: opts.state.workspace.workspaceId,
+    });
   } catch { /* best-effort */ }
 
   // ── History: write the start entry (best-effort) ──────────────────
@@ -314,6 +320,7 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
+      env: { ...process.env, CFCF_ACCESS_PATH: "agent-cli" },
     });
     const code = await proc.exited;
     exitCode = code ?? null;
@@ -410,13 +417,46 @@ async function finaliseHistoryEvent(opts: {
     return;
   }
 
+  // ── Cfcf-side fallback ingest of the session archive ──────────────
+  // The PA prompt instructs the agent to push `pa-session-<sessionId>`
+  // to Clio at session end (see prompt-assembler's "session end"
+  // section). Real-world dogfood (2026-05-09 tracker workspace) shows
+  // agents sometimes don't run the ingest — Ctrl-D exits, the agent
+  // skips the proactive "save?" question, or the model decides the
+  // session "isn't worth saving". When that happens the on-disk
+  // session log is preserved but never reaches Clio, breaking
+  // cross-machine durability.
+  //
+  // cfcf takes the safe path: if meta.json shows no Clio sync
+  // happened AND the disk session file has substantive content, push
+  // the archive ourselves before we exit. Idempotent — sha256 dedup
+  // in LocalClio means a later agent-driven re-ingest of identical
+  // content is a no-op. Never touches PA-memory.md (the digest) —
+  // that's the agent's call because it requires editorial judgement
+  // (current state + collapsed history). Only the immutable session
+  // archive is safe to auto-create.
+  const archiveResult = await fallbackIngestPaSessionArchive({
+    paCachePath: opts.paCachePath,
+    workspaceId,
+    sessionId: opts.eventBase.sessionId,
+    // `agent` / `model` are typed optional on the base history event
+    // (some event types omit them). For PA they're always set by the
+    // launcher above; default to "unknown" if somehow missing so the
+    // actor stamp is still well-formed.
+    paAgentAdapter: opts.eventBase.agent ?? "unknown",
+    paAgentModel: opts.eventBase.model,
+  });
+
   const completionPatch: Partial<PaSessionHistoryEvent> = {
     status,
     completedAt,
     exitCode: opts.exitCode ?? undefined,
     outcomeSummary: meta?.outcomeSummary,
     decisionsCount: meta?.decisionsCount,
-    clioWorkspaceMemoryDocId: meta?.clioWorkspaceMemoryDocId,
+    // If the agent already pushed PA-memory.md, prefer its doc id.
+    // Otherwise fall back to the session-archive id from our save.
+    clioWorkspaceMemoryDocId:
+      meta?.clioWorkspaceMemoryDocId ?? archiveResult.archiveDocId ?? undefined,
   };
 
   if (opts.historyEventId !== null) {
@@ -461,6 +501,198 @@ interface MetaJsonLastSession {
   outcomeSummary?: string;
   decisionsCount?: number;
   clioWorkspaceMemoryDocId?: string;
+}
+
+/**
+ * Fallback ingest of the PA session archive into Clio.
+ *
+ * Item 6.9 follow-up (2026-05-09): the PA prompt instructs the agent
+ * to push `pa-session-<sessionId>` at session end via
+ * `cfcf clio docs ingest`, but the agent occasionally skips it — Ctrl-D
+ * exits, model decides the session isn't worth saving, etc. Real
+ * dogfood case: tracker workspace, ~6KB session log on disk,
+ * `meta.json.lastSyncAt = null`, Clio empty for that workspace.
+ *
+ * cfcf is the right place to add the safety net: deterministic,
+ * agent-agnostic, runs unconditionally on every PA exit. Logic:
+ *
+ *   1. Read `.cfcf-pa/session-<sessionId>.md`. If absent or trivially
+ *      small (< 500 chars), the session was either crashy or empty —
+ *      skip silently.
+ *   2. Read `meta.json`. If `lastSyncAt` is set AND the session file's
+ *      mtime is older than `lastSyncAt`, the agent already pushed +
+ *      nothing changed since — nothing to do.
+ *   3. Otherwise ingest the archive into the workspace's effective
+ *      Clio Project (`effectiveClioProject(workspace)`) with the
+ *      standard `pa-session-<id>` title + metadata triple. The ingest
+ *      is **deduped by sha256** in LocalClio, so a later agent-driven
+ *      re-ingest of identical content is a no-op.
+ *   4. On success, update `meta.json` so the next launch's
+ *      `lastSession` block reflects the auto-save.
+ *
+ * Restricted to the **session archive only** — never touches
+ * `PA-memory.md` (the rolling digest), because that requires editorial
+ * judgement the agent owns (collapsing old sessions, dedup decisions).
+ * The session archive is immutable + append-only, so cfcf can't
+ * clobber anything by writing it.
+ *
+ * Returns the new doc's id if we ingested, `null` if we skipped.
+ * Best-effort: any failure is logged + swallowed; PA's exit doesn't
+ * fail because Clio was unreachable.
+ */
+export async function fallbackIngestPaSessionArchive(opts: {
+  paCachePath: string;
+  workspaceId: string;
+  sessionId: string;
+  paAgentAdapter: string;
+  paAgentModel?: string;
+}): Promise<{ archiveDocId: string | null; reason?: string }> {
+  const sessionFile = join(opts.paCachePath, `session-${opts.sessionId}.md`);
+  let content: string;
+  let sessionMtimeMs: number;
+  try {
+    content = await readFile(sessionFile, "utf-8");
+    const st = await stat(sessionFile);
+    sessionMtimeMs = st.mtimeMs;
+  } catch {
+    return { archiveDocId: null, reason: "no-session-file" };
+  }
+  if (content.trim().length < 500) {
+    return { archiveDocId: null, reason: "session-too-small" };
+  }
+
+  // Has the agent already pushed a more-recent version?
+  let agentSyncAtMs: number | null = null;
+  try {
+    const metaRaw = await readFile(join(opts.paCachePath, "meta.json"), "utf-8");
+    const parsed = JSON.parse(metaRaw) as { lastSyncAt?: string | null };
+    if (parsed.lastSyncAt) {
+      const t = Date.parse(parsed.lastSyncAt);
+      if (!isNaN(t)) agentSyncAtMs = t;
+    }
+  } catch { /* meta.json missing/malformed → treat as no sync */ }
+
+  // Floor the file mtime to whole ms before comparing — APFS / ext4
+  // can report sub-ms fractional precision (e.g. 1778389360291.29),
+  // but `Date.parse` of an ISO timestamp loses the fraction (returns
+  // whole ms). Without the floor, a "sync immediately after write"
+  // pattern fails the `>=` check by a fraction of a ms and falsely
+  // re-ingests. Real-world cadence is minutes-to-hours so this only
+  // matters in fast test loops, but the floor is the right semantic
+  // either way.
+  if (agentSyncAtMs !== null && agentSyncAtMs >= Math.floor(sessionMtimeMs)) {
+    return { archiveDocId: null, reason: "agent-already-synced" };
+  }
+
+  // Look up the workspace to compute the effective Clio Project.
+  let workspaceName = opts.workspaceId;
+  let workspaceClioProject: string;
+  try {
+    const all = await listWorkspaces();
+    const w = all.find((x) => x.id === opts.workspaceId);
+    workspaceName = w?.name ?? opts.workspaceId;
+    workspaceClioProject = effectiveClioProject({
+      id: opts.workspaceId,
+      clioProject: w?.clioProject,
+    });
+  } catch {
+    workspaceClioProject = `cf-workspace-${opts.workspaceId}`;
+  }
+
+  const actor = formatClioActor(ROLE_PRODUCT_ARCHITECT, opts.paAgentAdapter, opts.paAgentModel);
+
+  let archiveDocId: string;
+  try {
+    const backend = getClioBackend();
+    const result = await backend.ingest({
+      project: workspaceClioProject,
+      title: `pa-session-${opts.sessionId}`,
+      content,
+      source: "cfcf-auto:pa-session-fallback",
+      author: actor,
+      metadata: {
+        role: "pa",
+        artifact_type: "session-archive",
+        workspace_id: opts.workspaceId,
+        workspace_name: workspaceName,
+        session_id: opts.sessionId,
+        ingested_by: "cfcf-fallback",
+        // Agent-supplied outcomeSummary won't be available (the agent
+        // didn't write `lastSession`), so we leave it absent. The agent
+        // can edit-metadata later if it wants to add one.
+      },
+      // Per-session archives are immutable. If the agent ALSO ingests
+      // (race / re-launch), backend's sha256 dedup makes it a no-op.
+      updateIfExists: false,
+    });
+    archiveDocId = result.document?.id ?? "";
+  } catch (err) {
+    console.error(
+      `[pa] note: fallback session-archive ingest failed (${err instanceof Error ? err.message : String(err)}). ` +
+      `Disk file is preserved at ${sessionFile}; you can ingest it manually with: ` +
+      `cfcf clio docs ingest ${sessionFile} --project ${workspaceClioProject} --title pa-session-${opts.sessionId} ` +
+      `--metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${opts.workspaceId}","session_id":"${opts.sessionId}"}'`,
+    );
+    return { archiveDocId: null, reason: "ingest-failed" };
+  }
+
+  if (!archiveDocId) {
+    // Backend returned without a doc id — shouldn't happen on success,
+    // but defensively skip the meta.json write.
+    return { archiveDocId: null, reason: "no-doc-id-returned" };
+  }
+
+  // Update meta.json so the next launch's discrepancy check sees the
+  // synced state. Best-effort — never let this fail the exit path.
+  try {
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(await readFile(join(opts.paCachePath, "meta.json"), "utf-8"));
+    } catch { /* treat as new file */ }
+    parsed.lastSyncAt = new Date().toISOString();
+    parsed.lastSessionArchiveDocId = archiveDocId;
+    await writeFile(
+      join(opts.paCachePath, "meta.json"),
+      JSON.stringify(parsed, null, 2) + "\n",
+      "utf-8",
+    );
+  } catch { /* best-effort */ }
+
+  console.error(
+    `[pa] auto-saved session archive to Clio (${workspaceClioProject}). ` +
+    `The agent didn't push it itself; cfcf preserved the session at doc id ${archiveDocId}.`,
+  );
+
+  // Item 6.9 follow-up: also refresh the workspace's problem-pack
+  // files in Clio. PA's primary job is editing problem.md / success.md
+  // / etc., so a session that just ran almost certainly mutated at
+  // least one of them. sha256 dedup makes unchanged files no-ops, so
+  // calling unconditionally is cheap and predictable. We pass PA's
+  // actor stamp as the override so the audit log shows PA as the
+  // writer (not the default `user|cfcf|system` stamp the loop's
+  // iteration-start trigger uses).
+  try {
+    const all = await listWorkspaces();
+    const ws = all.find((x) => x.id === opts.workspaceId);
+    if (ws) {
+      const { ingestProblemPack } = await import("../clio/loop-ingest.js");
+      const ppResult = await ingestProblemPack(
+        getClioBackend(),
+        ws,
+        "pa-session-end",
+        actor, // PA's `product-architect|<adapter>|<model>` stamp
+      );
+      if (ppResult.ingested > 0) {
+        console.error(
+          `[pa] also refreshed ${ppResult.ingested} problem-pack file(s) in Clio (${ppResult.skipped} unchanged, ${ppResult.missing} not on disk).`,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(`[pa] problem-pack post-session ingest failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { archiveDocId };
 }
 
 async function readMetaJsonLastSession(paCachePath: string): Promise<MetaJsonLastSession | null> {

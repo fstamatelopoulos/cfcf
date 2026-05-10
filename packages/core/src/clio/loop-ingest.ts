@@ -18,7 +18,7 @@ import type { WorkspaceConfig, JudgeSignals, ReflectionSignals } from "../types.
 import type { MemoryBackend } from "./backend/types.js";
 import type { IngestResult } from "./types.js";
 import { readConfig } from "../config.js";
-import { DEFAULT_PROJECT } from "./system-projects.js";
+import { effectiveClioProject } from "./system-projects.js";
 import { formatClioActor } from "./actor.js";
 
 /**
@@ -47,22 +47,37 @@ export type IngestPolicy = "off" | "summaries-only" | "all";
 
 /**
  * Resolve the effective ingest policy for a workspace. Priority:
- *   workspace.clio.ingestPolicy -> global.clio.ingestPolicy -> "summaries-only"
+ *   workspace.clio.ingestPolicy -> global.clio.ingestPolicy -> "all"
+ *
+ * Default flipped from "summaries-only" to "all" 2026-05-09 (item 6.9).
+ * Disk is cheap (~20-50 KB per iteration); cross-iteration full-history
+ * search is high-value, especially for the multi-loop-over-time use
+ * case where users come back to the same workspace months later.
+ * Existing workspaces auto-pick-up the new default since none have an
+ * explicit override.
  */
 export async function resolveIngestPolicy(workspace: WorkspaceConfig): Promise<IngestPolicy> {
   if (workspace.clio?.ingestPolicy) return workspace.clio.ingestPolicy;
   const global = await readConfig();
   if (global?.clio?.ingestPolicy) return global.clio.ingestPolicy;
-  return "summaries-only";
+  return "all";
 }
 
 /**
- * Resolve the Clio Project to ingest into. Uses the workspace's
- * `clioProject` when set; otherwise the named system fallback Project
- * (auto-created by the backend on first ingest).
+ * Resolve the Clio Project to ingest into.
+ *
+ * Item 6.9 (2026-05-09): per-workspace memory now lives in
+ * `cf-workspace-<id>` by default. New workspaces get this set
+ * explicitly at `createWorkspace()` time; pre-6.9 workspaces with
+ * `clioProject` still unset get the SAME effective project via
+ * `effectiveClioProject()`, so auto-ingest routes consistently
+ * regardless of when the workspace was registered. The pre-6.9
+ * fallback to `cf-system-default` (the global "everyone's stuff"
+ * bucket) is gone — per-workspace artefacts no longer pollute the
+ * global default project.
  */
 function resolveClioProject(workspace: WorkspaceConfig): string {
-  return workspace.clioProject?.trim() || DEFAULT_PROJECT;
+  return effectiveClioProject(workspace);
 }
 
 // ── Shared metadata builder ───────────────────────────────────────────────
@@ -366,6 +381,153 @@ export async function ingestIterationSummary(
     );
     return null;
   }
+}
+
+// ── Hook: problem-pack files (item 6.9 follow-up) ─────────────────────────
+
+/**
+ * The five canonical problem-pack files cfcf auto-ingests into Clio.
+ * Order is stable for deterministic iteration in tests + logs.
+ *
+ * cfcf treats these as **read-only by convention** for agents (PA edits
+ * them; the loop roles cite them); ingesting them gives sibling
+ * workspaces in a shared Clio Project + future iterations of THIS
+ * workspace cross-cutting visibility.
+ */
+export const PROBLEM_PACK_FILES = [
+  "problem.md",
+  "success.md",
+  "constraints.md",
+  "hints.md",
+  "style-guide.md",
+] as const;
+
+export type ProblemPackFilename = (typeof PROBLEM_PACK_FILES)[number];
+
+export interface ProblemPackIngestResult {
+  /** Number of files newly created OR materially updated (action !== "skipped"). */
+  ingested: number;
+  /** Number of files where the on-disk content matched the live Clio doc (sha256-deduped). */
+  skipped: number;
+  /** Number of files that didn't exist on disk (or were empty). */
+  missing: number;
+  /** Per-file detail for logging / tests. */
+  perFile: Array<{
+    filename: ProblemPackFilename;
+    action: "created" | "updated" | "skipped" | "missing" | "failed";
+    documentId?: string;
+    error?: string;
+  }>;
+}
+
+/**
+ * Ingest the workspace's problem-pack files into Clio. ONE Clio doc
+ * per file, identified by `(role: "user", artifact_type: "problem-pack",
+ * filename: <one-of-the-five>, workspace_id)` metadata + matching
+ * title `<workspace-name>: problem-pack <filename>`.
+ *
+ * Runs at three trigger points:
+ *   - `workspace-init`: server's POST `/api/workspaces` after the
+ *     workspace gets created (catches Problem Packs that already
+ *     existed in the repo when the user registered).
+ *   - `iteration-start`: iteration loop's pre-dev hook (each iteration
+ *     re-checks; sha256 dedup means unchanged files are no-ops).
+ *   - `pa-session-end`: PA launcher's fallback (PA's primary job is
+ *     editing these files, so re-ingesting at session end captures
+ *     the freshest version).
+ *
+ * Idempotent: `--update-if-exists` looks up the doc by title within
+ * the workspace's effective Clio Project. The backend's sha256 dedup
+ * skips ingest when the file's content hash matches the live version's
+ * hash, so cost-per-call is a single SQL lookup for unchanged files.
+ *
+ * Subject to the same `clio.ingestPolicy` gate as other auto-ingests:
+ * `"off"` skips everything; `"summaries-only"` and `"all"` both
+ * include problem-pack (these files ARE the workspace's "summary"
+ * of intent, so no value in scoping them tighter).
+ *
+ * Best-effort: any single-file failure is logged + the loop continues
+ * to the next file. Returns a summary the caller can surface.
+ */
+export async function ingestProblemPack(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger: "workspace-init" | "iteration-start" | "pa-session-end" | "pa-boot-reconcile" | "manual",
+  actorOverride?: string,
+): Promise<ProblemPackIngestResult> {
+  const result: ProblemPackIngestResult = {
+    ingested: 0,
+    skipped: 0,
+    missing: 0,
+    perFile: [],
+  };
+
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return result;
+
+  const project = resolveClioProject(workspace);
+  // Two-layer attribution:
+  //   - `role: "user"` (set in metadata below) — STAKEHOLDER of the
+  //     spec content. Problem-pack files describe what the user wants
+  //     built; that's the semantic owner regardless of keystroke author.
+  //   - `author` — actual WRITER. Default `user|cfcf|system` for
+  //     workspace-init / iteration-start (cfcf-driven, no role agent
+  //     specifically triggered). PA fallback / boot-reconcile pass an
+  //     override like `product-architect|<adapter>|<model>` so the
+  //     audit log can distinguish PA-driven edits from user-only ones.
+  const author = actorOverride ?? actorForRole(workspace, "user");
+
+  for (const filename of PROBLEM_PACK_FILES) {
+    const path = join(workspace.repoPath, "cfcf-docs", filename);
+    const content = await readIfExists(path);
+    if (!content || !content.trim()) {
+      result.missing++;
+      result.perFile.push({ filename, action: "missing" });
+      continue;
+    }
+
+    try {
+      const ingestResult = await backend.ingest({
+        project,
+        title: `${workspace.name}: problem-pack ${filename}`,
+        content,
+        author,
+        source: `cfcf-auto:problem-pack:${filename}:${trigger}`,
+        // Workspace-singleton doc per file — look up by title inside
+        // the project + update in place when content changed. Backend
+        // dedups by sha256 so unchanged content is a fast no-op.
+        updateIfExists: true,
+        metadata: baseMetadata(workspace, {
+          role: "user",
+          artifact_type: "problem-pack",
+          filename,
+          tier: "semantic",
+          ingest_trigger: trigger,
+        }),
+      });
+      if (ingestResult.action === "skipped") {
+        result.skipped++;
+        result.perFile.push({
+          filename,
+          action: "skipped",
+          documentId: ingestResult.document?.id,
+        });
+      } else {
+        result.ingested++;
+        result.perFile.push({
+          filename,
+          action: ingestResult.action, // "created" | "updated"
+          documentId: ingestResult.document?.id,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[clio] problem-pack ingest failed for ${filename}: ${msg}`);
+      result.perFile.push({ filename, action: "failed", error: msg });
+    }
+  }
+
+  return result;
 }
 
 // ── Hook: iteration-log + iteration-handoff + judge-assessment (policy="all" only) ──

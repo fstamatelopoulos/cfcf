@@ -9,7 +9,92 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Item 6.9 follow-up: auto-ingest problem-pack files
+
+- **`ingestProblemPack()`** in `loop-ingest.ts` ingests the five
+  canonical problem-pack files (`problem.md`, `success.md`,
+  `constraints.md`, `hints.md`, `style-guide.md`) into the workspace's
+  effective Clio Project. One Clio doc per file (`<workspace-name>:
+  problem-pack <filename>`) with metadata
+  `(role: "user", artifact_type: "problem-pack", filename, workspace_id,
+  workspace_name, tier: "semantic", ingest_trigger)`. Idempotent via
+  `--update-if-exists` + sha256 dedup, so unchanged files are no-ops.
+- **Two-layer attribution**: `metadata.role = "user"` always (problem-
+  pack content represents the user's product intent regardless of who
+  keystroked the edit). The `author` column tracks the actual writer:
+  default `user|cfcf|system` for cfcf-driven triggers (workspace-init,
+  iteration-start), `product-architect|<adapter>|<model>` when PA
+  triggers it (session-end fallback or boot-reconcile rescue).
+- **Four trigger points**: server-side `POST /api/workspaces`
+  (catches Problem Packs that already existed at registration);
+  iteration-loop start (refreshes before `clio-relevant.md` so sibling
+  workspaces in shared Clio Projects see the freshest spec); PA
+  session-end fallback (PA's primary job is editing these files);
+  PA boot reconciliation (rescues mid-edit content when PA died
+  before its session-end fallback fired — Ctrl-C on parent shell,
+  server crash, OS panic).
+- **PA prompt addition**: optional opportunistic mid-session ingest
+  guidance — agents can push a finished spec edit immediately without
+  waiting for session-end / next iteration. sha256 dedup makes the
+  redundant harness re-ingest a no-op.
+- **Cross-workspace search benefit**: workspaces in shared Clio
+  Projects (e.g. `backend-services`) now surface each other's problem
+  statements. `clio-relevant.md` top-k generation can match against
+  prior workspaces' similar problems.
+- **Templates updated**: dev role's `process.md` notes
+  problem-pack auto-ingest; `clio-guide.md`'s "auto-ingest is on"
+  principle + metadata table now list problem-pack as a known
+  `artifact_type` + `filename` as a known metadata key.
+
+### Added — Item 6.9: rationalising Clio usage across agent roles
+
+- **`clio_usage_log`** schema (migrations 0003 + 0004): operational
+  lens for Clio activity (reads + writes), parallel to the existing
+  `clio_audit_log` (mutations only). Cerefox-parity table; same write
+  event lands a row in both tables, different filters.
+- **CLI client** stamps every server call with
+  `X-CFCF-Access-Path: cli|agent-cli|web` (defaults to `cli`).
+  Iteration runners spawn agent processes with
+  `CFCF_ACCESS_PATH=agent-cli` so any `cfcf clio …` shell-out from
+  inside an agent is correctly tagged.
+- **Hono middleware** on `/api/clio/*` writes one usage-log row per
+  call, capturing operation / access_path / requestor / document_id /
+  project_id / query_text / result_count / extra. Search + ingest
+  handlers populate extras for richer rows.
+- **CLI verbs** `cfcf clio usage` (list with `--reads/--writes/
+  --zero-hits/--actor/--operation/--access-path/--since/--until`) and
+  `cfcf clio usage summary` (Cerefox-parity aggregate by day /
+  operation / access path / requestor / top docs).
+- **HTTP routes** `GET /api/clio/usage` and `GET /api/clio/usage/summary`
+  back the CLI verbs and a future web UI viewer.
+- **Per-workspace Clio Project**: `cfcf workspace init` now defaults
+  `clioProject` to `cf-workspace-<id>` (auto-created at registration
+  time) so every workspace gets its own per-workspace memory home
+  without the user having to ask. CLI + web project pickers filter
+  `cf-system-*` and `cf-workspace-*` namespaces out of the dropdown.
+- **PA memory move**: per-workspace PA memory + session archives now
+  live in `cf-workspace-<id>` (renamed `pa-workspace-memory` →
+  `PA-memory.md`). Global cross-workspace preferences stay in
+  `cf-system-memory-global`. `cf-system-pa-memory` is preserved as a
+  placeholder. Metadata-based reads stay compatible with the prior
+  layout.
+- **Default ingest policy** flips from `summaries-only` to `all` —
+  every iteration's logs / handoffs / judge assessment / reflection
+  analysis / decision-log entry / iteration summary auto-ingests by
+  default. Workspaces / global config can still override.
+- **HA staleness disclaimer** in the Help Assistant prompt: every
+  memory entry stamped with `cfcf_version` at write time; the agent
+  flags entries from materially older releases when citing them.
+- **Multi-project search** (`cfcf clio search --project a,b,c`) maps
+  to `?project=a&project=b&project=c` and a SQL `IN (?, ?, ?)`
+  filter — Cerefox parity.
+- **Per-role template Clio sections**: `clio-guide.md` rewritten with
+  six universal principles + per-role cheatsheets; every role
+  template (architect / judge / reflection / documenter / process.md)
+  now reads `cfcf-docs/clio-relevant.md` first and ships a focused
+  Clio-usage section.
+- **Backlog F.20** seeded for a future Cerefox `usage_log` re-audit
+  once the CerefoxRemote backend lands.
 
 ## [0.22.2] -- 2026-05-09
 

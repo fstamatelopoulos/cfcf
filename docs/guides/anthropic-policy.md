@@ -33,14 +33,44 @@ The rule targets **the credential**, not the headless-vs-interactive pattern its
 - Anthropic's first-party Routines feature (cron / API / GitHub triggers running on Anthropic-managed infrastructure — subscription-billed by Anthropic itself).
 - CI on **your own** repository using `CLAUDE_CODE_OAUTH_TOKEN` (community guides + Claude Code GitHub Actions docs).
 - The Anthropic Agent SDK with proper API-key authorisation.
+- **Claude Code under `ANTHROPIC_API_KEY` auth** (paid API access, billed per-token rather than per-month). This is the canonical "automation under your own credentials" pattern; see the next section.
 
 ### What's prohibited
 
-- Any third-party harness (cfcf included) consuming a subscription OAuth token in unattended / scripted execution.
+- Any third-party harness (cfcf included) consuming a **subscription OAuth token** in unattended / scripted execution.
 
 ### Why subscriptions weren't built for this (Anthropic's own framing)
 
 Cherny's stated technical rationale: "Our subscriptions weren't built for the usage patterns of these third-party tools." Third-party harnesses bypass Claude Code's prompt-cache optimisations and exhibit token-consumption profiles the subscription pricing model wasn't designed around. The policy is the business response to that technical mismatch.
+
+---
+
+## Compliant `claude-code` adapter use via the API key
+
+The cfcf `claude-code` adapter is **not categorically prohibited** — it's the *credential* that determines compliance, not the adapter. Two auth paths to claude-code:
+
+| Auth path | How to set it up | Policy |
+|---|---|---|
+| **Subscription OAuth** (default after `claude /login`) | Pro/Max sub + `claude` opens a browser → you log in → an OAuth token gets stored under `~/.claude/`. | ⚠️ Prohibited in unattended cfcf roles. |
+| **API key** | Set `ANTHROPIC_API_KEY=<your-key>` in the env that `cfcf server start` runs in. claude-code auto-routes to the API path when this var is present. | ✅ Compliant. Same pattern as the Agent SDK. |
+
+**To use claude-code on unattended cfcf roles compliantly**:
+
+```bash
+# In your shell config (~/.zshrc, ~/.bashrc) or a per-project .envrc:
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Start the cfcf server in this shell so the var is inherited:
+cfcf server start
+
+# Now any role configured with the `claude-code` adapter will use the
+# API key — every spawned `claude -p` inherits ANTHROPIC_API_KEY from
+# cfcf's process env.
+```
+
+The cfcf inline warning + CLI banner DO appear when you pick `claude-code` for an unattended role (cfcf can't tell at config-save time which credential the env will carry at run time). The warning's wording explicitly says the API-key path is exempt — so you can dismiss the warning if you've set the env var.
+
+**Pricing trade-off**: API-key auth is per-token billing (no flat-rate cap). For an iteration loop running multiple iterations a day, costs can add up faster than a Pro/Max subscription. If you want flat-rate predictability without the policy issue, the alternative-adapter route (`codex`, `claude-code-ollama`, etc.) is usually cheaper at scale.
 
 ---
 

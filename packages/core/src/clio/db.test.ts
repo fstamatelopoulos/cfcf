@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Database } from "bun:sqlite";
-import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, getSqliteVecPath, type ClioMigration } from "./db.js";
+import { openClioDb, runMigrations, listAppliedMigrations, applyCustomSqlite, getSqliteVecPath, getClioDbPath, type ClioMigration } from "./db.js";
 
 // Load migration SQL via the same `with { type: "text" }` import the
 // db.ts production code uses, so tests exercise the real bytes.
@@ -29,6 +29,46 @@ afterEach(() => {
     const d = tempDirs.pop()!;
     try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+});
+
+describe("getClioDbPath", () => {
+  // Save/restore the env vars we're going to mutate so the test doesn't
+  // leak into subsequent tests in the same suite.
+  const origClioDb = process.env.CFCF_CLIO_DB;
+  const origConfigDir = process.env.CFCF_CONFIG_DIR;
+
+  function restoreEnv() {
+    if (origClioDb === undefined) delete process.env.CFCF_CLIO_DB;
+    else process.env.CFCF_CLIO_DB = origClioDb;
+    if (origConfigDir === undefined) delete process.env.CFCF_CONFIG_DIR;
+    else process.env.CFCF_CONFIG_DIR = origConfigDir;
+  }
+
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  it("CFCF_CLIO_DB wins when set (most explicit override)", () => {
+    process.env.CFCF_CLIO_DB = "/tmp/explicit/clio.db";
+    process.env.CFCF_CONFIG_DIR = "/tmp/configdir";
+    expect(getClioDbPath()).toBe("/tmp/explicit/clio.db");
+  });
+
+  it("CFCF_CONFIG_DIR derives <configdir>/clio.db when CFCF_CLIO_DB is unset (item 6.9 isolation hook)", () => {
+    delete process.env.CFCF_CLIO_DB;
+    process.env.CFCF_CONFIG_DIR = "/tmp/cfcf-test-sandbox";
+    expect(getClioDbPath()).toBe(join("/tmp/cfcf-test-sandbox", "clio.db"));
+  });
+
+  it("falls back to ~/.cfcf/clio.db when neither env var is set (production default)", () => {
+    delete process.env.CFCF_CLIO_DB;
+    delete process.env.CFCF_CONFIG_DIR;
+    const path = getClioDbPath();
+    // Production default lives under the user's home dir, NOT the
+    // platform-specific config dir. This separation is intentional —
+    // see the doc comment on `getClioDbPath`.
+    expect(path.endsWith("/.cfcf/clio.db")).toBe(true);
+  });
 });
 
 describe("openClioDb", () => {

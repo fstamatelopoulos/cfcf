@@ -42,7 +42,17 @@ export function NewWorkspaceModal({
     setClioProject("");
     setError(null);
     setSubmitting(false);
-    fetchClioProjects().then(setProjects).catch(() => setProjects([]));
+    // Hide cfcf-managed projects (`cf-system-*` system memory + each
+    // existing workspace's `cf-workspace-<id>` per-workspace project)
+    // from the picker — they're cfcf-internal and shouldn't be picked
+    // as the home for a new workspace's user-facing memory. Item 6.9.
+    fetchClioProjects()
+      .then((all) =>
+        setProjects(
+          all.filter((p) => !p.isSystem && !p.name.startsWith("cf-workspace-")),
+        ),
+      )
+      .catch(() => setProjects([]));
   }, [open]);
 
   async function submit(e: React.FormEvent) {
@@ -125,20 +135,23 @@ export function NewWorkspaceModal({
         </div>
 
         <div className="form-row">
-          <label htmlFor="new-ws-project">Clio Project (optional)</label>
-          {/* `<select>` (not `<input list>` + `<datalist>`) so the dropdown
-              looks identical to Settings → Agent Roles → Adapter. The
-              datalist popup is browser-chrome and varies in width across
-              dialogs; <select> uses our themed CSS chevron consistently.
-              New-project creation isn't supported here -- leave blank to
-              auto-create from the workspace name; create new projects
-              from the Memory page (or via `cfcf clio projects create`). */}
+          <label htmlFor="new-ws-project">Shared Clio Project (optional)</label>
+          {/* Item 6.9: by default a workspace gets its own
+              `cf-workspace-<id>` project, auto-created at registration.
+              The picker below is for the cross-workspace SHARING case
+              only -- pick an existing user-named project (e.g.
+              "backend-services") to pool memory with other workspaces.
+              `<select>` (not `<input list>` + `<datalist>`) so the
+              dropdown looks identical to Settings → Agent Roles →
+              Adapter. New-project creation isn't supported here -- create
+              new shared projects from the Memory page (or via
+              `cfcf clio projects create`) and then pick them here. */}
           <select
             id="new-ws-project"
             value={clioProject}
             onChange={(e) => setClioProject(e.target.value)}
           >
-            <option value="">(auto: defaults to workspace name)</option>
+            <option value="">(default: per-workspace project, auto-created)</option>
             {projects.map((p) => (
               <option key={p.id} value={p.name}>
                 {p.name}
@@ -147,7 +160,11 @@ export function NewWorkspaceModal({
             ))}
           </select>
           <span className="form-row__hint">
-            Cross-workspace memory bucket. Pick an existing project to share docs with other workspaces, or leave on auto for a fresh per-workspace project.
+            Leave on default — the workspace will get its own
+            <code>cf-workspace-&lt;id&gt;</code> Clio Project. Pick a shared
+            project here ONLY if you want this workspace to pool memory
+            with sibling workspaces (e.g. multiple repos in the same
+            problem domain).
           </span>
         </div>
 

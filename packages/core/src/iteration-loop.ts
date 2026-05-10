@@ -44,6 +44,7 @@ import {
   getClioBackend,
   ingestReflectionAnalysis,
   ingestArchitectReview,
+  ingestProblemPack,
   ingestDecisionLogEntries,
   ingestIterationSummary,
   ingestRawIterationArtifacts,
@@ -1396,6 +1397,24 @@ async function runLoop(
 
     await writeContextToRepo(workspace.repoPath, ctx);
 
+    // Item 6.9 follow-up: refresh the workspace's problem-pack files in
+    // Clio BEFORE we generate `clio-relevant.md`. Two benefits:
+    //   1. Sibling workspaces in a shared Clio Project see the freshest
+    //      problem statement / success criteria — useful for cross-
+    //      workspace search ("did anyone else build a thing with these
+    //      constraints?").
+    //   2. The auto-ingested problem-pack docs are themselves searchable
+    //      candidates for THIS iteration's `clio-relevant.md` top-k —
+    //      so the agents reading clio-relevant see prior workspaces'
+    //      similar problems alongside any code-level lessons.
+    // sha256 dedup makes unchanged files no-ops; cost-per-iteration is
+    // five SQL lookups when nothing changed. Best-effort.
+    try {
+      await ingestProblemPack(getClioBackend(), workspace, "iteration-start");
+    } catch (err) {
+      console.warn(`[clio] problem-pack ingest failed at iteration start: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // Clio context preload (item 5.7 PR3): generate
     // `cfcf-docs/clio-relevant.md` with top-k cross-workspace hits matched
     // against this workspace's problem.md. Reads through the same backend
@@ -1442,6 +1461,7 @@ async function runLoop(
       args: devCmd.args,
       cwd: workspace.repoPath,
       logFile: devLogFile,
+      env: { CFCF_ACCESS_PATH: "agent-cli" },
     });
     const unregisterDev = registerProcess({
       workspaceId: workspace.id,
@@ -1553,6 +1573,7 @@ async function runJudgeAndDecide(
     args: judgeCmd.args,
     cwd: workspace.repoPath,
     logFile: judgeLogFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   const unregisterJudge = registerProcess({
     workspaceId: workspace.id,

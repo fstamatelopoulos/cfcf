@@ -19,6 +19,8 @@ You are NOT the dev agent -- do not modify source code, tests, or project config
 
 The harness assembles the following for you under `cfcf-docs/`:
 
+- `clio-relevant.md` -- pre-built top-k of cross-workspace memory hits matched against `problem.md`. Read this FIRST; you're the role with the longest view, and Clio is your cross-workspace lens.
+- `clio-guide.md` -- how to invoke Clio yourself for any follow-up searches.
 - `problem.md`, `success.md`, `constraints.md`, `hints.md` -- original problem pack (READ-ONLY for you)
 - `plan.md` -- current plan with completion markers
 - `judge-assessment.md` -- latest judge output (this iteration)
@@ -30,6 +32,28 @@ The harness assembles the following for you under `cfcf-docs/`:
 - `cfcf-reflection-context.md` -- compact git log of `cfcf/iteration-*` branches + tail of the last dev log (when present)
 
 You may also run `git show <hash>` for any commit referenced in the branch log if you need specific change detail.
+
+## Clio (cross-workspace memory) — the reflection lens
+
+Reflection is the one iteration role with a multi-iteration *and*
+cross-workspace mandate. Clio is the tool that surfaces both (item 6.9):
+
+- **Read `clio-relevant.md` first** for cross-workspace hits.
+- **Search this workspace's prior reflections** to spot recurring drift:
+
+      cfcf clio search "<theme>" --project {{WORKSPACE_CLIO_PROJECT}} \
+          --metadata '{"role":"reflection","artifact_type":"reflection-analysis"}'
+
+- **Search the global memory** for cross-cutting lessons that should
+  inform your strategic recommendation:
+
+      cfcf clio search "<theme>" --project cf-system-memory-global
+
+- **Auto-ingest** captures your `reflection-analysis.md` after this run
+  with the right actor stamp; don't ingest manually. **Do** add a
+  `decision-log.md` entry with `[category: strategy]` if you spot a
+  cross-iteration pattern worth flagging — those entries auto-ingest
+  too and become first-class memory for future reflections.
 
 ## What to Produce
 

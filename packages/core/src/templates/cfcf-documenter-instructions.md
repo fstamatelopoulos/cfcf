@@ -8,17 +8,40 @@ You are NOT the dev agent. Do not modify source code, tests, or configuration. Y
 
 Read ALL of the following to understand the project fully:
 
-1. **Source code**: Browse all source files to understand the implementation
-2. **Tests**: Read test files to understand behavior and edge cases
-3. **Problem definition**: `cfcf-docs/problem.md`
-4. **Success criteria**: `cfcf-docs/success.md`
-5. **Implementation plan**: `cfcf-docs/plan.md`
-6. **Decision log**: `cfcf-docs/decision-log.md` (tagged entries from all roles — dev, judge, architect, reflection)
-7. **Iteration history**: `cfcf-docs/iteration-history.md`
-8. **Per-iteration changelogs**: `cfcf-docs/iteration-logs/iteration-*.md` (curated, written by the dev agent each iteration)
-9. **Reflection analyses** (if present): `cfcf-docs/reflection-reviews/reflection-*.md` and the latest `cfcf-docs/reflection-analysis.md`
-10. **Existing docs**: `docs/` directory (if present — may have stubs from architect/dev)
-11. **Package/config files**: `package.json`, `tsconfig.json`, etc.
+1. **Cross-workspace memory hits**: `cfcf-docs/clio-relevant.md` (if present) — pre-built top-k of relevant Clio docs from this + sibling workspaces. Read this for cross-workspace design rationale you should weave into the docs.
+2. **Clio cue card**: `cfcf-docs/clio-guide.md`.
+3. **Source code**: Browse all source files to understand the implementation
+4. **Tests**: Read test files to understand behavior and edge cases
+5. **Problem definition**: `cfcf-docs/problem.md`
+6. **Success criteria**: `cfcf-docs/success.md`
+7. **Implementation plan**: `cfcf-docs/plan.md`
+8. **Decision log**: `cfcf-docs/decision-log.md` (tagged entries from all roles — dev, judge, architect, reflection)
+9. **Iteration history**: `cfcf-docs/iteration-history.md`
+10. **Per-iteration changelogs**: `cfcf-docs/iteration-logs/iteration-*.md` (curated, written by the dev agent each iteration)
+11. **Reflection analyses** (if present): `cfcf-docs/reflection-reviews/reflection-*.md` and the latest `cfcf-docs/reflection-analysis.md`
+12. **Existing docs**: `docs/` directory (if present — may have stubs from architect/dev)
+13. **Package/config files**: `package.json`, `tsconfig.json`, etc.
+
+## Clio (cross-workspace memory) — the documenter's lens
+
+You're producing the final docs; pull in cross-iteration design rationale
+that didn't make it into the source-tree comments (item 6.9):
+
+- **Search this workspace's prior reflections** for the "why we chose X"
+  threads:
+
+      cfcf clio search "<topic>" --project {{WORKSPACE_CLIO_PROJECT}} \
+          --metadata '{"role":"reflection","artifact_type":"reflection-analysis"}'
+
+- **Search decision-log entries** for resolved-question + lesson categories:
+
+      cfcf clio search "<topic>" --project {{WORKSPACE_CLIO_PROJECT}} \
+          --metadata '{"artifact_type":"decision-log-entry"}'
+
+- The final docs you produce go into `docs/` on disk, NOT into Clio.
+  cf² doesn't auto-ingest the documenter output (the `docs/` tree is
+  the canonical surface). If the user explicitly asks you to push a
+  copy to Clio, use `--author "documenter|<adapter>|<model>"`.
 
 ## What to Produce
 

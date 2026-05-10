@@ -199,6 +199,14 @@ export function registerClioRoutes(app: Hono): void {
         chunkMaxChars: body.chunkMaxChars ?? cfgChunkMaxChars,
         chunkMinChars: body.chunkMinChars ?? cfgChunkMinChars,
       });
+      // Stamp the usage-log row with the resulting document id and the
+      // ingest action so the log reflects which doc was touched. The
+      // route doesn't know the project's UUID without a second lookup,
+      // so we leave projectId to the middleware (null today).
+      c.set("clioUsageExtras", {
+        documentId: result.document?.id ?? null,
+        extra: { action: result.action, project: body.project },
+      });
       // 201 for new docs; 200 for updates and skips. Mirrors Cerefox's
       // status-code split (created → 201, updated/no-op → 200).
       const status = result.action === "created" ? 201 : 200;
@@ -222,7 +230,14 @@ export function registerClioRoutes(app: Hono): void {
     if (!q.trim()) {
       return c.json({ error: "q is required" }, 400);
     }
-    const project = c.req.query("project") || undefined;
+    // Multi-project (item 6.9): `?project=a&project=b` → array via
+    // `c.req.queries`. Single `?project=a` is supported via the same
+    // call (returns ['a']) and via the legacy single-project field.
+    // CLI clients pass `--project a,b` which the action handler splits
+    // to `?project=a&project=b`.
+    const projectArr = c.req.queries("project") ?? [];
+    const project = projectArr.length === 1 ? projectArr[0] : undefined;
+    const projects = projectArr.length > 1 ? projectArr : undefined;
     // Resolve the search mode in this order (most specific wins):
     //   1. Explicit ?mode= query param  (per-call override; CLI's --mode)
     //   2. clio.defaultSearchMode in the global config
@@ -359,12 +374,24 @@ export function registerClioRoutes(app: Hono): void {
     try {
       const backend = getClioBackend();
       const reqShape: SearchRequest = {
-        query: q, project, matchCount, mode, metadata, minScore,
+        query: q, project, projects, matchCount, mode, metadata, minScore,
         alpha, smallDocThreshold, contextWindow, includeDeleted,
       };
       const res = by === "doc"
         ? await backend.searchDocuments(reqShape)
         : await backend.search(reqShape);
+      // Annotate the usage-log row with the query + hit count so the
+      // dashboard's "zero hits" filter and "popular queries" reports
+      // can run off the log without re-running the search. Both
+      // SearchResponse and DocumentSearchResponse expose `hits`.
+      const hitCount = Array.isArray((res as { hits?: unknown[] }).hits)
+        ? (res as { hits: unknown[] }).hits.length
+        : 0;
+      c.set("clioUsageExtras", {
+        queryText: q,
+        resultCount: hitCount,
+        extra: { mode, by, alpha, minScore },
+      });
       return c.json(res);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -411,6 +438,82 @@ export function registerClioRoutes(app: Hono): void {
         limit,
       });
       return c.json({ entries });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // Usage log (item 6.9). Read-only listing of `clio_usage_log` rows.
+  // The middleware writes to this table on every /api/clio/* call;
+  // here we surface it as JSON so the CLI + web UI can build "what
+  // ran when" reports. Filters all optional, combine with AND,
+  // newest-first.
+  //
+  // Query params:
+  //   ?since=ISO        (gte filter on logged_at)
+  //   ?until=ISO        (lte filter on logged_at)
+  //   ?operation=<op>   (exact match)
+  //   ?access_path=<p>  (cli|agent-cli|web|internal)
+  //   ?requestor=<r>    (exact match on actor stamp; e.g. 'dev|claude-code|sonnet')
+  //   ?reads=true       (filter to reads only)
+  //   ?writes=true      (filter to writes only)
+  //   ?zero_hits=true   (filter to result_count = 0; finds search misses)
+  //   ?document_id=<id>
+  //   ?project_id=<id>
+  //   ?limit=<n>        (default 100)
+  app.get("/api/clio/usage", async (c) => {
+    const backend = getClioBackend();
+    const operation = c.req.query("operation") || undefined;
+    const accessPath = c.req.query("access_path") || undefined;
+    const requestor = c.req.query("requestor") || undefined;
+    const since = c.req.query("since") || undefined;
+    const until = c.req.query("until") || undefined;
+    const documentId = c.req.query("document_id") || undefined;
+    const projectId = c.req.query("project_id") || undefined;
+    const readsOnly = c.req.query("reads") === "true";
+    const writesOnly = c.req.query("writes") === "true";
+    const zeroHitsOnly = c.req.query("zero_hits") === "true";
+    const limitStr = c.req.query("limit");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    if (limitStr && (isNaN(limit as number) || (limit as number) < 1)) {
+      return c.json({ error: "limit must be a positive integer" }, 400);
+    }
+    if (readsOnly && writesOnly) {
+      return c.json({ error: "reads and writes are mutually exclusive" }, 400);
+    }
+    try {
+      const entries = await backend.getUsageLog({
+        operation: operation as never,
+        accessPath: accessPath as never,
+        requestor,
+        since,
+        until,
+        documentId,
+        projectId,
+        readsOnly,
+        writesOnly,
+        zeroHitsOnly,
+        limit,
+      });
+      return c.json({ entries });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  // Aggregated view of `clio_usage_log` (item 6.9). Cerefox parity.
+  // Returns counts grouped by day / operation / access_path / requestor
+  // plus a top-N documents list. Filters: ?since, ?until, ?project_id.
+  app.get("/api/clio/usage/summary", async (c) => {
+    const backend = getClioBackend();
+    const since = c.req.query("since") || undefined;
+    const until = c.req.query("until") || undefined;
+    const projectId = c.req.query("project_id") || undefined;
+    try {
+      const summary = await backend.getUsageSummary({ since, until, projectId });
+      return c.json(summary);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 400);

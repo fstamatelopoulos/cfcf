@@ -1193,6 +1193,101 @@ describe("PUT /api/workspaces/:id/clio-project", () => {
   });
 });
 
+describe("Clio HTTP: usage log (item 6.9)", () => {
+  it("middleware writes a row on every /api/clio/* call", async () => {
+    const app = createApp();
+    // Trigger one read (search) and one write (ingest)
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CFCF-Access-Path": "cli" },
+      body: JSON.stringify({
+        project: "test-project", title: "doc", content: "# T\n\nbody",
+      }),
+    });
+    await app.request("/api/clio/search?q=body", {
+      headers: { "X-CFCF-Access-Path": "agent-cli" },
+    });
+
+    const usageRes = await app.request("/api/clio/usage");
+    expect(usageRes.status).toBe(200);
+    const body = await usageRes.json();
+    const ops = body.entries.map((e: { operation: string }) => e.operation);
+    // The /api/clio/usage call itself also gets logged, so we expect
+    // at least search + ingest (the read of /usage is below in the
+    // listing but the order is newest-first).
+    expect(ops).toContain("search");
+    expect(ops).toContain("ingest");
+  });
+
+  it("?reads=true filters out writes", async () => {
+    const app = createApp();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p", title: "t", content: "# t\n" }),
+    });
+    await app.request("/api/clio/search?q=t");
+    const res = await app.request("/api/clio/usage?reads=true");
+    const body = await res.json();
+    for (const e of body.entries) {
+      expect(["ingest", "edit-document", "delete", "restore", "purge"]).not.toContain(e.operation);
+    }
+  });
+
+  it("?access_path filter narrows by header", async () => {
+    const app = createApp();
+    await app.request("/api/clio/search?q=anything", {
+      headers: { "X-CFCF-Access-Path": "cli" },
+    });
+    await app.request("/api/clio/search?q=anything", {
+      headers: { "X-CFCF-Access-Path": "web" },
+    });
+    const res = await app.request("/api/clio/usage?access_path=cli");
+    const body = await res.json();
+    for (const e of body.entries) {
+      expect(e.accessPath).toBe("cli");
+    }
+  });
+
+  it("summary endpoint returns aggregated counts", async () => {
+    const app = createApp();
+    await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p", title: "t", content: "# t\n" }),
+    });
+    await app.request("/api/clio/search?q=t");
+    const res = await app.request("/api/clio/usage/summary");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.totalCount).toBeGreaterThan(0);
+    expect(Array.isArray(body.opsByOperation)).toBe(true);
+    expect(Array.isArray(body.opsByAccessPath)).toBe(true);
+  });
+
+  it("400s when reads=true and writes=true are both passed", async () => {
+    const app = createApp();
+    const res = await app.request("/api/clio/usage?reads=true&writes=true");
+    expect(res.status).toBe(400);
+  });
+
+  it("logs document_id when /documents/:id endpoints are called", async () => {
+    const app = createApp();
+    const ingestRes = await app.request("/api/clio/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: "p", title: "t", content: "# t\n" }),
+    });
+    const ingestBody = await ingestRes.json();
+    const docId = ingestBody.document.id;
+    await app.request(`/api/clio/documents/${docId}`);
+    const res = await app.request(`/api/clio/usage?document_id=${docId}`);
+    const body = await res.json();
+    expect(body.entries.length).toBeGreaterThan(0);
+    for (const e of body.entries) expect(e.documentId).toBe(docId);
+  });
+});
+
 describe("POST /api/workspaces accepts clioProject", () => {
   it("stores clioProject on the created workspace", async () => {
     const app = createApp();
@@ -1200,9 +1295,15 @@ describe("POST /api/workspaces accepts clioProject", () => {
     expect(w.clioProject).toBe("my-clio");
   });
 
-  it("is optional (workspace created without it)", async () => {
+  it("auto-routes to cf-workspace-<id> when no clioProject is supplied (item 6.9)", async () => {
+    // Item 6.9 (2026-05-09): workspaces.createWorkspace defaults
+    // clioProject to `cf-workspace-<id>` so every workspace gets its
+    // own per-workspace Clio Project without the user having to ask.
+    // Pre-6.9 behaviour was `undefined` (which then fell back to the
+    // global `default` Clio Project at search/ingest time).
     const app = createApp();
     const w = await seedWorkspace(app, "wsE");
-    expect(w.clioProject).toBeUndefined();
+    expect(w.clioProject).toBeDefined();
+    expect(w.clioProject).toMatch(/^cf-workspace-/);
   });
 });

@@ -626,6 +626,12 @@ cfcf clio docs list \
 Ingest a Markdown doc into Clio. Either pass a file path or pipe via `--stdin`.
 
 ```bash
+# Default: cfcf detects the workspace at $PWD and routes to its
+# effective Clio Project (item 6.9). No --project needed when you're
+# inside a registered workspace's repo.
+cfcf clio docs ingest <file> --title "..."
+
+# Explicit project (any of: shared user-named project, cf-system-*, etc.):
 cfcf clio docs ingest <file> --project <name> --title "..." \
     [--artifact-type design-guideline] [--tier semantic] [--tags a,b,c] \
     [--author <name>] [--metadata '{...}'] [--source <free-text>]
@@ -635,6 +641,13 @@ cat note.md | cfcf clio docs ingest --stdin --project <name> --title "..."
 cfcf clio docs ingest notes.md --project <name> --title "Note" --update-if-exists
 cfcf clio docs ingest notes.md --project <name> --document-id <uuid>
 ```
+
+**Default-project resolution** (when `--project` is omitted, item 6.9 follow-up):
+1. cfcf hits `GET /api/workspaces` and looks for a workspace whose `repoPath` (realpath-resolved) matches `$PWD`.
+2. **Match found** → routes to that workspace's effective Clio Project (`workspace.clioProject` if set, otherwise `cf-workspace-<id>`). cfcf prints `[clio] auto-routing ingest to <project> (workspace <name> at $PWD)` to stderr.
+3. **No match** → falls back to `cf-system-default` with a stderr note explaining what happened. Pass `--project` explicitly if the fallback isn't right.
+
+**Agents always pass `--project` explicitly** per the role templates (the prompt-assembler substitutes the workspace's effective project into every CLI example). The auto-routing default exists for human free-form ingests.
 
 `--update-if-exists` matches by title within the same Project; `--document-id <uuid>` is the deterministic path. When both are passed, `--document-id` wins. Updates snapshot the prior content into a version row — recall via `cfcf clio docs get <id> --version-id <uuid>`.
 
@@ -751,15 +764,25 @@ The interactive prompt summarises three signals before you confirm: how many chu
 
 ### Workspace ↔ Clio Project assignment
 
-```bash
-# At init time:
-cfcf workspace init --repo <path> --name <name> --project <clio-project>   # flag-driven
-cfcf workspace init --repo <path> --name <name>                             # interactive pick
+By default each workspace gets its own `cf-workspace-<id>` Clio Project at registration time, so memory stays per-workspace unless you opt in to sharing. Pass `--project <name>` only when you want this workspace to pool memory with sibling workspaces under a named shared Project (e.g. `backend-services` for a family of TS API repos).
 
-# Later:
+```bash
+# At init time — default (per-workspace `cf-workspace-<id>` auto-created):
+cfcf workspace init --repo <path> --name <name>
+
+# Interactive prompt — pick from existing shared Projects, name a new one, or skip
+# (TTY only; suppressed by --no-prompt):
+cfcf workspace init --repo <path> --name <name>
+
+# Opt into sharing — pool with sibling workspaces under a named Project:
+cfcf workspace init --repo <path> --name <name> --project <shared-project>
+
+# Later — re-point to a different Project:
 cfcf workspace set <name> --project <new-clio-project>                      # future ingests only
 cfcf workspace set <name> --project <new-clio-project> --migrate-history    # rekey historical docs too
 ```
+
+**`cf-workspace-*` and `cf-system-*` are reserved namespaces** (cfcf-managed). The CLI + web pickers filter them out so you can't accidentally pin a workspace to another workspace's bucket or to a system project.
 
 ---
 

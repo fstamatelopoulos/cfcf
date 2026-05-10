@@ -228,9 +228,36 @@ export interface MemoryBackend {
    *
    * The audit log records every mutation: `create`, `update-content`,
    * `delete`, `restore`, `migrate-project`. Reads (search, get, list)
-   * are NOT recorded.
+   * are NOT recorded here — they go to `clio_usage_log` (the
+   * operational lens; see `logUsage` / `getUsageLog` below).
    */
   getAuditLog(opts?: AuditLogQuery): Promise<ClioAuditEntry[]>;
+
+  // ── Usage log (item 6.9 — Cerefox parity, 2-table model) ─────────────
+  /**
+   * Record a usage event (read or write) in `clio_usage_log`.
+   *
+   * **Fire-and-forget**: errors are swallowed by the implementation;
+   * usage logging never breaks the caller. Callers (HTTP routes, CLI
+   * handlers, auto-ingest hooks) call this explicitly after each
+   * Clio operation to record `access_path`, `requestor` (actor
+   * stamp), `query_text`, `result_count`, and `extra` (latency,
+   * zero-hits flag, etc.).
+   */
+  logUsage(entry: import("../usage-log.js").UsageLogEntry): void;
+
+  /**
+   * List usage-log entries (filtered, ordered by `logged_at DESC`).
+   * Powers `cfcf clio usage` and the web UI's Usage view.
+   */
+  getUsageLog(query?: import("../usage-log.js").UsageLogQuery): Promise<import("../usage-log.js").UsageLogRow[]>;
+
+  /**
+   * Aggregate summary mirroring Cerefox's `cerefox_usage_summary`.
+   * Powers `cfcf clio usage summary` and a future analytics dashboard
+   * tile in the Memory tab.
+   */
+  getUsageSummary(filter?: { since?: string; until?: string; projectId?: string }): Promise<import("../usage-log.js").UsageLogSummary>;
 
   // ── Reindex ───────────────────────────────────────────────────────────
   /**

@@ -62,6 +62,13 @@ export async function createWorkspace(opts: {
   const globalConfig = await readConfig();
 
   const id = generateWorkspaceId(opts.name);
+  // Per-workspace Clio Project (item 6.9): if the user didn't pass an
+  // explicit `clioProject`, default to `cf-workspace-<id>` so each
+  // workspace gets its own per-workspace memory bucket. Old default
+  // (undefined → fallback to `cf-system-default`) is gone for new
+  // workspaces; existing ones with `clioProject` unset stay on the
+  // shared default bucket until the user changes it manually.
+  const resolvedClioProject = opts.clioProject ?? `cf-workspace-${id}`;
   const config: WorkspaceConfig = {
     id,
     name: opts.name,
@@ -83,7 +90,7 @@ export async function createWorkspace(opts: {
     processTemplate: "default",
     currentIteration: 0,
     status: "idle",
-    clioProject: opts.clioProject,
+    clioProject: resolvedClioProject,
     // item 5.7: Clio ingest policy. Inherit from global; do NOT default here
     // so the workspace config reads as "inherit from global" when unset.
     clio: globalConfig?.clio?.ingestPolicy

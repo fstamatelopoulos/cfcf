@@ -135,14 +135,18 @@ export function HarnessPolicyWarning({
             ⚠ Anthropic third-party-harness policy notice
           </strong>
           <div style={{ marginBottom: "0.5rem" }}>
-            Anthropic's third-party-harness policy prohibits using Claude Code
-            subscriptions in unattended/headless contexts (the cf² iteration
-            loop is exactly that pattern). For limited testing only — do not
-            use for production.
+            Anthropic's third-party-harness policy prohibits using a Claude
+            Pro/Max <strong>subscription</strong> OAuth credential in
+            unattended/headless contexts (the cf² iteration loop is exactly
+            that pattern). The <strong>API-key path is exempt</strong> — set{" "}
+            <code>ANTHROPIC_API_KEY</code> in your environment and{" "}
+            <code>claude-code</code> authenticates via the paid Anthropic API
+            instead of your subscription. That's the compliant way to run{" "}
+            <code>claude-code</code> on unattended roles.
           </div>
           <div style={{ marginBottom: "0.5rem" }}>
-            Affected role{policyRoles.length > 1 ? "s" : ""}:{" "}
-            {policyRoles.map((role, i) => (
+            Affected role{policyRoles.length > 1 ? "s" : ""} (subscription
+            OAuth path): {policyRoles.map((role, i) => (
               <span key={role}>
                 {i > 0 && ", "}
                 <code>{role}</code>
@@ -150,7 +154,9 @@ export function HarnessPolicyWarning({
             ))}
           </div>
           <div>
-            Compliant alternatives for unattended roles: <code>codex</code>,{" "}
+            For subscription OAuth, this is for limited testing only.
+            Compliant alternatives: keep <code>claude-code</code> + set{" "}
+            <code>ANTHROPIC_API_KEY</code>, or switch to <code>codex</code>,{" "}
             <code>claude-code-ollama</code>, <code>opencode-ollama</code>,{" "}
             <code>opencode</code>. See{" "}
             <a

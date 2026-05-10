@@ -29,6 +29,7 @@ import {
   formatOrphanLine,
   refreshOllamaModelsInConfig,
   refreshAugmentedOverrides,
+  reconcileStalePaSessions,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -267,6 +268,31 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   } catch (err) {
     console.warn(
       `ensureSystemProjects failed at boot (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // Item 6.9 follow-up: reconcile stale `running` PA history events
+  // left behind when the launcher process was killed before its finally
+  // block ran (Ctrl-C on parent shell, server crash, OS panic). Stale
+  // events get flipped to `failed` + their session archive ingested to
+  // Clio. Sibling to the orphan-reaper above, but for history-state
+  // drift rather than processes. Best-effort + idempotent.
+  try {
+    const result = await reconcileStalePaSessions();
+    if (result.staleEvents > 0) {
+      console.log(
+        `[server] Reconciled ${result.staleEvents} stale PA session(s) ` +
+        `(${result.archivedToClio} archived to Clio, ${result.staleNoContent} had no content):`,
+      );
+      for (const ws of result.perWorkspace) {
+        console.log(
+          `[server]   workspace ${ws.workspaceName} (${ws.workspaceId}): ${ws.staleSessions.join(", ")}`,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[server] PA session reconciliation failed at boot (best-effort): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

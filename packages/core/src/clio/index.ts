@@ -12,3 +12,4 @@ export * from "./loop-ingest.js";
 export * from "./embedders/index.js";
 export * from "./system-projects.js";
 export * from "./actor.js";
+export * from "./usage-log.js";

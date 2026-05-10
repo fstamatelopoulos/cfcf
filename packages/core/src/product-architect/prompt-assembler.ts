@@ -26,6 +26,7 @@ import type { AssessedState } from "./state-assessor.js";
 import { formatAssessedState } from "./state-assessor.js";
 import type { MemoryInventory } from "./memory.js";
 import { formatMemoryInventory } from "./memory.js";
+import { effectiveClioProject } from "../clio/system-projects.js";
 
 export interface AssembleOptions {
   /**
@@ -78,7 +79,13 @@ export function assembleProductArchitectPrompt(opts: AssembleOptions): string {
   sections.push(INTERFACES);
   sections.push(formatAssessedState(opts.state));
   sections.push(formatMemoryInventory(opts.memory));
-  sections.push(memoryProtocolSection(opts.state.sessionId, opts.memory, opts.state.workspace.workspaceId, opts.clioActor));
+  sections.push(memoryProtocolSection(
+    opts.state.sessionId,
+    opts.memory,
+    opts.state.workspace.workspaceId,
+    opts.state.workspace.clioProject,
+    opts.clioActor,
+  ));
   sections.push(PERMISSION_MODEL);
   sections.push(SESSION_START_BEHAVIOUR);
   sections.push(HANDOFF_GUIDANCE);
@@ -291,15 +298,38 @@ If that happens in your session:
     the sandbox typically allows read/write; your file ops will
     work in either mode.`;
 
+/**
+ * Build the "Memory protocol" prompt section. Item 6.9 update: takes the
+ * workspace's *explicit* `clioProject` (may be null when the workspace
+ * has no override stored) so we can render the EFFECTIVE project for
+ * every `--project` flag we tell the agent to pass. When the workspace
+ * has an explicit shared project (e.g. `backend-services`), the agent
+ * writes there; when unset, the per-workspace default `cf-workspace-<id>`
+ * is used. Either way the agent passes one consistent value, so PA's
+ * memory always lands in the right place.
+ */
 function memoryProtocolSection(
   sessionId: string,
   memory: MemoryInventory,
   workspaceId: string | null,
+  workspaceClioProjectExplicit: string | null,
   clioActor: string,
 ): string {
   const workspaceDocId = memory.workspace.documentId ?? "<none-yet>";
   const globalDocId = memory.global.documentId ?? "<none-yet>";
   const workspaceIdLabel = workspaceId ?? "<not-yet-registered>";
+  // Item 6.9: resolve the EFFECTIVE Clio Project for this workspace.
+  // Two cases:
+  //   - Explicit: the user has assigned the workspace to a shared
+  //     project (e.g. `backend-services`) so it pools memory with
+  //     siblings. We use that name verbatim.
+  //   - Default: workspace.clioProject is unset, so we fall back to
+  //     `cf-workspace-<id>` (the auto-created per-workspace bucket).
+  // Cross-workspace preferences always go to `cf-system-memory-global`
+  // regardless of either case.
+  const workspaceClioProject = workspaceId === null
+    ? "<not-yet-registered>"
+    : effectiveClioProject({ id: workspaceId, clioProject: workspaceClioProjectExplicit ?? undefined });
   return `# Memory protocol — disk + Clio hybrid
 
 ## Clio actor stamp (use on every Clio mutation)
@@ -350,12 +380,14 @@ You operate on a **two-tier memory**:
   - \`meta.json\` — sync timestamps + session_id + Clio doc IDs.
 
 **Tier 2 (Clio, canonical)**:
-  - \`pa-workspace-memory\` (Clio doc ID: \`${workspaceDocId}\`)
-    Per-workspace memory. ONE doc per workspace. Lives in Project
-    \`cf-system-pa-memory\`. Updated by you on session end.
+  - \`PA-memory.md\` (Clio doc ID: \`${workspaceDocId}\`)
+    Per-workspace memory. ONE doc per workspace. Lives in **THIS
+    workspace's Clio Project**, \`${workspaceClioProject}\`. Updated
+    by you on session end.
   - \`pa-global-memory\` (Clio doc ID: \`${globalDocId}\`)
     Cross-workspace user preferences. ONE doc, lives ONLY in Clio
-    (no local cache). Updated when cross-cutting preferences emerge.
+    (in Project \`cf-system-memory-global\`, no local cache). Updated
+    when cross-cutting preferences emerge.
 
 Your **\`session_id\` for this session is \`${sessionId}\`** — tag
 every memory write with it.
@@ -375,11 +407,11 @@ different cadences:
     Updated **turn-by-turn**, EVERY user message. This is where
     your work is durably persisted at all times. Nothing is lost
     on Ctrl-D.
-  * **Clio** (\`pa-workspace-memory\` digest +
-    \`pa-session-<sessionId>\` archive doc) — the **durable
-    cross-session backup**. Updated at session end (or sooner per
-    user preference / explicit request). This is what travels
-    across machines.
+  * **Clio** (\`PA-memory.md\` digest +
+    \`pa-session-<sessionId>\` archive doc, both in
+    \`${workspaceClioProject}\`) — the **durable cross-session
+    backup**. Updated at session end (or sooner per user preference
+    / explicit request). This is what travels across machines.
 
 When the user asks "did you save?":
   * **YES — disk has everything.** State this clearly.
@@ -463,7 +495,7 @@ afterwards so future sessions can use \`--document-id\`.
 
 \`\`\`
 cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
-    --title pa-session-${sessionId} --project cf-system-pa-memory \\
+    --title pa-session-${sessionId} --project ${workspaceClioProject} \\
     --metadata '{"role":"pa","artifact_type":"session-archive","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}","outcome_summary":"<one-line outcomeSummary>"}' \\
     --author "${clioActor}"
 \`\`\`
@@ -472,7 +504,7 @@ cfcf clio docs ingest --file .cfcf-pa/session-${sessionId}.md \\
 
 \`\`\`
 cfcf clio docs ingest --update-if-exists --document-id ${workspaceDocId} \\
-    --title pa-workspace-memory --project cf-system-pa-memory \\
+    --title PA-memory.md --project ${workspaceClioProject} \\
     --metadata '{"role":"pa","artifact_type":"workspace-memory","workspace_id":"${workspaceIdLabel}","session_id":"${sessionId}"}' \\
     --author "${clioActor}" --stdin
 \`\`\`
@@ -489,7 +521,7 @@ entry it writes to \`history.json\`. Standard structure:
 {
   "currentSessionId": "${sessionId}",
   "lastSyncAt": "<ISO timestamp of the most recent Clio sync>",
-  "paWorkspaceMemoryDocId": "<Clio doc UUID for pa-workspace-memory>",
+  "paWorkspaceMemoryDocId": "<Clio doc UUID for PA-memory.md>",
   "paGlobalMemoryDocId": "<Clio doc UUID for pa-global-memory>",
   "lastSession": {
     "sessionId": "${sessionId}",
@@ -529,7 +561,7 @@ cfcf has already injected the current Clio state into this prompt
 check the local disk state and reconcile:
 
   1. Look at \`<repo>/.cfcf-pa/workspace-summary.md\` (if exists)
-     vs the Clio \`pa-workspace-memory\` content above.
+     vs the Clio \`PA-memory.md\` content above.
   2. **If the Clio updatedAt is NEWER than the local file's mtime**
      → another machine wrote since last sync. Tell the user
      "Clio has newer memory than your local cache — want me to pull
@@ -560,7 +592,7 @@ timestamp inside the Markdown body.
 **Two kinds of Clio docs** for PA per-workspace memory; understand
 the distinction before doing any memory ops:
 
-  - \`pa-workspace-memory\` (one per workspace, fixed title) — the
+  - \`PA-memory.md\` (one per workspace, fixed title) — the
     **rolling DIGEST**. Current state + recent sessions verbatim +
     older sessions as one-liners + cumulative decisions. cfcf
     injects this in full into your prompt (see Memory Inventory
@@ -572,14 +604,14 @@ the distinction before doing any memory ops:
     These are the canonical full history. The Memory Inventory
     above lists titles + outcomeSummaries; retrieve full content
     via \`cfcf clio docs get <id>\` or
-    \`cfcf clio search "<query>" --project cf-system-pa-memory\`.
+    \`cfcf clio search "<query>" --project ${workspaceClioProject}\`.
 
 The disk \`.cfcf-pa/session-*.md\` files are the LOCAL copy of
 those same archives, written turn-by-turn during the session.
 Disk + Clio archive both persist the full transcript; either is
 sufficient for recovery.
 
-## When to compact \`pa-workspace-memory\`
+## When to compact \`PA-memory.md\`
 
 The digest grows session-by-session. Eventually it becomes large
 enough that the per-turn token cost is noticeable + the user's
@@ -616,7 +648,7 @@ If the user says yes:
      - "## Decisions / Rejections / Preferences (cumulative)" —
        deduped + grouped
   4. Push the compacted version to Clio with
-     \`--update-if-exists --document-id ${workspaceDocId} --title pa-workspace-memory --project cf-system-pa-memory\`.
+     \`--update-if-exists --document-id ${workspaceDocId} --title PA-memory.md --project ${workspaceClioProject}\`.
   5. Log the compaction in the current session file.
   6. **NEVER touch \`pa-session-*\` archives or
      \`.cfcf-pa/session-*.md\` disk files.** Those are the full
@@ -635,7 +667,7 @@ session from last Tuesday"), retrieve full detail from one of:
   - **Clio archive doc** (multi-device durable):
       \`cfcf clio docs get <pa-session-...id>\` — the inventory
       above lists IDs.
-      \`cfcf clio search "<query>" --project cf-system-pa-memory\` —
+      \`cfcf clio search "<query>" --project ${workspaceClioProject}\` —
       FTS + semantic search across all archives + the digest.
   - **Local disk file** (immediate, no network):
       \`cat .cfcf-pa/session-<sessionId>.md\` — the working
@@ -650,12 +682,25 @@ disk file isn't present (e.g. user moved to a different machine).
 
 ## Doc location: WRITE TO THE RIGHT PROJECT
 
-When you ingest \`pa-workspace-memory\` to Clio, ALWAYS pass
-\`--project cf-system-pa-memory\`. cfcf pre-created this Project at your
-launch, so the project always exists. **Never let ingest auto-route
-to \`default\`** — that breaks cfcf's reads (cfcf searches for the
-doc by metadata, but the discrepancy reports look weird if Clio's
-project assignment is unexpected).
+When you ingest \`PA-memory.md\` (or any session archive
+\`pa-session-<sessionId>\`), ALWAYS pass
+\`--project ${workspaceClioProject}\` — that's the EFFECTIVE Clio
+Project for this workspace (item 6.9). It's either:
+  - the workspace's own per-workspace bucket
+    \`cf-workspace-<id>\` (the default — auto-created at
+    \`cfcf workspace init\` time), OR
+  - a SHARED project the user assigned via
+    \`cfcf workspace set --project <name>\` (e.g.
+    \`backend-services\`). In that case the workspace pools memory
+    with sibling workspaces in the same shared project.
+
+Either way the value above (\`${workspaceClioProject}\`) is right —
+cfcf already resolved it from \`workspace.clioProject\` (explicit) or
+the per-workspace default. Don't second-guess it; just pass the flag.
+
+**Never let ingest auto-route to \`cf-system-default\`** by omitting
+\`--project\` — that would land your write in the global "everyone's
+stuff" bucket and break cfcf's per-workspace reads.
 
 Same rule for \`pa-global-memory\`: ALWAYS \`--project cf-system-memory-global\`.
 
@@ -663,7 +708,42 @@ If the doc IDs in the snippets above are \`<none-yet>\`, the doc
 hasn't been created yet — your first ingest creates it. cfcf will
 discover it via metadata-search on next launch, regardless of which
 project it lands in (project-agnostic by design), but writing to
-the correct project keeps the audit log clean.`;
+the correct project keeps the audit log clean.
+
+## Problem-pack files: ingest opportunistically after each edit
+
+The five problem-pack files (\`problem.md\`, \`success.md\`,
+\`constraints.md\`, \`hints.md\`, \`style-guide.md\`) auto-ingest to
+Clio at three deterministic points: \`cfcf workspace init\`,
+iteration-loop start, and your session-end. **You do NOT need to
+ingest them on every turn.** sha256 dedup makes re-ingest of
+unchanged content a no-op, but the call is non-zero work — don't
+spam it.
+
+**However**, if you've made a substantive edit (the user just signed
+off on a major rewrite of \`success.md\`, you've finished a multi-
+turn refinement of \`constraints.md\`, etc.) and you don't expect
+another edit in the next few turns, you CAN push the change to Clio
+right away as an additional safeguard:
+
+\`\`\`
+cfcf clio docs ingest <repo>/problem-pack/<filename> \\
+    --update-if-exists \\
+    --project ${workspaceClioProject} \\
+    --title "${workspaceIdLabel}: problem-pack <filename>" \\
+    --metadata '{"role":"user","artifact_type":"problem-pack","filename":"<filename>","workspace_id":"${workspaceIdLabel}","tier":"semantic","ingest_trigger":"pa-mid-session"}' \\
+    --author "${clioActor}"
+\`\`\`
+
+This survives the session-end gap if your process gets killed (Ctrl-C
+on the parent shell, OS panic, etc.). The harness still runs its
+boot-reconcile fallback on next \`cfcf server start\`, but a
+mid-session push lands the change immediately rather than waiting
+for the next iteration / boot. **Keep this opportunistic — not every
+turn, just the "this is a real milestone" moments.**
+
+If the next harness ingest finds matching content (sha256 dedup) it
+no-ops, so there's no double-write risk.`;
 }
 
 const SESSION_START_BEHAVIOUR = `# Your behaviour at session start

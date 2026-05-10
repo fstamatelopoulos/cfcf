@@ -32,6 +32,7 @@ import {
   loadMemoryInventory,
   formatClioActor,
   ROLE_HELP_ASSISTANT,
+  VERSION,
   type AgentConfig,
 } from "@cfcf/core";
 
@@ -258,6 +259,7 @@ async function launchAssistant(opts: AssistantOptions): Promise<void> {
     workspace: workspaceCtx,
     memoryInventory,
     clioActor: formatClioActor(ROLE_HELP_ASSISTANT, agent.adapter, agent.model),
+    cfcfVersion: VERSION,
   });
 
   // 5. --print-prompt escape hatch: emit the prompt + exit.

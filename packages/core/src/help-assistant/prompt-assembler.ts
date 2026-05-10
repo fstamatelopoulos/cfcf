@@ -55,6 +55,14 @@ export interface AssembleOptions {
    * call sites should always pass it.
    */
   clioActor?: string;
+  /**
+   * Current cfcf release tag (e.g. "0.7.2"). Stamped into the metadata
+   * of every HA-authored Clio doc so future sessions can spot stale
+   * entries (item 6.9). Resolved by the launcher from
+   * `@cfcf/core::VERSION`. Optional for pre-6.9 callers; new call
+   * sites should always pass it.
+   */
+  cfcfVersion?: string;
 }
 
 export function assembleHelpAssistantPrompt(opts: AssembleOptions = {}): string {
@@ -64,7 +72,7 @@ export function assembleHelpAssistantPrompt(opts: AssembleOptions = {}): string 
   sections.push(SCOPE);
   sections.push(PERMISSION_MODEL);
   sections.push(LOCAL_ENVIRONMENT);
-  sections.push(memorySection(opts.memoryInventory ?? [], opts.clioActor));
+  sections.push(memorySection(opts.memoryInventory ?? [], opts.clioActor, opts.cfcfVersion));
   if (opts.workspace) {
     sections.push(workspaceSection(opts.workspace));
   }
@@ -132,12 +140,13 @@ const LOCAL_ENVIRONMENT = `# Local environment
 The user's current pwd may or may not be a workspace's repo. Check via
 \`git rev-parse\` + cross-reference with \`cfcf workspace list\`.`;
 
-function memorySection(inventory: string[], clioActor?: string): string {
+function memorySection(inventory: string[], clioActor?: string, cfcfVersion?: string): string {
   const inventoryText = inventory.length === 0
     ? "(empty -- memory Projects don't exist yet, or no docs in them)"
     : inventory.join("\n");
 
   const actor = clioActor ?? "help-assistant|<adapter>|<model>";
+  const versionLabel = cfcfVersion ?? "<unknown>";
 
   return `# Memory
 
@@ -149,6 +158,34 @@ Two Clio Projects you can read + (with user approval) write:
 Pull specific entries via \`cfcf clio docs get <id>\` when relevant. Run
 new searches with \`cfcf clio search "<query>" --project cf-system-ha-memory\`
 or \`--project cf-system-memory-global\`.
+
+## Memory may be STALE — treat the inventory as advisory (item 6.9)
+
+Help-Assistant memory accumulates across cfcf releases. A preference
+captured in cfcf v0.6.4 ("the new \`cfcf reflect\` flag is opt-in") may
+be wrong by v0.7.2 if the flag became the default. You will see
+\`cfcf_version\` stamped on each ingest in the metadata of every entry —
+**check it**.
+
+When you cite memory in an answer:
+  - Quote the relevant entry's \`cfcf_version\`.
+  - If the version is materially older than the current release
+    (\`${versionLabel}\`), add: "this memory was recorded under cfcf
+    \`<x.y.z>\`; the current install is \`${versionLabel}\` — verify
+    against today's behaviour with \`cfcf doctor\` / a fresh
+    \`cfcf help <topic>\` if the answer feels off."
+  - If you spot a memory entry that's clearly out-of-date, OFFER to
+    update it (the user gates the write).
+
+When you write memory, ALWAYS stamp \`cfcf_version: "${versionLabel}"\`
+in the metadata so future HA sessions can spot stale entries:
+
+\`\`\`
+cfcf clio docs ingest --stdin --project cf-system-ha-memory \\
+    --title "<short title>" \\
+    --metadata '{"role":"ha","artifact_type":"user-preference","cfcf_version":"${versionLabel}"}' \\
+    --author "${actor}"
+\`\`\`
 
 ## Clio actor stamp (use on every Clio mutation)
 

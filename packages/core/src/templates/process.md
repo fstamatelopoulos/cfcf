@@ -24,18 +24,50 @@ This is what makes the judge's per-iteration assessment meaningful and makes the
 ## What to Read (in order)
 
 1. **CLAUDE.md** (or your agent's equivalent) -- iteration-specific instructions and Tier 1 context
-2. **cfcf-docs/problem.md** -- what needs to be built or fixed
-3. **cfcf-docs/success.md** -- how success is measured
-4. **cfcf-docs/plan.md** -- current plan from previous iterations (if any)
-5. **cfcf-docs/iteration-history.md** -- compressed summaries of previous iterations
-6. **cfcf-docs/iteration-logs/** -- per-iteration changelogs from earlier iterations (curated, more detail than history)
-7. **cfcf-docs/iteration-handoffs/** -- archived per-iteration handoffs (forward-looking notes each dev left behind; useful context for picking up where they left off)
-8. **cfcf-docs/iteration-handoff.md** -- the LIVE handoff file. When the loop already has history, this starts with the previous iteration's handoff (same content as the most recent file in `iteration-handoffs/`). Use it as starting context; **you will replace it** with your own handoff before exiting (see "What to Produce" below).
-9. **cfcf-docs/judge-assessment.md** -- feedback from the judge on the last iteration
-10. **cfcf-docs/user-feedback.md** -- feedback from the user (if any)
-11. **cfcf-docs/decision-log.md** -- past decisions and lessons (read the tail, ~last 50 entries)
-12. **cfcf-docs/constraints.md**, **hints.md**, **style-guide.md** -- if present
-13. **cfcf-docs/context/** -- additional context files as needed
+2. **cfcf-docs/clio-relevant.md** -- top-k cross-workspace memory hits (item 6.9). Pre-built each iteration by cf² from a search of every Clio Project against `problem.md`. Read this BEFORE you read code: it surfaces the prior workspace's "we tried X and it failed because Y" entries that would otherwise stay buried.
+3. **cfcf-docs/clio-guide.md** -- how to invoke Clio yourself when you need a search the pre-built top-k didn't cover.
+4. **cfcf-docs/problem.md** -- what needs to be built or fixed
+5. **cfcf-docs/success.md** -- how success is measured
+6. **cfcf-docs/plan.md** -- current plan from previous iterations (if any)
+7. **cfcf-docs/iteration-history.md** -- compressed summaries of previous iterations
+8. **cfcf-docs/iteration-logs/** -- per-iteration changelogs from earlier iterations (curated, more detail than history)
+9. **cfcf-docs/iteration-handoffs/** -- archived per-iteration handoffs (forward-looking notes each dev left behind; useful context for picking up where they left off)
+10. **cfcf-docs/iteration-handoff.md** -- the LIVE handoff file. When the loop already has history, this starts with the previous iteration's handoff (same content as the most recent file in `iteration-handoffs/`). Use it as starting context; **you will replace it** with your own handoff before exiting (see "What to Produce" below).
+11. **cfcf-docs/judge-assessment.md** -- feedback from the judge on the last iteration
+12. **cfcf-docs/user-feedback.md** -- feedback from the user (if any)
+13. **cfcf-docs/decision-log.md** -- past decisions and lessons (read the tail, ~last 50 entries)
+14. **cfcf-docs/constraints.md**, **hints.md**, **style-guide.md** -- if present
+15. **cfcf-docs/context/** -- additional context files as needed
+
+## Clio (cross-workspace memory) — the dev's lens
+
+The dev role's main Clio interaction is *reading* — auto-ingest covers
+your writes. The minimum-viable use is (item 6.9):
+
+- **Read `clio-relevant.md` first**. Skim the top-k hits; if any look
+  applicable, follow up with `cfcf clio docs get <id>` for the full
+  doc (or `cfcf clio search "<phrase>" --project cf-workspace-<this-workspace-id>`
+  for this workspace's own history of the same area).
+- **Don't ingest your iteration log or handoff yourself.** cf²
+  auto-ingests `iteration-log-N.md`, `iteration-handoff-N.md`, your
+  decision-log entries, and the iteration summary after the dev commit.
+  Ingesting by hand creates duplicates.
+- **Don't ingest the problem-pack files** (`problem.md`, `success.md`,
+  `constraints.md`, `hints.md`, `style-guide.md`). cf² auto-ingests
+  them at iteration start (with sha256 dedup so unchanged files are
+  no-ops). They appear in Clio as `<workspace-name>: problem-pack
+  <filename>` with `metadata.artifact_type = "problem-pack"`.
+- **Do** ingest one-off design notes / domain knowledge / research notes
+  that don't belong in the canonical artefact set:
+
+      echo "..." | cfcf clio docs ingest --stdin --project cf-workspace-<this-workspace-id> \
+          --title "<short title>" \
+          --metadata '{"role":"dev","artifact_type":"design-guideline"}' \
+          --author "dev|<your-adapter>|<your-model>"
+
+- **Grep, not Clio, for code.** Use `Read` / `grep` for files and
+  symbols in this repo. Use Clio for cross-workspace facts +
+  cross-iteration history.
 
 ## What to Produce
 

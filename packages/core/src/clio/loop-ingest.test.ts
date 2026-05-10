@@ -17,6 +17,8 @@ import {
   ingestIterationSummary,
   ingestRawIterationArtifacts,
   writeClioRelevant,
+  ingestProblemPack,
+  PROBLEM_PACK_FILES,
 } from "./loop-ingest.js";
 import type { WorkspaceConfig } from "../types.js";
 import { writeConfig, createDefaultConfig } from "../config.js";
@@ -78,9 +80,9 @@ describe("resolveIngestPolicy", () => {
     expect(await resolveIngestPolicy(ws)).toBe("off");
   });
 
-  it("defaults to summaries-only when neither is set", async () => {
+  it("defaults to 'all' when neither is set", async () => {
     const ws = makeWorkspace({ clio: undefined });
-    expect(await resolveIngestPolicy(ws)).toBe("summaries-only");
+    expect(await resolveIngestPolicy(ws)).toBe("all");
   });
 });
 
@@ -190,7 +192,7 @@ describe("ingestArchitectReview", () => {
 
 describe("ingestDecisionLogEntries", () => {
   it("summaries-only: only semantic-category entries for this iteration", async () => {
-    const ws = makeWorkspace();
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "decision-log.md"),
       `
@@ -323,8 +325,8 @@ describe("ingestRawIterationArtifacts", () => {
     expect(count).toBe(3);
   });
 
-  it("returns 0 under summaries-only (default)", async () => {
-    const ws = makeWorkspace();
+  it("returns 0 under summaries-only", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "iteration-logs", "iteration-3.md"),
       "# Iteration 3\n\n## Summary\n\nBody.",
@@ -370,5 +372,230 @@ describe("writeClioRelevant", () => {
     expect(body).toContain("Broad matches");
     // Same-Project narrow hits should appear when workspace.clioProject is set.
     expect(body).toContain("test-project");
+  });
+});
+
+// ── ingestProblemPack (item 6.9 follow-up) ────────────────────────────────
+
+describe("ingestProblemPack", () => {
+  async function seedProblemPack(opts: Partial<Record<typeof PROBLEM_PACK_FILES[number], string>>) {
+    const cfcfDocs = join(repoDir, "cfcf-docs");
+    await mkdir(cfcfDocs, { recursive: true });
+    for (const [filename, content] of Object.entries(opts)) {
+      if (content !== undefined) {
+        await writeFile(join(cfcfDocs, filename), content, "utf-8");
+      }
+    }
+  }
+
+  it("creates one Clio doc per problem-pack file with the canonical metadata triple", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({
+      "problem.md": "# Problem\n\nBuild an OAuth-secured API for tracker.",
+      "success.md": "# Success\n\nTests pass + docs generated.",
+      "constraints.md": "# Constraints\n\nNo external dependencies.",
+      // hints.md + style-guide.md absent on disk
+    });
+
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    expect(result.ingested).toBe(3);
+    expect(result.skipped).toBe(0);
+    expect(result.missing).toBe(2); // hints.md + style-guide.md
+
+    // Each doc lands with the right metadata + title.
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const problemPackDocs = docs.filter(
+      (d) => (d.metadata as { artifact_type?: string })?.artifact_type === "problem-pack",
+    );
+    expect(problemPackDocs).toHaveLength(3);
+
+    const titles = problemPackDocs.map((d) => d.title).sort();
+    expect(titles).toEqual([
+      "myws: problem-pack constraints.md",
+      "myws: problem-pack problem.md",
+      "myws: problem-pack success.md",
+    ]);
+
+    // Metadata is consistent across the set.
+    for (const doc of problemPackDocs) {
+      const md = doc.metadata as Record<string, unknown>;
+      expect(md.role).toBe("user");
+      expect(md.artifact_type).toBe("problem-pack");
+      expect(md.workspace_id).toBe(ws.id);
+      expect(md.workspace_name).toBe(ws.name);
+      expect(typeof md.filename).toBe("string");
+      expect(PROBLEM_PACK_FILES).toContain(md.filename as typeof PROBLEM_PACK_FILES[number]);
+    }
+  });
+
+  it("is idempotent on unchanged content (sha256 dedup → action=skipped)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({
+      "problem.md": "# Problem\n\nIdempotency probe.",
+    });
+
+    const r1 = await ingestProblemPack(clio, ws, "iteration-start");
+    expect(r1.ingested).toBe(1);
+    expect(r1.perFile.find((f) => f.filename === "problem.md")?.action).toBe("created");
+
+    const r2 = await ingestProblemPack(clio, ws, "iteration-start");
+    // Second call: backend's sha256 dedup returns action="skipped"
+    // because the file's content hash matches the live version.
+    expect(r2.ingested).toBe(0);
+    expect(r2.skipped).toBe(1);
+    expect(r2.perFile.find((f) => f.filename === "problem.md")?.action).toBe("skipped");
+
+    // Doc count in Clio is unchanged — no duplicate row created.
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const problemDocs = docs.filter((d) => d.title === "myws: problem-pack problem.md");
+    expect(problemDocs).toHaveLength(1);
+  });
+
+  it("updates the existing doc in place when content changes (no duplicate row)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nv1 text." });
+    const r1 = await ingestProblemPack(clio, ws, "iteration-start");
+    const v1DocId = r1.perFile[0].documentId;
+    expect(v1DocId).toBeTruthy();
+
+    // User edits the file (PA's typical mid-session pattern).
+    await seedProblemPack({ "problem.md": "# Problem\n\nv2 text — refined after PA review." });
+    const r2 = await ingestProblemPack(clio, ws, "pa-session-end");
+    expect(r2.ingested).toBe(1);
+    expect(r2.perFile[0].action).toBe("updated");
+    // Same doc id — update-by-title within the project, not a fresh create.
+    expect(r2.perFile[0].documentId).toBe(v1DocId);
+
+    // Still one row for problem.md (the update snapshotted the prior
+    // version into clio_document_versions; live row is the new content).
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const problemDocs = docs.filter((d) => d.title === "myws: problem-pack problem.md");
+    expect(problemDocs).toHaveLength(1);
+  });
+
+  it("respects workspace.clio.ingestPolicy = 'off' (skips everything)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "off" } });
+    await seedProblemPack({
+      "problem.md": "# Problem\n\nShould be ignored.",
+    });
+
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    expect(result.ingested).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.missing).toBe(0);
+    expect(result.perFile).toHaveLength(0);
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    expect(docs).toHaveLength(0);
+  });
+
+  it("routes to the workspace's effective Clio Project (cf-workspace-<id> when clioProject unset)", async () => {
+    // Simulate a pre-6.9 workspace with no clioProject set on its
+    // config — effectiveClioProject() falls back to cf-workspace-<id>.
+    const ws = makeWorkspace({ clioProject: undefined });
+    await seedProblemPack({ "problem.md": "# Problem\n\nRouting probe." });
+
+    await ingestProblemPack(clio, ws, "workspace-init");
+
+    const docs = await clio.listDocuments({ project: `cf-workspace-${ws.id}` });
+    expect(docs.find((d) => d.title.includes("problem-pack problem.md"))).toBeTruthy();
+  });
+
+  it("respects an explicit shared clioProject (e.g. backend-services)", async () => {
+    const ws = makeWorkspace({ clioProject: "backend-services" });
+    await seedProblemPack({ "problem.md": "# Problem\n\nShared-project probe." });
+
+    await ingestProblemPack(clio, ws, "workspace-init");
+
+    const sharedDocs = await clio.listDocuments({ project: "backend-services" });
+    expect(sharedDocs.find((d) => d.title.includes("problem-pack problem.md"))).toBeTruthy();
+    // And NOT in the per-workspace fallback project.
+    const fallbackDocs = await clio.listDocuments({ project: `cf-workspace-${ws.id}` });
+    expect(fallbackDocs.find((d) => d.title.includes("problem-pack"))).toBeFalsy();
+  });
+
+  it("stamps the trigger source so audit + usage logs can distinguish entry points", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nTrigger probe." });
+
+    const result = await ingestProblemPack(clio, ws, "pa-session-end");
+    const docId = result.perFile[0].documentId!;
+    const doc = await clio.getDocument(docId);
+    expect(doc?.source).toContain("cfcf-auto:problem-pack:problem.md:pa-session-end");
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-session-end");
+  });
+
+  it("surfaces missing files but doesn't fail the call", async () => {
+    const ws = makeWorkspace();
+    // No problem-pack files seeded at all.
+
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    expect(result.ingested).toBe(0);
+    expect(result.missing).toBe(PROBLEM_PACK_FILES.length);
+    for (const entry of result.perFile) {
+      expect(entry.action).toBe("missing");
+    }
+  });
+
+  it("treats whitespace-only content as missing (won't create empty docs)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({
+      "problem.md": "   \n\n\t\n",
+    });
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    expect(result.ingested).toBe(0);
+    expect(result.missing).toBe(PROBLEM_PACK_FILES.length); // including the empty problem.md
+  });
+
+  it("default actor stamps the WRITER as user|cfcf|system (cfcf-driven, no role agent)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nDefault actor probe." });
+
+    const result = await ingestProblemPack(clio, ws, "iteration-start");
+    const docId = result.perFile[0].documentId!;
+    const doc = await clio.getDocument(docId);
+    expect(doc?.author).toBe("user|cfcf|system");
+    // role: "user" stays in metadata regardless — the user OWNS the spec
+    // content even when iteration-start triggers the ingest.
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("user");
+  });
+
+  it("actorOverride stamps the actual writer (PA case) without changing the metadata role (item 6.9 follow-up)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({ "problem.md": "# Problem\n\nPA wrote this." });
+
+    const paActor = "product-architect|claude-code|sonnet";
+    const result = await ingestProblemPack(clio, ws, "pa-session-end", paActor);
+    const docId = result.perFile[0].documentId!;
+    const doc = await clio.getDocument(docId);
+
+    // author column = the OVERRIDE: the audit log shows PA as the
+    // writer, so a future search for "what did PA do?" surfaces this.
+    expect(doc?.author).toBe(paActor);
+    // role STAYS "user" because that's the semantic stakeholder of
+    // the problem-pack content, not a PA artefact.
+    expect((doc?.metadata as Record<string, unknown>)?.role).toBe("user");
+    // ingest_trigger captures the entry-point separately so analytics
+    // can distinguish PA-driven from cfcf-driven from boot-reconcile.
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-session-end");
+  });
+
+  it("supports the pa-boot-reconcile trigger (item 6.9 follow-up — PA died before session-end fallback)", async () => {
+    const ws = makeWorkspace();
+    await seedProblemPack({
+      "problem.md": "# Problem\n\nMid-edit content that PA's killed-process left on disk.",
+    });
+
+    const result = await ingestProblemPack(
+      clio,
+      ws,
+      "pa-boot-reconcile",
+      "product-architect|claude-code|sonnet",
+    );
+    expect(result.ingested).toBe(1);
+    expect(result.perFile[0].action).toBe("created");
+    const doc = await clio.getDocument(result.perFile[0].documentId!);
+    expect((doc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-boot-reconcile");
+    expect(doc?.source).toContain("pa-boot-reconcile");
   });
 });

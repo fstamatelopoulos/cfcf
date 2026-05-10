@@ -172,9 +172,10 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
    */
   decisionsCount?: number;
   /**
-   * Clio doc ID for the per-workspace `pa-workspace-memory` doc that
-   * was updated at session end. Surfaced in the web UI as a deep link
-   * to the Clio browser. Absent when no Clio sync happened.
+   * Clio doc ID for the per-workspace `PA-memory.md` doc (item 6.9
+   * rename — pre-6.9 this was titled `pa-workspace-memory`) that was
+   * updated at session end. Surfaced in the web UI as a deep link to
+   * the Clio browser. Absent when no Clio sync happened.
    */
   clioWorkspaceMemoryDocId?: string;
   /** Exit code of the agent process. */

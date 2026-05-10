@@ -55,6 +55,37 @@ interface AuditLogResponse {
   entries: ClioAuditEntry[];
 }
 
+/**
+ * Row shape returned by `GET /api/clio/usage` (item 6.9). Mirrors
+ * `UsageLogRow` in `@cfcf/core` but kept inline here so the CLI
+ * doesn't pull `bun:sqlite`-typed exports through @cfcf/core's
+ * `usage-log.js`.
+ */
+interface UsageLogRow {
+  id: number;
+  loggedAt: string;
+  operation: string;
+  accessPath: string;
+  requestor: string | null;
+  documentId: string | null;
+  projectId: string | null;
+  queryText: string | null;
+  resultCount: number | null;
+  extra: Record<string, unknown> | null;
+}
+
+/**
+ * Aggregate response shape from `GET /api/clio/usage/summary` (item 6.9).
+ */
+interface UsageLogSummaryResponse {
+  totalCount: number;
+  opsByDay: Array<{ day: string; count: number }>;
+  opsByOperation: Array<{ operation: string; count: number }>;
+  opsByAccessPath: Array<{ accessPath: string; count: number }>;
+  opsByRequestor: Array<{ requestor: string; count: number }>;
+  topDocuments: Array<{ documentId: string; docTitle: string | null; count: number }>;
+}
+
 interface ClioProjectListResponse {
   projects: ClioProject[];
 }
@@ -98,7 +129,13 @@ function registerUnder(root: Command): void {
       "explicit --mode > clio.defaultSearchMode in global config > 'auto' " +
       "(hybrid if an embedder is active, fts otherwise).",
     )
-    .option("-p, --project <name>", "Scope to a single Clio Project (name or id)")
+    .option(
+      "-p, --project <name>",
+      "Scope to one or more Clio Projects. Pass a single name (`-p cf-workspace-abc`) " +
+      "or a comma-separated list (`-p cf-workspace-abc,cf-system-memory-global`) to " +
+      "search both. Multi-project (item 6.9) — agents typically pass workspace + " +
+      "global memory together.",
+    )
     .option(
       "--mode <mode>",
       "Search mode: 'fts' (keyword), 'semantic' (vector cosine), or 'hybrid' (RRF over both). Omit to use the configured default.",
@@ -148,7 +185,13 @@ function registerUnder(root: Command): void {
 
       const qs = new URLSearchParams();
       qs.set("q", q);
-      if (opts.project) qs.set("project", opts.project);
+      // Multi-project (item 6.9): split comma-separated --project into
+      // multiple ?project= query params; the server reads the array via
+      // c.req.queries('project'). Single-project use is unchanged.
+      if (opts.project) {
+        const projects = String(opts.project).split(",").map((s) => s.trim()).filter(Boolean);
+        for (const p of projects) qs.append("project", p);
+      }
       if (opts.mode) {
         if (!["fts", "semantic", "hybrid"].includes(opts.mode)) {
           console.error(`search: --mode must be one of fts | semantic | hybrid (got: ${opts.mode})`);
@@ -252,7 +295,13 @@ function registerUnder(root: Command): void {
       "Ingest a Markdown document into Clio. Pass a file path, or use --stdin to pipe via stdin.",
     )
     .option("--stdin", "Read content from stdin instead of a file")
-    .option("-p, --project <name>", "Clio Project to ingest into (auto-created if missing)", "cf-system-default")
+    .option(
+      "-p, --project <name>",
+      "Clio Project to ingest into (auto-created if missing). " +
+      "When omitted, cfcf detects the workspace at $PWD and routes to its " +
+      "effective Clio Project (item 6.9). Falls back to `cf-system-default` " +
+      "only when no workspace matches $PWD — see the auto-resolve message on stderr.",
+    )
     .option("-t, --title <title>", "Document title. Defaults to the file name (or 'stdin' for piped)")
     .option("--source <src>", "Free-text origin hint (default: file path or 'stdin')")
     .option(
@@ -280,6 +329,21 @@ function registerUnder(root: Command): void {
     .option("--json", "Emit the raw JSON result instead of a human-readable summary")
     .action(async (file: string | undefined, opts) => {
       if (!(await checkServer())) return;
+
+      // Item 6.9 (2026-05-09 follow-up): when --project isn't passed,
+      // route to the workspace at $PWD instead of dumping into the
+      // global `cf-system-default` bucket. This matches the "each
+      // workspace owns its memory" convention everywhere else in the
+      // post-6.9 model. Agents always pass --project explicitly per
+      // the role templates, so this only affects free-form ingests
+      // a human runs from a repo's working tree.
+      if (!opts.project) {
+        const resolved = await resolveDefaultIngestProject();
+        opts.project = resolved.project;
+        if (!opts.json) {
+          console.error(`[clio] auto-routing ingest to \`${resolved.project}\` (${resolved.reason}). Pass --project to override.`);
+        }
+      }
 
       let content: string;
       let defaultTitle: string;
@@ -547,6 +611,137 @@ function registerUnder(root: Command): void {
           for (const [k, v] of Object.entries(e.metadata)) {
             console.log(`     ${k}: ${JSON.stringify(v)}`);
           }
+        }
+      }
+    });
+
+  // ── usage ────────────────────────────────────────────────────────────
+  // Read-only view of clio_usage_log (item 6.9). Captures BOTH reads
+  // and writes — a parallel lens to the audit log (which only records
+  // mutations). Cerefox-parity feature; mirrors `cerefox_usage_log`.
+  const usageCmd = root
+    .command("usage")
+    .description("Inspect the Clio usage log (reads + writes; newest first).");
+
+  usageCmd
+    .command("list", { isDefault: true })
+    .description("List usage-log entries. All filters AND together.")
+    .option("--operation <op>", "Exact match (e.g. 'search', 'ingest')")
+    .option("--access-path <p>", "Match access path: cli | agent-cli | web | internal")
+    .option("--actor <a>", "Match the requestor stamp (e.g. 'dev|claude-code|sonnet')")
+    .option("--reads", "Filter to reads only")
+    .option("--writes", "Filter to writes only")
+    .option("--zero-hits", "Filter to entries where result_count = 0 (search misses)")
+    .option("--document-id <uuid>", "Scope to one document")
+    .option("--project-id <uuid>", "Scope to one Clio Project (project_id, not name)")
+    .option("--since <iso>", "Only entries with logged_at >= this ISO-8601 timestamp")
+    .option("--until <iso>", "Only entries with logged_at <= this ISO-8601 timestamp")
+    .option("-n, --limit <n>", "Max entries to return (default 100)", (v) => parseInt(v, 10))
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      if (opts.reads && opts.writes) {
+        console.error("usage list: --reads and --writes are mutually exclusive");
+        process.exit(1);
+      }
+      const qs = new URLSearchParams();
+      if (opts.operation) qs.set("operation", opts.operation);
+      if (opts.accessPath) qs.set("access_path", opts.accessPath);
+      if (opts.actor) qs.set("requestor", opts.actor);
+      if (opts.reads) qs.set("reads", "true");
+      if (opts.writes) qs.set("writes", "true");
+      if (opts.zeroHits) qs.set("zero_hits", "true");
+      if (opts.documentId) qs.set("document_id", opts.documentId);
+      if (opts.projectId) qs.set("project_id", opts.projectId);
+      if (opts.since) qs.set("since", opts.since);
+      if (opts.until) qs.set("until", opts.until);
+      if (opts.limit) qs.set("limit", String(opts.limit));
+      const url = qs.toString() ? `/api/clio/usage?${qs.toString()}` : "/api/clio/usage";
+      const res = await get<{ entries: UsageLogRow[] }>(url);
+      if (!res.ok) {
+        console.error(`usage failed: ${res.error}`);
+        process.exit(1);
+      }
+      const entries = res.data!.entries;
+      if (opts.json) {
+        console.log(JSON.stringify(entries, null, 2));
+        return;
+      }
+      if (entries.length === 0) {
+        console.log("No usage entries match the filter.");
+        return;
+      }
+      console.log(`${entries.length} usage entry(ies), newest first:`);
+      console.log();
+      for (const e of entries) {
+        const tag = `${e.operation}/${e.accessPath}`;
+        const actor = e.requestor ? `  actor=${e.requestor}` : "";
+        const hits = e.resultCount === null || e.resultCount === undefined
+          ? ""
+          : `  hits=${e.resultCount}`;
+        console.log(`  [${e.loggedAt}] ${tag}${actor}${hits}`);
+        if (e.queryText) console.log(`     query: ${JSON.stringify(e.queryText)}`);
+        if (e.documentId) console.log(`     document: ${e.documentId}`);
+        if (e.projectId) console.log(`     project: ${e.projectId}`);
+        if (e.extra && Object.keys(e.extra).length > 0) {
+          console.log(`     extra: ${JSON.stringify(e.extra)}`);
+        }
+      }
+    });
+
+  usageCmd
+    .command("summary")
+    .description("Aggregate the usage log: ops/day + by operation + by access_path + by requestor + top docs.")
+    .option("--since <iso>", "Window start (logged_at >= this)")
+    .option("--until <iso>", "Window end (logged_at <= this)")
+    .option("--project-id <uuid>", "Scope to one Clio Project")
+    .option("--json", "Emit raw JSON")
+    .action(async (opts) => {
+      if (!(await checkServer())) return;
+      const qs = new URLSearchParams();
+      if (opts.since) qs.set("since", opts.since);
+      if (opts.until) qs.set("until", opts.until);
+      if (opts.projectId) qs.set("project_id", opts.projectId);
+      const url = qs.toString()
+        ? `/api/clio/usage/summary?${qs.toString()}`
+        : "/api/clio/usage/summary";
+      const res = await get<UsageLogSummaryResponse>(url);
+      if (!res.ok) {
+        console.error(`usage summary failed: ${res.error}`);
+        process.exit(1);
+      }
+      const s = res.data!;
+      if (opts.json) {
+        console.log(JSON.stringify(s, null, 2));
+        return;
+      }
+      console.log(`Total events: ${s.totalCount}`);
+      console.log();
+      if (s.opsByDay.length > 0) {
+        console.log("By day:");
+        for (const r of s.opsByDay) console.log(`  ${r.day}: ${r.count}`);
+        console.log();
+      }
+      if (s.opsByOperation.length > 0) {
+        console.log("By operation:");
+        for (const r of s.opsByOperation) console.log(`  ${r.operation.padEnd(24)} ${r.count}`);
+        console.log();
+      }
+      if (s.opsByAccessPath.length > 0) {
+        console.log("By access path:");
+        for (const r of s.opsByAccessPath) console.log(`  ${r.accessPath.padEnd(12)} ${r.count}`);
+        console.log();
+      }
+      if (s.opsByRequestor.length > 0) {
+        console.log("Top requestors:");
+        for (const r of s.opsByRequestor) console.log(`  ${r.requestor.padEnd(40)} ${r.count}`);
+        console.log();
+      }
+      if (s.topDocuments.length > 0) {
+        console.log("Top documents:");
+        for (const r of s.topDocuments) {
+          const title = r.docTitle ?? "(no title — doc may have been purged)";
+          console.log(`  ${r.documentId}  ${r.count}  ${title}`);
         }
       }
     });
@@ -1439,4 +1634,62 @@ async function readStdin(): Promise<string> {
     chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
   }
   return chunks.join("");
+}
+
+/**
+ * Pick the default Clio Project for `cfcf clio docs ingest` when the
+ * user didn't pass `--project` (item 6.9 follow-up, 2026-05-09).
+ *
+ * Resolution order:
+ *   1. **Workspace at $PWD** — list workspaces via the server, find
+ *      the one whose `repoPath` (realpath-resolved) matches the
+ *      current directory. If found, return that workspace's
+ *      effective Clio Project (`workspace.clioProject` if set,
+ *      otherwise `cf-workspace-<id>`). This is the common path: a
+ *      human dropping a free-form note into "this workspace's
+ *      memory".
+ *   2. **`cf-system-default`** — fallback when $PWD isn't inside any
+ *      registered workspace's repo. The user gets a stderr note
+ *      explaining what happened so they can pass `--project`
+ *      explicitly next time if the default isn't right.
+ *
+ * Pre-6.9 the static option default was `cf-system-default` — that's
+ * still the no-context fallback, but now it's an explicit "couldn't
+ * find a workspace at $PWD" branch rather than a silent default that
+ * dumped per-workspace artefacts into the global bucket.
+ */
+async function resolveDefaultIngestProject(): Promise<{ project: string; reason: string }> {
+  // Lazy import to avoid pulling realpath deps when --project IS passed.
+  const { realpathSync } = await import("node:fs");
+  const safeRealpath = (p: string): string => {
+    try { return realpathSync(p); } catch { return p; }
+  };
+  const cwd = safeRealpath(process.cwd());
+
+  type WsListItem = { id: string; name: string; repoPath: string; clioProject?: string };
+  const res = await get<WsListItem[]>("/api/workspaces");
+  if (res.ok && Array.isArray(res.data)) {
+    const match = res.data.find((w) => safeRealpath(w.repoPath) === cwd);
+    if (match) {
+      const explicit = match.clioProject?.trim();
+      // Either case (explicit clioProject set OR auto-fallback to
+      // cf-workspace-<id>) routes to the workspace's *effective*
+      // project. We don't distinguish "explicit-shared vs per-
+      // workspace-default" in the user-visible reason because
+      // post-6.9 `createWorkspace` always populates `clioProject`,
+      // so the on-disk shape is the same in both cases — what
+      // matters is "this is the workspace's project".
+      const project = explicit && explicit.length > 0
+        ? explicit
+        : `cf-workspace-${match.id}`;
+      return {
+        project,
+        reason: `workspace \`${match.name}\` at $PWD`,
+      };
+    }
+  }
+  return {
+    project: "cf-system-default",
+    reason: "no workspace registered for $PWD; falling back to the global bucket",
+  };
 }
