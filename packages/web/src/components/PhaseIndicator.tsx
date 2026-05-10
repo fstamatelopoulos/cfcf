@@ -41,9 +41,19 @@ const documentPhases: { key: string; label: string }[] = [
   { key: "executing", label: "Execute (agent)" },
 ];
 
+// Standalone Reflect (item 6.12) — same three-phase shape as Review.
+// Without this, a manual `cfcf reflect` rendered no PhaseIndicator (the
+// pre-v0.24 fallback dropped to documentPhases via an else-branch),
+// surfacing the wrong labels at the wrong moments.
+const reflectPhases: { key: string; label: string }[] = [
+  { key: "preparing", label: "Prepare (cf²)" },
+  { key: "executing", label: "Execute (agent)" },
+  { key: "collecting", label: "Collect (cf²)" },
+];
+
 const terminalStates = new Set(["completed", "failed", "stopped", "paused"]);
 
-export type AgentType = "loop" | "review" | "document";
+export type AgentType = "loop" | "review" | "document" | "reflect";
 
 export function PhaseIndicator({
   agentType,
@@ -86,6 +96,8 @@ export function PhaseIndicator({
     if (autoDocumenter === false) phases = phases.filter((p) => p.key !== "documenting");
   } else if (agentType === "review") {
     phases = reviewPhases;
+  } else if (agentType === "reflect") {
+    phases = reflectPhases;
   } else {
     phases = documentPhases;
   }

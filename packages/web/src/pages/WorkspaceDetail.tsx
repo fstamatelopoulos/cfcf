@@ -140,7 +140,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   // now this only checked the three non-interactive states; PA sessions
   // counted as "nothing has run" because they only show up in History.
   const trulyEmpty =
-    !loopState && !reviewState && !documentState && history.length === 0;
+    !loopState && !reviewState && !documentState && !reflectState && history.length === 0;
   const activeAgent: ActiveAgent = isLoopActive
     ? "loop"
     : isReviewActive
@@ -302,6 +302,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
           completedAt={documentState.completedAt}
         />
       )}
+      {isReflectActive && reflectState && (
+        <PhaseIndicator
+          agentType="reflect"
+          phase={reflectState.status}
+          title={reflectState.sequence ? `Reflect run ${reflectState.sequence}` : "Reflect"}
+          startedAt={reflectState.startedAt}
+          completedAt={reflectState.completedAt}
+        />
+      )}
 
       {isPaused && (
         <FeedbackForm
@@ -327,6 +336,30 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
               iteration branch from the current HEAD.
             </div>
           )}
+        </div>
+      )}
+
+      {/* Standalone-agent failure banners (item 6.12 follow-up, v0.24).
+          Pre-v0.24 these were silently buried — only loopState.error
+          showed in the UI. The next standalone run replaced the
+          in-memory state, hiding the prior failure. Now each surfaces
+          as a structured banner so the user can see what went wrong. */}
+      {reviewState?.error && !isReviewActive && (
+        <div className="project-detail__error-banner">
+          <div className="project-detail__error-banner-title">⚠️ Review failed</div>
+          <div className="project-detail__error-banner-message">{reviewState.error}</div>
+        </div>
+      )}
+      {documentState?.error && !isDocumentActive && (
+        <div className="project-detail__error-banner">
+          <div className="project-detail__error-banner-title">⚠️ Document failed</div>
+          <div className="project-detail__error-banner-message">{documentState.error}</div>
+        </div>
+      )}
+      {reflectState?.error && !isReflectActive && (
+        <div className="project-detail__error-banner">
+          <div className="project-detail__error-banner-title">⚠️ Reflection failed</div>
+          <div className="project-detail__error-banner-message">{reflectState.error}</div>
         </div>
       )}
 
@@ -361,6 +394,15 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                 <div className="status-panel__info">
                   <span>Started: {new Date(documentState.startedAt).toLocaleTimeString()}</span>
                   <span>Agent: {workspace.documenterAgent.adapter}</span>
+                </div>
+              </div>
+            )}
+            {isReflectActive && reflectState && (
+              <div className="status-panel__section">
+                <h3>Reflection in progress</h3>
+                <div className="status-panel__info">
+                  <span>Started: {new Date(reflectState.startedAt).toLocaleTimeString()}</span>
+                  <span>Agent: {(workspace.reflectionAgent ?? workspace.architectAgent).adapter}</span>
                 </div>
               </div>
             )}
