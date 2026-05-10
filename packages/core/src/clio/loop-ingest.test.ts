@@ -78,9 +78,9 @@ describe("resolveIngestPolicy", () => {
     expect(await resolveIngestPolicy(ws)).toBe("off");
   });
 
-  it("defaults to summaries-only when neither is set", async () => {
+  it("defaults to 'all' when neither is set", async () => {
     const ws = makeWorkspace({ clio: undefined });
-    expect(await resolveIngestPolicy(ws)).toBe("summaries-only");
+    expect(await resolveIngestPolicy(ws)).toBe("all");
   });
 });
 
@@ -190,7 +190,7 @@ describe("ingestArchitectReview", () => {
 
 describe("ingestDecisionLogEntries", () => {
   it("summaries-only: only semantic-category entries for this iteration", async () => {
-    const ws = makeWorkspace();
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "decision-log.md"),
       `
@@ -323,8 +323,8 @@ describe("ingestRawIterationArtifacts", () => {
     expect(count).toBe(3);
   });
 
-  it("returns 0 under summaries-only (default)", async () => {
-    const ws = makeWorkspace();
+  it("returns 0 under summaries-only", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
     await writeFile(
       join(ws.repoPath, "cfcf-docs", "iteration-logs", "iteration-3.md"),
       "# Iteration 3\n\n## Summary\n\nBody.",

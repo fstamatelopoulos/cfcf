@@ -1,7 +1,7 @@
 # Clio (item 5.7) — implementation decisions
 
 **Branch:** `iteration-5/clio`.
-**Status:** Working doc for the Clio build. Captures decisions made in the session that kicked off implementation (2026-04-22), on top of [`docs/design/clio-memory-layer.md`](../design/clio-memory-layer.md). This exists so the next session (or a reviewer) sees what we agreed on without re-reading the full design.
+**Status:** **Historical** — this doc captures decisions made when item 5.7 shipped (2026-04-22). Several decisions below were superseded by item 6.9 (2026-05-09); see the inline "Superseded" notes plus the [item 6.9 design doc](../design/clio-rationalisation.md). Don't treat this as a current spec — it's the audit trail.
 
 ---
 
@@ -16,7 +16,7 @@
 ## Design-doc open questions (§12.1) closed
 
 1. **Changing a workspace's Clio Project post-init.** `cfcf workspace set --project <new-name>` rewires **future** ingests only. Explicit `--migrate-history` opt-in re-keys existing `clio_documents.project_id` + `clio_chunks.project_id` via a single SQL UPDATE per table. Audit log (v2) records either path.
-2. **Empty Clio Project handling.** Workspace with no `clioProject` assigned gets auto-routed to a named `"default"` Clio Project on first ingest. Schema stays NOT NULL on `project_id`. **First time Clio auto-creates `default` we prompt the user:** `"This workspace has no Clio Project set. Create a 'default' Project to hold its memory? (You can set a specific Project later with 'cfcf workspace set --project <name>'.) [y/n]"`. User can rename the default Project later.
+2. **Empty Clio Project handling.** ~~Workspace with no `clioProject` assigned gets auto-routed to a named `"default"` Clio Project on first ingest.~~ **Superseded by item 6.9 (2026-05-09)**: every workspace now auto-resolves to its own `cf-workspace-<id>` Clio Project at registration time (created eagerly by the server). The `cf-system-default` project is preserved as a safety-net for free-form ingests outside any workspace context, but per-workspace artefacts no longer fall through to it. Schema is unchanged (still NOT NULL on `project_id`).
 3. **`cfcf workspace init --project` prompt wording.** Iterate during implementation. First draft goes through review before the PR opens.
 4. **Taxonomy governance (`artifact_type` values).** Permissive — any string accepted. Start with §5.1's table as convention; revisit if fragmentation shows up in the audit log.
 

@@ -49,7 +49,16 @@ export function ClioProjectDialog({
     setAllInProject(false);
     setError(null);
     setSubmitting(false);
-    fetchClioProjects().then(setProjects).catch(() => setProjects([]));
+    // Filter out cfcf-managed projects from the picker -- the user
+    // shouldn't pin a workspace to `cf-system-*` (system memory) or to
+    // another workspace's `cf-workspace-<id>` project. Item 6.9.
+    fetchClioProjects()
+      .then((all) =>
+        setProjects(
+          all.filter((p) => !p.isSystem && !p.name.startsWith("cf-workspace-")),
+        ),
+      )
+      .catch(() => setProjects([]));
   }, [open, workspace.clioProject]);
 
   // The text input wins if filled (lets users type a brand-new project
@@ -117,7 +126,12 @@ export function ClioProjectDialog({
           ))}
         </select>
         <span className="form-row__hint">
-          Currently: <strong>{workspace.clioProject ?? "(none)"}</strong>.
+          Currently:{" "}
+          <strong>
+            {workspace.clioProject
+              ?? `cf-workspace-${workspace.id} (per-workspace default)`}
+          </strong>
+          .
         </span>
       </div>
 

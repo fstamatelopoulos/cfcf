@@ -11,6 +11,7 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
 import { getTemplate, writeTemplate } from "./templates.js";
 import { getAdapter } from "./adapters/index.js";
+import { effectiveClioProject } from "./clio/system-projects.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
@@ -92,6 +93,11 @@ export async function writeArchitectInstructions(
 ): Promise<void> {
   let template = await getTemplate("cfcf-architect-instructions.md", { repoPath });
   template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
+  // Item 6.9: real effective Clio Project in the agent's CLI examples.
+  template = template.replace(
+    /\{\{WORKSPACE_CLIO_PROJECT\}\}/g,
+    effectiveClioProject(workspace),
+  );
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
   await mkdir(cfcfDocsDir, { recursive: true });
@@ -401,6 +407,7 @@ async function runReview(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   reviewProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
@@ -599,6 +606,7 @@ export async function runReviewSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,

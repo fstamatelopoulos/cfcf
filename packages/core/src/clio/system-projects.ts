@@ -35,7 +35,16 @@ export const DEFAULT_PROJECT = "cf-system-default";
 /** Cross-role global memory + user preferences. */
 export const GLOBAL_MEMORY_PROJECT = "cf-system-memory-global";
 
-/** Product Architect per-workspace memory (`pa-workspace-memory` + `pa-session-<id>`). */
+/**
+ * Reserved placeholder for Product Architect cross-workspace state.
+ *
+ * Item 6.9 (2026-05-09): per-workspace PA memory + session archives
+ * moved out of this project into the workspace's OWN Clio Project
+ * (`cf-workspace-<id>`). The constant is preserved so existing installs
+ * with `cf-system-pa-memory` rows already in the DB don't suddenly look
+ * orphaned, and so any future cross-workspace PA state has a named
+ * home. Treat it as effectively empty going forward.
+ */
 export const PA_MEMORY_PROJECT = "cf-system-pa-memory";
 
 /**
@@ -69,6 +78,33 @@ export const SYSTEM_PROJECTS: ReadonlySet<string> = new Set([
 /** True if `name` is one of the system-managed Clio Projects (case-sensitive). */
 export function isSystemProject(name: string): boolean {
   return SYSTEM_PROJECTS.has(name);
+}
+
+/**
+ * Resolve the effective Clio Project name for a workspace (item 6.9).
+ *
+ * Returns the explicitly-configured `workspace.clioProject` when set;
+ * otherwise falls back to `cf-workspace-<id>` (the per-workspace
+ * default established in 6.9). This mirrors the auto-resolve done by
+ * `createWorkspace()` for new workspaces, but it ALSO covers
+ * pre-6.9 workspaces whose stored config still has `clioProject`
+ * unset — they get the same per-workspace project at ingest /
+ * search time without a forced config-file migration.
+ *
+ * Use this anywhere a routing decision needs the *effective* project,
+ * not the raw stored field. Single source of truth so display strings
+ * (`state-assessor`, `cfcf workspace show`), auto-ingest
+ * (`loop-ingest.resolveClioProject`), and any future consumer all
+ * agree.
+ *
+ * Note: this never returns `cf-system-default` — pre-6.9's "fall
+ * through to the global default bucket" behaviour is intentionally
+ * gone. Per-workspace memory belongs in a per-workspace project.
+ */
+export function effectiveClioProject(workspace: { id: string; clioProject?: string | null }): string {
+  const explicit = workspace.clioProject?.trim();
+  if (explicit) return explicit;
+  return `cf-workspace-${workspace.id}`;
 }
 
 /** Per-project descriptions populated when the boot pre-create runs. */

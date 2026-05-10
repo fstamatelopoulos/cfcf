@@ -18,7 +18,7 @@ import type { WorkspaceConfig, JudgeSignals, ReflectionSignals } from "../types.
 import type { MemoryBackend } from "./backend/types.js";
 import type { IngestResult } from "./types.js";
 import { readConfig } from "../config.js";
-import { DEFAULT_PROJECT } from "./system-projects.js";
+import { effectiveClioProject } from "./system-projects.js";
 import { formatClioActor } from "./actor.js";
 
 /**
@@ -47,22 +47,37 @@ export type IngestPolicy = "off" | "summaries-only" | "all";
 
 /**
  * Resolve the effective ingest policy for a workspace. Priority:
- *   workspace.clio.ingestPolicy -> global.clio.ingestPolicy -> "summaries-only"
+ *   workspace.clio.ingestPolicy -> global.clio.ingestPolicy -> "all"
+ *
+ * Default flipped from "summaries-only" to "all" 2026-05-09 (item 6.9).
+ * Disk is cheap (~20-50 KB per iteration); cross-iteration full-history
+ * search is high-value, especially for the multi-loop-over-time use
+ * case where users come back to the same workspace months later.
+ * Existing workspaces auto-pick-up the new default since none have an
+ * explicit override.
  */
 export async function resolveIngestPolicy(workspace: WorkspaceConfig): Promise<IngestPolicy> {
   if (workspace.clio?.ingestPolicy) return workspace.clio.ingestPolicy;
   const global = await readConfig();
   if (global?.clio?.ingestPolicy) return global.clio.ingestPolicy;
-  return "summaries-only";
+  return "all";
 }
 
 /**
- * Resolve the Clio Project to ingest into. Uses the workspace's
- * `clioProject` when set; otherwise the named system fallback Project
- * (auto-created by the backend on first ingest).
+ * Resolve the Clio Project to ingest into.
+ *
+ * Item 6.9 (2026-05-09): per-workspace memory now lives in
+ * `cf-workspace-<id>` by default. New workspaces get this set
+ * explicitly at `createWorkspace()` time; pre-6.9 workspaces with
+ * `clioProject` still unset get the SAME effective project via
+ * `effectiveClioProject()`, so auto-ingest routes consistently
+ * regardless of when the workspace was registered. The pre-6.9
+ * fallback to `cf-system-default` (the global "everyone's stuff"
+ * bucket) is gone — per-workspace artefacts no longer pollute the
+ * global default project.
  */
 function resolveClioProject(workspace: WorkspaceConfig): string {
-  return workspace.clioProject?.trim() || DEFAULT_PROJECT;
+  return effectiveClioProject(workspace);
 }
 
 // ── Shared metadata builder ───────────────────────────────────────────────

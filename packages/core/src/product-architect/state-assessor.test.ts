@@ -186,6 +186,41 @@ describe("formatAssessedState — server section", () => {
     expect(out).toContain("http://localhost:7233/#/workspaces/ws-uuid-1");
   });
 
+  it("surfaces the effective Clio Project for a pre-6.9 workspace with clioProject unset (item 6.9)", async () => {
+    const state = await assessState({ repoPath: repo });
+    state.workspace = {
+      registered: true,
+      workspaceId: "tracker-723c21",
+      name: "tracker",
+      clioProject: null,
+      currentIteration: 0,
+    };
+    const out = formatAssessedState(state);
+    // Effective name is exposed so the user knows where memory will land.
+    expect(out).toContain("`cf-workspace-tracker-723c21`");
+    // The "default for this workspace" parenthetical signals that the
+    // user can override but doesn't have to.
+    expect(out).toContain("default for this workspace");
+    // The pre-6.9 phrasing must be GONE — that wording was a lie after
+    // the auto-routing rule landed (it claimed "auto-routes to default"
+    // when the loop actually routes to `cf-workspace-<id>`).
+    expect(out).not.toContain("auto-routes to 'default'");
+  });
+
+  it("renders an explicit Clio Project as `(explicit)` so the user knows it's user-set", async () => {
+    const state = await assessState({ repoPath: repo });
+    state.workspace = {
+      registered: true,
+      workspaceId: "ws-1",
+      name: "my-app",
+      clioProject: "my-named-project",
+      currentIteration: 3,
+    };
+    const out = formatAssessedState(state);
+    expect(out).toContain("`my-named-project`");
+    expect(out).toContain("explicit");
+  });
+
   it("explains how to start the server when not running", async () => {
     const state = await assessState({ repoPath: repo });
     state.server = { running: false, pid: null, port: null };

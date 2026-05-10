@@ -57,6 +57,33 @@ describe("writeJudgeInstructions", () => {
     expect(content).not.toContain("{{ITERATION}}");
     expect(content).not.toContain("{{PROJECT_NAME}}");
   });
+
+  test("substitutes {{WORKSPACE_CLIO_PROJECT}} with the effective project (item 6.9)", async () => {
+    // Pre-6.9 workspace shape: clioProject unset → effective is cf-workspace-<id>.
+    await writeJudgeInstructions(TEST_DIR, makeProject(), 5);
+    const content = await readFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-judge-instructions.md"),
+      "utf-8",
+    );
+    expect(content).not.toContain("{{WORKSPACE_CLIO_PROJECT}}");
+    // makeProject() returns id "test-id" (or similar) so the
+    // effective project is `cf-workspace-<that-id>`. Check the prefix
+    // — the exact id is fixture-specific.
+    expect(content).toMatch(/--project cf-workspace-/);
+  });
+
+  test("substitutes {{WORKSPACE_CLIO_PROJECT}} with the explicit shared project when set", async () => {
+    const ws = makeProject();
+    ws.clioProject = "backend-services";
+    await writeJudgeInstructions(TEST_DIR, ws, 5);
+    const content = await readFile(
+      join(TEST_DIR, "cfcf-docs", "cfcf-judge-instructions.md"),
+      "utf-8",
+    );
+    expect(content).toContain("--project backend-services");
+    // And NOT the per-workspace fallback — explicit wins.
+    expect(content).not.toMatch(/--project cf-workspace-/);
+  });
 });
 
 describe("resetJudgeSignals", () => {

@@ -11,6 +11,7 @@ import { readFile, writeFile, mkdir, access, copyFile } from "fs/promises";
 import type { WorkspaceConfig, JudgeSignals } from "./types.js";
 import { getAdapter } from "./adapters/index.js";
 import { getTemplate, writeTemplate } from "./templates.js";
+import { effectiveClioProject } from "./clio/system-projects.js";
 
 /**
  * Generate judge instructions for a specific iteration.
@@ -24,6 +25,12 @@ export async function writeJudgeInstructions(
   let template = await getTemplate("cfcf-judge-instructions.md", { repoPath });
   template = template.replace(/\{\{ITERATION\}\}/g, String(iteration));
   template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
+  // Item 6.9: substitute the effective Clio Project so the agent's
+  // CLI examples carry the real project name (no inline placeholders).
+  template = template.replace(
+    /\{\{WORKSPACE_CLIO_PROJECT\}\}/g,
+    effectiveClioProject(workspace),
+  );
 
   const destPath = join(repoPath, "cfcf-docs", "cfcf-judge-instructions.md");
   await writeFile(destPath, template, "utf-8");

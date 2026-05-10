@@ -106,16 +106,21 @@ describe("clio CLI option-parsing (parent/child shadow regression — 2026-05-08
     expect(opts!.project).toBe("cf-system-pa-memory");
   });
 
-  it("`cfcf clio docs ingest <file>` (no --project) falls back to ingest's default", async () => {
-    // Sanity check: the child's default still kicks in when the user
-    // doesn't pass --project. Guards against an over-aggressive fix
-    // that would have removed the default along with the parent option.
+  it("`cfcf clio docs ingest <file>` (no --project) leaves opts.project undefined for runtime resolution (item 6.9)", async () => {
+    // Item 6.9 (2026-05-09 follow-up) removed the static default
+    // `cf-system-default` from the option line. The action handler
+    // now resolves it at runtime via `resolveDefaultIngestProject()`
+    // — detecting the workspace at $PWD and routing to its effective
+    // Clio Project, falling back to `cf-system-default` only when no
+    // workspace matches. We assert the parse-time invariant here:
+    // `opts.project` is undefined when the user didn't pass --project,
+    // so the action's resolver branch reliably fires.
     const opts = await captureSubcommandOpts(
       ["docs", "ingest"],
       ["node", "cfcf", "clio", "docs", "ingest", "/tmp/cfcf-fake.md"],
     );
     expect(opts).not.toBeNull();
-    expect(opts!.project).toBe("cf-system-default");
+    expect(opts!.project).toBeUndefined();
   });
 
   it("`cfcf clio docs edit <id>` (no --project) leaves opts.project undefined", async () => {

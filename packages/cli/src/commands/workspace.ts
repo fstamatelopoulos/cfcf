@@ -18,6 +18,12 @@ interface ClioProjectListItem {
   name: string;
   description?: string;
   documentCount?: number;
+  /**
+   * Server-stamped flag for cfcf-managed system projects (the
+   * `cf-system-*` namespace). Read-only via the API; the CLI uses it
+   * to hide system projects from the interactive workspace-init picker.
+   */
+  isSystem?: boolean;
 }
 
 export function registerWorkspaceCommands(program: Command): void {
@@ -32,8 +38,9 @@ export function registerWorkspaceCommands(program: Command): void {
     .requiredOption("--name <name>", "Workspace name")
     .option(
       "--project <clio-project>",
-      "Clio Project (cross-workspace memory grouping) this workspace belongs to. " +
-      "Skip to pick interactively, or leave unset to auto-route to 'default'.",
+      "Clio Project to share memory with sibling workspaces (cross-workspace " +
+      "grouping). Skip to pick interactively, or leave unset for the per-workspace " +
+      "default `cf-workspace-<id>` (item 6.9 — auto-created at registration time).",
     )
     .option(
       "--no-prompt",
@@ -110,7 +117,10 @@ export function registerWorkspaceCommands(program: Command): void {
       console.log(`Workspace created: ${w.name}`);
       console.log(`  ID:             ${w.id}`);
       console.log(`  Repo:           ${w.repoPath}`);
-      console.log(`  Clio Project:   ${w.clioProject ?? "(none — will auto-route to 'default' on first ingest)"}`);
+      // Item 6.9: clioProject defaults to `cf-workspace-<id>` for new
+      // workspaces; pre-6.9 workspaces with the field unset auto-route
+      // to the same per-workspace project at ingest/search time.
+      console.log(`  Clio Project:   ${w.clioProject ?? `cf-workspace-${w.id}` + " (default for this workspace)"}`);
       console.log(`  Dev:            ${formatAgent(w.devAgent)}`);
       console.log(`  Judge:          ${formatAgent(w.judgeAgent)}`);
       console.log(`  Architect:      ${formatAgent(w.architectAgent)}`);
@@ -175,7 +185,10 @@ export function registerWorkspaceCommands(program: Command): void {
       console.log(`Workspace: ${w.name}`);
       console.log(`  ID:             ${w.id}`);
       console.log(`  Repo:           ${w.repoPath}`);
-      console.log(`  Clio Project:   ${w.clioProject ?? "(none — auto-routes to 'default' on first ingest)"}`);
+      // Item 6.9: explicit field if set, else effective per-workspace
+      // default. Pre-6.9 workspaces without `clioProject` set route to
+      // `cf-workspace-<id>` at runtime via `effectiveClioProject()`.
+      console.log(`  Clio Project:   ${w.clioProject ?? `cf-workspace-${w.id}` + " (default for this workspace)"}`);
       console.log(`  Clio policy:    ${w.clio?.ingestPolicy ?? "(inherit global)"}`);
       console.log(`  Dev agent:         ${formatAgent(w.devAgent)}`);
       console.log(`  Judge agent:       ${formatAgent(w.judgeAgent)}`);
@@ -323,9 +336,15 @@ export function registerWorkspaceCommands(program: Command): void {
  * is not passed. Lists existing Projects + offers "new" + offers "skip".
  */
 async function promptForClioProject(): Promise<string | undefined> {
-  // Pull the list of existing Clio Projects via the server.
+  // Pull the list of existing Clio Projects via the server, then drop
+  // anything system-managed. cfcf-internal projects (`cf-system-*`,
+  // `cf-workspace-*`) are owned by code -- the user should never pick
+  // them as the home for a workspace's everyday memory. Item 6.9.
   const res = await get<{ projects: ClioProjectListItem[] }>("/api/clio/projects");
-  const existing = res.ok && res.data ? res.data.projects : [];
+  const all = res.ok && res.data ? res.data.projects : [];
+  const existing = all.filter(
+    (p) => !p.isSystem && !p.name.startsWith("cf-workspace-"),
+  );
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = (q: string) => new Promise<string>((r) => rl.question(q, r));
@@ -333,32 +352,34 @@ async function promptForClioProject(): Promise<string | undefined> {
   console.log();
   console.log("Clio Project assignment (cross-workspace memory)");
   console.log("─".repeat(50));
-  console.log("Workspaces can share memory through a Clio Project -- a named grouping");
-  console.log("of workspaces in related domains (e.g. 'backend-services' for a bunch of");
-  console.log("TypeScript API repos, or 'cf-ecosystem' for cf² + Clio + Cerefox code).");
-  console.log("Searches made inside this workspace see cross-workspace knowledge from");
-  console.log("siblings in the same Project; workspaces in different Projects stay");
-  console.log("isolated by default.");
+  console.log("By default, this workspace will get its OWN per-workspace Clio Project");
+  console.log("(`cf-workspace-<id>`, auto-created). That's the right choice unless you");
+  console.log("explicitly want to share memory with a sibling workspace.");
+  console.log();
+  console.log("Assign a SHARED named Project only when you want multiple workspaces to");
+  console.log("pool memory — e.g. 'backend-services' for a bunch of TypeScript API repos,");
+  console.log("or 'cf-ecosystem' for cf² + Clio + Cerefox code. Searches inside any");
+  console.log("workspace in a shared Project see knowledge from all the siblings.");
   console.log();
 
   if (existing.length === 0) {
-    console.log("No Clio Projects exist yet.");
+    console.log("No shared Clio Projects exist yet.");
     const answer = await ask(
-      "Create a new one for this workspace? (enter a name, or press Enter to skip and use 'default'): ",
+      "Pick a shared Project name now? (enter a name, or press Enter to use the per-workspace default): ",
     );
     rl.close();
     const trimmed = answer.trim();
     return trimmed || undefined;
   }
 
-  console.log("Existing Clio Projects:");
+  console.log("Existing shared Clio Projects you could pool with:");
   existing.forEach((p, i) => {
     const desc = p.description ? ` — ${p.description}` : "";
     const count = p.documentCount != null ? ` (${p.documentCount} doc${p.documentCount === 1 ? "" : "s"})` : "";
     console.log(`  ${i + 1}) ${p.name}${count}${desc}`);
   });
-  console.log(`  N) Create a new Project`);
-  console.log(`  S) Skip (route to 'default' Project on first ingest)`);
+  console.log(`  N) Create a new shared Project`);
+  console.log(`  S) Skip (use the per-workspace default \`cf-workspace-<id>\`)`);
 
   const answer = (await ask("Pick one [1-" + existing.length + " / N / S]: ")).trim();
   const asNum = parseInt(answer, 10);

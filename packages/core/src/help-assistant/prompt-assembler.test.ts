@@ -25,6 +25,19 @@ describe("assembleHelpAssistantPrompt", () => {
     expect(prompt).toContain("`cf-system-memory-global`");
   });
 
+  it("warns about memory staleness and stamps cfcfVersion (item 6.9)", () => {
+    const prompt = assembleHelpAssistantPrompt({ cfcfVersion: "0.7.2" });
+    expect(prompt).toContain("Memory may be STALE");
+    // The version is rendered into the disclaimer text and the ingest example.
+    expect(prompt).toContain("0.7.2");
+    expect(prompt).toContain('"cfcf_version":"0.7.2"');
+  });
+
+  it("falls back to <unknown> when no cfcfVersion is provided", () => {
+    const prompt = assembleHelpAssistantPrompt();
+    expect(prompt).toContain("<unknown>");
+  });
+
   it("notes empty memory inventory when no entries provided", () => {
     const prompt = assembleHelpAssistantPrompt({ memoryInventory: [] });
     expect(prompt).toContain("(empty -- memory Projects don't exist yet, or no docs in them)");

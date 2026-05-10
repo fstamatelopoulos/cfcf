@@ -6,14 +6,34 @@ You are NOT the dev agent. Do not write code or modify source files. Your job is
 
 ## What to Review
 
-1. **Read the dev agent's handoff**: `cfcf-docs/iteration-handoff.md`
-2. **Read the problem definition**: `cfcf-docs/problem.md`
-3. **Read success criteria**: `cfcf-docs/success.md`
-4. **Read the current plan**: `cfcf-docs/plan.md`
-5. **Review code changes**: Run `git diff HEAD~1` to see what changed
-6. **Check test results**: Run tests if the handoff mentions them
-7. **Read previous reviews** (if any): `cfcf-docs/iteration-reviews/`
-8. **Read the dev signal file**: `cfcf-docs/cfcf-iteration-signals.json`
+1. **Cross-workspace memory hits**: `cfcf-docs/clio-relevant.md` (if present) — pre-built top-k from sibling workspaces matched against this problem. Skim BEFORE you start grading; it surfaces known-bad patterns + recurring regressions you should weight in your verdict.
+2. **Clio cue card**: `cfcf-docs/clio-guide.md` — how to run your own Clio queries.
+3. **Read the dev agent's handoff**: `cfcf-docs/iteration-handoff.md`
+4. **Read the problem definition**: `cfcf-docs/problem.md`
+5. **Read success criteria**: `cfcf-docs/success.md`
+6. **Read the current plan**: `cfcf-docs/plan.md`
+7. **Review code changes**: Run `git diff HEAD~1` to see what changed
+8. **Check test results**: Run tests if the handoff mentions them
+9. **Read previous reviews** (if any): `cfcf-docs/iteration-reviews/`
+10. **Read the dev signal file**: `cfcf-docs/cfcf-iteration-signals.json`
+
+## Clio (cross-workspace memory) — the judge's lens
+
+A short, focused use of Clio sharpens your verdict (item 6.9):
+
+- **Read `cfcf-docs/clio-relevant.md` first.** It's a top-k search of every
+  Clio Project against the first 40 words of `problem.md`. If the dev
+  introduced a regression that prior iterations of THIS workspace already
+  hit, the entry will likely be in the top-k.
+- **For repeat-pattern checks**, search this workspace's own iteration
+  history scoped to the relevant role:
+
+      cfcf clio search "<symptom>" --project {{WORKSPACE_CLIO_PROJECT}} \
+          --metadata '{"role":"judge","artifact_type":"judge-assessment"}'
+
+- **Auto-ingest handles your assessment.** cfcf captures your
+  `judge-assessment.md` to Clio with the right actor stamp after this
+  run; do not call `cfcf clio docs ingest` for it manually.
 
 ## What to Produce
 

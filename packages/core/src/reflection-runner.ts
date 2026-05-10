@@ -24,6 +24,7 @@ import type {
   AgentConfig,
 } from "./types.js";
 import { getTemplate, writeTemplate } from "./templates.js";
+import { effectiveClioProject } from "./clio/system-projects.js";
 import { getAdapter } from "./adapters/index.js";
 import { spawnProcess, type ManagedProcess } from "./process-manager.js";
 import {
@@ -93,6 +94,11 @@ export async function writeReflectionInstructions(
   let template = await getTemplate("cfcf-reflection-instructions.md", { repoPath });
   template = template.replace(/\{\{ITERATION\}\}/g, String(iteration));
   template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
+  // Item 6.9: real effective Clio Project in the agent's CLI examples.
+  template = template.replace(
+    /\{\{WORKSPACE_CLIO_PROJECT\}\}/g,
+    effectiveClioProject(workspace),
+  );
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
   await mkdir(cfcfDocsDir, { recursive: true });
@@ -395,6 +401,7 @@ async function runReflectionAsync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   reflectProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({
@@ -533,6 +540,7 @@ export async function runReflectionSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,

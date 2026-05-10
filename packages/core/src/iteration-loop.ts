@@ -1442,6 +1442,7 @@ async function runLoop(
       args: devCmd.args,
       cwd: workspace.repoPath,
       logFile: devLogFile,
+      env: { CFCF_ACCESS_PATH: "agent-cli" },
     });
     const unregisterDev = registerProcess({
       workspaceId: workspace.id,
@@ -1553,6 +1554,7 @@ async function runJudgeAndDecide(
     args: judgeCmd.args,
     cwd: workspace.repoPath,
     logFile: judgeLogFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   const unregisterJudge = registerProcess({
     workspaceId: workspace.id,

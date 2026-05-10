@@ -7,10 +7,12 @@
  * during the session.
  *
  * Two standardised Clio docs:
- *   - `pa-workspace-memory` in Project `cf-system-pa-memory`
+ *   - `PA-memory.md` in Project `cf-workspace-<id>` (item 6.9)
  *     ONE doc per workspace (identified by metadata `workspace_id`).
  *     Contains workspace summary + chronological session entries +
- *     decisions inline. Updated by PA on each session end.
+ *     decisions inline. Updated by PA on each session end. Pre-6.9
+ *     this lived in `cf-system-pa-memory` as `pa-workspace-memory`;
+ *     metadata-based lookup keeps reads compatible with both layouts.
  *   - `pa-global-memory` in Project `cf-system-memory-global`
  *     ONE doc cross-workspace. User preferences spanning all
  *     workspaces. Lives ONLY in Clio (no local cache). Updated by PA
@@ -35,8 +37,20 @@ import { PA_MEMORY_PROJECT, GLOBAL_MEMORY_PROJECT, HA_MEMORY_PROJECT } from "../
 // the system prompt so PA can use --document-id ingest semantics for
 // guaranteed update-not-create behaviour.
 
-/** Per-workspace PA memory doc. Lives in cf-system-pa-memory Project. */
-export const PA_WORKSPACE_MEMORY_TITLE = "pa-workspace-memory";
+/**
+ * Per-workspace PA memory doc.
+ *
+ * Item 6.9 (2026-05-09) move: lives in the workspace's OWN Clio Project
+ * (`cf-workspace-<id>`) instead of the previous `cf-system-pa-memory`
+ * dumping ground. The new convention also renames the doc title to
+ * `PA-memory.md` so it reads as a normal repo-style memory file when
+ * surfaced in `cfcf clio docs list`.
+ *
+ * The metadata triple `(role: "pa", artifact_type: "workspace-memory",
+ * workspace_id: <id>)` is still the canonical lookup key — title and
+ * project moves are layered on top of that.
+ */
+export const PA_WORKSPACE_MEMORY_TITLE = "PA-memory.md";
 
 /** Cross-workspace PA memory doc. Lives in cf-system-memory-global Project. */
 export const PA_GLOBAL_MEMORY_TITLE = "pa-global-memory";
@@ -61,6 +75,18 @@ export const PA_SESSION_ARCHIVE_TITLE_PREFIX = "pa-session-";
 
 export const PA_PROJECT = PA_MEMORY_PROJECT;
 export const GLOBAL_PROJECT = GLOBAL_MEMORY_PROJECT;
+
+/**
+ * Resolve the per-workspace Clio Project name (item 6.9). Each
+ * workspace gets its own project, auto-created at `cfcf workspace init`
+ * time as `cf-workspace-<id>`. PA writes `PA-memory.md` + session
+ * archives there; the dev/judge/reflection roles ingest auto-summaries
+ * there too. `cf-system-pa-memory` is kept as a placeholder for any
+ * future cross-PA cross-workspace state.
+ */
+export function paWorkspaceProjectName(workspaceId: string): string {
+  return `cf-workspace-${workspaceId}`;
+}
 
 /** Other roles' Clio Projects PA reads (READ-ONLY) for cross-role context. */
 export const READONLY_OTHER_ROLE_PROJECTS = [
@@ -320,32 +346,56 @@ export async function readMemoryInventory(
 }
 
 /**
- * Ensure the two PA Clio Projects (`cf-system-pa-memory`, `cf-system-memory-global`)
- * exist before the agent runs. Without this, the agent's ingest with
- * `--project cf-system-pa-memory` may auto-route to the `default` Project
- * (cfcf's auto-route-on-missing semantics), producing the discrepancy
- * we hit in dogfood: doc-in-Clio-but-wrong-project.
+ * Ensure the Clio Projects PA writes to exist before the agent runs.
+ * Pre-6.9: PA wrote per-workspace memory + session archives to
+ * `cf-system-pa-memory`. Post-6.9 (item 6.9, 2026-05-09): per-workspace
+ * memory + session archives move to the workspace's OWN Clio Project
+ * (`cf-workspace-<id>`); only the cross-workspace `pa-global-memory`
+ * still lives in a system project (`cf-system-memory-global`).
+ *
+ * `cf-system-pa-memory` itself is preserved as a placeholder for any
+ * future cross-PA cross-workspace state (and so existing installs
+ * with that project don't suddenly look orphaned in the project list).
  *
  * Idempotent: `resolveProject(name, { createIfMissing: true })` is a
  * no-op when the project already exists.
  *
  * Best-effort: any failure (Clio unreachable, etc.) just logs to
  * stderr; PA still launches.
+ *
+ * Pass `workspaceId` (when available) so the per-workspace project
+ * is also pre-created — defence-in-depth even though
+ * `workspaces.createWorkspace` already does this at registration time.
  */
-export async function ensurePaClioProjects(backend: MemoryBackend): Promise<void> {
+export async function ensurePaClioProjects(
+  backend: MemoryBackend,
+  opts: { workspaceId?: string | null } = {},
+): Promise<void> {
   try {
     await backend.resolveProject(PA_PROJECT, {
       createIfMissing: true,
-      description: "Product Architect per-workspace memory (pa-workspace-memory docs)",
+      description: "Reserved (PA cross-workspace state placeholder; per-workspace memory now lives in cf-workspace-<id>).",
     });
     await backend.resolveProject(GLOBAL_PROJECT, {
       createIfMissing: true,
       description: "Cross-role global memory (PA + HA user preferences)",
     });
+    if (opts.workspaceId) {
+      await backend.resolveProject(paWorkspaceProjectName(opts.workspaceId), {
+        createIfMissing: true,
+        description: "Per-workspace memory + session archives (PA + iteration roles)",
+      });
+    }
   } catch (err) {
+    // The pre-create is best-effort; the agent's first ingest will
+    // still succeed because LocalClio's `resolveProject` auto-creates
+    // missing projects on demand. This warning surfaces only when
+    // Clio itself is unreachable (DB locked, deleted out from under
+    // us, etc.) — in that case the agent's writes will fail entirely,
+    // not "auto-route to default".
     console.error(
       `[pa] note: couldn't pre-create Clio Projects (${err instanceof Error ? err.message : String(err)}). ` +
-      `Agent ingests may auto-route to the 'default' project.`,
+      `Agent writes to Clio may fail until the backend is healthy again.`,
     );
   }
 }
@@ -361,7 +411,7 @@ export function formatMemoryInventory(inv: MemoryInventory): string {
   sections.push("# Memory inventory (snapshot at session start)");
   sections.push("");
 
-  sections.push("## Per-workspace PA memory (`pa-workspace-memory`)");
+  sections.push(`## Per-workspace PA memory (\`${PA_WORKSPACE_MEMORY_TITLE}\` in your workspace's Clio Project)`);
   sections.push("");
   if (inv.workspace.content === null) {
     sections.push(
@@ -392,14 +442,14 @@ export function formatMemoryInventory(inv: MemoryInventory): string {
   }
   sections.push("");
 
-  sections.push("## Per-session archives (`pa-session-<sessionId>` docs in `cf-system-pa-memory`)");
+  sections.push("## Per-session archives (`pa-session-<sessionId>` docs in your workspace's Clio Project)");
   sections.push("");
   if (inv.sessionArchives.length === 0) {
     sections.push("_(no archives yet — the first session save creates the first archive)_");
   } else {
     sections.push(
       `${inv.sessionArchives.length} archived session${inv.sessionArchives.length === 1 ? "" : "s"} (full transcripts; immutable; never compacted). ` +
-      `Use \`cfcf clio docs get <id>\` to retrieve any in full, or \`cfcf clio search "<query>" --project cf-system-pa-memory\` to grep across archives:`,
+      `Use \`cfcf clio docs get <id>\` to retrieve any in full, or \`cfcf clio search "<query>" --project <workspace-clio-project>\` to grep across archives:`,
     );
     sections.push("");
     for (const a of inv.sessionArchives) {

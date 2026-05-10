@@ -54,7 +54,14 @@ export {
 export {
   buildLaunchArgs as buildPaLaunchArgs,
   launchProductArchitect,
+  fallbackIngestPaSessionArchive,
   type LaunchOptions as PaLaunchOptions,
   type LaunchResult as PaLaunchResult,
   type LaunchArgs as PaLaunchArgs,
 } from "./launcher.js";
+
+// Boot-time reconciliation (item 6.9 follow-up)
+export {
+  reconcileStalePaSessions,
+  type PaReconcileResult,
+} from "./boot-reconcile.js";

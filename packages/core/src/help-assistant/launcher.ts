@@ -222,6 +222,7 @@ export async function launchHelpAssistant(opts: LaunchOptions): Promise<LaunchRe
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
+      env: { ...process.env, CFCF_ACCESS_PATH: "agent-cli" },
     });
     const exitCode = await proc.exited;
 

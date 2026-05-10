@@ -22,17 +22,24 @@ The web UI is intentionally not a 1:1 mirror of the CLI — it's tailored for hu
 ## Mental model
 
 - **cf² workspace** = one managed git repo (same as today).
-- **Clio Project** = named grouping of workspaces in the same knowledge domain. Examples: `cf-ecosystem` for cf² + Clio + Cerefox code, `backend-services` for a handful of TypeScript API repos, `research` for exploratory projects.
-- A workspace belongs to **exactly one Clio Project**. The assignment is captured on the workspace config (`clioProject`) and used to route auto-ingests + scope search queries.
-- If you never set a Project, cf² auto-routes to a Project named `default` the first time something tries to ingest.
+- **Clio Project** = named grouping of workspaces that pool memory. Two flavours:
+  - **Per-workspace (default)** — each workspace is auto-assigned its own Clio Project at registration time. The name follows the convention `cf-workspace-<workspace-id>` (e.g. `cf-workspace-tracker-723c21` for a workspace named "tracker"). The workspace's auto-ingests + searches default to this Project, so it acts as an isolated memory bucket for that one repo.
+  - **Shared (opt-in)** — a user-named Project that multiple workspaces explicitly assign themselves to, for cross-workspace memory sharing. Examples: `cf-ecosystem` for cf² + Clio + Cerefox code, `backend-services` for a handful of TypeScript API repos, `research` for exploratory projects. Inside a shared Project, every iteration's outputs are visible to sibling workspaces' searches.
+- A workspace belongs to **exactly one Clio Project at a time**. The assignment is captured on the workspace config (`clioProject`); when unset, cf² uses the per-workspace `cf-workspace-<id>` default at runtime via `effectiveClioProject()` (item 6.9, 2026-05-09 — pre-6.9 the unset case fell back to the global `cf-system-default` bucket; that route is gone for per-workspace artefacts).
+- **`cf-system-*` projects are cfcf-managed** — they hold cross-role state like the global memory layer (`cf-system-memory-global`), HA history (`cf-system-ha-memory`), etc. Don't pick one as a workspace's home Project; they're filtered out of the CLI / web pickers.
 
 ## Set up a workspace with a Clio Project
 
 ```bash
-# Interactive: pick from existing Projects or create a new one.
+# Default — each workspace gets its own per-workspace Project
+# (`cf-workspace-<id>`), auto-created at registration.
 cfcf workspace init --repo /path/to/repo --name my-api
 
-# Non-interactive: pass the Project name directly.
+# Interactive prompt — appears when --project isn't passed and you're on a TTY.
+# Lets you skip (use the default), pick an existing shared Project, or
+# name a new one.
+
+# Opt into sharing — pool memory with sibling workspaces under a named Project.
 cfcf workspace init --repo /path/to/repo --name my-api --project backend-services
 ```
 
@@ -45,6 +52,13 @@ cfcf workspace set my-api --project new-project-name
 # Same, but re-key existing docs into the new Project too.
 cfcf workspace set my-api --project new-project-name --migrate-history
 ```
+
+**When to pick a shared Project**: when 2+ workspaces work in the same problem
+domain and you want lessons from one to surface in the others' searches.
+Common case: a monorepo split across multiple cf² workspaces, or a family of
+microservices where the architecture rationale travels with the engineer
+between repos. Otherwise leave on default — per-workspace isolation keeps
+memory crisp and avoids "noise from another repo" hits in your searches.
 
 ## Ingest a Markdown doc
 

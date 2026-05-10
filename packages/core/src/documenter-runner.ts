@@ -16,6 +16,7 @@ import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getTemplate } from "./templates.js";
+import { effectiveClioProject } from "./clio/system-projects.js";
 
 /**
  * Count markdown files in the workspace's docs/ directory.
@@ -100,6 +101,11 @@ export async function writeDocumenterInstructions(
 ): Promise<void> {
   let template = await getTemplate("cfcf-documenter-instructions.md", { repoPath });
   template = template.replace(/\{\{WORKSPACE_NAME\}\}/g, workspace.name);
+  // Item 6.9: real effective Clio Project in the agent's CLI examples.
+  template = template.replace(
+    /\{\{WORKSPACE_CLIO_PROJECT\}\}/g,
+    effectiveClioProject(workspace),
+  );
 
   const cfcfDocsDir = join(repoPath, "cfcf-docs");
   await mkdir(cfcfDocsDir, { recursive: true });
@@ -233,6 +239,7 @@ export async function runDocumentSync(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   const unregister = registerProcess({
     workspaceId: workspace.id,
@@ -286,6 +293,7 @@ async function runDocument(
     args: cmd.args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
   documentProcessStore.set(workspace.id, managed);
   const unregister = registerProcess({

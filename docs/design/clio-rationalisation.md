@@ -1,8 +1,16 @@
 # Item 6.9 — Rationalising Clio usage across agent roles
 
+> **Status: ✅ shipped 2026-05-09.** This doc is preserved as the
+> design rationale + decision record. For the **current behaviour**,
+> see [`docs/guides/clio-quickstart.md`](../guides/clio-quickstart.md)
+> + the "Clio cross-workspace memory" section of
+> [`CLAUDE.md`](../../CLAUDE.md). Some prose below describes pre-ship
+> alternatives that didn't land — the canonical "what shipped" is the
+> CHANGELOG entry under `[Unreleased]` and the row 6.9 summary in
+> `docs/plan.md`.
+>
 > Design doc for item 6.9. Started 2026-05-09 on
-> `iteration-6/clio-rationalisation-6.9`. **All open questions
-> resolved 2026-05-09**; implementation can proceed.
+> `iteration-6/clio-rationalisation-6.9`.
 
 ## Problem
 

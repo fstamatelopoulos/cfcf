@@ -32,6 +32,8 @@ import { mkdirSync, existsSync } from "fs";
 // file (0002_*.sql, 0003_*.sql, ...) -- don't edit 0001 in place.
 import migration_0001_initial from "./migrations/0001_initial.sql" with { type: "text" };
 import migration_0002_fts_title_boost from "./migrations/0002_fts_title_boost.sql" with { type: "text" };
+import migration_0003_usage_log from "./migrations/0003_usage_log.sql" with { type: "text" };
+import migration_0004_usage_log_drop_fks from "./migrations/0004_usage_log_drop_fks.sql" with { type: "text" };
 
 export interface ClioMigration {
   /** Filename used as a unique key in the `clio_migrations` tracking table. */
@@ -43,15 +45,34 @@ export interface ClioMigration {
 const MIGRATIONS: ClioMigration[] = [
   { filename: "0001_initial.sql", sql: migration_0001_initial },
   { filename: "0002_fts_title_boost.sql", sql: migration_0002_fts_title_boost },
+  { filename: "0003_usage_log.sql", sql: migration_0003_usage_log },
+  { filename: "0004_usage_log_drop_fks.sql", sql: migration_0004_usage_log_drop_fks },
 ];
 
 /**
- * Resolve the Clio DB path. `CFCF_CLIO_DB` env var overrides; otherwise
- * `~/.cfcf/clio.db`. Cross-workspace state lives under `~/.cfcf/` (same
- * tier as `~/.cfcf/logs/`), not under the platform-specific config dir.
+ * Resolve the Clio DB path.
+ *
+ * Resolution order:
+ *   1. `CFCF_CLIO_DB` env var (explicit DB-path override; wins always).
+ *   2. `CFCF_CONFIG_DIR` env var → `<that>/clio.db`. When the user/test
+ *      has remapped the config dir for sandboxing, Clio follows. This
+ *      is the load-bearing test-isolation hook: tests that set
+ *      `CFCF_CONFIG_DIR = <tempDir>` automatically get an isolated
+ *      `<tempDir>/clio.db` instead of leaking writes into the user's
+ *      real `~/.cfcf/clio.db`. Surfaced 2026-05-09 after item 6.9
+ *      added an eager `getClioBackend()` call to `POST /api/workspaces`,
+ *      which is exercised by tests that set CONFIG_DIR but never
+ *      injected a Clio backend via `setClioBackend()`. Before 6.9
+ *      this latent gap was harmless because Clio wasn't auto-touched
+ *      from non-Clio routes.
+ *   3. `~/.cfcf/clio.db` (production default — cross-workspace state
+ *      lives under `~/.cfcf/`, NOT under the platform-specific config
+ *      dir, because cfcf has multiple machines sharing the same
+ *      logical user).
  */
 export function getClioDbPath(): string {
   if (process.env.CFCF_CLIO_DB) return process.env.CFCF_CLIO_DB;
+  if (process.env.CFCF_CONFIG_DIR) return join(process.env.CFCF_CONFIG_DIR, "clio.db");
   return join(homedir(), ".cfcf", "clio.db");
 }
 

@@ -9,7 +9,55 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Item 6.9: rationalising Clio usage across agent roles
+
+- **`clio_usage_log`** schema (migrations 0003 + 0004): operational
+  lens for Clio activity (reads + writes), parallel to the existing
+  `clio_audit_log` (mutations only). Cerefox-parity table; same write
+  event lands a row in both tables, different filters.
+- **CLI client** stamps every server call with
+  `X-CFCF-Access-Path: cli|agent-cli|web` (defaults to `cli`).
+  Iteration runners spawn agent processes with
+  `CFCF_ACCESS_PATH=agent-cli` so any `cfcf clio …` shell-out from
+  inside an agent is correctly tagged.
+- **Hono middleware** on `/api/clio/*` writes one usage-log row per
+  call, capturing operation / access_path / requestor / document_id /
+  project_id / query_text / result_count / extra. Search + ingest
+  handlers populate extras for richer rows.
+- **CLI verbs** `cfcf clio usage` (list with `--reads/--writes/
+  --zero-hits/--actor/--operation/--access-path/--since/--until`) and
+  `cfcf clio usage summary` (Cerefox-parity aggregate by day /
+  operation / access path / requestor / top docs).
+- **HTTP routes** `GET /api/clio/usage` and `GET /api/clio/usage/summary`
+  back the CLI verbs and a future web UI viewer.
+- **Per-workspace Clio Project**: `cfcf workspace init` now defaults
+  `clioProject` to `cf-workspace-<id>` (auto-created at registration
+  time) so every workspace gets its own per-workspace memory home
+  without the user having to ask. CLI + web project pickers filter
+  `cf-system-*` and `cf-workspace-*` namespaces out of the dropdown.
+- **PA memory move**: per-workspace PA memory + session archives now
+  live in `cf-workspace-<id>` (renamed `pa-workspace-memory` →
+  `PA-memory.md`). Global cross-workspace preferences stay in
+  `cf-system-memory-global`. `cf-system-pa-memory` is preserved as a
+  placeholder. Metadata-based reads stay compatible with the prior
+  layout.
+- **Default ingest policy** flips from `summaries-only` to `all` —
+  every iteration's logs / handoffs / judge assessment / reflection
+  analysis / decision-log entry / iteration summary auto-ingests by
+  default. Workspaces / global config can still override.
+- **HA staleness disclaimer** in the Help Assistant prompt: every
+  memory entry stamped with `cfcf_version` at write time; the agent
+  flags entries from materially older releases when citing them.
+- **Multi-project search** (`cfcf clio search --project a,b,c`) maps
+  to `?project=a&project=b&project=c` and a SQL `IN (?, ?, ?)`
+  filter — Cerefox parity.
+- **Per-role template Clio sections**: `clio-guide.md` rewritten with
+  six universal principles + per-role cheatsheets; every role
+  template (architect / judge / reflection / documenter / process.md)
+  now reads `cfcf-docs/clio-relevant.md` first and ships a focused
+  Clio-usage section.
+- **Backlog F.20** seeded for a future Cerefox `usage_log` re-audit
+  once the CerefoxRemote backend lands.
 
 ## [0.22.2] -- 2026-05-09
 

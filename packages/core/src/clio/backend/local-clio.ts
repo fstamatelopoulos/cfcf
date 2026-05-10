@@ -1535,6 +1535,36 @@ export class LocalClio implements MemoryBackend {
     }));
   }
 
+  // ── Usage log (item 6.9 — Cerefox parity, 2-table model) ─────────────
+
+  /**
+   * Record a usage event. **Fire-and-forget**: errors are swallowed
+   * inside `logUsage()` (in `../usage-log.ts`); never breaks the
+   * caller. Callers (HTTP route handlers, CLI handlers, auto-ingest
+   * hooks) invoke this explicitly after each Clio operation.
+   */
+  logUsage(entry: import("../usage-log.js").UsageLogEntry): void {
+    // Lazy-import via dynamic resolution to avoid a circular type
+    // import; usage-log.ts is in the same dir.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const usageLog = require("../usage-log.js") as typeof import("../usage-log.js");
+    usageLog.logUsage(this.db, entry);
+  }
+
+  async getUsageLog(query: import("../usage-log.js").UsageLogQuery = {}): Promise<import("../usage-log.js").UsageLogRow[]> {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const usageLog = require("../usage-log.js") as typeof import("../usage-log.js");
+    return usageLog.getUsageLog(this.db, query);
+  }
+
+  async getUsageSummary(
+    filter: { since?: string; until?: string; projectId?: string } = {},
+  ): Promise<import("../usage-log.js").UsageLogSummary> {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const usageLog = require("../usage-log.js") as typeof import("../usage-log.js");
+    return usageLog.getUsageSummary(this.db, filter);
+  }
+
   // ── Search ─────────────────────────────────────────────────────────────
 
   async search(req: SearchRequest): Promise<SearchResponse> {
@@ -1549,11 +1579,29 @@ export class LocalClio implements MemoryBackend {
 
     // Resolve optional project filter. Don't auto-create: "search non-existent
     // project" should return zero hits, not silently create a Project.
-    let projectFilterId: string | null = null;
-    if (req.project) {
+    //
+    // Multi-project (item 6.9): when `req.projects` is set, resolve each
+    // entry; project names that don't resolve are silently dropped (so
+    // a typo in one of the comma-separated names doesn't kill the
+    // search). When `req.projects` is unset but `req.project` (singular)
+    // is, fall through to the single-project path. When BOTH set,
+    // `req.projects` wins.
+    let projectFilterIds: string[] | null = null;
+    if (req.projects && req.projects.length > 0) {
+      const ids: string[] = [];
+      for (const name of req.projects) {
+        const p = await this.getProject(name);
+        if (p) ids.push(p.id);
+      }
+      if (ids.length === 0) {
+        // None of the named projects resolved — empty filter == zero hits.
+        return { hits: [], mode: requestedMode === "semantic" ? "semantic" : requestedMode === "hybrid" ? "hybrid" : "fts", totalMatches: 0 };
+      }
+      projectFilterIds = ids;
+    } else if (req.project) {
       const p = await this.getProject(req.project);
       if (!p) return { hits: [], mode: requestedMode === "semantic" ? "semantic" : requestedMode === "hybrid" ? "hybrid" : "fts", totalMatches: 0 };
-      projectFilterId = p.id;
+      projectFilterIds = [p.id];
     }
 
     // Route by mode. Callers asking for hybrid/semantic get the better
@@ -1565,14 +1613,14 @@ export class LocalClio implements MemoryBackend {
     }
 
     if (requestedMode === "semantic" && embedder) {
-      return await this.searchSemantic(req, embedder, matchCount, projectFilterId);
+      return await this.searchSemantic(req, embedder, matchCount, projectFilterIds);
     }
     if (requestedMode === "hybrid" && embedder) {
-      return await this.searchHybrid(req, embedder, matchCount, projectFilterId);
+      return await this.searchHybrid(req, embedder, matchCount, projectFilterIds);
     }
 
     // FTS path (default, or fallback when no embedder is active).
-    return await this.searchFts(req, matchCount, projectFilterId);
+    return await this.searchFts(req, matchCount, projectFilterIds);
   }
 
   /**
@@ -1763,8 +1811,14 @@ export class LocalClio implements MemoryBackend {
   /**
    * FTS-only search. Same shape as the PR1 query, moved into its own
    * method so hybrid/semantic can reuse the candidate-fetching logic.
+   *
+   * `projectFilterIds`: when set + non-empty, restrict to docs in those
+   * Projects via `IN (?, ?, …)`. NULL = no project filter (search all).
+   * Multi-project (item 6.9): the agents pass
+   * `[cf-workspace-<id>, cf-system-memory-global]` as the canonical
+   * pair.
    */
-  private async searchFts(req: SearchRequest, matchCount: number, projectFilterId: string | null): Promise<SearchResponse> {
+  private async searchFts(req: SearchRequest, matchCount: number, projectFilterIds: string[] | null): Promise<SearchResponse> {
     const matchExpr = buildFtsMatchExpression(req.query);
     const candidateCount = matchCount * FTS_CANDIDATE_MULTIPLIER;
 
@@ -1800,7 +1854,7 @@ export class LocalClio implements MemoryBackend {
          WHERE clio_chunks_fts MATCH ?
            AND c.version_id IS NULL
            ${deletedClause}
-           ${projectFilterId ? "AND d.project_id = ?" : ""}
+           ${projectFilterIds && projectFilterIds.length > 0 ? `AND d.project_id IN (${projectFilterIds.map(() => "?").join(", ")})` : ""}
            ${metaWhere}
          ORDER BY bm25_rank ASC
          LIMIT ?
@@ -1829,7 +1883,7 @@ export class LocalClio implements MemoryBackend {
     `;
 
     const bindings: (string | number | boolean)[] = [matchExpr];
-    if (projectFilterId) bindings.push(projectFilterId);
+    if (projectFilterIds && projectFilterIds.length > 0) bindings.push(...projectFilterIds);
     bindings.push(...metaBindings);
     bindings.push(candidateCount);
     bindings.push(matchCount);
@@ -1888,10 +1942,10 @@ export class LocalClio implements MemoryBackend {
     req: SearchRequest,
     embedder: Embedder,
     matchCount: number,
-    projectFilterId: string | null,
+    projectFilterIds: string[] | null,
   ): Promise<SearchResponse> {
     const queryVector = (await embedder.embed([req.query]))[0];
-    const candidates = this.fetchVectorCandidates(req, projectFilterId, embedder);
+    const candidates = this.fetchVectorCandidates(req, projectFilterIds, embedder);
 
     const scored: Array<{ row: VectorCandidateRow; score: number }> = [];
     for (const row of candidates) {
@@ -1942,7 +1996,7 @@ export class LocalClio implements MemoryBackend {
     req: SearchRequest,
     embedder: Embedder,
     matchCount: number,
-    projectFilterId: string | null,
+    projectFilterIds: string[] | null,
   ): Promise<SearchResponse> {
     const alpha = clampAlpha(req.alpha ?? 0.7);
     const candidateCount = Math.max(matchCount * 5, 30);
@@ -1950,10 +2004,10 @@ export class LocalClio implements MemoryBackend {
 
     // FTS candidate pool. Each row's `bm25_rank` is BM25 in [-∞, 0]
     // where more-negative = more relevant (we negate below).
-    const ftsRows = this.fetchFtsCandidates(req, projectFilterId, candidateCount);
+    const ftsRows = this.fetchFtsCandidates(req, projectFilterIds, candidateCount);
     // Vector candidates + raw cosine per chunk.
     const queryVector = (await embedder.embed([req.query]))[0];
-    const vecRows = this.fetchVectorCandidates(req, projectFilterId, embedder);
+    const vecRows = this.fetchVectorCandidates(req, projectFilterIds, embedder);
     const vecScored = vecRows
       .map((row) => ({
         row,
@@ -2073,12 +2127,16 @@ export class LocalClio implements MemoryBackend {
 
   private fetchFtsCandidates(
     req: SearchRequest,
-    projectFilterId: string | null,
+    projectFilterIds: string[] | null,
     candidateCount: number,
   ): VectorCandidateRow[] {
     const matchExpr = buildFtsMatchExpression(req.query);
     const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
     const deletedClause = req.includeDeleted ? "" : "AND d.deleted_at IS NULL";
+
+    const projectClause = projectFilterIds && projectFilterIds.length > 0
+      ? `AND d.project_id IN (${projectFilterIds.map(() => "?").join(", ")})`
+      : "";
 
     const sql = `
       SELECT c.id AS chunk_id,
@@ -2104,13 +2162,13 @@ export class LocalClio implements MemoryBackend {
        WHERE clio_chunks_fts MATCH ?
          AND c.version_id IS NULL
          ${deletedClause}
-         ${projectFilterId ? "AND d.project_id = ?" : ""}
+         ${projectClause}
          ${metaWhere}
        ORDER BY bm25_rank ASC
        LIMIT ?
     `;
     const bindings: (string | number | boolean)[] = [matchExpr];
-    if (projectFilterId) bindings.push(projectFilterId);
+    if (projectFilterIds && projectFilterIds.length > 0) bindings.push(...projectFilterIds);
     bindings.push(...metaBindings);
     bindings.push(candidateCount);
 
@@ -2125,11 +2183,15 @@ export class LocalClio implements MemoryBackend {
    */
   private fetchVectorCandidates(
     req: SearchRequest,
-    projectFilterId: string | null,
+    projectFilterIds: string[] | null,
     embedder: Embedder,
   ): VectorCandidateRow[] {
     const { metaWhere, metaBindings } = this.buildMetadataFilter(req.metadata);
     const deletedClause = req.includeDeleted ? "" : "AND d.deleted_at IS NULL";
+
+    const projectClause = projectFilterIds && projectFilterIds.length > 0
+      ? `AND d.project_id IN (${projectFilterIds.map(() => "?").join(", ")})`
+      : "";
 
     const sql = `
       SELECT c.id AS chunk_id,
@@ -2155,11 +2217,11 @@ export class LocalClio implements MemoryBackend {
          ${deletedClause}
          AND c.embedding IS NOT NULL
          AND c.embedder = ?
-         ${projectFilterId ? "AND d.project_id = ?" : ""}
+         ${projectClause}
          ${metaWhere}
     `;
     const bindings: (string | number | boolean)[] = [embedder.name];
-    if (projectFilterId) bindings.push(projectFilterId);
+    if (projectFilterIds && projectFilterIds.length > 0) bindings.push(...projectFilterIds);
     bindings.push(...metaBindings);
 
     return this.db.query<VectorCandidateRow, (string | number | boolean)[]>(sql).all(...bindings);

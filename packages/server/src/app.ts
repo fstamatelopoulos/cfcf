@@ -13,10 +13,12 @@ import { VERSION, DEFAULT_PORT } from "@cfcf/core";
 import { configExists, readConfig, writeConfig, validateConfig } from "@cfcf/core";
 import type { CfcfGlobalConfig } from "@cfcf/core";
 import { registerClioRoutes } from "./routes/clio.js";
+import { clioUsageMiddleware } from "./clio-usage-middleware.js";
 import { registerHelpRoutes } from "./routes/help.js";
 import { registerUpdateRoutes } from "./routes/update.js";
 import { registerAgentModelsRoutes } from "./routes/agent-models.js";
 import { registerRoleTemplatesRoutes } from "./routes/role-templates.js";
+import { getClioBackend } from "./clio-backend.js";
 import {
   createWorkspace,
   listWorkspaces,
@@ -236,6 +238,25 @@ export function createApp() {
     }
 
     const workspace = await createWorkspace(body);
+
+    // Per-workspace Clio Project pre-creation (item 6.9). createWorkspace
+    // resolved a default `clioProject = cf-workspace-<id>` if the caller
+    // didn't pass one. Eagerly create the Project here so it's visible
+    // in the Memory tab immediately + ready for the first auto-ingest.
+    // Best-effort: a Clio failure (e.g. db wedge) doesn't block workspace
+    // registration — auto-ingest's `createIfMissing` path is the
+    // safety net.
+    if (workspace.clioProject) {
+      try {
+        const clio = getClioBackend();
+        await clio.resolveProject(workspace.clioProject, { createIfMissing: true });
+      } catch (err) {
+        console.warn(
+          `[workspace-init] failed to pre-create Clio Project '${workspace.clioProject}' (best-effort; auto-ingest will retry): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     return c.json(workspace, 201);
   });
 
@@ -1099,6 +1120,11 @@ export function createApp() {
   // Memory layer for cross-workspace knowledge. All routes live under
   // /api/clio/* plus the PUT /api/workspaces/:id/clio-project handler for
   // `cfcf workspace set --project`. Implementation in routes/clio.ts.
+  //
+  // Item 6.9: instrument every /api/clio/* call with the usage-log
+  // middleware before the routes run so each call lands a row in
+  // clio_usage_log with operation/access_path/result_count.
+  app.use("/api/clio/*", clioUsageMiddleware());
   registerClioRoutes(app);
 
   // /api/help/topics + /api/help/topics/:slug -- powers the web UI

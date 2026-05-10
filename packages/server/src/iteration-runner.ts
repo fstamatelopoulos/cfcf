@@ -197,6 +197,7 @@ async function runIterationAsync(
     args,
     cwd: workspace.repoPath,
     logFile: state.logFile,
+    env: { CFCF_ACCESS_PATH: "agent-cli" },
   });
 
   const result = await managed.result;

@@ -97,7 +97,9 @@ Each role is independently configurable (adapter + model). The defaults are set 
 
 ### Clio Project
 
-A grouping of workspaces that share knowledge. Clio is cfcf's persistent memory layer (`~/.cfcf/clio.db`); search across workspaces with `cfcf clio search "<query>"`. New users typically have one Clio Project; advanced users group workspaces by domain (`backend-services`, `data-platform`, etc.). See [Clio quickstart](clio-quickstart.md).
+The named bucket a workspace's memory lives in. Clio is cfcf's persistent memory layer (`~/.cfcf/clio.db`); search across workspaces with `cfcf clio search "<query>"`.
+
+By default each workspace gets its own per-workspace Project (`cf-workspace-<id>`, auto-created at `cfcf workspace init` time) — searches inside that workspace see its own iteration history and nothing else. Opt into a **shared** Project (e.g. `backend-services`) to pool memory with sibling workspaces in the same domain — useful when N repos share architecture rationale or you want lessons from one to surface in the others. See [Clio quickstart](clio-quickstart.md) for examples.
 
 ### Server / web UI
 
