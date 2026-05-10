@@ -9,6 +9,150 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Investigation + observability — "Server restarted" message + workspace stuck on Failed
+
+Real dogfood: across a single `testgame` loop run, the user saw
+**three different events** (Reflection 1, Dev+Judge 2, Reflection 2)
+get temporarily marked as `failed` in the History tab while
+they were in fact still running. Each one later flipped back to
+`completed` correctly — but the spurious `Error: Server
+restarted while this event was running` text **stayed attached
+to the row** even after the agent succeeded. The user also
+reported that the workspace's overall status (on the
+workspaces-list page) **stayed pinned to "Failed"** even though
+iteration events later showed completed.
+
+**Strongest current hypothesis (user-suggested + mechanism
+verified) — `local-install.sh` mid-loop:** The user reports
+running `./scripts/local-install.sh` to update the binary
+during the loop *without* stopping the server first. This
+script does `npm remove -g @cerefox/codefactory …` followed by
+`npm install -g …` — a window of seconds during which the cfcf
+package tree on disk is half-removed.
+
+The build (`build-cli.sh`) externalizes three heavy deps:
+
+```bash
+bun build … --external @huggingface/transformers \
+            --external onnxruntime-node \
+            --external sharp
+```
+
+— meaning they're resolved from `node_modules/` at runtime, not
+bundled. The Clio ONNX embedder in
+`packages/core/src/clio/embedders/onnx-embedder.ts:76` does:
+
+```typescript
+cached = await import("@huggingface/transformers");
+```
+
+— a **lazy dynamic import**. Once the running server's loop
+hits a Clio operation that triggers this import during the
+install window, the import throws `MODULE_NOT_FOUND`, which
+becomes an `unhandledRejection`, which triggers
+`gracefulShutdown("unhandledRejection", 1)` → marks active
+events failed → `process.exit(1)`. Three loop transitions
+during the install window = three corrupted events.
+
+This explains everything the user observed: the message
+wording (after the next manual restart, boot cleanup catches
+events that gracefulShutdown's swallow-on-error skipped), the
+recurrence pattern (one corruption per Clio call during the
+window), and crucially that the user didn't manually stop —
+the unhandled rejection killed the server *for them*.
+
+**Other plausible-but-secondary candidates** (kept on the
+short list in case the install-window theory turns out not to
+be the actual cause): (a) Bun watch-mode reload from
+`bun run dev:server` if file edits happen during a live loop,
+(b) external process supervisor auto-restarting on a transient
+crash. Both would produce the same observable surface.
+
+**Observability added so the next dogfood run produces evidence:**
+
+- Boot banner — `[boot] cfcf server v… starting — pid=… ts=…`
+  printed first thing in `startServer()`. If the user observes
+  the "Server restarted" message in history, the matching
+  `[boot]` line in the server log proves whether a real restart
+  happened. Multiple `[boot]` lines = real restarts; only one =
+  the message came from somewhere else and we have a new bug.
+- Shutdown trace — `[shutdown] Received <signal> — pid=… ts=…`
+  printed at the top of `gracefulShutdown`. Includes a stack
+  trace for `unhandledRejection` / `uncaughtException` / `api`
+  triggers so we can see where the shutdown was kicked off
+  from.
+- Workspace-status transition trace — `[workspace-status]
+  <name> (id): <from> → <to>` plus a 4-frame stack hint, logged
+  on every `updateWorkspace({status: …})` call where the value
+  actually changes. Particularly: every transition INTO
+  "failed" gets a hint pointing at the call site, so we can
+  identify what wrote it.
+
+**Defense-in-depth fixes (still ship now — they're safe and
+fix observed symptoms regardless of the root-cause path):**
+
+- **Stale-error clearing on `failed → completed`**
+  (`workspace-history.ts`): `updateHistoryEvent` now clears the
+  `error` field when a patch transitions an event AWAY from
+  `failed` and doesn't explicitly carry an `error` itself. Spread
+  merge would otherwise preserve the old text. Direct fix for
+  the user-visible "lingering error" symptom.
+- **Liveness probe in cleanup** (`workspace-history.ts`): boot
+  cleanup now stat's the event's log file. If written in the
+  last 90s, the agent is alive — skip cleanup. Defends against
+  any boot-cleanup-during-live-run race regardless of why the
+  boot happens.
+- **`/api/shutdown` now routes through `gracefulShutdown`**
+  (`app.ts` + `start.ts`): the previous `setTimeout(() =>
+  process.exit(0), 100)` shortcut was a real bug — it left
+  agents orphaned to PID 1 and history events stuck "running"
+  after `cfcf server stop`. Now the same code path as
+  SIGTERM/SIGINT runs: agents get process-group SIGTERM + SIGKILL
+  grace, history events get marked failed cleanly. (Independent
+  fix — would have manifested for any user running `cfcf server
+  stop` while a loop was active.)
+- **Workspace-status self-heal** (`iteration-loop.ts`): when
+  an iteration's history event is updated to `completed`,
+  re-read the workspace config; if its status is stuck on
+  "failed" (regardless of how it got there), reset to "running".
+  Concrete evidence — an iteration just completed — lets us
+  fix the dashboard immediately without waiting for the
+  root-cause investigation. Logs the heal so we can see the
+  trigger.
+
+7 new tests in `workspace-history.test.ts` covering the
+defense-in-depth layers: stale-error clears on `failed →
+completed`, explicit error in patch is honoured, error stays
+put when status stays `failed`, liveness probe skips events
+with recent log activity, still cleans events with stale logs,
+defensive default for missing log files, iteration events stay
+alive if EITHER dev or judge log shows recent activity.
+
+**Bonus independent fix — `cfcf server stop` orphans:** while
+investigating, found that `/api/shutdown` was implemented as a
+literal `setTimeout(() => process.exit(0), 100)` — bypassing
+`gracefulShutdown` entirely. This left agents reparented to
+PID 1 and history events stuck at `running` after every `cfcf
+server stop`. Now routes through `gracefulShutdown("api", 0)`
+via the new `requestShutdown()` export. Independent bug,
+shipped together because the search for the root cause
+surfaced it.
+
+**Pre-flight check in `scripts/local-install.sh`** — detect a
+running server with a live loop BEFORE running `npm remove +
+npm install`. Prints a structured warning with a one-liner
+(`cfcf server stop` + `cfcf resume`) and prompts y/N to
+continue. Best-effort: needs `cfcf` on PATH and the server
+reachable to fire, both of which are pre-conditions for the
+issue. Catches the user-suggested install-window mechanism
+before it can corrupt history.
+
+**Hint in unhandled-rejection logging** — when an
+`unhandledRejection` matches `MODULE_NOT_FOUND` / `Cannot find
+module` / `Cannot find package`, the fatal log now points at
+the install-window scenario as the most likely cause. Saves a
+post-mortem step the next time it happens.
+
 ### Changed — Per-role Clio ingest cadence (real-time visibility)
 
 Real dogfood: dev + judge ran for many minutes during iteration 1
