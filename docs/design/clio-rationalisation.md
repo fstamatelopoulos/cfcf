@@ -263,13 +263,21 @@ its instructions, with a role-tuned set of triggers:
 - Doesn't generally ingest; the docs themselves are the artefact and
   they live in `docs/` not Clio.
 
-**Product Architect** (already wired via `cf-system-pa-memory`):
-- Reads `cf-system-memory-global` for user preferences across
-  workspaces. Already does this; `cf-system-pa-memory` adds per-workspace
-  PA scratchpads.
+**Product Architect** (interactive — `cfcf spec`):
+- Reads `cf-system-memory-global` for cross-workspace user preferences
+  (already wired).
+- Reads `cf-workspace-<id>/PA-memory.md` for **this** workspace's PA
+  state (newly relocated — see "PA memory simplification" in §1).
+- Reads `cf-system-pa-memory` for cross-workspace PA-only patterns
+  (PA's own learned heuristics, role preferences).
+- The launcher ingests `PA-memory.md` to the per-workspace project
+  at session end.
 
-**Help Assistant** (already wired via `cf-system-ha-memory`):
-- Reads global + per-workspace for user-context. Already wired.
+**Help Assistant** (interactive — `cfcf help assistant`):
+- Reads `cf-system-ha-memory` for prior Q&A continuity.
+- Reads `cf-system-memory-global` for user preferences.
+- Saved Q&A entries get a `cfcfVersion` stamp so HA can deprioritise
+  hits from older versions (staleness mitigation).
 
 ### 3a. Default ingest policy (DECIDED 2026-05-09)
 
@@ -536,12 +544,19 @@ any auto-ingested artefact.
 ### Default Clio Project routing (post-Phase-2)
 
 - **Per-workspace project** = `cf-workspace-<workspace-id>` (auto-created
-  at `cfcf workspace init`, auto-routed by `loop-ingest.ts`).
+  at `cfcf workspace init`, auto-routed by `loop-ingest.ts`). Holds
+  iteration auto-ingests, the dev/judge/architect/reflection
+  decision-log + assessments + analyses, AND PA's per-workspace
+  memory (`PA-memory.md`, ingested by the PA launcher at session end).
 - **Global memory project** = `cf-system-memory-global` (cross-workspace,
   hand-curated by all roles + the user).
-- **PA-specific** = `cf-system-pa-memory` (PA's own per-workspace
-  scratchpad + workspace-summary).
-- **HA-specific** = `cf-system-ha-memory` (HA's Q&A history).
+- **PA cross-workspace** = `cf-system-pa-memory` — PA-specific
+  cross-workspace state ONLY (PA-only patterns + role preferences
+  PA learned across multiple workspaces; portable agent-side
+  heuristics). Per-workspace PA stuff moved to `cf-workspace-<id>` —
+  see "PA memory simplification" in §1.
+- **HA cross-workspace** = `cf-system-ha-memory` (HA's Q&A history +
+  user preferences).
 
 When a role searches without a `--project` filter, Clio searches all
 projects (back-compat behaviour). When the agent wants the recommended
@@ -613,8 +628,9 @@ pointer.
 | **Reflection** | Cross-iteration lesson that's portable across workspaces ("opus + tool-heavy roles tends to over-edit") | Direct ingest to global memory as `lesson` | global memory | **Direct** |
 | **Documenter** | After SUCCESS (or `cfcf document`) | Polished docs in `docs/` of the user's repo | — (the docs ARE the artefact; they live in the repo, not Clio) | None |
 | **Documenter** | Discovered docs-style preference ("user wants Mermaid diagrams, not ASCII") | Direct ingest to global memory | global memory | **Direct** |
-| **Product Architect** (`cfcf spec`) | Every session | `<repo>/.cfcf-pa/session-<id>.md` (live scratchpad) | `cf-system-pa-memory` | Already wired (PA prompt-assembler + memory protocol) |
-| **Product Architect** | Session end ("save before you go?") | `cf-system-pa-memory` workspace-summary refresh | `cf-system-pa-memory` | Already wired |
+| **Product Architect** (`cfcf spec`) | Every turn | `<repo>/.cfcf-pa/session-<id>.md` (live per-session scratchpad — local cache; per-session ephemeral) | (local cache only — NOT ingested) | Already wired |
+| **Product Architect** | Session end | `<repo>/.cfcf-pa/workspace-summary.md` (local cache) PLUS Clio ingest as `PA-memory.md` document | per-workspace project (`cf-workspace-<id>`) | **NEW** — direct ingest by PA launcher at session-end with `--update-if-exists --title "PA-memory.md"`. Same doc gets refreshed across sessions (one canonical PA-memory per workspace) |
+| **Product Architect** | Cross-workspace PA pattern learned ("PA should always offer a glossary section") | Direct ingest | `cf-system-pa-memory` (PA-only cross-workspace state) | Direct |
 | **Product Architect** | User stated a portable preference ("I always want a 'glossary' section in problem.md") | Direct ingest to global memory | `cf-system-memory-global` | Already wired |
 | **Product Architect** | Problem-Pack-level decision (scope cut, success-criteria change) | `decision-log.md` `[decision]` entry — flows to per-workspace project | per-workspace project | Auto-ingest (PA runs in the user's repo with full FS access) |
 | **Help Assistant** (`cfcf help assistant`) | Every turn | Q&A history append | `cf-system-ha-memory` | Already wired |
@@ -660,6 +676,79 @@ deliberately. Under-searching is the bigger risk (it's why we're doing
 this work). Search liberally; the `cfcf clio audit --reads` log
 shipping in the same PR will let us measure actual usage in the
 clean-wipe test workspace and add a brake later if needed.
+
+## Sanity-check decisions (2026-05-09, pre-implementation)
+
+These are the small implementation decisions surfaced during the final
+design review. Recording so the implementation matches expectations.
+
+1. **`access_path` detection mechanism**: the CLI client adds an HTTP
+   header on every `/api/clio/*` call:
+   - `X-CFCF-Access-Path: cli` when the actor stamp is `user`
+     (direct user invocation).
+   - `X-CFCF-Access-Path: agent-cli` when the actor stamp matches the
+     `<role>|<adapter>|<model>` pattern (CLI invoked from inside an
+     agent's spawn).
+   - The web UI doesn't set this header → server defaults to `web`.
+   - Server-side `clio_usage_log` write reads the header (or defaults
+     to `web` when missing). Cleanest signal — no string-pattern
+     matching of requestor needed.
+
+2. **Multi-project HTTP encoding**: `--project a,b` (CLI) maps to
+   `?project=a&project=b` (multi-value HTTP query). Hono natively
+   parses repeated query params into an array via `c.req.queries('project')`.
+   Comma-encoded `?project=a,b` would also work but multi-value is
+   more standard.
+
+3. **`cf-workspace-<id>` creation timing**: **eager** at
+   `cfcf workspace init` (NOT lazy on first ingest). Reasoning:
+   visible immediately in the Memory tab's Projects list; user sees
+   their workspace's project appear as soon as the workspace is
+   registered. Lazy creation works at the auto-ingest layer (already
+   has `createIfMissing: true`) but the eager path is one extra
+   `getOrCreateProject` call at workspace-init time and gives a
+   better default UX.
+
+4. **Workspace deletion → orphaned per-workspace project**: when the
+   user runs `cfcf workspace delete`, leave the project in place. It's
+   not in the system-lock list — user can delete it manually via the
+   Memory tab (Projects → Delete) or `cfcf clio projects delete`.
+   Auto-cleanup deferred as a separate concern (would need a
+   "delete-with-cascade" affordance + soft-delete-vs-hard-delete UX
+   decision; the docs aren't necessarily safe to drop just because the
+   workspace is gone — they may have cross-workspace references).
+
+5. **PA-memory.md ingest mechanism**: PA is interactive — `loop-ingest.ts`
+   doesn't fire for PA. The PA launcher
+   (`packages/core/src/product-architect/launcher.ts`) gains a
+   session-end ingest step:
+   - PA writes `<repo>/.cfcf-pa/workspace-summary.md` as today (local
+     cache, fast writes during the session).
+   - On session exit (clean exit OR user Ctrl-C), the launcher
+     reads the local file + ingests to Clio as a doc titled
+     `PA-memory.md` in the workspace's `cf-workspace-<id>` project,
+     with `--update-if-exists` and the actor stamp
+     `product-architect|<adapter>|<model>`.
+   - On ingest failure: log + continue exit (best-effort, never blocks
+     PA from exiting).
+   - Per-session `session-<id>.md` scratchpads stay local-only (they
+     ARE per-session ephemeral; not worth ingesting each one).
+
+6. **HA staleness mitigation**: HA's prompt-assembler appends a small
+   line to the system prompt: *"Saved Q&A history is for conversation
+   continuity, not as authoritative. Always verify against current
+   docs / state before quoting an old answer."* HA's saved entries
+   get a `cfcfVersion` stamp at write time so HA can spot
+   stale-version hits at retrieval time.
+
+7. **Recursion-safety for usage-log reads of the audit log**: when
+   the user / agent runs `cfcf clio audit` or `cfcf clio usage`, those
+   reads are themselves usage-loggable. Not infinite (each call is one
+   write that doesn't recursively log itself), but worth noting:
+   - `getAuditLog` and `getUsageLog` reads → record a usage-log entry
+     each call. No recursion.
+   - The `usage-log-list` itself is just a SQL SELECT; the hook fires
+     once at the end of the call.
 
 ## Implementation plan
 
