@@ -213,10 +213,35 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).toContain("INSIST");
   });
 
-  it("includes the session-end save protocol", () => {
+  it("teaches the continuous-mirror memory model (no approval-gated 'session end save' dance — refactor 2026-05-10)", () => {
+    // The PA prompt used to instruct the agent to ASK the user before
+    // pushing to Clio at session end. Real dogfood (testgame, three
+    // sessions, no PA-memory.md ever pushed) proved that gate was
+    // friction without protection — disk and Clio are both local files
+    // under ~/.cfcf-pa/ and ~/.cfcf/, mirroring is a wire concern not
+    // a content concern. Refactored to teach a continuous-mirror model:
+    // disk + Clio together, no approval needed for the local→Clio
+    // direction, asymmetric for Clio→local (still asks before clobber).
     const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory, clioActor: "product-architect|claude-code|opus" });
-    expect(out).toContain("Want me to save this session's work before you go?");
-    expect(out).toContain("ASK PROACTIVELY");
+    // The new model is named explicitly so the agent reads it.
+    expect(out).toContain("continuous mirror");
+    // The asymmetry is the load-bearing distinction — pin it.
+    expect(out).toContain("Clio→local pull asks");
+    expect(out).toContain("Local→Clio push is silent");
+    // Anti-regression: the old "ASK PROACTIVELY" framing should be
+    // GONE from the SESSION_END section. (`ASK PROACTIVELY` may still
+    // appear elsewhere — e.g. for git-init prompting — but not for
+    // memory writes.)
+    expect(out).not.toMatch(/Want me to \*\*sync this session to Clio\*\* before you go/);
+    expect(out).not.toContain("DO NOT silently sync without asking");
+  });
+
+  it("session-end behaviour describes 'all set' rather than asking 'did you save?'", () => {
+    const out = assembleProductArchitectPrompt({ state: baseState, memory: emptyMemory, clioActor: "product-architect|claude-code|opus" });
+    expect(out).toContain("All set. Disk + Clio are both up to date.");
+    // The lastSession-block courtesy note should still be present —
+    // it's not a save action, just metadata for the history entry.
+    expect(out).toContain("lastSession");
   });
 
   it("renders state assessment with workspace registration when registered", () => {

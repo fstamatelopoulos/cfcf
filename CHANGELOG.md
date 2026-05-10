@@ -9,6 +9,60 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Changed — Drop approval-gating + "session end" framing for PA + HA memory writes
+
+Real dogfood (testgame, three sessions, no `PA-memory.md` ever
+pushed) showed two interacting problems with the original
+agent-driven memory model:
+
+1. **Agent-side approval gate added friction without protection.**
+   PA's prompt said "DO NOT silently sync without asking — Memory
+   writes are user-impactful enough that an explicit acknowledgement
+   makes the user feel in control." But: Clio is a local SQLite
+   file under `~/.cfcf/`; the disk file at `<repo>/.cfcf-pa/` is
+   already there with the same content; pushing to Clio is
+   mirroring, not authorship. The user already accepted the content
+   when it landed on disk. The opt-out path (`clio.ingestPolicy =
+   "off"`) already exists for users who want to skip Clio entirely.
+2. **"Session end" was an unreliable trigger.** The agent has no
+   clean signal for "session end" — Ctrl-D, terminal close, and
+   process kill all bypass the agent's next turn. Asking the agent
+   to "save at session end" was asking it to detect something it
+   largely can't.
+
+**PA refactor**: rewrote three sections of the PA prompt to teach
+a **continuous-mirror** model:
+- Disk + Clio move in lockstep. Push every meaningful digest
+  update at the same cadence as disk writes; sha256 dedup makes
+  redundant calls free.
+- **Local→Clio direction is silent + automatic** (mirroring is a
+  wire concern, not a content concern).
+- **Clio→local direction still asks** — pulling Clio's version
+  could clobber local work-in-progress. Asymmetric rule.
+- "Session end save" deleted. The model says "all set, both up to
+  date" instead of asking "did you save?". Optional `lastSession`
+  block in `meta.json` for the workspace-history entry — courtesy
+  metadata, not a save action.
+- "did you save?" framing removed throughout.
+
+**HA refinement**: HA's pattern is different (sparse Q&A writes,
+no continuous disk file). But the same dogfood logic applies for
+**explicit** preference signals — "always TypeScript", "I prefer
+pytest", "skip the welcome message". Tightened "Always prompt
+the user before writing memory" to:
+- **Save silently** when the user's intent is unambiguous (explicit
+  preference signals + direct configuration requests)
+- **Ask first** when inferring (casual remarks, ambiguous scope)
+
+Iteration roles (dev / judge / architect / reflection / documenter)
+already had no approval-gating language — harness auto-ingests
+post-commit, agent isn't in the decision loop. No changes needed
+there.
+
+3 new tests pinning the new wording (PA: continuous-mirror model
++ "all set" session-end framing + asymmetric Clio/local rule;
+HA: explicit-vs-inferred asymmetry).
+
 ### Added — PA workspace-memory digest fallback (item 6.35 follow-up round 3)
 
 **Real dogfood gap surfaced**: testgame workspace, three PA sessions,

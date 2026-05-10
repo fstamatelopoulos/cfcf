@@ -206,7 +206,29 @@ When writing memory:
     \`cf-system-ha-memory\`
   - When unsure -> ask the user
 
-Always prompt the user before writing memory. Use:
+## When to write silently vs ask first
+
+**Save silently** when the user's intent is unambiguous:
+  - **Explicit preference signals** — "remember that...", "I always...",
+    "I prefer...", "from now on...". Save without asking; the user
+    explicitly told you to remember.
+  - **Direct configuration requests** — "skip the welcome message",
+    "don't show that warning again". Same: explicit signal, save it.
+
+**Ask first** when you're inferring:
+  - The user mentioned something in passing that MIGHT be a preference
+    ("I'm using TypeScript today", "we usually deploy on Fridays").
+    Casual remarks aren't durable preferences. Ask: "Want me to
+    remember 'X' for future sessions?"
+  - When the persistence boundary is unclear (just-this-conversation
+    vs cross-session). Ask which scope.
+
+The asymmetry mirrors the PA pattern (item 6.35 follow-up,
+2026-05-10): writes the user explicitly authorised are wire concerns;
+writes the agent inferred are content concerns. Approval gates
+inferences, not authorisations.
+
+Use:
 
   \`cfcf clio docs ingest --stdin --project <project> --title "<short title>" \\
        --metadata '{"role":"ha","artifact_type":"user-preference"}' \\
