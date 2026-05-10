@@ -46,6 +46,16 @@ export interface WorkspaceConfig {
   notifications?: NotificationConfig;
   /** Clio Project name this workspace ingests into (item 5.7). */
   clioProject?: string;
+  /**
+   * Which agent (if any) is actively running on this workspace right
+   * now. Computed server-side from the per-runner state stores; sent
+   * inline by the `/api/workspaces` list endpoint so the dashboard
+   * card can render an "<agent> running" chip without a per-card
+   * status fetch (item F.22, v0.24.0). Absent on the per-workspace
+   * detail endpoint where the dedicated state objects are fetched
+   * separately.
+   */
+  activeAgent?: "loop" | "review" | "document" | "reflect" | null;
 }
 
 // Keep in sync with packages/core/src/iteration-loop.ts

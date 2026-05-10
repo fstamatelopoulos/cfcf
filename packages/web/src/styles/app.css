@@ -402,6 +402,33 @@
   font-size: 1.125rem;
 }
 
+/* F.22 (v0.24): right-side container that groups the StatusBadge with
+   the secondary "<agent> running" chip so they sit side-by-side. */
+.project-card__status-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* F.22 (v0.24): chip rendered when an agent is actively running on the
+   workspace — particularly important for standalone Review / Document /
+   Reflect runs that don't update workspace.status. The pulse animation
+   makes "live activity" visible at a glance. */
+.project-card__active-chip {
+  font-size: var(--text-xs);
+  padding: 0.125rem 0.5rem;
+  background: color-mix(in srgb, var(--color-info) 20%, transparent);
+  color: var(--color-info);
+  border-radius: 12px;
+  font-weight: 500;
+  animation: cfcf-pulse 2s ease-in-out infinite;
+}
+
+@keyframes cfcf-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 1; }
+}
+
 .project-card__details {
   display: flex;
   justify-content: space-between;
