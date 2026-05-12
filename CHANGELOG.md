@@ -9,7 +9,74 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — F.21: History tab splits iteration rows into Dev + Judge
+
+Previously the History tab rendered each iteration as a single
+"Dev + Judge · iter N" row. That collapsed view hid three things:
+
+- **Judge adapter is invisible** — Agent column only shows
+  `event.devAgent`. If you run `dev: codex` + `judge: opus`, you
+  can't tell which adapter is which from a glance.
+- **Granular failures are ambiguous** — combined status reflects
+  judge's verdict, so a dev exit-non-zero on something the judge
+  graded `PROGRESS` looks like a single all-green row.
+- **Inconsistent with the live PhaseIndicator** — that bar already
+  separates the halves (prepare → dev → judge → reflect → decide →
+  document); the historical record now matches.
+
+**Implementation.** UI-only rendering split — no data model change.
+`WorkspaceHistory.tsx`'s top-level loop routes `iteration` events
+into a new `IterationRowPair` component that returns TWO `<tr>` from
+the same `IterationHistoryEvent`. Each row carries its own `expanded`
+state, its own targeted detail panel (`JudgeDetail` with `dev`-only
+or `judge`-only signals passed in), and its own log button. The
+backend still emits one `iteration` history event with both halves'
+data; the split is purely visual.
+
+**Per-half timestamps.** New optional `devCompletedAt?: string`
+field on `IterationHistoryEvent`. Recorded by `iteration-loop.ts`
+immediately after the dev agent exits, before the judge starts.
+Together with the existing `completedAt` (= judge / iteration
+completion), the History tab shows accurate per-half durations
+on each row. Backward compat: pre-F.21 events without
+`devCompletedAt` render the dev row's duration as "—" with a
+tooltip explaining the field wasn't tracked at the time.
+
+**Edge cases handled.** Each row reflects only its OWN half — same
+semantic as the live PhaseIndicator highlighting one phase at a
+time. The iteration's overall `event.status` is intentionally NOT
+mirrored to both rows; per-half exit codes + dev-completion
+ordering give the sharper picture:
+
+- **Dev executing, judge hasn't started:** dev row `running`
+  (blue), judge row `pending` (muted grey, duration "—"). Mirrors
+  PhaseIndicator's "dev is the active phase" state.
+- **Dev done, judge executing:** dev row `completed` (green), judge
+  row `running` (blue, duration counting from `devCompletedAt`).
+- **Dev failed → judge skipped:** dev row `failed` (red), judge row
+  `skipped` (muted grey, duration "—"). Reflects that the loop's
+  decision engine bails before spawning the judge.
+- **Both completed:** both rows green with their respective
+  durations.
+- **Pre-F.21 events without `devCompletedAt`:** dev row's duration
+  renders "—" with a tooltip; judge row's spans the whole event
+  window (the only data we have for legacy events). No migration;
+  old files read cleanly.
+
+**Visual grouping.** Subtle left-border band on both rows + a
+slightly muted top border on the dev row visually clusters the pair
+as one iteration unit. CSS-only; respects the existing token-based
+theming.
+
+**Tests.** 3 new core-side tests for `devCompletedAt` round-trip +
+update-flow + backward-compat (web component tests aren't part of
+the existing infrastructure; the existing 979-test suite continues
+to pass with the new field accepted on the event shape).
+
+No breaking changes. Auto-switch-to-dev-log behaviour in
+`WorkspaceDetail.tsx` (when a new iteration starts) is unchanged.
+
+## [0.24.0] -- 2026-05-12
 
 ## [0.24.0] -- 2026-05-12
 

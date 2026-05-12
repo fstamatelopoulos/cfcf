@@ -149,6 +149,10 @@ export interface LoopIterationRecord {
   branch: string;
   devExitCode?: number;
   devSignals?: DevSignals;
+  /** Dev-only completion timestamp (F.21, v0.24+). Persisted to the
+   *  history event as `devCompletedAt` so the History tab's separated
+   *  Dev / Judge rows can show per-half durations. */
+  devCompletedAt?: string;
   judgeExitCode?: number;
   judgeSignals?: JudgeSignals;
   judgeError?: string;
@@ -1539,6 +1543,12 @@ async function runLoop(
       unregisterDev();
     }
     iterRecord.devExitCode = devResult.exitCode;
+    // F.21 (v0.24+): mark dev completion BEFORE the judge starts so
+    // the History tab's separated Dev / Judge rows can show
+    // per-half durations. Pre-F.21 only the iteration's overall
+    // `completedAt` (= judge completion) was tracked; the dev
+    // row's duration fell back to "—".
+    iterRecord.devCompletedAt = new Date().toISOString();
 
     // Check if stopped during dev execution
     if (isStopped(state)) break;
@@ -1722,6 +1732,7 @@ async function runJudgeAndDecide(
   await updateHistoryEvent(workspace.id, iterRecord.historyEventId, {
     status: "completed",
     completedAt: iterCompletedAt,
+    devCompletedAt: iterRecord.devCompletedAt,
     devExitCode: iterRecord.devExitCode,
     judgeExitCode: iterRecord.judgeExitCode,
     judgeDetermination: judgeSignals?.determination,

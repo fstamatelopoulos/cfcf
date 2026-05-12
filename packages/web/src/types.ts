@@ -297,6 +297,15 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
   devSignals?: DevSignalsWeb;
   /** Full parsed judge signals (added in 0.6.0). */
   judgeSignals?: JudgeSignalsWeb;
+  /**
+   * Dev-only completion timestamp (F.21, v0.24+). `completedAt`
+   * (inherited from BaseHistoryEvent) is the JUDGE'S (= iteration's)
+   * completion time. Together they let the History tab show
+   * per-half durations on the separated Dev / Judge rows. Absent on
+   * iteration events written by pre-F.21 servers; the web falls
+   * back to "—" for the dev row's duration in that case.
+   */
+  devCompletedAt?: string;
 }
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {

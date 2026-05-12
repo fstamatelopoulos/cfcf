@@ -415,3 +415,103 @@ describe("cleanupStaleRunningEvents liveness probe (item 6.35 follow-up)", () =>
     expect(events[0].status).toBe("running");
   });
 });
+
+// ── F.21 (v0.24+): per-half timestamps on iteration events ─────────
+
+describe("IterationHistoryEvent.devCompletedAt persistence (F.21)", () => {
+  test("optional field round-trips through append + read", async () => {
+    const iter: IterationHistoryEvent = {
+      id: "iter-with-dev-completed",
+      type: "iteration",
+      status: "running",
+      startedAt: "2026-05-12T10:00:00.000Z",
+      logFile: "iteration-001-dev.log",
+      agent: "codex",
+      iteration: 1,
+      branch: "cfcf/iteration-1",
+      devLogFile: "iteration-001-dev.log",
+      judgeLogFile: "iteration-001-judge.log",
+      devAgent: "codex",
+      judgeAgent: "claude-code",
+      devCompletedAt: "2026-05-12T10:08:32.000Z",
+    };
+    await appendHistoryEvent(PROJECT_ID, iter);
+    const events = await readHistory(PROJECT_ID);
+    const e = events[0] as IterationHistoryEvent;
+    expect(e.devCompletedAt).toBe("2026-05-12T10:08:32.000Z");
+  });
+
+  test("survives updateHistoryEvent patch flow (F.21 wiring in iteration-loop)", async () => {
+    // Append a `running` iteration with no devCompletedAt (the loop
+    // doesn't know dev's completion time at append-time).
+    const iter: IterationHistoryEvent = {
+      id: "iter-update-flow",
+      type: "iteration",
+      status: "running",
+      startedAt: "2026-05-12T10:00:00.000Z",
+      logFile: "iter-2-dev.log",
+      agent: "codex",
+      iteration: 2,
+      branch: "cfcf/iteration-2",
+      devLogFile: "iter-2-dev.log",
+      judgeLogFile: "iter-2-judge.log",
+      devAgent: "codex",
+      judgeAgent: "codex",
+    };
+    await appendHistoryEvent(PROJECT_ID, iter);
+
+    // Iteration loop completes both halves → patches the event with
+    // both timestamps. Matches the call shape in iteration-loop.ts.
+    await updateHistoryEvent(PROJECT_ID, "iter-update-flow", {
+      status: "completed",
+      completedAt: "2026-05-12T10:15:00.000Z",
+      devCompletedAt: "2026-05-12T10:08:00.000Z",
+      devExitCode: 0,
+      judgeExitCode: 0,
+      judgeDetermination: "PROGRESS",
+      judgeQuality: 7,
+    } as Partial<IterationHistoryEvent>);
+
+    const events = await readHistory(PROJECT_ID);
+    const e = events[0] as IterationHistoryEvent;
+    expect(e.devCompletedAt).toBe("2026-05-12T10:08:00.000Z");
+    expect(e.completedAt).toBe("2026-05-12T10:15:00.000Z");
+    // Sanity: dev's window (start → devCompletedAt) is contained
+    // within the iteration window (start → completedAt).
+    expect(new Date(e.devCompletedAt!).getTime()).toBeLessThan(
+      new Date(e.completedAt!).getTime(),
+    );
+  });
+
+  test("backward compat: pre-F.21 events without devCompletedAt still parse", async () => {
+    // A legacy event from a pre-F.21 server: no devCompletedAt field
+    // at all. Should read back cleanly with the field undefined; the
+    // UI handles the absence by rendering "—" for the dev row's
+    // duration column.
+    const legacy: IterationHistoryEvent = {
+      id: "iter-legacy",
+      type: "iteration",
+      status: "completed",
+      startedAt: "2026-04-01T10:00:00.000Z",
+      completedAt: "2026-04-01T10:20:00.000Z",
+      logFile: "iter-1-dev.log",
+      agent: "codex",
+      iteration: 1,
+      branch: "cfcf/iteration-1",
+      devLogFile: "iter-1-dev.log",
+      judgeLogFile: "iter-1-judge.log",
+      devAgent: "codex",
+      judgeAgent: "codex",
+      devExitCode: 0,
+      judgeExitCode: 0,
+      judgeDetermination: "PROGRESS",
+      judgeQuality: 7,
+      // no devCompletedAt
+    };
+    await appendHistoryEvent(PROJECT_ID, legacy);
+    const events = await readHistory(PROJECT_ID);
+    const e = events[0] as IterationHistoryEvent;
+    expect(e.devCompletedAt).toBeUndefined();
+    expect(e.completedAt).toBe("2026-04-01T10:20:00.000Z");
+  });
+});
