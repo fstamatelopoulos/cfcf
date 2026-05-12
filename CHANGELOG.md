@@ -42,15 +42,26 @@ on each row. Backward compat: pre-F.21 events without
 `devCompletedAt` render the dev row's duration as "—" with a
 tooltip explaining the field wasn't tracked at the time.
 
-**Edge cases handled.**
+**Edge cases handled.** Each row reflects only its OWN half — same
+semantic as the live PhaseIndicator highlighting one phase at a
+time. The iteration's overall `event.status` is intentionally NOT
+mirrored to both rows; per-half exit codes + dev-completion
+ordering give the sharper picture:
 
-- Dev failed → judge never ran → judge row shows status `skipped`
-  (muted grey) with duration "—".
-- Iteration still running → both rows show `running`.
-- Old history.json files without `devCompletedAt` → dev row
-  duration "—", judge row duration spans the whole event (the only
-  data we have for legacy events). No migration; old files read
-  cleanly.
+- **Dev executing, judge hasn't started:** dev row `running`
+  (blue), judge row `pending` (muted grey, duration "—"). Mirrors
+  PhaseIndicator's "dev is the active phase" state.
+- **Dev done, judge executing:** dev row `completed` (green), judge
+  row `running` (blue, duration counting from `devCompletedAt`).
+- **Dev failed → judge skipped:** dev row `failed` (red), judge row
+  `skipped` (muted grey, duration "—"). Reflects that the loop's
+  decision engine bails before spawning the judge.
+- **Both completed:** both rows green with their respective
+  durations.
+- **Pre-F.21 events without `devCompletedAt`:** dev row's duration
+  renders "—" with a tooltip; judge row's spans the whole event
+  window (the only data we have for legacy events). No migration;
+  old files read cleanly.
 
 **Visual grouping.** Subtle left-border band on both rows + a
 slightly muted top border on the dev row visually clusters the pair

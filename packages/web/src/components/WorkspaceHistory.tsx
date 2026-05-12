@@ -15,6 +15,10 @@ import { JudgeDetail } from "./JudgeDetail";
 import { ReflectionDetail } from "./ReflectionDetail";
 import { PaSessionDetail } from "./PaSessionDetail";
 import { formatDurationOrRunning } from "../utils/time";
+import {
+  deriveDevRowStatus,
+  deriveJudgeRowStatus,
+} from "../utils/iteration-row-status";
 
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
@@ -475,24 +479,13 @@ function IterationRowPair({
   const [devExpanded, setDevExpanded] = useState(false);
   const [judgeExpanded, setJudgeExpanded] = useState(false);
 
-  // Per-half status derivation. Exit code 0 → completed; anything else
-  // → failed. If the iteration is still running, dev/judge phase
-  // hasn't started yet → render the overall event status (running).
-  // If dev failed, judge never ran → judge row shows "—" (not failed).
-  const devStatus: "running" | "completed" | "failed" =
-    event.devExitCode === undefined
-      ? event.status === "completed" ? "completed" : event.status
-      : event.devExitCode === 0
-        ? "completed"
-        : "failed";
-  const judgeStatus: "running" | "completed" | "failed" | "skipped" =
-    event.judgeExitCode === undefined
-      ? event.devExitCode !== undefined && event.devExitCode !== 0
-        ? "skipped" // dev failed, judge never ran
-        : event.status === "completed" ? "completed" : event.status
-      : event.judgeExitCode === 0
-        ? "completed"
-        : "failed";
+  // Per-half status — derived by the pure helper in
+  // `../utils/iteration-row-status` so the per-state matrix is
+  // unit-testable. Each row reflects only ITS half, matching how
+  // the live PhaseIndicator highlights exactly one of [prepare →
+  // dev → judge → reflect → decide] at a time.
+  const devStatus = deriveDevRowStatus(event);
+  const judgeStatus = deriveJudgeRowStatus(event);
 
   const devStatusColor =
     devStatus === "running"
@@ -505,7 +498,7 @@ function IterationRowPair({
       ? "var(--color-info)"
       : judgeStatus === "completed"
         ? "var(--color-success)"
-        : judgeStatus === "skipped"
+        : judgeStatus === "pending" || judgeStatus === "skipped"
           ? "var(--color-text-muted)"
           : "var(--color-error)";
 
@@ -518,11 +511,13 @@ function IterationRowPair({
       ? "—"
       : "running";
   // Judge duration: from devCompletedAt (judge's start, when available)
-  // to completedAt (judge's end = iteration end). Falls back to the
-  // whole-event window for old events.
+  // to completedAt (judge's end = iteration end). When the judge
+  // hasn't started yet (pending), render "—" — there's nothing to
+  // count. Falls back to the whole-event window for old events
+  // missing devCompletedAt.
   const judgeStart = event.devCompletedAt ?? event.startedAt;
   const judgeDuration =
-    judgeStatus === "skipped"
+    judgeStatus === "pending" || judgeStatus === "skipped"
       ? "—"
       : event.completedAt
         ? formatDurationOrRunning(judgeStart, event.completedAt)
