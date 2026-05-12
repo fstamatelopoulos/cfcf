@@ -13,7 +13,7 @@ _No changes yet._
 
 ## [0.24.1] -- 2026-05-12
 
-Patch release bundling five items since v0.24.0:
+Patch release bundling six items since v0.24.0:
 
 - **F.31** (new feature) — `MILESTONE_SUCCESS` judge determination +
   reflection override for milestone-phased `success.md` workflows.
@@ -32,8 +32,98 @@ Patch release bundling five items since v0.24.0:
   `updatedAt` time so docs that update in-place (decision-log,
   architect-review, plan.md) sort by their last activity instead of
   their original creation slot.
+- **PA memory discipline** — sharpened the Product Architect system
+  prompt around digest writes: digest-first ordering, testable write
+  trigger, supersession pattern with strikethrough + date, and a
+  turn-start self-check ritual. From dogfood feedback (gmbot PA had
+  been treating the digest as afterthought; missed updates).
 
-All five sections below.
+All six sections below.
+
+### Changed — PA memory discipline (digest-first, testable trigger, supersession, self-check)
+
+Dogfood feedback from running PA on the gmbot repo: the PA agent was
+treating the workspace digest (`workspace-summary.md` / `PA-memory.md`)
+as an afterthought to the session log, missed a handful of decisions
+between turns, and had no in-prompt rule for what to do when a fresh
+decision *contradicts* an earlier one. The PA system prompt is the
+load-bearing teaching surface — sharpened in four ways:
+
+**1. Digest-first ordering** (`### Digest` now leads, `### Session
+log` follows).
+
+The "When to write" section previously taught the session log first
+(append-only, durable scratchpad) then the digest (curated, what
+future sessions read). That ordering was backwards for what matters
+day-to-day — future PA sessions read the digest first, so the digest
+*is* the load-bearing artifact. Inverted: digest rules now lead, the
+session log section follows as the durability scratchpad behind it.
+
+**2. Sharpened, testable write trigger.**
+
+Previous trigger was judgment-call territory ("on major decision /
+preference / rejection"). New rule has four clauses, each testable:
+substantive edit to a Problem Pack file (`problem.md` / `success.md`
+/ `constraints.md` / `hints.md` / `style-guide.md`); a turn that
+contradicts or supersedes a prior decision; an expressed user
+preference; an explicit rejection. The trigger fires **BEFORE
+responding to the user** — making it a pre-response duty, not a
+post-hoc reflection.
+
+**3. Supersession pattern** (new section).
+
+When a fresh decision overrides an older one, the older bullet stays
+in the digest with `~~strikethrough~~` markdown + a dated
+`SUPERSEDED <YYYY-MM-DD>: see below` annotation, and the new bullet
+appears below. This preserves the *narrative* (a future reader sees
+not just the current state, but *what changed and why*) while making
+the active decision unambiguous. Without this rule, agents either
+silently overwrite (losing history) or stack contradictions (the
+gmbot failure mode).
+
+**4. Turn-start self-check ritual** (new section).
+
+Before generating the reply, scan the session log for entries
+appended since the last digest update. If **2+** have accumulated,
+flush them into the digest first. Names the threshold (`2+`) so the
+rule is testable rather than a vibe — and forces the check *before*
+the user-visible reply, not after.
+
+**Implementation** (`packages/core/src/product-architect/
+prompt-assembler.ts`):
+
+- Restructured the "When to write" section: `### Digest` block before
+  `### Session log` block.
+- Replaced the soft trigger with a four-clause testable rule under
+  `### Digest`. Each clause names the artifact + the user action.
+- New `### Supersession pattern` section, with an example block
+  using `~~old bullet~~` + `SUPERSEDED 2026-05-12: see below`.
+- New `### Turn-start self-check` section, with the `2+` threshold
+  named literally + the rule firing `BEFORE generating your reply`.
+
+**Test coverage** (4 new tests in `prompt-assembler.test.ts`, all 26
+tests pass):
+
+- `leads with the digest write rules, NOT the session log` — asserts
+  the `### Digest` header appears before the `### Session log` header
+  in prompt text.
+- `encodes a sharp testable digest-write trigger` — pins the
+  Problem Pack filenames + "BEFORE responding" + "contradicts or
+  supersedes" literals.
+- `teaches the supersession pattern with strikethrough + date` —
+  pins the `Supersession pattern` heading + the `SUPERSEDED` literal
+  + a `~~text~~` strikethrough example.
+- `mandates a turn-start self-check ritual` — pins the heading +
+  the `2+` threshold + the `BEFORE generating your reply` literal.
+
+**No code changes** outside the prompt template + its tests — this
+is a prompt-engineering change, not a behavioural change to cfcf
+itself. The companion **cfcf-side diagnostic** (a `pa-digest-
+staleness` warning surfaced via `cfcf doctor` / dashboard, that would
+flag when the disk session log has grown faster than the digest) was
+considered but deferred to its own backlog item — it's a different
+shape of change (config + diagnostic infrastructure) and shouldn't
+hold this patch release.
 
 ### Added — Memory Browse sort + show updated time
 

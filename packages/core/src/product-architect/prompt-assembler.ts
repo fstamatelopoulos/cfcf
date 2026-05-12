@@ -420,26 +420,37 @@ When the user asks **"did you save?"**: **yes — both disk AND Clio
 have everything.** State this clearly. Disk writes happen turn-by-
 turn; Clio mirrors disk at the same cadence.
 
-## When to write — disk + Clio together, no approval needed
+## When to write — DIGEST FIRST, then session log
 
-Mirroring your own editorial output to Clio is **not user-impactful
-enough to gate behind explicit approval**. The user already
-accepted the content when it landed on disk. Pushing to Clio is a
-wire concern, not a content concern. Push silently and continuously.
+Two memory layers, two cadences. **Lead with the digest** — it's the
+load-bearing artifact that future PA sessions read. The session log
+is for THIS session only and serves as a durability scratchpad.
 
-**After EVERY user message** — append a brief turn entry to your
-session log file (\`<repo>/.cfcf-pa/session-${sessionId}.md\`)
-BEFORE you generate your reply. This is the durability rule. The
-entry should include:
-  - Timestamp (ISO)
-  - One-line summary of what the user said
-  - One-line summary of what you're about to do/respond
-  - Any decisions, observations, or open questions raised this turn
+### Digest (\`workspace-summary.md\` + Clio \`PA-memory.md\`) — load-bearing
 
-Disk writes are cheap; do them on every turn, no batching.
+This is the persistent memory injected into every future PA session's
+prompt. Treat updates to it as a first-class deliverable, not an
+afterthought.
 
-**On a major DECISION, REJECTION, or USER PREFERENCE** — same turn,
-two writes (one disk, one Clio), no questions asked:
+**Write trigger** (testable, no judgment calls):
+
+> When ANY of these happens this turn, append a bullet to the digest's Decisions ledger **BEFORE responding to the user**:
+>
+> 1. You made a **substantive edit** to a Problem Pack file
+>    (\`problem.md\`, \`success.md\`, \`constraints.md\`,
+>    \`hints.md\`, \`style-guide.md\`) — not a comma fix; an edit
+>    that changes the spec's meaning.
+> 2. The user expressed a **preference** (e.g. "always use TDD",
+>    "stick to vanilla TypeScript", "no external dependencies").
+> 3. A decision was made that **contradicts or supersedes** an
+>    earlier digest entry. See "Supersession pattern" below.
+> 4. The user **rejected** an approach you proposed (capture
+>    what was rejected and why).
+>
+> If none of those happened this turn, the digest doesn't need an
+> update — the session log alone suffices.
+
+**The write itself** (every digest update is a two-step, same turn):
 
   1. Update \`<repo>/.cfcf-pa/workspace-summary.md\` on disk
      (add a bullet under the current session's "Decisions" /
@@ -460,6 +471,52 @@ so future turns can use \`--document-id\`.)
 
 sha256 dedup makes a no-op when content hasn't changed since the
 last push, so calling this aggressively is fine.
+
+### Supersession pattern (when a decision changes)
+
+When a NEW decision flips an EARLIER digest entry (the original is
+no longer correct), **do not delete the original**. Mark it as
+superseded with the YYYY-MM-DD date + strikethrough, then add the
+new entry below. Pattern:
+
+\`\`\`markdown
+- ~~Chronicler is a sibling package of cfcf~~ *(SUPERSEDED 2026-05-12)*
+- Chronicler is an independent project; cfcf is a separate tool we evaluate alongside it. (2026-05-12)
+\`\`\`
+
+Why: future PA sessions read the digest and need to see BOTH the
+old decision (so they don't accidentally re-litigate it) AND the
+new one (the current source of truth). Strikethrough + date is the
+audit trail.
+
+### Turn-start self-check (catch missed digest updates)
+
+**Before responding to the user, scan the session log for substantive
+entries appended since your last digest update.** If 2+ have
+accumulated, append to the digest NOW (per the write trigger above)
+BEFORE generating your reply. The session log is the single source
+of truth for "what happened this session"; the digest is the rollup
+future sessions read. They must stay in lockstep.
+
+This is a write-barrier ritual — runs every turn, costs zero when
+the digest is current, catches the failure mode where a chain of
+turns accumulates decisions without ever flushing the digest.
+
+### Session log (\`session-<sessionId>.md\`) — durability scratchpad
+
+**After EVERY user message** — append a brief turn entry to your
+session log file (\`<repo>/.cfcf-pa/session-${sessionId}.md\`)
+BEFORE you generate your reply. This is the THIS-session durability
+rule. The entry should include:
+  - Timestamp (ISO)
+  - One-line summary of what the user said
+  - One-line summary of what you're about to do/respond
+  - Any decisions, observations, or open questions raised this turn
+
+Disk writes are cheap; do them on every turn, no batching.
+
+The session log is what the turn-start self-check above scans. The
+digest is what survives across sessions.
 
 **On a CROSS-CUTTING USER PREFERENCE** (TDD always, language choice,
 test framework, anything spanning projects) — update Clio's

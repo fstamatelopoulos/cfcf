@@ -297,4 +297,70 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).not.toContain("AGENTS.md auto-load");
     expect(out).not.toContain("sentinel-marked briefing");
   });
+
+  // --- v0.24.1 PA-memory-discipline refresh (dogfood feedback) ---
+
+  it("leads with the digest write rules, NOT the session log (v0.24.1)", () => {
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    // The "When to write" section now leads with the digest
+    // (workspace-summary.md / PA-memory.md) — the load-bearing
+    // artifact that future sessions read — and the session log
+    // appears AFTER it as a durability scratchpad. This is the
+    // ordering inversion from the gmbot dogfood feedback (digest
+    // had been treated as afterthought; PA missed updates).
+    const digestHeader = out.indexOf("### Digest (");
+    const sessionLogHeader = out.indexOf("### Session log");
+    expect(digestHeader).toBeGreaterThan(0);
+    expect(sessionLogHeader).toBeGreaterThan(0);
+    expect(digestHeader).toBeLessThan(sessionLogHeader);
+  });
+
+  it("encodes a sharp testable digest-write trigger (v0.24.1)", () => {
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    // The trigger is no longer "on major decision/rejection/preference"
+    // (judgment call). It's now a four-clause testable rule that
+    // names the Problem Pack files explicitly + supersession +
+    // preference + rejection.
+    expect(out).toMatch(/substantive edit.+Problem Pack/i);
+    expect(out).toMatch(/problem\.md.+success\.md.+constraints\.md/);
+    expect(out).toContain("BEFORE responding");
+    expect(out).toContain("contradicts or supersedes");
+  });
+
+  it("teaches the supersession pattern with strikethrough + date (v0.24.1)", () => {
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    // The Supersession pattern section is mandatory teaching now —
+    // include the SUPERSEDED literal + an example bullet.
+    expect(out).toContain("Supersession pattern");
+    expect(out).toContain("SUPERSEDED");
+    // Strikethrough markdown (~~text~~) example.
+    expect(out).toMatch(/~~[^~]+~~/);
+  });
+
+  it("mandates a turn-start self-check ritual (v0.24.1)", () => {
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    // The pre-response ritual: scan the session log for entries
+    // since the last digest update; flush to the digest if 2+
+    // have accumulated. Names the threshold so it's a testable
+    // rule, not a vibe.
+    expect(out).toContain("Turn-start self-check");
+    expect(out).toContain("2+"); // explicit threshold appears literally
+    expect(out).toContain("BEFORE generating your reply");
+  });
 });
