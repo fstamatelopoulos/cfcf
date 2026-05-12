@@ -953,14 +953,16 @@
 
 /* F.21 (v0.24+): split iteration events into Dev + Judge rows. A
    subtle left-border band on both rows visually groups them as one
-   iteration unit. Dev row gets a slightly muted top border separator;
-   judge row carries the same band so the eye reads "these two go
+   iteration unit. The JUDGE row is the top of the pair (judge runs
+   AFTER dev = newer in the newest-first list, so judge appears
+   above dev). Judge gets a slightly muted top border separator;
+   dev row carries the same band so the eye reads "these two go
    together". */
 .project-history__row--iteration-dev,
 .project-history__row--iteration-judge {
   border-left: 3px solid var(--color-border-subtle, color-mix(in srgb, var(--color-text-muted) 30%, transparent));
 }
-.project-history__row--iteration-dev {
+.project-history__row--iteration-judge {
   /* Top of the iteration pair — slight top border so it visually
      separates from whatever preceded it (review / reflect / other
      iteration). */

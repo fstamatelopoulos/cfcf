@@ -645,47 +645,23 @@ function IterationRowPair({
 
   return (
     <>
-      {/* Dev row */}
-      <tr className="project-history__row project-history__row--iteration-dev">
-        <td className="project-history__time">{formatTime(event.startedAt)}</td>
-        <td>Dev · iter {event.iteration}</td>
-        <td className="project-history__agent">
-          {event.devAgent}
-          {event.model && event.devAgent === event.agent && `:${event.model}`}
-        </td>
-        <td>
-          <span style={{ color: devStatusColor }}>{devStatus}</span>
-        </td>
-        <td>{devResultCell}</td>
-        <td title={event.devCompletedAt ? undefined : "Pre-F.21 event — per-half duration not tracked. The whole iteration duration is on the Judge row."}>{devDuration}</td>
-        <td className="project-history__actions">
-          <button
-            className="btn btn--small btn--secondary"
-            onClick={() =>
-              onSelectLog({
-                workspaceId,
-                logFile: event.devLogFile,
-                label: `Iteration ${event.iteration} (dev)`,
-              })
-            }
-          >
-            dev
-          </button>
-        </td>
-      </tr>
-      {/* Dev expanded detail */}
-      {devExpanded && hasDevSignals && (
-        <tr className="project-history__detail-row">
-          <td colSpan={7}>
-            <JudgeDetail
-              dev={event.devSignals}
-              judge={undefined}
-              meta={{ branch: event.branch }}
-            />
-          </td>
-        </tr>
-      )}
-      {/* Judge row */}
+      {/*
+        Within an iteration: judge ran AFTER dev, so judge is "newer".
+        The list sorts newest-first across iterations; ordering judge
+        before dev within an iteration keeps the same newest-first
+        invariant all the way through. Reading top-to-bottom you see:
+          Judge iter N (latest activity)
+          Dev iter N
+          Judge iter (N-1)
+          Dev iter (N-1)
+          ...
+        Pre-v0.24.x the order was dev-then-judge (chronological within
+        iter), which violated the list's newest-first rule + read
+        inconsistently next to the cross-iteration ordering. User
+        feedback caught this; fixed by swapping the JSX order +
+        keeping each row's expanded-detail panel adjacent to its row.
+      */}
+      {/* Judge row (newer — listed first) */}
       <tr className="project-history__row project-history__row--iteration-judge">
         <td className="project-history__time">
           {/* Judge starts when dev completes — use that as its
@@ -729,6 +705,46 @@ function IterationRowPair({
             <JudgeDetail
               judge={event.judgeSignals}
               dev={undefined}
+              meta={{ branch: event.branch }}
+            />
+          </td>
+        </tr>
+      )}
+      {/* Dev row (older — listed second) */}
+      <tr className="project-history__row project-history__row--iteration-dev">
+        <td className="project-history__time">{formatTime(event.startedAt)}</td>
+        <td>Dev · iter {event.iteration}</td>
+        <td className="project-history__agent">
+          {event.devAgent}
+          {event.model && event.devAgent === event.agent && `:${event.model}`}
+        </td>
+        <td>
+          <span style={{ color: devStatusColor }}>{devStatus}</span>
+        </td>
+        <td>{devResultCell}</td>
+        <td title={event.devCompletedAt ? undefined : "Pre-F.21 event — per-half duration not tracked. The whole iteration duration is on the Judge row."}>{devDuration}</td>
+        <td className="project-history__actions">
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() =>
+              onSelectLog({
+                workspaceId,
+                logFile: event.devLogFile,
+                label: `Iteration ${event.iteration} (dev)`,
+              })
+            }
+          >
+            dev
+          </button>
+        </td>
+      </tr>
+      {/* Dev expanded detail */}
+      {devExpanded && hasDevSignals && (
+        <tr className="project-history__detail-row">
+          <td colSpan={7}>
+            <JudgeDetail
+              dev={event.devSignals}
+              judge={undefined}
               meta={{ branch: event.branch }}
             />
           </td>
