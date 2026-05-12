@@ -404,7 +404,17 @@ function HistoryRow({
                 })
               }
             >
-              log
+              {/* Role-specific button label so the History tab's
+                  log column is uniformly labelled by ROLE — matching
+                  the iteration row's "dev" / "judge" buttons. F.21
+                  follow-up (2026-05-12). */}
+              {event.type === "review"
+                ? "architect"
+                : event.type === "document"
+                  ? "documenter"
+                  : event.type === "reflection"
+                    ? "reflection"
+                    : "log"}
             </button>
           ) : (
             <span style={{ color: "var(--color-text-muted)" }}>—</span>
