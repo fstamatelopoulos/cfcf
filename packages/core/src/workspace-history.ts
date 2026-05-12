@@ -213,6 +213,22 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
    * what state PA started from.
    */
   problemPackFilesAtStart: number;
+  /**
+   * PID of the launcher process (the `cfcf spec` invocation that
+   * spawned the agent). Used by `reconcileStalePaSessions` at boot
+   * time to do a precise liveness check via `kill -0 <pid>` instead
+   * of the file-mtime heuristic — which false-positived on idle
+   * interactive sessions (user thinking / AFK / reading) longer than
+   * the staleness threshold. Added in v0.24.0 (F.28). Absent on
+   * sessions started before v0.24.0; reconcile falls back to the
+   * mtime check in that case. Note: PID is only meaningful on the
+   * machine the session ran on — that's always the user's local
+   * machine, so the check is local. The launcher's `finally` block
+   * still updates status to `completed`/`failed`; this field is
+   * defensive coverage for the cases the finally block doesn't run
+   * (parent-shell SIGINT, OS panic, server hard-crash).
+   */
+  launcherPid?: number;
 }
 
 /**

@@ -11,9 +11,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
-## [0.24.0] -- 2026-05-10
+## [0.24.0] -- 2026-05-11
 
-Seven-phase release packaging up the v0.23.1 dogfood follow-ups: full
+Eight-phase release packaging up the v0.23.1 dogfood follow-ups: full
 status-tracking symmetry across all four agent surfaces (loop /
 review / document / reflect), Clio storage rationalisation that drops
 ~20% of fragmented per-iteration docs to single growing artifacts,
@@ -136,6 +136,43 @@ brings Reflect to parity.
   silently buried — only `loopState.error` rendered, and the next
   standalone run replaced the in-memory state, hiding the prior
   failure.
+
+### Fixed — F.28: PA boot-reconcile false-positive for idle live sessions
+
+Surfaced when the user reinstalled cfcf locally and restarted the
+server during an active PA session (no loop running). The new
+boot's PA boot-reconcile pass flagged the live session as
+`failed` with `"Process detection lost — launcher didn't
+finalise this session before exiting (likely SIGINT to the
+parent shell, server crash, or OS panic)"` even though the
+launcher (running in the user's parent terminal) was still
+very much alive.
+
+**Root cause.** The reconcile's staleness check was
+**session-log mtime > 5 minutes**. PA is interactive — the
+user can read, think, AFK, switch contexts — for arbitrary
+durations with zero log writes. A 5-min quiet window during a
+server restart is well within the false-positive zone.
+
+**Fix.** Record the launcher's PID on the PA history event at
+session start (`PaSessionHistoryEvent.launcherPid: number`).
+On reconcile, do a precise `process.kill(pid, 0)` liveness
+check:
+- `ESRCH` (no such process) → launcher gone, mark stale.
+- `EPERM` (process exists, owned by another user) → still
+  alive, just not ours; treat as live.
+- Success → alive, leave running.
+
+PID-based check is precise because PA always runs on the
+user's local machine alongside the server. Falls back to the
+original mtime heuristic when `launcherPid` is absent
+(backward compat for events written by pre-v0.24 launchers).
+
+4 new tests in `boot-reconcile.test.ts`:
+- live PID + stale mtime → leave running (overrides mtime)
+- dead PID + fresh mtime → flip to failed (PID is authoritative)
+- no PID + fresh mtime → fall through to mtime check, leave alone
+- no PID + stale mtime → fall through to mtime check, flip
 
 ### Added — F.27: auto-ingest `<repo>/context-pack/` user-supplied reference docs
 

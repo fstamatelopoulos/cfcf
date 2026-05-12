@@ -346,6 +346,8 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
   workspaceRegisteredAtStart: boolean;
   gitInitializedAtStart: boolean;
   problemPackFilesAtStart: number;
+  /** PA launcher PID — used server-side for boot-time liveness checks (F.28, v0.24). */
+  launcherPid?: number;
 }
 
 /**

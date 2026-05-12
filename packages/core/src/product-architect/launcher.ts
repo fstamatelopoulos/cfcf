@@ -277,6 +277,13 @@ export async function launchProductArchitect(opts: LaunchOptions): Promise<Launc
     workspaceRegisteredAtStart: opts.state.workspace.registered,
     gitInitializedAtStart: opts.state.git.isGitRepo,
     problemPackFilesAtStart,
+    // F.28 (v0.24): record the launcher's own PID so the server's
+    // boot-time reconcile pass can do a precise liveness check
+    // (`kill -0 <pid>`) instead of the file-mtime heuristic — which
+    // was flagging idle interactive sessions (user reading / AFK)
+    // as "process detection lost" after a server restart that
+    // happened to coincide with a quiet 5-min window.
+    launcherPid: process.pid,
   };
 
   let historyEventId: string | null = null;

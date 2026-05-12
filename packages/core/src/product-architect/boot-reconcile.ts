@@ -123,16 +123,47 @@ export async function reconcileStalePaSessions(opts: {
 
       const paEvent = ev as PaSessionHistoryEvent;
       const sessionFile = join(ws.repoPath, paEvent.sessionFilePath);
-      let sessionMtimeMs: number | null = null;
-      try {
-        const st = await stat(sessionFile);
-        sessionMtimeMs = st.mtimeMs;
-      } catch { /* file missing → still treat the event as stale */ }
 
-      // Live? mtime within the threshold means a turn-by-turn writer
-      // is alive — leave the event untouched.
-      if (sessionMtimeMs !== null && now - sessionMtimeMs < staleAfterMs) {
-        continue;
+      // F.28 (v0.24): if the event has a `launcherPid` recorded (PA
+      // sessions started by v0.24+), use `process.kill(pid, 0)` as the
+      // primary liveness check. The signal-0 sends nothing but throws
+      // ESRCH if the PID doesn't exist (process dead or never existed)
+      // and EPERM if it exists but is owned by another user (alive,
+      // not ours). Both "alive" outcomes mean: leave the event running.
+      //
+      // PID-based check is precise: PA is interactive, the user may
+      // read / think / step away for arbitrary durations with no log
+      // writes, so the older mtime-based heuristic false-positived
+      // idle-but-live sessions (real dogfood: user with a 1h+ session
+      // open while testing local-install + server restart).
+      if (typeof paEvent.launcherPid === "number") {
+        let launcherAlive = false;
+        try {
+          process.kill(paEvent.launcherPid, 0);
+          launcherAlive = true;
+        } catch (err) {
+          const e = err as NodeJS.ErrnoException;
+          if (e.code === "EPERM") {
+            // Process exists but owned by another user — still alive,
+            // just not ours to signal. Treat as live (safer than a
+            // false flip to failed).
+            launcherAlive = true;
+          }
+          // ESRCH (no such process) → launcherAlive stays false →
+          // fall through to mark stale.
+        }
+        if (launcherAlive) continue;
+      } else {
+        // Backward-compat fallback for events written pre-v0.24
+        // (no launcherPid field). Use the original mtime heuristic.
+        let sessionMtimeMs: number | null = null;
+        try {
+          const st = await stat(sessionFile);
+          sessionMtimeMs = st.mtimeMs;
+        } catch { /* file missing → still treat the event as stale */ }
+        if (sessionMtimeMs !== null && now - sessionMtimeMs < staleAfterMs) {
+          continue;
+        }
       }
 
       result.staleEvents++;
