@@ -432,23 +432,32 @@ This is the persistent memory injected into every future PA session's
 prompt. Treat updates to it as a first-class deliverable, not an
 afterthought.
 
-**Write trigger** (testable, no judgment calls):
+**Write trigger** (lock-step with the per-turn session-log rule):
 
-> When ANY of these happens this turn, append a bullet to the digest's Decisions ledger **BEFORE responding to the user**:
->
-> 1. You made a **substantive edit** to a Problem Pack file
->    (\`problem.md\`, \`success.md\`, \`constraints.md\`,
->    \`hints.md\`, \`style-guide.md\`) — not a comma fix; an edit
->    that changes the spec's meaning.
-> 2. The user expressed a **preference** (e.g. "always use TDD",
->    "stick to vanilla TypeScript", "no external dependencies").
-> 3. A decision was made that **contradicts or supersedes** an
->    earlier digest entry. See "Supersession pattern" below.
-> 4. The user **rejected** an approach you proposed (capture
->    what was rejected and why).
->
-> If none of those happened this turn, the digest doesn't need an
-> update — the session log alone suffices.
+> **After every substantive edit to a Problem Pack file, append a
+> Decisions bullet to the digest in the same turn — same hard discipline
+> as the per-turn session-log rule.** A Problem Pack edit without a
+> matching digest bullet is incomplete work — write the bullet
+> **BEFORE responding to the user**.
+
+The Problem Pack files this rule covers: \`problem.md\`,
+\`success.md\`, \`constraints.md\`, \`hints.md\`, \`style-guide.md\`.
+"Substantive" = the change alters the spec's meaning. Comma fixes
+and reflow don't count; a new constraint, a flipped success
+criterion, or a hint that reframes the problem do.
+
+Additional triggers (same discipline, even without a Problem Pack
+edit this turn):
+
+  - The user expressed a **preference** (e.g. "always use TDD",
+    "stick to vanilla TypeScript", "no external dependencies").
+  - A decision was made that **contradicts or supersedes** an
+    earlier digest entry. See "Supersession pattern" below.
+  - The user **rejected** an approach you proposed — capture what
+    was rejected and why.
+
+If none of those happened this turn, the digest doesn't need an
+update — the session log alone suffices.
 
 **The write itself** (every digest update is a two-step, same turn):
 
@@ -491,16 +500,28 @@ audit trail.
 
 ### Turn-start self-check (catch missed digest updates)
 
-**Before responding to the user, scan the session log for substantive
-entries appended since your last digest update.** If 2+ have
-accumulated, append to the digest NOW (per the write trigger above)
-BEFORE generating your reply. The session log is the single source
-of truth for "what happened this session"; the digest is the rollup
-future sessions read. They must stay in lockstep.
+**Before responding to the user, run a write-barrier check on disk:**
 
-This is a write-barrier ritual — runs every turn, costs zero when
-the digest is current, catches the failure mode where a chain of
-turns accumulates decisions without ever flushing the digest.
+  1. \`stat\` (or \`ls -lT\` on macOS) \`<repo>/.cfcf-pa/workspace-summary.md\`
+  2. \`stat\` \`<repo>/.cfcf-pa/session-${sessionId}.md\`
+  3. If the session log mtime is **newer** than the digest mtime
+     AND the gap represents **2+ turns** of content (use file
+     size or your own count of how many user turns passed since
+     the last digest update), do a **catch-up pass**: flush
+     accumulated decisions into the digest (per the write
+     trigger above) BEFORE generating your reply.
+
+This is a file-mtime comparison, not a vibe check. The two files
+are co-located under \`<repo>/.cfcf-pa/\` and you have shell
+access — do the \`stat\` rather than guess.
+
+The session log is the single source of truth for "what happened
+this session"; the digest is the rollup future sessions read. They
+must stay in lockstep.
+
+Write-barrier ritual: runs every turn, costs zero when the digest
+is current, catches the failure mode where a chain of turns
+accumulates decisions without ever flushing the digest.
 
 ### Session log (\`session-<sessionId>.md\`) — durability scratchpad
 
