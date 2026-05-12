@@ -98,6 +98,35 @@ milestone) + `makeDecision` MILESTONE routing (continue not stop,
 empty-note lenient, reflection-override of judge SUCCESS,
 reflection-recommend-stop agreement). 1006 total tests passing.
 
+### Fixed — F.21 follow-up: judge row appears above dev row within iter
+
+The F.21 split (released in v0.24.0) put Dev row above Judge row
+within each iteration. User caught the inconsistency during dogfood
+of the F.31 build: the History list sorts events newest-first
+ACROSS iterations (iter N above iter N-1), but the per-iter pair
+inverted the same rule — dev ran FIRST = older = should appear
+LOWER in a newest-first list.
+
+**Fix**: swap the JSX order in `IterationRowPair` so judge row
+appears above dev row within each iteration. Reading top-to-bottom
+now gives strict newest-first ordering all the way through:
+
+```
+Judge iter N      ← latest activity, top
+Dev iter N
+Judge iter (N-1)
+Dev iter (N-1)
+...
+```
+
+Each row's expanded-detail panel stays adjacent to its row. CSS
+iteration-pair top-border separator moved from the dev row (the
+old top) to the judge row (the new top) so the visual grouping
+still reads correctly.
+
+Bundled with the F.31 PR since it's a small UI fix on the same
+History surface; no data-model or test change.
+
 ### Added — F.21: History tab splits iteration rows into Dev + Judge
 
 Previously the History tab rendered each iteration as a single
