@@ -9,6 +9,24 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.24.1] -- 2026-05-12
+
+Patch release bundling three items merged in PRs #46 and #47 since
+v0.24.0:
+
+- **F.31** (new feature) — `MILESTONE_SUCCESS` judge determination +
+  reflection override for milestone-phased `success.md` workflows.
+  Solves the gmbot premature-termination scenario.
+- **F.21** (new feature) — History tab splits iteration rows into
+  separate Dev + Judge sibling rows. Surfaces judge adapter, granular
+  per-half status, and per-half durations.
+- **F.21 follow-up fix** — judge row appears ABOVE dev row within
+  each iteration (newest-first ordering, caught during F.31 dogfood).
+
+All three sections below.
+
 ### Added — F.31: `MILESTONE_SUCCESS` judge determination + reflection override
 
 **Motivation.** Real dogfood (gmbot): user wrote `success.md` with
