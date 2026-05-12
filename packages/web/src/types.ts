@@ -46,6 +46,16 @@ export interface WorkspaceConfig {
   notifications?: NotificationConfig;
   /** Clio Project name this workspace ingests into (item 5.7). */
   clioProject?: string;
+  /**
+   * Which agent (if any) is actively running on this workspace right
+   * now. Computed server-side from the per-runner state stores; sent
+   * inline by the `/api/workspaces` list endpoint so the dashboard
+   * card can render an "<agent> running" chip without a per-card
+   * status fetch (item F.22, v0.24.0). Absent on the per-workspace
+   * detail endpoint where the dedicated state objects are fetched
+   * separately.
+   */
+  activeAgent?: "loop" | "review" | "document" | "reflect" | null;
 }
 
 // Keep in sync with packages/core/src/iteration-loop.ts
@@ -261,6 +271,13 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
   signals?: ArchitectSignals;
   /** Added in 0.7.2: `"loop"` = pre-loop review phase; `"manual"` = user-invoked. */
   trigger?: "loop" | "manual";
+  /**
+   * Whether the standalone (`trigger: "manual"`) review committed its
+   * on-disk outputs to the current branch. Set by architect-runner.ts
+   * since v0.24 (F.1). Absent / undefined on in-loop pre-loop review
+   * events — those commit via the iteration-loop driver itself.
+   */
+  committed?: boolean;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {
@@ -299,6 +316,14 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   /** Reason the non-destructive validator rejected a rewrite (added in 0.6.0). */
   planRejectionReason?: string;
   exitCode?: number;
+  /**
+   * Whether the standalone (`trigger: "manual"`) reflection committed
+   * its on-disk outputs to the current branch. Set by reflection-
+   * runner.ts since v0.24 (F.1). Absent / undefined on in-loop
+   * reflection events — those commit via the iteration-loop driver
+   * itself.
+   */
+  committed?: boolean;
 }
 
 /**
@@ -321,6 +346,8 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
   workspaceRegisteredAtStart: boolean;
   gitInitializedAtStart: boolean;
   problemPackFilesAtStart: number;
+  /** PA launcher PID — used server-side for boot-time liveness checks (F.28, v0.24). */
+  launcherPid?: number;
 }
 
 /**

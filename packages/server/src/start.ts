@@ -30,6 +30,9 @@ import {
   refreshOllamaModelsInConfig,
   refreshAugmentedOverrides,
   reconcileStalePaSessions,
+  hydrateReviewStateStore,
+  hydrateDocumentStateStore,
+  hydrateReflectStateStore,
 } from "@cfcf/core";
 import { closeClioBackend } from "./clio-backend.js";
 
@@ -182,6 +185,36 @@ export async function startServer(port: number): Promise<ReturnType<typeof Bun.s
   );
   if (staleLoopCount > 0) {
     console.log(`[boot] Marked ${staleLoopCount} stale active loop(s) as failed (pid=${process.pid})`);
+  }
+
+  // F.23 (v0.24): hydrate the per-runner state stores from disk +
+  // mark any still-active state from the prior server as failed. The
+  // history-event cleanup above + the loop-state cleanup catch the
+  // narrative-state surfaces; these three catch the per-runner
+  // operational state that was previously in-memory-only.
+  try {
+    const reviewCleaned = await hydrateReviewStateStore();
+    if (reviewCleaned > 0) {
+      console.log(`[boot] Marked ${reviewCleaned} stale review state(s) as failed (pid=${process.pid})`);
+    }
+  } catch (err) {
+    console.warn(`[boot] hydrateReviewStateStore failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    const documentCleaned = await hydrateDocumentStateStore();
+    if (documentCleaned > 0) {
+      console.log(`[boot] Marked ${documentCleaned} stale document state(s) as failed (pid=${process.pid})`);
+    }
+  } catch (err) {
+    console.warn(`[boot] hydrateDocumentStateStore failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    const reflectCleaned = await hydrateReflectStateStore();
+    if (reflectCleaned > 0) {
+      console.log(`[boot] Marked ${reflectCleaned} stale reflect state(s) as failed (pid=${process.pid})`);
+    }
+  } catch (err) {
+    console.warn(`[boot] hydrateReflectStateStore failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Re-compose any promoted "augmented" role-template overrides

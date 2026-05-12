@@ -35,6 +35,7 @@ import {
   getWorkspaceLogDir,
 } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
+import { persistAgentState, loadAgentState } from "./agent-state-store.js";
 import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import * as gitManager from "./git-manager.js";
@@ -81,8 +82,51 @@ export interface ReflectState {
 const reflectStore = new Map<string, ReflectState>();
 const reflectProcessStore = new Map<string, ManagedProcess>();
 
+/**
+ * Disk-backed store filename + active-status set (item F.23, v0.24).
+ * Same shape as architect-runner / documenter-runner.
+ */
+const REFLECT_STATE_FILE = "reflect-state.json";
+const REFLECT_ACTIVE_STATUSES = new Set(["preparing", "executing", "collecting"]);
+
+async function setReflectState(state: ReflectState): Promise<void> {
+  reflectStore.set(state.workspaceId, state);
+  try {
+    await persistAgentState(REFLECT_STATE_FILE, state);
+  } catch (err) {
+    console.warn(
+      `[reflection-runner] persistAgentState failed for ${state.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function getReflectState(workspaceId: string): ReflectState | undefined {
   return reflectStore.get(workspaceId);
+}
+
+/**
+ * Server-boot hook (item F.23): hydrate the in-memory cache from disk
+ * and clean up any state still claiming to be active.
+ */
+export async function hydrateReflectStateStore(
+  staleReason: string = "Server restarted while reflection was running",
+): Promise<number> {
+  const { listWorkspaces } = await import("./workspaces.js");
+  const workspaces = await listWorkspaces();
+  let cleaned = 0;
+  for (const w of workspaces) {
+    const state = await loadAgentState<ReflectState>(REFLECT_STATE_FILE, w.id);
+    if (!state) continue;
+    if (REFLECT_ACTIVE_STATUSES.has(state.status)) {
+      state.status = "failed";
+      state.error = staleReason;
+      state.completedAt = new Date().toISOString();
+      await persistAgentState(REFLECT_STATE_FILE, state).catch(() => {});
+      cleaned++;
+    }
+    reflectStore.set(w.id, state);
+  }
+  return cleaned;
 }
 
 // --- Template helpers ---
@@ -319,13 +363,14 @@ export async function startReflection(
     iteration,
     trigger: "manual",
   };
-  reflectStore.set(workspace.id, state);
+  await setReflectState(state);
 
   runReflectionAsync(workspace, state, opts).catch(async (err) => {
     try {
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
+      await setReflectState(state);
       await updateHistoryEvent(workspace.id, historyEventId, {
         status: "failed",
         error: state.error,
@@ -366,6 +411,7 @@ export async function stopReflection(workspaceId: string): Promise<ReflectState 
   state.status = "failed";
   state.error = "Stopped by user";
   state.completedAt = new Date().toISOString();
+  await setReflectState(state);
   await updateHistoryEvent(workspaceId, state.historyEventId, {
     status: "failed",
     error: "Stopped by user",
@@ -390,6 +436,7 @@ async function runReflectionAsync(
   await writeReflectionContext(workspace.repoPath, workspace.id, state.iteration);
 
   state.status = "executing";
+  await setReflectState(state);
 
   const focusHint = opts?.prompt
     ? ` The user has supplied this focus hint: "${opts.prompt.replace(/"/g, '\\"')}". Weigh it against the cross-iteration evidence; it is advisory, not binding.`
@@ -426,10 +473,48 @@ async function runReflectionAsync(
     if ((state.status as string) === "failed") return; // externally stopped
 
     state.status = "collecting";
+    await setReflectState(state);
     const signals = await parseReflectionSignals(workspace.repoPath);
     state.signals = signals ?? undefined;
+
+    // F.1 (v0.24): commit the reflection's outputs (reflection-analysis.md,
+    // decision-log.md append, plan.md rewrite, cfcf-reflection-{context,
+    // instructions}.md, cfcf-reflection-signals.json) on the current
+    // branch. Pre-v0.24 the standalone reflect path left these files
+    // dirty in the working tree — the user accidentally triggered a
+    // reflect, came back to a "modified files" git status with no way
+    // to undo without manual cleanup. The in-loop reflect already
+    // commits via `iteration-loop.ts`; this matches the pattern. Best-
+    // effort: a failing commit is logged but doesn't fail the run.
+    let committed = false;
+    if (result.exitCode === 0) {
+      try {
+        if (await gitManager.hasChanges(workspace.repoPath)) {
+          const health = signals?.iteration_health ?? "inconclusive";
+          const obs = signals?.key_observation || "manual reflection";
+          const subject = `cfcf manual reflection (${health}): ${obs}`.slice(0, 200);
+          const cr = await gitManager.commitAll(workspace.repoPath, subject);
+          committed = cr.success;
+          if (!cr.success) {
+            console.warn(`[reflection-runner] commitAll returned non-success`);
+          }
+        } else {
+          // No changes to commit — the agent produced no on-disk output.
+          // Surface this distinctly from "commit failed" by setting
+          // committed=undefined; the history-event update below sends
+          // `committed` only when we attempted a commit.
+          committed = false;
+        }
+      } catch (err) {
+        console.warn(
+          `[reflection-runner] post-run commit failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     state.status = "completed";
     state.completedAt = new Date().toISOString();
+    await setReflectState(state);
 
     await updateHistoryEvent(workspace.id, state.historyEventId, {
       status: result.exitCode === 0 ? "completed" : "failed",
@@ -438,6 +523,7 @@ async function runReflectionAsync(
       signals: signals ?? undefined,
       iterationHealth: signals?.iteration_health,
       planModified: signals?.plan_modified,
+      committed,
     } as Partial<import("./workspace-history.js").ReflectionHistoryEvent>);
   } finally {
     reflectProcessStore.delete(workspace.id);

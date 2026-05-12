@@ -202,6 +202,22 @@ export async function ingestReflectionAnalysis(
 
 // ── Hook: architect-review.md ingest ──────────────────────────────────────
 
+/**
+ * Mirror `cfcf-docs/architect-review.md` to Clio.
+ *
+ * Pre-v0.24: every architect run created a NEW Clio document (title
+ * varied by readiness — "architect review (READY)" vs "(NEEDS_REFINEMENT)" —
+ * and source varied by trigger). A re-review-heavy workspace accumulated
+ * dozens of architect-review docs in Clio for what's a single living
+ * artifact on disk (`cfcf-docs/architect-review.md` is rewritten each
+ * time, not appended).
+ *
+ * v0.24: single growing doc with `updateIfExists: true`. Title +
+ * source are stable across runs; readiness + trigger move to
+ * doc-level metadata (still searchable, still auditable, but the doc
+ * count stays at 1 per workspace). Version snapshots in
+ * `clio_document_versions` capture the audit trail.
+ */
 export async function ingestArchitectReview(
   backend: MemoryBackend,
   workspace: WorkspaceConfig,
@@ -218,16 +234,18 @@ export async function ingestArchitectReview(
   try {
     const result = await backend.ingest({
       project: resolveClioProject(workspace),
-      title: `${workspace.name}: architect review (${readiness ?? "unknown"})`,
+      title: `${workspace.name}: architect-review`,
       content,
       author: actorForRole(workspace, "architect"),
-      source: `cfcf-auto:architect-review:${trigger}`,
+      source: `cfcf-auto:architect-review`,
+      updateIfExists: true,
       metadata: baseMetadata(workspace, {
         role: "architect",
         artifact_type: "architect-review",
         tier: "semantic",
-        trigger,
+        last_trigger: trigger,
         readiness: readiness ?? null,
+        last_updated_at: new Date().toISOString(),
       }),
     });
     recordInternalUsage(backend, {
@@ -385,15 +403,29 @@ export function parseDecisionLog(raw: string): DecisionEntry[] {
 }
 
 /**
- * Ingest decision-log entries that appended during the iteration. The
- * harness passes the raw file's content from BEFORE + AFTER the iteration;
- * we ingest any entries whose header block changed (simplest: ingest new
- * semantic entries only, by iteration number match).
+ * Mirror `cfcf-docs/decision-log.md` to Clio.
  *
- * "Semantic" = category ∈ {lesson, strategy, resolved-question, risk}.
+ * Pre-v0.24: each entry in the file was ingested as a SEPARATE Clio
+ * document (title varied by category + iter + role; source varied
+ * by entry timestamp). A 5-iteration loop produced 7+ separate
+ * decision-log docs in Clio — fragmenting what's one growing file
+ * on disk. Search noise: "what decisions has this project made?"
+ * returned N hits to read in order. Lost narrative continuity (each
+ * entry was authored aware of prior ones; the collective is the
+ * value). Did not mirror the on-disk source.
  *
- * In `summaries-only` mode only semantic entries are ingested. In `all`
- * mode every category is ingested.
+ * v0.24: single growing doc with `updateIfExists: true`. Per-entry
+ * metadata (role, iter, category, timestamp) lives INSIDE the
+ * content via the existing `## <ts>  [role: …]  [iter: N]  [category: …]`
+ * markdown header that cf² writes in the file — chunker + FTS
+ * preserve those for search. Doc-level metadata captures aggregate
+ * info: entry_count, categories present, last_iter_updated.
+ *
+ * Policy still honoured: in `summaries-only` we ingest only the
+ * semantic entries (lesson / strategy / resolved-question / risk).
+ * In `all` we ingest the full file as-is.
+ *
+ * Returns 1 when a doc was created/updated, 0 when no-op.
  */
 export async function ingestDecisionLogEntries(
   backend: MemoryBackend,
@@ -407,50 +439,76 @@ export async function ingestDecisionLogEntries(
   const content = await readIfExists(path);
   if (!content) return 0;
 
-  const iterLabel = String(iteration);
-  const entries = parseDecisionLog(content).filter((e) => {
-    if (e.iteration !== iterLabel) return false;
-    if (policy === "all") return true;
-    return SEMANTIC_CATEGORIES.has(e.category);
-  });
+  const allEntries = parseDecisionLog(content);
+  if (allEntries.length === 0) return 0;
 
-  let count = 0;
-  for (const e of entries) {
-    try {
-      // Build the ingested body so it stands alone: include the header in
-      // the content for readability when the doc is retrieved via
-      // `cfcf clio get`.
-      const body = `## ${e.timestamp}  [role: ${e.role}]  [iter: ${e.iteration}]  [category: ${e.category}]\n\n${e.body}`;
-      const dlResult = await backend.ingest({
-        project: resolveClioProject(workspace),
-        title: `${workspace.name}: decision-log ${e.category} (iter ${iteration}, ${e.role})`,
-        content: body,
-        author: actorForRole(workspace, e.role),
-        source: `cfcf-auto:decision-log:iter-${iteration}:${e.timestamp}`,
-        metadata: baseMetadata(workspace, {
-          role: e.role,
-          artifact_type: "decision-log-entry",
-          tier: SEMANTIC_CATEGORIES.has(e.category) ? "semantic" : "episodic",
-          iteration,
-          category: e.category,
-          timestamp: e.timestamp,
-        }),
-      });
-      recordInternalUsage(backend, {
-        operation: "ingest",
-        requestor: actorForRole(workspace, e.role),
-        documentId: dlResult.document?.id,
-        projectId: dlResult.document?.projectId,
-        extra: { artifact_type: "decision-log-entry", iteration, category: e.category, action: dlResult.action },
-      });
-      count++;
-    } catch (err) {
-      console.warn(
-        `[clio] decision-log entry ingest failed (iter ${iteration}, ${e.category}): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  // In summaries-only mode, build a filtered file containing only
+  // semantic entries. In `all`, ingest the original file content
+  // unchanged so search hits reflect what's on disk.
+  let body: string;
+  let entries: DecisionEntry[];
+  if (policy === "summaries-only") {
+    entries = allEntries.filter((e) => SEMANTIC_CATEGORIES.has(e.category));
+    if (entries.length === 0) return 0;
+    body = renderDecisionLog(entries);
+  } else {
+    entries = allEntries;
+    body = content;
   }
-  return count;
+
+  const categories = Array.from(new Set(entries.map((e) => e.category))).sort();
+  const author = actorForRole(workspace, "cfcf");
+
+  try {
+    const result = await backend.ingest({
+      project: resolveClioProject(workspace),
+      title: `${workspace.name}: decision-log`,
+      content: body,
+      author,
+      source: `cfcf-auto:decision-log`,
+      updateIfExists: true,
+      metadata: baseMetadata(workspace, {
+        artifact_type: "decision-log",
+        tier: "semantic",
+        last_iter_updated: iteration,
+        entry_count: entries.length,
+        categories,
+        last_updated_at: new Date().toISOString(),
+      }),
+    });
+    recordInternalUsage(backend, {
+      operation: "ingest",
+      requestor: author,
+      documentId: result.document?.id,
+      projectId: result.document?.projectId,
+      extra: {
+        artifact_type: "decision-log",
+        last_iter_updated: iteration,
+        entry_count: entries.length,
+        action: result.action,
+      },
+    });
+    return 1;
+  } catch (err) {
+    console.warn(
+      `[clio] decision-log ingest failed (iter ${iteration}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
+  }
+}
+
+/**
+ * Reconstruct a markdown decision-log file from parsed entries.
+ * Used by `ingestDecisionLogEntries` in `summaries-only` mode to
+ * build a filtered version containing only semantic entries.
+ */
+function renderDecisionLog(entries: DecisionEntry[]): string {
+  return entries
+    .map(
+      (e) =>
+        `## ${e.timestamp}  [role: ${e.role}]  [iter: ${e.iteration}]  [category: ${e.category}]\n\n${e.body}`,
+    )
+    .join("\n\n");
 }
 
 // ── Hook: end-of-iteration summary (cfcf-generated) ───────────────────────
@@ -705,6 +763,250 @@ export async function ingestProblemPack(
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[clio] problem-pack ingest failed for ${filename}: ${msg}`);
       result.perFile.push({ filename, action: "failed", error: msg });
+    }
+  }
+
+  return result;
+}
+
+// ── Hook: context-pack/ user-supplied reference docs (F.27, v0.24) ────────
+
+/**
+ * Soft warning size: files above this land as 50+ chunks each, which
+ * starts to dominate per-search embedder cost. We still ingest but log
+ * a one-line warning so the user can decide to split the file.
+ */
+const CONTEXT_PACK_WARN_SIZE_BYTES = 1_000_000; // 1 MB
+
+/**
+ * Hard skip size: above this we refuse to ingest. Protects Clio from
+ * accidental binary / log dumps that someone drops into context-pack/.
+ * A 10 MB markdown file is clearly not what the directory is for.
+ */
+const CONTEXT_PACK_SKIP_SIZE_BYTES = 10_000_000; // 10 MB
+
+/**
+ * File extensions auto-ingested from `context-pack/`. Markdown only for
+ * now — the Clio chunker is tuned for it. Extending to `.txt` / `.rst`
+ * / `.pdf` is a future task; would need chunker validation.
+ */
+const CONTEXT_PACK_EXTENSIONS = [".md"] as const;
+
+export interface ContextPackIngestResult {
+  /** Number of files newly created OR materially updated. */
+  ingested: number;
+  /** Files where the on-disk sha256 matched the live Clio doc (no-op). */
+  skipped: number;
+  /** Files refused due to the 10 MB hard skip. */
+  oversized: number;
+  /** Per-file detail for tests / logging. */
+  perFile: Array<{
+    relpath: string;
+    action: "created" | "updated" | "skipped" | "oversized" | "failed";
+    sizeBytes: number;
+    documentId?: string;
+    error?: string;
+  }>;
+}
+
+/**
+ * Recursively list markdown files under a root, returning relative paths.
+ * Skips dotfiles + dot-directories so `context-pack/.git/`,
+ * `context-pack/.DS_Store` etc. never leak in. Skips symlinks for
+ * safety (a misconfigured symlink could pull in arbitrary disk).
+ */
+async function listContextPackFiles(
+  root: string,
+): Promise<Array<{ relpath: string; absPath: string; sizeBytes: number }>> {
+  const { readdir, stat } = await import("node:fs/promises");
+  const out: Array<{ relpath: string; absPath: string; sizeBytes: number }> = [];
+  async function walk(dir: string, prefix: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // dir doesn't exist or perm-denied; treat as empty
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue; // dotfiles / hidden dirs
+      const abs = join(dir, e.name);
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        await walk(abs, rel);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const ext = e.name.slice(e.name.lastIndexOf(".")).toLowerCase();
+      if (!CONTEXT_PACK_EXTENSIONS.includes(ext as ".md")) continue;
+      try {
+        const st = await stat(abs);
+        out.push({ relpath: rel, absPath: abs, sizeBytes: st.size });
+      } catch {
+        // Race: file was deleted between readdir + stat. Skip.
+      }
+    }
+  }
+  await walk(root, "");
+  out.sort((a, b) => a.relpath.localeCompare(b.relpath)); // deterministic
+  return out;
+}
+
+/**
+ * Ingest the workspace's user-supplied reference docs under
+ * `<repo>/context-pack/` into Clio. One doc per .md file, identified by
+ * title `<workspace>: context-pack/<relpath>` and source
+ * `cfcf-auto:context-pack:<relpath>` (stable per file across triggers).
+ * Idempotent: `updateIfExists: true` + the backend's sha256 dedup means
+ * unchanged content is a single SQL lookup.
+ *
+ * Surfaced 2026-05-10 (F.27): user ran PA on a project where they had
+ * a freeform design-direction.md sitting outside the formal problem-
+ * pack/. PA could find it on disk but Clio's search couldn't — the
+ * doc wasn't in any auto-ingest path. `context-pack/` is the
+ * conventional location for those freeform docs going forward; this
+ * function picks them up.
+ *
+ * Trigger points (mirrors `ingestProblemPack`):
+ *   - `iteration-start`: every iteration's pre-dev hook
+ *   - `post-architect`: after a successful architect review (SA may
+ *     produce a synthesis doc the user drops into context-pack/)
+ *   - `pa-session-end`: PA launcher's session-end hook (PA may edit
+ *     or create context-pack/ docs during its session)
+ *   - `workspace-init`: catches docs already present at workspace
+ *     registration time
+ *
+ * Subject to the same `clio.ingestPolicy` gate as other auto-ingests.
+ *
+ * Size limits: files >1 MB log a warning (large semantic chunks can
+ * dominate embedder cost); files >10 MB are refused entirely (more
+ * likely a misplaced binary / log dump than a real reference doc).
+ *
+ * Best-effort: any single-file failure is logged + the loop continues.
+ * Returns a summary the caller can surface.
+ */
+export async function ingestContextPack(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger:
+    | "workspace-init"
+    | "iteration-start"
+    | "post-architect"
+    | "pa-session-end"
+    | "pa-boot-reconcile"
+    | "manual",
+  actorOverride?: string,
+): Promise<ContextPackIngestResult> {
+  const result: ContextPackIngestResult = {
+    ingested: 0,
+    skipped: 0,
+    oversized: 0,
+    perFile: [],
+  };
+
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return result;
+
+  const root = join(workspace.repoPath, "context-pack");
+  const files = await listContextPackFiles(root);
+  if (files.length === 0) return result; // directory missing or empty — no-op
+
+  const project = resolveClioProject(workspace);
+  // Same two-layer attribution as problem-pack: user is the semantic
+  // owner of these docs (it's THEIR reference material), the writer is
+  // either cfcf-system or the role that triggered the ingest.
+  const author = actorOverride ?? actorForRole(workspace, "user");
+
+  for (const f of files) {
+    if (f.sizeBytes > CONTEXT_PACK_SKIP_SIZE_BYTES) {
+      console.warn(
+        `[clio] context-pack skipping oversize file ${f.relpath} (${(f.sizeBytes / 1_000_000).toFixed(1)} MB > 10 MB limit). Drop the file or split it if its content is real reference material.`,
+      );
+      result.oversized++;
+      result.perFile.push({
+        relpath: f.relpath,
+        action: "oversized",
+        sizeBytes: f.sizeBytes,
+      });
+      continue;
+    }
+    if (f.sizeBytes > CONTEXT_PACK_WARN_SIZE_BYTES) {
+      console.warn(
+        `[clio] context-pack: ${f.relpath} is ${(f.sizeBytes / 1_000_000).toFixed(1)} MB — will produce 50+ chunks and may dominate per-search embedder cost. Consider splitting.`,
+      );
+    }
+
+    const content = await readIfExists(f.absPath);
+    if (!content || !content.trim()) {
+      // Empty markdown — skip silently, neither warning nor stat.
+      continue;
+    }
+
+    try {
+      const ingestResult = await backend.ingest({
+        project,
+        title: `${workspace.name}: context-pack/${f.relpath}`,
+        content,
+        author,
+        source: `cfcf-auto:context-pack:${f.relpath}`,
+        updateIfExists: true,
+        metadata: baseMetadata(workspace, {
+          role: "user",
+          artifact_type: "context-doc",
+          relpath: f.relpath,
+          file_size: f.sizeBytes,
+          tier: "semantic",
+          ingest_trigger: trigger,
+          // Note: deliberately no `last_ingested_at` here — mirrors
+          // problem-pack metadata shape. If we included a timestamp
+          // that changes on every call, the backend would treat every
+          // re-ingest as an update + bump version, defeating sha256
+          // dedup. The `clio_usage_log` records each ingest event
+          // separately with its own timestamp, so the audit trail is
+          // intact regardless.
+        }),
+      });
+
+      const action = ingestResult.action;
+      if (action === "skipped") {
+        result.skipped++;
+        result.perFile.push({
+          relpath: f.relpath,
+          action: "skipped",
+          sizeBytes: f.sizeBytes,
+          documentId: ingestResult.document?.id,
+        });
+      } else {
+        result.ingested++;
+        result.perFile.push({
+          relpath: f.relpath,
+          action: action as "created" | "updated",
+          sizeBytes: f.sizeBytes,
+          documentId: ingestResult.document?.id,
+        });
+      }
+
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor: author,
+        documentId: ingestResult.document?.id,
+        projectId: ingestResult.document?.projectId,
+        extra: {
+          artifact_type: "context-doc",
+          relpath: f.relpath,
+          ingest_trigger: trigger,
+          action,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[clio] context-pack ingest failed for ${f.relpath}: ${msg}`);
+      result.perFile.push({
+        relpath: f.relpath,
+        action: "failed",
+        sizeBytes: f.sizeBytes,
+        error: msg,
+      });
     }
   }
 

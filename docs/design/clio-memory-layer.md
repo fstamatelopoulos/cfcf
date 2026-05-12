@@ -273,12 +273,16 @@ Metadata is JSON, queryable via SQLite's JSON1 `json_extract`. Clio is **agent-f
 
 | Value | Source | Written by | Tier default |
 |---|---|---|---|
+| `problem-pack` | cf² auto | user | semantic (one doc per file; problem.md / success.md / constraints.md / hints.md / style-guide.md) |
+| `context-doc` | cf² auto (v0.24) | user | semantic (one doc per file under `<repo>/context-pack/**.md`; user-supplied freeform reference material) |
 | `iteration-log` | cf² auto | dev | episodic |
 | `iteration-handoff` | cf² auto | dev | episodic |
 | `judge-assessment` | cf² auto | judge | episodic |
 | `reflection-analysis` | cf² auto | reflection | semantic |
-| `decision-log-entry` | cf² auto | dev/judge/architect/reflection/user | semantic (if category ∈ {lesson, strategy}) else episodic |
+| `decision-log` | cf² auto | cfcf (system; aggregates dev/judge/architect/reflection entries) | semantic |
 | `architect-review` | cf² auto | architect | semantic |
+
+> **v0.24 storage rationalisation.** `decision-log` previously had the `artifact_type` `decision-log-entry` and was ingested as ONE document per parsed entry — fragmenting what's a single growing `cfcf-docs/decision-log.md` file on disk into N Clio documents. v0.24 collapses it to a single growing doc per workspace (stable title `<workspace>: decision-log`, `updateIfExists: true`). Per-entry headers (`## <ts> [role: …] [iter: N] [category: …]`) are preserved inside the doc's content — chunker + FTS still surface them for search. Doc-level metadata captures aggregates: `entry_count`, `categories[]`, `last_iter_updated`, `last_updated_at`. Same treatment for `architect-review` (was 1 doc per architect run; now 1 doc per workspace, `readiness` + `last_trigger` move to metadata). Pre-v0.24 docs with `artifact_type='decision-log-entry'` remain in Clio as historical clutter — agent prompts/templates filtering on the old name should be updated to `'decision-log'`.
 | `iteration-summary` | cf² auto | dev (post-iteration cfcf-generated summary) | semantic |
 | `design-guideline` | user CLI / agent | user / agent | semantic |
 | `domain-knowledge` | user CLI / agent | user / agent | semantic |
@@ -300,23 +304,25 @@ Clio treats the taxonomy as open — `cfcf clio docs ingest ... --artifact-type 
 
 A knob: `clio.ingestPolicy` on `CfcfGlobalConfig` / `ProjectConfig` with values `"summaries-only"` (default) | `"all"` (raw + summaries, for heavy dogfooding or debugging) | `"off"` (no auto-ingest; Clio only holds what the user / agents explicitly push).
 
-**Auto-ingest under `summaries-only` (default):**
+**Auto-ingest under `summaries-only` (item 6.9 default flipped to `all` 2026-05-09; this table preserved for the policy semantics):**
 
 | Trigger | What is ingested | Metadata highlights |
 |---|---|---|
+| `workspace-init` / `iteration-start` / `post-architect` / `pa-session-end` (sha256 dedup → unchanged is a free no-op) | `<repo>/problem-pack/*.md` (5 canonical files) | role=user, artifact_type=problem-pack, tier=semantic — one doc per file |
+| `workspace-init` / `iteration-start` / `post-architect` / `pa-session-end` (F.27, v0.24) | `<repo>/context-pack/**/*.md` (recursive walk; user-supplied reference material — design directions, research, ADRs, domain notes) | role=user, artifact_type=context-doc, tier=semantic — one doc per file; size >1MB warns, >10MB skipped |
 | End of REFLECT phase (post-commit) | `cfcf-docs/reflection-analysis.md` | role=reflection, artifact_type=reflection-analysis, tier=semantic |
-| End of ARCHITECT review | `cfcf-docs/architect-review.md` | role=architect, artifact_type=architect-review, tier=semantic |
-| Each `decision-log.md` append that is `[category: lesson]`, `[category: strategy]`, `[category: resolved-question]`, or `[category: risk]` | That entry only (parsed out of the tagged section) | role from the `[role: X]` tag; tier=semantic |
-| End of iteration (post-judge, post-reflect) | `iteration-summary` -- a new cfcf-generated condensed doc combining dev's `## Summary` block from iteration-log + judge's determination/concerns + reflection's `key_observation`. Short. | role=cfcf, artifact_type=iteration-summary, tier=semantic |
+| End of ARCHITECT review | `cfcf-docs/architect-review.md` — **single growing doc** (stable title `<workspace>: architect-review`, `updateIfExists: true` since v0.24). | role=architect, artifact_type=architect-review, tier=semantic, doc-level: readiness, last_trigger, last_updated_at |
+| Any `decision-log.md` change (when at least one `[category: lesson]`, `[category: strategy]`, `[category: resolved-question]`, or `[category: risk]` entry exists) | The whole `decision-log.md` filtered to keep only semantic entries — **single growing doc** (stable title `<workspace>: decision-log`, `updateIfExists: true` since v0.24; per-entry headers preserved inside content, doc-level metadata aggregates entries) | role=cfcf, artifact_type=decision-log, tier=semantic, doc-level: entry_count, categories[], last_iter_updated, last_updated_at |
+| End of iteration (post-judge, post-reflect) | `iteration-summary` -- a cfcf-generated condensed doc combining dev's `## Summary` block from iteration-log + judge's determination/concerns + reflection's `key_observation`. Short, per-iteration. | role=cfcf, artifact_type=iteration-summary, tier=semantic |
 
-**Auto-ingest under `all` (opt-in, for dogfooding / high-signal projects):** all of the above, plus:
+**Auto-ingest under `all` (default since 2026-05-09, item 6.9):** all of the above, plus:
 
 | Trigger | What is ingested | Metadata highlights |
 |---|---|---|
 | End of DEV phase | `cfcf-docs/iteration-logs/iteration-N.md` | artifact_type=iteration-log, tier=episodic |
 | End of DEV phase | `cfcf-docs/iteration-handoff.md` (the archived copy) | artifact_type=iteration-handoff, tier=episodic |
 | End of JUDGE phase | `cfcf-docs/judge-assessment.md` | artifact_type=judge-assessment, tier=episodic |
-| Every `decision-log.md` append (any category) | That entry | caller's category drives tier |
+| Any `decision-log.md` change | The whole `decision-log.md` (every category, no semantic filter). Same single-growing-doc shape as `summaries-only` — only the content body differs. | doc-level metadata captures every category present |
 
 **User / agent ingest (always available, regardless of policy):**
 

@@ -11,6 +11,369 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.24.0] -- 2026-05-12
+
+Nine-phase release packaging up the v0.23.1 dogfood follow-ups: full
+status-tracking symmetry across all four agent surfaces (loop /
+review / document / reflect), Clio storage rationalisation that drops
+~20% of fragmented per-iteration docs to single growing artifacts,
+dashboard list-view active-agent indicator (F.22), and on-disk
+persistence for all three standalone-runner state stores so
+mid-flight UI never goes blank across server restart (F.23).
+
+Per-iteration commit messages on the `iteration-6/v0.24-status-clio-tracking`
+branch carry the detailed phase notes; the summary below is the
+user-facing changelog.
+
+### Added — F.22: dashboard active-agent indicator
+
+`workspace.status` (the on-disk loop-status field) only tracks the
+iteration loop. Standalone Review / Document / Reflect runs don't
+touch it by design — so a manual `cfcf reflect` against a `completed`
+workspace would show up on the dashboard list as just "completed", no
+hint that an agent was running. **v0.24**: `/api/workspaces` now
+enriches each workspace with `activeAgent: "loop" | "review" |
+"document" | "reflect" | null`, computed server-side from the four
+runner state stores. `WorkspaceCard` renders a pulse-animated chip
+("● review running") when non-null. The StatusBadge stays the source
+of truth for loop status; the chip is the source of truth for "an
+agent is alive right now".
+
+New `packages/core/src/active-agent.ts` exposes the helper
+(`getActiveAgent` / `getActiveAgentsForWorkspaces`) so the same
+priority resolution can be reused by future surfaces (CLI status,
+notification-channel filtering, etc.).
+
+### Added — F.23: standalone-agent state survives server restart
+
+Pre-v0.24 the three runners (`architect-runner`, `documenter-runner`,
+`reflection-runner`) kept state in module-level in-memory `Map`s. A
+server restart wiped them: agent processes (detached) might survive,
+but the harness had no record; the web UI's "review running" /
+"document running" / "reflect running" indicators vanished
+mid-flight; post-restart `getXxxState` returned undefined even when
+there was a meaningful prior result on disk worth surfacing.
+
+**v0.24** mirrors the existing `loop-state.json` pattern. Each runner
+write-throughs every status transition to a sibling file under
+`<config-dir>/workspaces/<id>/`:
+- `review-state.json` (architect-runner)
+- `document-state.json` (documenter-runner)
+- `reflect-state.json` (reflection-runner)
+
+On boot, three new hydrate hooks (`hydrateReviewStateStore`,
+`hydrateDocumentStateStore`, `hydrateReflectStateStore`) populate the
+in-memory caches from disk and flip any state still claiming an
+active status to `failed` with reason "Server restarted while …".
+Mirrors `cleanupStaleActiveLoops` + `cleanupStaleRunningEvents` for
+the loop + history surfaces. `getXxxState` stays sync — boot
+hydration ensures the cache is pre-populated, so the existing N
+callsites in `app.ts` don't need to become async.
+
+New `packages/core/src/agent-state-store.ts` exposes the underlying
+primitives (`persistAgentState`, `loadAgentState`,
+`cleanupStaleAgentStates`); each runner uses its own filename +
+active-status set. Disk writes are best-effort (in-memory write
+always succeeds; warns + continues on disk error).
+
+### Changed — Clio storage: decision-log + architect-review → single growing docs
+
+Real dogfood: a 5-iteration testgame run produced 37 Clio documents
+in the per-workspace project. Audit found two fragmentation problems:
+
+- **Decision log** was 7 separate documents, one per parsed entry,
+  for what's a single growing `cfcf-docs/decision-log.md` file on
+  disk. Search noise: "what decisions has this project made?"
+  returned N hits to read in chronological order. Lost narrative
+  continuity. Did not mirror the source-of-truth on disk.
+- **Architect-review** was 1 document per architect run (title
+  varied by readiness, source varied by trigger). Re-review-heavy
+  workspaces would accumulate dozens for a single living artifact.
+
+Both now follow the `plan.md` pattern: single document, stable title
+(`<workspace>: decision-log` / `<workspace>: architect-review`),
+stable source, `updateIfExists: true`. Audit trail lives in
+`clio_document_versions`. Decision-log per-entry headers (`## <ts>
+[role: …] [iter: N] [category: …]`) are preserved inside the doc's
+content — chunker + FTS still surface them for search. Doc-level
+metadata captures aggregates: `entry_count`, `categories[]`,
+`last_iter_updated` for decision-log; `readiness`, `last_trigger` for
+architect-review. `summaries-only` policy still honoured (filters
+semantic entries before assembling).
+
+`artifact_type` rename: `decision-log-entry` → `decision-log`. Agent
+prompts/templates that filter on the old value should be updated;
+existing per-entry-style docs from prior runs remain in Clio as
+historical clutter (use `cfcf clio docs delete` to clean if desired).
+
+Net effect on storage:
+- 5-iter run: 37 docs → ~30 docs (-19%)
+- 50-iter run: ~327 docs → ~258 docs (-21%)
+
+### Changed — Status-tracking symmetry across standalone agents
+
+Five symmetric fixes for the gaps that surfaced during the v0.23.1
+audit. Earlier versions only covered Review and Document; v0.24
+brings Reflect to parity.
+
+- **Stop Reflect button** in `LoopControls`. Pre-v0.24 a manual
+  reflect that the user kicked off by mistake had no kill switch in
+  the UI — `cfcf-server stop` or a `curl -X POST .../reflect/stop`
+  was the only escape. Now mirrors Stop Review / Stop Document.
+- **Workspace-detail header badge** falls through to `isReflectActive`
+  when neither loop nor review nor document is running (so a manual
+  reflect against a `completed` workspace shows "running" in the
+  header, not "completed").
+- **`PhaseIndicator` agent type**: new `"reflect"` value with a
+  three-phase array `[preparing, executing, collecting]`. Pre-v0.24
+  the else-branch silently fell through to documentPhases — wrong
+  labels at wrong moments.
+- **Workspace-detail Status panel**: new "Reflection in progress"
+  section parallel to Review / Document.
+- **`trulyEmpty` guard** now includes `reflectState`.
+- **Inline error banners** for `reviewState.error` /
+  `documentState.error` / `reflectState.error`. Pre-v0.24 these were
+  silently buried — only `loopState.error` rendered, and the next
+  standalone run replaced the in-memory state, hiding the prior
+  failure.
+
+### Fixed — F.29: agent's `cfcf clio search` cascaded `CFCF_INTERNAL_SERVE=1` → EADDRINUSE
+
+Surfaced when the user ran the Solution Architect on `~/src/gmbot`.
+The SA tried to do `cfcf clio search "..."` to pull
+cross-workspace precedents (as the architect-instructions
+template directs). Instead of acting as an HTTP client to the
+running server, the nested `cfcf` binary attempted to **start a
+new server** on port 7233 and failed with `EADDRINUSE`. The SA
+recorded:
+
+> "Clio cross-workspace search could not run because the local
+> cfcf server failed to bind port 7233."
+
+as a non-blocking gap in `architect-review.md`.
+
+**Root cause — env-var cascade.** `cfcf server start` re-spawns
+the cfcf binary with `CFCF_INTERNAL_SERVE=1` to route the
+process into `startServer()` (single-binary CLI+server pattern,
+item 5.3). The CLI's entry-point consumed that env var but
+never deleted it from `process.env`, so:
+
+1. Server child inherits `CFCF_INTERNAL_SERVE=1` (set on spawn)
+2. Server spawns agent processes with `{ ...process.env }` →
+   agent inherits the var
+3. Agent shells out to `cfcf clio search` → nested cfcf process
+   inherits its parent's env → still has `CFCF_INTERNAL_SERVE=1`
+4. Nested cfcf routes to `startServer()` → `Bun.serve({ port:
+   7233 })` → EADDRINUSE (the real server is already bound)
+
+**Fix.** One line in `packages/cli/src/index.ts`: `delete
+process.env.CFCF_INTERNAL_SERVE` immediately after the routing
+check, BEFORE any child process is spawned. The server still
+boots correctly (the var has already served its purpose);
+descendants now inherit a clean env.
+
+Affects every agent role that follows the architect-instructions
+template's Clio-search guidance: dev, judge, architect,
+reflection, documenter. Pre-fix, ALL of those silently failed
+their Clio precedent lookups; the SA was just the first to
+record it explicitly because the template tells the architect
+to surface non-blocking gaps in `architect-review.md`. The
+other roles' searches failed quietly into stdout/stderr without
+a structured signal back to the harness.
+
+### Fixed — F.28: PA boot-reconcile false-positive for idle live sessions
+
+Surfaced when the user reinstalled cfcf locally and restarted the
+server during an active PA session (no loop running). The new
+boot's PA boot-reconcile pass flagged the live session as
+`failed` with `"Process detection lost — launcher didn't
+finalise this session before exiting (likely SIGINT to the
+parent shell, server crash, or OS panic)"` even though the
+launcher (running in the user's parent terminal) was still
+very much alive.
+
+**Root cause.** The reconcile's staleness check was
+**session-log mtime > 5 minutes**. PA is interactive — the
+user can read, think, AFK, switch contexts — for arbitrary
+durations with zero log writes. A 5-min quiet window during a
+server restart is well within the false-positive zone.
+
+**Fix.** Record the launcher's PID on the PA history event at
+session start (`PaSessionHistoryEvent.launcherPid: number`).
+On reconcile, do a precise `process.kill(pid, 0)` liveness
+check:
+- `ESRCH` (no such process) → launcher gone, mark stale.
+- `EPERM` (process exists, owned by another user) → still
+  alive, just not ours; treat as live.
+- Success → alive, leave running.
+
+PID-based check is precise because PA always runs on the
+user's local machine alongside the server. Falls back to the
+original mtime heuristic when `launcherPid` is absent
+(backward compat for events written by pre-v0.24 launchers).
+
+4 new tests in `boot-reconcile.test.ts`:
+- live PID + stale mtime → leave running (overrides mtime)
+- dead PID + fresh mtime → flip to failed (PID is authoritative)
+- no PID + fresh mtime → fall through to mtime check, leave alone
+- no PID + stale mtime → fall through to mtime check, flip
+
+### Added — F.27: auto-ingest `<repo>/context-pack/` user-supplied reference docs
+
+User feedback (~/src/gmbot): "I had a large md document with the
+concept and initial design direction. Such documents are not
+covered by our cfcf ingestion policy but it is clearly useful."
+The PA ingested it manually at user request; v0.24 makes that
+automatic.
+
+**Convention.** A new `<repo>/context-pack/` directory (parallel
+sibling to `problem-pack/`). Anything-goes markdown lives here:
+design directions, research findings, competitive analyses,
+domain-knowledge dumps, meeting notes the agents should index.
+cf² walks it recursively + auto-ingests every `.md` file as a
+`context-doc` Clio document.
+
+**Hooks** (same cadence as `ingestProblemPack`):
+- `iteration-start` — every iteration's pre-dev hook
+- `post-architect` — after a successful manual `cfcf review` or
+  web Review-button run (SA may have produced a synthesis doc)
+- `pa-session-end` — PA launcher's session-end (PA's gmbot use
+  case — the agent edits / creates `context-pack/` docs during
+  the session)
+- `workspace-init` — catches docs already present at registration
+
+**Clio shape** — one doc per markdown file:
+- title: `<workspace>: context-pack/<relpath>`
+- source: `cfcf-auto:context-pack:<relpath>` (stable across triggers)
+- artifact_type: `context-doc`
+- role: `user` (semantic owner — these are the user's reference
+  material; writer attribution via author stamp)
+- tier: `semantic`
+- metadata: `relpath`, `file_size`, `ingest_trigger`
+- `updateIfExists: true` + sha256 dedup → unchanged files are
+  free no-ops; content edits land as version snapshots in
+  `clio_document_versions`
+
+**Safety limits.** Files >1 MB log a one-line warning (large
+semantic chunks dominate per-search embedder cost); files >10 MB
+are refused entirely (likely a misplaced binary / log dump,
+not real reference material). Dotfiles + dot-directories
+(`context-pack/.git/`, `.secret.md`, etc.) skipped. Symlinks
+ignored. Non-`.md` files ignored (extensible to `.txt` / `.pdf`
+later when chunker support is validated).
+
+**Backward compat.** Workspaces without a `context-pack/`
+directory are no-ops — zero new disk artifacts, zero behaviour
+change.
+
+**Agent integration.** The bundled `clio-guide.md` template
+(read by all iteration roles) now points agents at
+`context-pack/` as the conventional location for workspace-scoped
+reference docs.
+
+8 unit tests in `loop-ingest.test.ts`: empty dir / missing dir
+(no-op); single .md ingested as context-doc; recursive walk
+preserves relpath; non-.md filtered; dotfiles + dot-dirs
+skipped; sha256 dedup on re-ingest (idempotent); updateIfExists
+on content change; `policy: "off"` respected.
+
+### Added — F.1: standalone runners now commit their on-disk outputs
+
+Real dogfood (testgame): after the loop completed, the user
+accidentally clicked Reflect (the manual / standalone path).
+`reflection-analysis.md`, `decision-log.md`, `cfcf-reflection-
+context.md`, `cfcf-reflection-instructions.md`, and
+`cfcf-reflection-signals.json` were rewritten on disk — but
+**none of the three standalone runners commits**. The user came
+back to a "modified files" git status with no harness-side
+record that those changes were from a manual reflect.
+
+**Diagnosis**: `gitManager` is imported only in `iteration-loop.ts`
+(for in-loop commits) and as read-only in `reflection-runner.ts`
+(for log inspection). Architect-runner and documenter-runner
+have no git import at all. The in-loop variants of all three
+commit via the iteration-loop driver; the standalone /
+async-spawn paths skip git entirely.
+
+**Fix**: each standalone runner now commits at the end of a
+successful run, mirroring the in-loop pattern. Commit-message
+convention distinguishes manual from in-loop runs:
+
+| Runner | Trigger | Commit message |
+|---|---|---|
+| `reflection-runner.runReflectionAsync` | exit=0, hasChanges | `cfcf manual reflection (<health>): <key_observation>` |
+| `architect-runner.runReview` (async) | exit=0, hasChanges | `cfcf manual review (<readiness>)` |
+| `documenter-runner.runDocument` | exit=0, hasChanges | `cfcf manual documentation (<adapter>)` |
+
+`committed` field added to `ReviewHistoryEvent` and
+`ReflectionHistoryEvent` (already existed on
+`DocumentHistoryEvent`); set on the history event so the web UI
+can render a committed/no-changes badge per manual run. Best-
+effort: a failing `commitAll` is logged but doesn't fail the
+run.
+
+### Fixed — `stop_loop_now` resume action left iteration-history.md uncommitted
+
+Same shape as F.1, just on a different code path. When the user
+clicks "Stop loop now" from the FeedbackForm during a paused
+loop, `handleStopLoopNow` (in `iteration-loop.ts`) appends a
+`## Loop stopped at iteration N` narrative section to
+`cfcf-docs/iteration-history.md`. Pre-fix the append fired but
+the change was never committed — every structured stop left a
+dirty `iteration-history.md` in the user's working tree.
+
+Surfaced when the user ran a fresh testgame loop, kicked it
+during pre-loop review, hit Stop loop now, and saw `git status
+modified: cfcf-docs/iteration-history.md` after deleting the
+orphan iter-3 branch from Finding 3.
+
+`handleStopLoopNow` now commits the append + any other dirty
+working-tree changes with subject:
+`cfcf loop stopped at iteration N` (or `cfcf loop stopped at
+iteration N: <user's note>` when free-text feedback was
+provided). Best-effort — failing commit logged but doesn't
+block the stop sequence.
+
+### Fixed — UI "(not committed)" wording → "(no changes to commit)"
+
+The documenter row in the History tab rendered "(not committed)"
+when `committed=false && docsFileCount>0`. With F.1 in place
+that combination now only occurs when the documenter ran
+successfully but produced no on-disk changes vs. what's already
+in git (re-wrote identical content). The label is "(no changes
+to commit)" with a tooltip explaining the case. Same wording
+extended to the new `committed` indicators on review +
+reflection rows for the standalone-runner badges.
+
+### Investigated — Finding 3: orphan `cfcf/iteration-3` branch on testgame
+
+Surfaced during the same dogfood pass. Root cause traced back
+to the original v0.23.1 "Server restarted" bug: iter-3 started
+at 08:07:51, was killed mid-flight by a server restart, marked
+`failed` by boot cleanup. The `cfcf/iteration-3` git branch
+that was created for it sits at the pre-loop review commit
+with no dev/judge work. Iter-4 created its own branch + ran +
+merged successfully; iter-3's branch is dead weight.
+
+Not a new bug — confirmed it's a side effect of the v0.23.1
+gap, which is already fixed for history-event state. The branch
+cleanup itself is a separate, lower-priority polish task. New
+backlog item **F.25** captures the fix sketch (boot-time scan
+for orphan iteration branches, surface via a `cfcf
+orphan-branches` CLI command rather than auto-deleting silently).
+
+**Workaround**: `git branch -D cfcf/iteration-N` manually after
+a failed iteration.
+
+### Backlog updates (`docs/plan.md`)
+
+- **F.22** — promoted to v0.24.0 (delivered).
+- **F.23** — promoted to v0.24.0 (delivered).
+- **F.24** — workspace-status writer trace investigation
+  (observability already in place; awaiting next repro).
+- **F.25** — new entry: boot-time cleanup of orphan iteration
+  branches.
+
 ## [0.23.1] -- 2026-05-10
 
 ### Fixed — install.sh + local-install.sh PID-file probe was wrong on macOS

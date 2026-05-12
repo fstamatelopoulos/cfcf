@@ -95,7 +95,7 @@ a full editor -- wire-compatible with `cfcf config edit` via the same
 `PUT /api/config` endpoint. Reach it from the **Settings** link in the
 top bar. The web UI's full top-level navigation:
 
-- **Workspaces** — dashboard + per-workspace iteration history, log viewer, config tab.
+- **Workspaces** — dashboard + per-workspace iteration history, log viewer, config tab. Each card on the dashboard surfaces a pulse-animated chip ("● review running" / "● document running" / "● reflect running" / "● loop running") when ANY agent is actively running on that workspace, including standalone Review / Document / Reflect runs that don't touch the workspace's loop-status badge (F.22, v0.24).
 - **Memory** — Clio (cross-workspace memory): search, browse, ingest, audit, projects, trash.
 - **Agents** (item 6.8) — per-role instruction-template editor with versioning + promote-to-production. One sub-tab per role; the bundled cf² default is always selectable (read-only). Save edits as either a `full` version (replaces the default; doesn't auto-upgrade) or an `augmented` version (extension-only on top of the live default; auto-upgrades when cf² ships a new template).
 - **Settings** — global config (per-role agent + model, ollama-models refresh button, model registry, notifications).

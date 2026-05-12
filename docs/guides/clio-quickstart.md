@@ -225,7 +225,7 @@ PA writes to these projects automatically; you don't need to manage them. But if
 | Embedder install / list / set / **set --reindex** | ✅ (default `cfcf clio embedder install` resolves from `clio.preferredEmbedder`) |
 | `cfcf clio reindex` | ✅ idempotent, batched, per-Project; pair with `embedder set --reindex` for safe model switches |
 | `cfcf clio docs list` | ✅ (newest first; `--project`, `--limit`, `--offset`) |
-| Iteration-loop auto-ingest (reflect, architect, decision-log, iteration-summary) | ✅ |
+| Iteration-loop auto-ingest (reflect, architect, decision-log, iteration-summary) | ✅ — `decision-log` + `architect-review` are single growing docs per workspace since v0.24 (artifact_type `decision-log` replaces the older `decision-log-entry`). |
 | `cfcf-docs/clio-relevant.md` preload into agent context | ✅ |
 | `cfcf-docs/clio-guide.md` agent cue card | ✅ |
 | Web UI Clio settings (default search mode, min score, preferred embedder readout) | ✅ on the Server Info page |

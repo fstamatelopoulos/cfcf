@@ -73,6 +73,17 @@ export interface ReviewHistoryEvent extends BaseHistoryEvent {
    * undefined as `"manual"` for backward compat.
    */
   trigger?: "loop" | "manual";
+  /**
+   * Whether the standalone review committed its on-disk outputs
+   * (architect-review.md, plan.md, cfcf-architect-signals.json,
+   * cfcf-architect-instructions.md). `true` when a commit landed;
+   * `false` when there were no changes to commit OR the commit failed.
+   * Only set for `trigger: "manual"` runs — in-loop reviews commit via
+   * the iteration-loop driver itself (the existing
+   * `cfcf pre-loop review (<readiness>)` commit). Field added in v0.24
+   * (F.1 follow-up).
+   */
+  committed?: boolean;
 }
 
 export interface IterationHistoryEvent extends BaseHistoryEvent {
@@ -133,6 +144,16 @@ export interface ReflectionHistoryEvent extends BaseHistoryEvent {
   planRejectionReason?: string;
   /** Exit code of the reflection process */
   exitCode?: number;
+  /**
+   * Whether the standalone reflection committed its on-disk outputs
+   * (reflection-analysis.md + decision-log.md append + plan.md rewrite
+   * if any). `true` when a commit landed; `false` when there were no
+   * changes to commit OR the commit failed. Only set for `trigger:
+   * "manual"` runs — in-loop reflections commit via the iteration-loop
+   * driver itself and don't surface `committed` on this event (the
+   * iteration commit covers that). Field added in v0.24 (F.1 follow-up).
+   */
+  committed?: boolean;
 }
 
 /**
@@ -192,6 +213,22 @@ export interface PaSessionHistoryEvent extends BaseHistoryEvent {
    * what state PA started from.
    */
   problemPackFilesAtStart: number;
+  /**
+   * PID of the launcher process (the `cfcf spec` invocation that
+   * spawned the agent). Used by `reconcileStalePaSessions` at boot
+   * time to do a precise liveness check via `kill -0 <pid>` instead
+   * of the file-mtime heuristic — which false-positived on idle
+   * interactive sessions (user thinking / AFK / reading) longer than
+   * the staleness threshold. Added in v0.24.0 (F.28). Absent on
+   * sessions started before v0.24.0; reconcile falls back to the
+   * mtime check in that case. Note: PID is only meaningful on the
+   * machine the session ran on — that's always the user's local
+   * machine, so the check is local. The launcher's `finally` block
+   * still updates status to `completed`/`failed`; this field is
+   * defensive coverage for the cases the finally block doesn't run
+   * (parent-shell SIGINT, OS panic, server hard-crash).
+   */
+  launcherPid?: number;
 }
 
 /**

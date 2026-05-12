@@ -44,6 +44,7 @@ async function seedRunningPaEvent(opts: {
   sessionId: string;
   sessionContentChars?: number;
   fileMtime?: Date;
+  launcherPid?: number;
 }): Promise<PaSessionHistoryEvent> {
   const sessionFilePath = `.cfcf-pa/session-${opts.sessionId}.md`;
   const absSessionFile = join(opts.workspaceRepoPath, sessionFilePath);
@@ -73,6 +74,7 @@ async function seedRunningPaEvent(opts: {
     gitInitializedAtStart: true,
     problemPackFilesAtStart: 0,
     logFile: sessionFilePath,
+    ...(opts.launcherPid !== undefined ? { launcherPid: opts.launcherPid } : {}),
   };
   await appendHistoryEvent(opts.workspaceId, event);
   return event;
@@ -276,5 +278,89 @@ describe("reconcileStalePaSessions", () => {
     // ingest_trigger metadata distinguishes boot-reconcile from the
     // happy-path session-end + iteration-start triggers.
     expect((problemDoc?.metadata as Record<string, unknown>)?.ingest_trigger).toBe("pa-boot-reconcile");
+  });
+
+  // ── F.28 (v0.24): launcherPid liveness check ─────────────────────────
+
+  it("leaves running PA events alone when launcherPid is alive (this test process)", async () => {
+    // Use the test process's own PID — guaranteed alive while the test
+    // runs. Old mtime would normally trigger a stale flip; the live
+    // PID overrides that.
+    const w = await createWorkspace({ name: "live-pid-ws", repoPath: tempDir });
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const ev = await seedRunningPaEvent({
+      workspaceId: w.id,
+      workspaceRepoPath: w.repoPath,
+      sessionId: "pa-2026-05-11T10-00-00-live-pid",
+      fileMtime: tenMinAgo,
+      launcherPid: process.pid,
+    });
+
+    const result = await reconcileStalePaSessions();
+    expect(result.staleEvents).toBe(0);
+
+    const evs = await readHistory(w.id);
+    const same = evs.find((e) => e.id === ev.id);
+    expect(same?.status).toBe("running");
+  });
+
+  it("flips PA events to failed when launcherPid is dead (PID never existed)", async () => {
+    // Use a PID that's extremely unlikely to be in use: 2^22 is well
+    // past anything macOS / Linux would allocate in a normal session.
+    // ESRCH on `kill -0` → marked stale.
+    const w = await createWorkspace({ name: "dead-pid-ws", repoPath: tempDir });
+    const ev = await seedRunningPaEvent({
+      workspaceId: w.id,
+      workspaceRepoPath: w.repoPath,
+      sessionId: "pa-2026-05-11T10-30-00-dead-pid",
+      // recent mtime — pre-v0.24 logic would have left it alone; the
+      // PID check overrides because the process doesn't exist.
+      launcherPid: 2 ** 22,
+    });
+
+    const result = await reconcileStalePaSessions();
+    expect(result.staleEvents).toBe(1);
+
+    const evs = await readHistory(w.id);
+    const updated = evs.find((e) => e.id === ev.id) as PaSessionHistoryEvent;
+    expect(updated.status).toBe("failed");
+    expect(updated.error).toContain("Process detection lost");
+  });
+
+  it("falls back to mtime check for events without launcherPid (backward compat)", async () => {
+    // Old event shape — no launcherPid field. mtime is fresh → leave
+    // alone (same behaviour as pre-v0.24 for pre-existing history).
+    const w = await createWorkspace({ name: "no-pid-fresh-ws", repoPath: tempDir });
+    const ev = await seedRunningPaEvent({
+      workspaceId: w.id,
+      workspaceRepoPath: w.repoPath,
+      sessionId: "pa-2026-05-11T11-00-00-no-pid-fresh",
+      // No launcherPid; default fresh mtime.
+    });
+
+    const result = await reconcileStalePaSessions();
+    expect(result.staleEvents).toBe(0);
+
+    const evs = await readHistory(w.id);
+    expect(evs.find((e) => e.id === ev.id)?.status).toBe("running");
+  });
+
+  it("backward-compat: stale mtime + no launcherPid still flips to failed", async () => {
+    const w = await createWorkspace({ name: "no-pid-stale-ws", repoPath: tempDir });
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const ev = await seedRunningPaEvent({
+      workspaceId: w.id,
+      workspaceRepoPath: w.repoPath,
+      sessionId: "pa-2026-05-11T11-30-00-no-pid-stale",
+      fileMtime: tenMinAgo,
+      // No launcherPid → mtime fallback path; mtime is 10 min ago →
+      // stale → flipped.
+    });
+
+    const result = await reconcileStalePaSessions();
+    expect(result.staleEvents).toBe(1);
+
+    const evs = await readHistory(w.id);
+    expect(evs.find((e) => e.id === ev.id)?.status).toBe("failed");
   });
 });

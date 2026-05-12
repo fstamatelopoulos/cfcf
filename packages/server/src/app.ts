@@ -27,6 +27,7 @@ import {
   updateWorkspace,
   deleteWorkspace,
   validateWorkspaceRepo,
+  getActiveAgentsForWorkspaces,
 } from "@cfcf/core";
 import { getIterationLogPath, getLogPathByFilename, readHistory } from "@cfcf/core";
 import {
@@ -283,7 +284,18 @@ export function createApp() {
 
   app.get("/api/workspaces", async (c) => {
     const workspaces = await listWorkspaces();
-    return c.json(workspaces);
+    // F.22: enrich each workspace with `activeAgent` so the dashboard
+    // list view can render an "<agent> running" chip for standalone
+    // Review/Document/Reflect runs (which don't touch workspace.status
+    // by design — that field tracks the loop only). null when nothing
+    // is running.
+    const ids = workspaces.map((w) => w.id);
+    const activeAgents = await getActiveAgentsForWorkspaces(ids);
+    const enriched = workspaces.map((w) => ({
+      ...w,
+      activeAgent: activeAgents[w.id] ?? null,
+    }));
+    return c.json(enriched);
   });
 
   app.get("/api/workspaces/:id", async (c) => {

@@ -7,7 +7,24 @@ function formatAgent(agent?: { adapter: string; model?: string }): string {
   return agent.model ? `${agent.adapter}:${agent.model}` : agent.adapter;
 }
 
+/**
+ * Map the server-computed `activeAgent` to a user-visible chip label.
+ * F.22 (v0.24.0): standalone Review / Document / Reflect runs don't
+ * touch `workspace.status`, so the StatusBadge alone misses them. The
+ * card surfaces a secondary chip when an agent is actively running.
+ */
+function activeAgentLabel(activeAgent: WorkspaceConfig["activeAgent"]): string | null {
+  switch (activeAgent) {
+    case "loop":     return "loop running";
+    case "review":   return "review running";
+    case "document": return "document running";
+    case "reflect":  return "reflect running";
+    default:         return null;
+  }
+}
+
 export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
+  const activeLabel = activeAgentLabel(workspace.activeAgent);
   return (
     <div
       className="project-card"
@@ -15,7 +32,17 @@ export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
     >
       <div className="project-card__header">
         <h3 className="project-card__name">{workspace.name}</h3>
-        <StatusBadge status={workspace.status} />
+        <div className="project-card__status-group">
+          <StatusBadge status={workspace.status} />
+          {activeLabel && (
+            <span
+              className="project-card__active-chip"
+              title="An agent is actively running on this workspace right now (F.22)"
+            >
+              ● {activeLabel}
+            </span>
+          )}
+        </div>
       </div>
       <div className="project-card__details">
         <span className="project-card__repo" title={workspace.repoPath}>

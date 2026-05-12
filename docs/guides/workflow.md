@@ -508,8 +508,10 @@ Last reflect: stable · "Auth layer is coming together cleanly."
 ### The web GUI shows even more
 
 - A pulsing blue dot + phase label (e.g. `my-project: reflect #3`) appears in the top bar whenever *any* agent is running anywhere.
+- The dashboard's workspace cards show a per-card pulse-animated chip (e.g. `● review running`) when *any* agent is alive on that workspace — including standalone Review / Document / Reflect runs that don't touch the workspace's loop status. The `StatusBadge` next to the chip stays the source of truth for loop state (idle / running / paused / completed / failed / stopped). v0.24 / F.22.
 - The History tab shows each iteration plus a separate row per reflection run. Clicking a row expands it to show the full parsed signals (determination, quality, test counts, key concerns, reflection opt-out, iteration health, plan-modified vs rejected-with-reason, etc.).
-- The PhaseIndicator component labels each step with `(cf²)` or `(agent)` so you can tell at a glance which phases are deterministic plumbing vs LLM invocations.
+- The PhaseIndicator component labels each step with `(cf²)` or `(agent)` so you can tell at a glance which phases are deterministic plumbing vs LLM invocations. v0.24 added a `reflect` agent type so manual `cfcf reflect` runs render their own three-phase indicator parallel to Review and Document.
+- The workspace-detail page surfaces inline error banners when a standalone Review / Document / Reflect run fails. Pre-v0.24 only the loop's `error` field rendered; standalone-run failures were silently buried until the next successful run replaced the in-memory state.
 
 ### Monitoring (anytime during execution)
 

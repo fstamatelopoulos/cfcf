@@ -539,23 +539,52 @@ All structured cfcf files live in the repo under `cfcf-docs/`. This is the sourc
   CLAUDE.md                        # Agent instruction file (regenerated each iteration by cfcf)
 ```
 
-### 8.2 Outside the Repo (backup only)
+### 8.2 Outside the Repo (backup + runtime state)
 
-cfcf keeps agent logs (stdout/stderr) under `~/.cfcf/` since these are very large and would bloat the repo. This is a backup, not the source of truth.
+cfcf keeps agent logs (stdout/stderr) + per-runner runtime state under
+`~/.cfcf/` (or the platform config dir — `~/Library/Application
+Support/cfcf/` on macOS). Logs are too large to commit; runtime state
+is restart-recovery scaffolding, not source-of-truth. The repo's
+`cfcf-docs/` is the source of truth for everything that matters
+across machines.
 
 ```
-~/.cfcf/
-  logs/
+<config-dir>/
+  config.json                          # global cfcf config
+  workspaces/
     <workspace-id>/
-      iteration-001-dev.log      # Full dev agent stdout/stderr
-      iteration-001-judge.log    # Full judge agent stdout/stderr
-      iteration-002-dev.log
-      ...
-      architect-001.log          # Nth architect review run
-      architect-002.log
-      documenter-001.log         # Nth documenter run
-      documenter-002.log
+      config.json                      # per-workspace config
+      loop-state.json                  # iteration-loop state (pre-v0.24)
+      history.json                     # all agent-run events (any role)
+      review-state.json                # F.23 v0.24 — Architect runner
+      document-state.json              # F.23 v0.24 — Documenter runner
+      reflect-state.json               # F.23 v0.24 — Reflection runner
+
+<logs-dir>/  (typically ~/.cfcf/logs/ on macOS too)
+  <workspace-id>/
+    iteration-001-dev.log              # Full dev agent stdout/stderr
+    iteration-001-judge.log            # Full judge agent stdout/stderr
+    iteration-002-dev.log
+    ...
+    architect-001.log                  # Nth architect review run
+    documenter-001.log                 # Nth documenter run
+    reflection-001.log                 # Nth standalone reflection run
 ```
+
+**State-file lifecycle.** Each `<runner>-state.json` is written through
+on every status transition (`preparing` → `executing` → `collecting`
+→ `completed` / `failed`). On server boot, `start.ts` calls
+`hydrateReviewStateStore` / `hydrateDocumentStateStore` /
+`hydrateReflectStateStore` to populate the in-memory caches AND mark
+any state still claiming an active phase as `failed` with reason
+`Server restarted while <runner> was running`. So the dashboard's
+mid-flight indicators don't go blank across restart, and a stale
+"running" never lingers past a fresh boot.
+
+This mirrors the existing `loop-state.json` + `cleanupStaleActiveLoops`
+pattern. Together, all four state-bearing entities (loop, review,
+document, reflect) survive restart with the same
+"hydrate-and-flip-stale-to-failed" semantics.
 
 ### 8.3 No External Persistent Memory (for now)
 
