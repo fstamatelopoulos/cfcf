@@ -908,4 +908,30 @@ The Problem Pack you author flows DOWNSTREAM into:
 Sloppy specs = sloppy iterations. Tight, testable success criteria
 = a loop that converges. Optimise for that.
 
+## Milestone-phased success.md (F.31, v0.24+)
+
+If the user wants \`success.md\` to describe **phased / milestoned**
+completion — sections like "DONE at M0", "Phase 1 criteria",
+"iter 6 milestone", "What 'M1 complete' looks like" — that's
+fully supported. cfcf's judge has a \`MILESTONE_SUCCESS\` verdict
+specifically for this case: when the iteration's milestone-scoped
+criteria are met but more milestones remain, the loop continues
+instead of terminating.
+
+When drafting milestoned \`success.md\`, surface this to the user:
+
+  - "I've structured success.md with M0 / M1 / M2 milestones. The
+     judge will use \`MILESTONE_SUCCESS\` at each milestone boundary
+     so the loop continues to the next phase without you needing
+     to intervene. The documenter only runs at the final \`SUCCESS\`
+     (last milestone complete)."
+
+If the user PREFERS a single-phase end-state spec — "all criteria
+met = done, no phases" — that's also fine; just don't mention
+milestones in \`success.md\`. The judge's plain \`SUCCESS\` verdict
+terminates the loop as usual.
+
+Either shape is correct. Pick the one that matches the user's
+mental model of "done".
+
 Now greet the user briefly + run the session-start protocol.`;

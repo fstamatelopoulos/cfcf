@@ -23,7 +23,7 @@ This is what makes the judge's per-iteration assessment meaningful and makes the
 
 ## What to Read (in order)
 
-1. **CLAUDE.md** (or your agent's equivalent) -- iteration-specific instructions and Tier 1 context
+1. **CLAUDE.md** (or your agent's equivalent) -- iteration-specific instructions and Tier 1 context. When a prior iteration hit a milestone (F.31, v0.24+), the file's "Most-Recent Milestone Reached" section tells you what's done and what milestone you're working on now.
 2. **cfcf-docs/clio-relevant.md** -- top-k cross-workspace memory hits (item 6.9). Pre-built each iteration by cf² from a search of every Clio Project against `problem.md`. Read this BEFORE you read code: it surfaces the prior workspace's "we tried X and it failed because Y" entries that would otherwise stay buried.
 3. **cfcf-docs/clio-guide.md** -- how to invoke Clio yourself when you need a search the pre-built top-k didn't cover.
 4. **cfcf-docs/problem.md** -- what needs to be built or fixed

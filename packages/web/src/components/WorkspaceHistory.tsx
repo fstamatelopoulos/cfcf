@@ -23,6 +23,11 @@ import {
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
   PROGRESS: "var(--color-info)",
+  // MILESTONE_SUCCESS (F.31, v0.24+): not a problem state, not a
+  // final state — a successful milestone with more milestones to
+  // follow. Use a hue distinct from both SUCCESS and PROGRESS so
+  // the timeline reads "🏁 we hit a milestone here".
+  MILESTONE_SUCCESS: "var(--color-info)",
   STALLED: "var(--color-warning)",
   ANOMALY: "var(--color-error)",
 };
@@ -538,8 +543,12 @@ function IterationRowPair({
   const hasDevSignals = !!event.devSignals;
   const hasJudgeSignals = !!event.judgeSignals;
 
-  // Judge result summary (determination + quality + tests) — same shape
-  // the pre-F.21 combined row showed in the Result column.
+  // Judge result summary (determination + quality + tests). For
+  // MILESTONE_SUCCESS (F.31, v0.24+), prefix with a 🏁 flag and a
+  // "MILESTONE" label so the timeline reads as a milestone marker,
+  // not a generic SUCCESS. The note itself renders below as a
+  // muted sub-line.
+  const isMilestone = event.judgeDetermination === "MILESTONE_SUCCESS";
   const judgeResultCell = event.judgeDetermination ? (() => {
     const j = event.judgeSignals;
     const d = event.devSignals;
@@ -549,7 +558,7 @@ function IterationRowPair({
     const hasTests = passed !== undefined && total !== undefined;
     const summary = (
       <>
-        {event.judgeDetermination}
+        {isMilestone ? "🏁 MILESTONE" : event.judgeDetermination}
         {(hasQ || hasTests) && (
           <>
             {" "}(
@@ -562,12 +571,16 @@ function IterationRowPair({
       </>
     );
     const color = determinationColor[event.judgeDetermination] || "inherit";
-    return hasJudgeSignals ? (
+    const pill = hasJudgeSignals ? (
       <button
         type="button"
         className="project-history__readiness-pill"
         onClick={() => setJudgeExpanded((v) => !v)}
-        title="Click to view judge signals"
+        title={
+          isMilestone
+            ? `Milestone success — click to view judge signals${event.milestoneSetBy === "reflection" ? " (verdict overridden by reflection)" : ""}`
+            : "Click to view judge signals"
+        }
         style={{ color }}
       >
         {summary} {judgeExpanded ? "▾" : "▸"}
@@ -575,6 +588,33 @@ function IterationRowPair({
     ) : (
       <span style={{ color }}>{summary}</span>
     );
+    // Milestone note as a small sub-line — visible without expand.
+    if (isMilestone && event.milestoneNote) {
+      return (
+        <>
+          {pill}
+          <div
+            style={{
+              color: "var(--color-text-muted)",
+              fontSize: "var(--text-xs)",
+              marginTop: "0.25rem",
+              fontStyle: "italic",
+            }}
+            title={event.milestoneSetBy === "reflection"
+              ? "Set by reflection (override of judge's verdict)"
+              : "Set by judge"}
+          >
+            {event.milestoneNote}
+            {event.milestoneSetBy === "reflection" && (
+              <span style={{ marginLeft: "0.5rem", fontStyle: "normal" }}>
+                ↺ reflection override
+              </span>
+            )}
+          </div>
+        </>
+      );
+    }
+    return pill;
   })() : null;
 
   // Dev result summary: test counts + (when expandable) a click hint.
@@ -605,47 +645,23 @@ function IterationRowPair({
 
   return (
     <>
-      {/* Dev row */}
-      <tr className="project-history__row project-history__row--iteration-dev">
-        <td className="project-history__time">{formatTime(event.startedAt)}</td>
-        <td>Dev · iter {event.iteration}</td>
-        <td className="project-history__agent">
-          {event.devAgent}
-          {event.model && event.devAgent === event.agent && `:${event.model}`}
-        </td>
-        <td>
-          <span style={{ color: devStatusColor }}>{devStatus}</span>
-        </td>
-        <td>{devResultCell}</td>
-        <td title={event.devCompletedAt ? undefined : "Pre-F.21 event — per-half duration not tracked. The whole iteration duration is on the Judge row."}>{devDuration}</td>
-        <td className="project-history__actions">
-          <button
-            className="btn btn--small btn--secondary"
-            onClick={() =>
-              onSelectLog({
-                workspaceId,
-                logFile: event.devLogFile,
-                label: `Iteration ${event.iteration} (dev)`,
-              })
-            }
-          >
-            dev
-          </button>
-        </td>
-      </tr>
-      {/* Dev expanded detail */}
-      {devExpanded && hasDevSignals && (
-        <tr className="project-history__detail-row">
-          <td colSpan={7}>
-            <JudgeDetail
-              dev={event.devSignals}
-              judge={undefined}
-              meta={{ branch: event.branch }}
-            />
-          </td>
-        </tr>
-      )}
-      {/* Judge row */}
+      {/*
+        Within an iteration: judge ran AFTER dev, so judge is "newer".
+        The list sorts newest-first across iterations; ordering judge
+        before dev within an iteration keeps the same newest-first
+        invariant all the way through. Reading top-to-bottom you see:
+          Judge iter N (latest activity)
+          Dev iter N
+          Judge iter (N-1)
+          Dev iter (N-1)
+          ...
+        Pre-v0.24.x the order was dev-then-judge (chronological within
+        iter), which violated the list's newest-first rule + read
+        inconsistently next to the cross-iteration ordering. User
+        feedback caught this; fixed by swapping the JSX order +
+        keeping each row's expanded-detail panel adjacent to its row.
+      */}
+      {/* Judge row (newer — listed first) */}
       <tr className="project-history__row project-history__row--iteration-judge">
         <td className="project-history__time">
           {/* Judge starts when dev completes — use that as its
@@ -689,6 +705,46 @@ function IterationRowPair({
             <JudgeDetail
               judge={event.judgeSignals}
               dev={undefined}
+              meta={{ branch: event.branch }}
+            />
+          </td>
+        </tr>
+      )}
+      {/* Dev row (older — listed second) */}
+      <tr className="project-history__row project-history__row--iteration-dev">
+        <td className="project-history__time">{formatTime(event.startedAt)}</td>
+        <td>Dev · iter {event.iteration}</td>
+        <td className="project-history__agent">
+          {event.devAgent}
+          {event.model && event.devAgent === event.agent && `:${event.model}`}
+        </td>
+        <td>
+          <span style={{ color: devStatusColor }}>{devStatus}</span>
+        </td>
+        <td>{devResultCell}</td>
+        <td title={event.devCompletedAt ? undefined : "Pre-F.21 event — per-half duration not tracked. The whole iteration duration is on the Judge row."}>{devDuration}</td>
+        <td className="project-history__actions">
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() =>
+              onSelectLog({
+                workspaceId,
+                logFile: event.devLogFile,
+                label: `Iteration ${event.iteration} (dev)`,
+              })
+            }
+          >
+            dev
+          </button>
+        </td>
+      </tr>
+      {/* Dev expanded detail */}
+      {devExpanded && hasDevSignals && (
+        <tr className="project-history__detail-row">
+          <td colSpan={7}>
+            <JudgeDetail
+              dev={event.devSignals}
+              judge={undefined}
               meta={{ branch: event.branch }}
             />
           </td>

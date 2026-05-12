@@ -411,6 +411,57 @@ export interface LoopDecision {
  * its original meaning (loop is stuck → pause + popup) regardless of
  * `iteration_health`.
  */
+/**
+ * Resolve the effective determination for this iteration (item F.31,
+ * v0.24+). Reflection's `override_determination` wins over judge's
+ * `determination` when set — primary use case is reflection catching
+ * a premature SUCCESS verdict on milestone-scoped success.md
+ * criteria. The harness records WHO set MILESTONE_SUCCESS so the
+ * audit trail shows whether judge or reflection made the call.
+ *
+ * Returns the determination + accompanying milestone_note + a
+ * `milestoneSetBy` audit field. For non-milestone determinations,
+ * `milestoneNote` is undefined and `milestoneSetBy` is null.
+ */
+export function resolveEffectiveDetermination(
+  judgeSignals: JudgeSignals | null,
+  reflectionSignals?: ReflectionSignals | null,
+): {
+  determination: JudgeSignals["determination"] | null;
+  milestoneNote: string | undefined;
+  milestoneSetBy: "judge" | "reflection" | null;
+} {
+  // Reflection override (F.31). Only "MILESTONE_SUCCESS" is allowed
+  // today — other override paths would land here in the future.
+  if (
+    reflectionSignals?.override_determination === "MILESTONE_SUCCESS" &&
+    reflectionSignals.milestone_note?.trim()
+  ) {
+    return {
+      determination: "MILESTONE_SUCCESS",
+      milestoneNote: reflectionSignals.milestone_note.trim(),
+      milestoneSetBy: "reflection",
+    };
+  }
+  // Judge's own MILESTONE_SUCCESS.
+  if (
+    judgeSignals?.determination === "MILESTONE_SUCCESS" &&
+    judgeSignals.milestone_note?.trim()
+  ) {
+    return {
+      determination: "MILESTONE_SUCCESS",
+      milestoneNote: judgeSignals.milestone_note.trim(),
+      milestoneSetBy: "judge",
+    };
+  }
+  // Fall through to the judge's determination (or null).
+  return {
+    determination: judgeSignals?.determination ?? null,
+    milestoneNote: undefined,
+    milestoneSetBy: null,
+  };
+}
+
 export function makeDecision(
   judgeSignals: JudgeSignals | null,
   devSignals: DevSignals | null,
@@ -440,8 +491,17 @@ export function makeDecision(
   // -- the recommend_stop=true is reflection agreeing with the judge,
   // not flagging a problem. See doc-comment above.
   if (reflectionSignals?.recommend_stop === true) {
+    // The "reflection agrees with the stop" carve-out applies to
+    // both SUCCESS and (F.31) reflection-overridden MILESTONE_SUCCESS:
+    // in both cases reflection said "stop" but the judge / override
+    // signals confirm it's the right call (final or milestone) +
+    // iteration_health is good — so the loop's natural stop /
+    // continue logic handles it correctly. Don't pause for user
+    // review.
+    const effective = resolveEffectiveDetermination(judgeSignals, reflectionSignals);
     const reflectionAgreesWithSuccess =
-      judgeSignals?.determination === "SUCCESS" &&
+      (effective.determination === "SUCCESS" ||
+        effective.determination === "MILESTONE_SUCCESS") &&
       (reflectionSignals.iteration_health === "converging" ||
         reflectionSignals.iteration_health === "stable");
     if (!reflectionAgreesWithSuccess) {
@@ -476,10 +536,25 @@ export function makeDecision(
     };
   }
 
-  // Map judge determination to action
-  switch (judgeSignals.determination) {
+  // Map judge determination to action. Reflection may override the
+  // judge's verdict to MILESTONE_SUCCESS (F.31, v0.24+); use the
+  // resolved value so the override flows through the switch.
+  const effective = resolveEffectiveDetermination(judgeSignals, reflectionSignals);
+  switch (effective.determination ?? judgeSignals.determination) {
     case "SUCCESS":
       return { action: "stop", reason: "Judge determination: SUCCESS -- all criteria met" };
+
+    case "MILESTONE_SUCCESS":
+      // F.31 (v0.24+): milestone reached, more milestones remain.
+      // Continue the loop, surface the milestone_note. The harness's
+      // documenter path (in the stop-action branch elsewhere) is
+      // intentionally NOT triggered — documenting partial work as
+      // final would be misleading. The user can `cfcf document`
+      // manually if they want a milestone snapshot.
+      return {
+        action: "continue",
+        reason: `${effective.milestoneSetBy === "reflection" ? "Reflection override" : "Judge determination"}: MILESTONE_SUCCESS — ${effective.milestoneNote}`,
+      };
 
     case "PROGRESS":
       // Check pause cadence
@@ -1424,6 +1499,36 @@ async function runLoop(
       iterationHistory = historyLines.join("\n");
     }
 
+    // Find the most-recent MILESTONE_SUCCESS narrative from prior
+    // iterations to thread into the new iteration's CLAUDE.md banner
+    // (F.31, v0.24+). Walks the in-memory iteration record list
+    // backwards (most recent first); takes the first milestone_note
+    // from a judge/reflection that emitted MILESTONE_SUCCESS or
+    // override_determination='MILESTONE_SUCCESS'. Returns undefined
+    // when no prior milestone exists. Cheap — N iterations is small
+    // for any real run.
+    let previousMilestoneNote: string | undefined;
+    for (let i = state.iterations.length - 2; i >= 0; i--) {
+      const prev = state.iterations[i];
+      // Reflection override wins (matches resolveEffectiveDetermination)
+      const refl = prev.reflectionSignals;
+      if (
+        refl?.override_determination === "MILESTONE_SUCCESS" &&
+        refl.milestone_note?.trim()
+      ) {
+        previousMilestoneNote = refl.milestone_note.trim();
+        break;
+      }
+      const j = prev.judgeSignals;
+      if (
+        j?.determination === "MILESTONE_SUCCESS" &&
+        j.milestone_note?.trim()
+      ) {
+        previousMilestoneNote = j.milestone_note.trim();
+        break;
+      }
+    }
+
     const ctx: IterationContext = {
       iteration: iterationNum,
       problemPack,
@@ -1431,6 +1536,7 @@ async function runLoop(
       previousJudgeAssessment,
       userFeedback: state.userFeedback,
       iterationHistory,
+      previousMilestoneNote,
     };
 
     await writeContextToRepo(workspace.repoPath, ctx);
@@ -1729,6 +1835,18 @@ async function runJudgeAndDecide(
   // History tab look stuck. Merge status is updated separately in the
   // DECIDE block after auto-merge succeeds.
   const iterCompletedAt = new Date().toISOString();
+  // First pass: capture the judge's view of the iteration. If judge
+  // emitted MILESTONE_SUCCESS directly, the milestone fields are
+  // captured here. If reflection later overrides to MILESTONE_SUCCESS,
+  // a second updateHistoryEvent call after reflection runs will
+  // patch in the override (see the post-reflection block further
+  // down). F.31 (v0.24+).
+  const judgeMilestoneNote = (
+    judgeSignals?.determination === "MILESTONE_SUCCESS" &&
+    judgeSignals.milestone_note?.trim()
+  )
+    ? judgeSignals.milestone_note.trim()
+    : undefined;
   await updateHistoryEvent(workspace.id, iterRecord.historyEventId, {
     status: "completed",
     completedAt: iterCompletedAt,
@@ -1739,6 +1857,8 @@ async function runJudgeAndDecide(
     judgeQuality: judgeSignals?.quality_score,
     devSignals: iterRecord.devSignals,
     judgeSignals: judgeSignals ?? undefined,
+    milestoneNote: judgeMilestoneNote,
+    milestoneSetBy: judgeMilestoneNote ? "judge" : undefined,
   } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
 
   // Self-heal workspace status (item 6.35 follow-up #2): the user
@@ -1843,6 +1963,24 @@ async function runJudgeAndDecide(
     }
   }
 
+  // F.31 (v0.24+): if reflection overrode the judge's determination
+  // to MILESTONE_SUCCESS, patch the history event with the resolved
+  // milestone fields + flip the denormalised judgeDetermination so
+  // the UI renders the effective verdict. The judge's original
+  // value is still in `judgeSignals.determination` (persisted inline
+  // on the event) for audit.
+  if (
+    reflectionSignals?.override_determination === "MILESTONE_SUCCESS" &&
+    reflectionSignals.milestone_note?.trim()
+  ) {
+    await updateHistoryEvent(workspace.id, iterRecord.historyEventId, {
+      judgeDetermination: "MILESTONE_SUCCESS",
+      milestoneNote: reflectionSignals.milestone_note.trim(),
+      milestoneSetBy: "reflection",
+    } as Partial<import("./workspace-history.js").IterationHistoryEvent>);
+  }
+
+
   // Mirror the history event's completion time on the in-memory record.
   // (The history event itself was already marked completed above, before
   // reflection ran, so the user-visible row flipped promptly.)
@@ -1921,11 +2059,18 @@ async function runJudgeAndDecide(
 
   const decision = makeDecision(judgeSignals, devSignals, state, workspace, reflectionSignals);
 
-  // Merge branch to main if auto-merge and progress/success
+  // Merge branch to main if auto-merge and progress/success.
+  // F.31 (v0.24+): MILESTONE_SUCCESS also auto-merges — it's a
+  // successful milestone iteration with real work product, same
+  // shape as PROGRESS. Uses the resolved effective determination
+  // so a reflection override is honoured.
+  const effectiveForMerge = resolveEffectiveDetermination(judgeSignals, reflectionSignals).determination;
   if (
     workspace.mergeStrategy === "auto" &&
     judgeSignals &&
-    (judgeSignals.determination === "PROGRESS" || judgeSignals.determination === "SUCCESS")
+    (effectiveForMerge === "PROGRESS" ||
+      effectiveForMerge === "SUCCESS" ||
+      effectiveForMerge === "MILESTONE_SUCCESS")
   ) {
     const mainBranch = "main"; // TODO: detect default branch
     await gitManager.checkoutBranch(workspace.repoPath, mainBranch);

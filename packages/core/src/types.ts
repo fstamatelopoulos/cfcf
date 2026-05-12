@@ -437,7 +437,39 @@ export interface DevSignals {
 
 export interface JudgeSignals {
   iteration: number;
-  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY";
+  /**
+   * Judge's verdict on the iteration.
+   *
+   * `MILESTONE_SUCCESS` (item F.31, v0.24+) — "the iteration's
+   * applicable success criteria are met, AND `success.md` describes
+   * additional milestones/phases that remain incomplete". The harness
+   * treats this as "continue the loop" (no documenter, no
+   * termination) while preserving SUCCESS-flavoured semantics in the
+   * historical record (history.json + iteration-history.md surface
+   * the milestone reached). When this value is set, `milestone_note`
+   * MUST be populated with a concrete explanation of which milestone
+   * was reached + what work remains.
+   *
+   * The other four values behave as before:
+   *   SUCCESS  — final success, loop terminates, documenter runs
+   *   PROGRESS — partial progress, loop continues
+   *   STALLED  — no meaningful progress, onStalled policy decides
+   *   ANOMALY  — abnormal behaviour, loop pauses for user review
+   */
+  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY" | "MILESTONE_SUCCESS";
+  /**
+   * Required when `determination === "MILESTONE_SUCCESS"`. Free-form
+   * markdown explaining which milestone was reached + what comes
+   * next. Surfaced in `iteration-history.md`, the History tab's
+   * judge-detail panel, and as context to the next iteration's dev
+   * agent. Ignored for other determinations.
+   *
+   * Example: `"M0 milestone reached — all M0 criteria (1-7) met.
+   * M1 work remains (criteria 8-14, plan iterations 7-12)."`
+   *
+   * Item F.31, v0.24+.
+   */
+  milestone_note?: string;
   anomaly_type?:
     | "token_exhaustion"
     | "user_input_needed"
@@ -508,6 +540,31 @@ export interface ReflectionSignals {
     | "finish_loop"
     | "stop_loop_now"
     | "pause_for_user";
+  /**
+   * Cross-iteration override of the judge's determination
+   * (item F.31, v0.24+). Use case: the judge marked SUCCESS on
+   * milestone-scoped success.md criteria but the multi-iteration
+   * view shows additional milestones remain. Reflection — which
+   * reads across every iteration's history — corrects the verdict
+   * by setting this to `"MILESTONE_SUCCESS"`.
+   *
+   * When set, the harness uses THIS value as the effective
+   * determination (instead of the judge's). `milestone_note` MUST
+   * be populated alongside. Outside the override case, this field
+   * is undefined + judge's determination is used directly.
+   *
+   * Currently scoped to `"MILESTONE_SUCCESS"` only — reflection
+   * doesn't override SUCCESS → PROGRESS, PROGRESS → STALLED, etc.
+   * Other override paths can be added if the need surfaces.
+   */
+  override_determination?: "MILESTONE_SUCCESS";
+  /**
+   * Required when `override_determination === "MILESTONE_SUCCESS"`.
+   * Same shape + purpose as `JudgeSignals.milestone_note`: free-form
+   * markdown explaining which milestone was reached + what work
+   * remains. Surfaced wherever the judge's milestone_note would be.
+   */
+  milestone_note?: string;
 }
 
 /**

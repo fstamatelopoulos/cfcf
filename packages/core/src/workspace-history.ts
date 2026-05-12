@@ -118,6 +118,24 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
   devSignals?: DevSignals;
   /** Full parsed judge signals, same rationale as devSignals. */
   judgeSignals?: JudgeSignals;
+  /**
+   * Milestone explanation surfaced when `judgeDetermination ===
+   * "MILESTONE_SUCCESS"` (item F.31, v0.24+). Denormalised from
+   * judge.milestone_note (or reflection.milestone_note if
+   * reflection overrode the verdict) so the web UI's History tab
+   * can render the milestone pill without loading per-iteration
+   * signals files. Free-form markdown.
+   */
+  milestoneNote?: string;
+  /**
+   * Audit field that records which agent set the
+   * MILESTONE_SUCCESS determination — `"judge"` when the judge
+   * emitted it directly, `"reflection"` when reflection overrode
+   * a judge-SUCCESS via `override_determination`. Undefined for
+   * non-milestone determinations. Useful for users debugging
+   * "who decided we were at a milestone?".
+   */
+  milestoneSetBy?: "judge" | "reflection";
 }
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {

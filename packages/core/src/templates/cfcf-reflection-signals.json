@@ -3,5 +3,7 @@
   "plan_modified": false,
   "iteration_health": "inconclusive",
   "key_observation": "",
-  "recommend_stop": false
+  "recommend_stop": false,
+  "override_determination": null,
+  "milestone_note": null
 }
