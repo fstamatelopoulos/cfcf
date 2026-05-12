@@ -6,7 +6,15 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { mkdtemp, rm, mkdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
-import { makeDecision, getLoopState, startLoop, stopLoop, shouldRunReflection, type LoopState } from "./iteration-loop.js";
+import {
+  makeDecision,
+  getLoopState,
+  startLoop,
+  stopLoop,
+  shouldRunReflection,
+  resolveEffectiveDetermination,
+  type LoopState,
+} from "./iteration-loop.js";
 import type { WorkspaceConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
 
 function makeProject(overrides?: Partial<WorkspaceConfig>): WorkspaceConfig {
@@ -246,6 +254,199 @@ describe("Decision Engine - makeDecision", () => {
       makeProject(),
     );
     expect(decision.action).toBe("stop");
+  });
+
+  // --- F.31 (v0.24+): MILESTONE_SUCCESS routing ---
+
+  test("MILESTONE_SUCCESS with milestone_note → continue (NOT stop)", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({
+        determination: "MILESTONE_SUCCESS",
+        milestone_note: "M0 milestone reached — M1 work remains in plan.md.",
+      }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(decision.action).toBe("continue");
+    expect(decision.reason).toContain("MILESTONE_SUCCESS");
+    expect(decision.reason).toContain("M0 milestone reached");
+  });
+
+  test("MILESTONE_SUCCESS with empty milestone_note → still routes to MILESTONE_SUCCESS (lenient)", () => {
+    // Judge set MILESTONE_SUCCESS but forgot the note. We don't
+    // downgrade — the loop continues with whatever judge said. The
+    // history event captures the empty milestone_note; the warning
+    // surfaces in the UI via the absence of the sub-line.
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "MILESTONE_SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+    );
+    expect(decision.action).toBe("continue");
+  });
+
+  test("reflection.override_determination='MILESTONE_SUCCESS' overrides judge SUCCESS", () => {
+    // The testgame scenario: judge said SUCCESS at the M0 milestone
+    // boundary, reflection caught it across iterations.
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "M0 closed, M1 work remains.",
+        override_determination: "MILESTONE_SUCCESS",
+        milestone_note: "Reflection override: M0 done (judge graded SUCCESS at milestone). M1 in plan iters 7-12.",
+      },
+    );
+    expect(decision.action).toBe("continue");
+    expect(decision.reason).toContain("Reflection override");
+    expect(decision.reason).toContain("MILESTONE_SUCCESS");
+  });
+
+  test("reflection override without milestone_note is ignored (falls back to judge's verdict)", () => {
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "test",
+        override_determination: "MILESTONE_SUCCESS",
+        // milestone_note: not set → override is ignored
+      },
+    );
+    expect(decision.action).toBe("stop"); // falls through to SUCCESS
+  });
+
+  test("reflection override + recommend_stop is treated as agreement (no anomaly pause)", () => {
+    // Reflection said "stop AND it's a milestone" — the
+    // reflectionAgreesWithSuccess carve-out treats MILESTONE_SUCCESS
+    // the same as SUCCESS for this case. The MILESTONE_SUCCESS branch
+    // then routes to "continue".
+    const decision = makeDecision(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      makeDevSignals(),
+      makeLoopState(),
+      makeProject(),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "milestone closure",
+        recommend_stop: true,
+        override_determination: "MILESTONE_SUCCESS",
+        milestone_note: "M0 closed.",
+      },
+    );
+    expect(decision.action).toBe("continue");
+  });
+});
+
+// --- F.31 (v0.24+): resolveEffectiveDetermination ---
+
+describe("resolveEffectiveDetermination (F.31)", () => {
+  test("null judge + null reflection → null determination", () => {
+    const r = resolveEffectiveDetermination(null);
+    expect(r.determination).toBeNull();
+    expect(r.milestoneNote).toBeUndefined();
+    expect(r.milestoneSetBy).toBeNull();
+  });
+
+  test("judge PROGRESS, no reflection → PROGRESS, no milestone", () => {
+    const r = resolveEffectiveDetermination(makeJudgeSignals({ determination: "PROGRESS" }));
+    expect(r.determination).toBe("PROGRESS");
+    expect(r.milestoneNote).toBeUndefined();
+    expect(r.milestoneSetBy).toBeNull();
+  });
+
+  test("judge MILESTONE_SUCCESS + note → judge as the setter", () => {
+    const r = resolveEffectiveDetermination(
+      makeJudgeSignals({
+        determination: "MILESTONE_SUCCESS",
+        milestone_note: "M0 closed",
+      }),
+    );
+    expect(r.determination).toBe("MILESTONE_SUCCESS");
+    expect(r.milestoneNote).toBe("M0 closed");
+    expect(r.milestoneSetBy).toBe("judge");
+  });
+
+  test("judge MILESTONE_SUCCESS without note → falls through to original (raw)", () => {
+    // Lenient — the judge's verdict still propagates as
+    // MILESTONE_SUCCESS but milestoneSetBy is null + note is
+    // undefined. The harness's switch handles MILESTONE_SUCCESS
+    // with an empty action.reason note; the UI shows the pill
+    // without a sub-line.
+    const r = resolveEffectiveDetermination(
+      makeJudgeSignals({ determination: "MILESTONE_SUCCESS" }),
+    );
+    expect(r.determination).toBe("MILESTONE_SUCCESS");
+    expect(r.milestoneNote).toBeUndefined();
+    expect(r.milestoneSetBy).toBeNull();
+  });
+
+  test("reflection override wins over judge SUCCESS", () => {
+    const r = resolveEffectiveDetermination(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "test",
+        override_determination: "MILESTONE_SUCCESS",
+        milestone_note: "Reflection caught premature SUCCESS at M0 boundary.",
+      },
+    );
+    expect(r.determination).toBe("MILESTONE_SUCCESS");
+    expect(r.milestoneNote).toBe("Reflection caught premature SUCCESS at M0 boundary.");
+    expect(r.milestoneSetBy).toBe("reflection");
+  });
+
+  test("reflection override without note is ignored", () => {
+    const r = resolveEffectiveDetermination(
+      makeJudgeSignals({ determination: "SUCCESS" }),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "test",
+        override_determination: "MILESTONE_SUCCESS",
+        // no milestone_note
+      },
+    );
+    // Falls through to judge's verdict
+    expect(r.determination).toBe("SUCCESS");
+    expect(r.milestoneSetBy).toBeNull();
+  });
+
+  test("reflection override wins over judge's own MILESTONE_SUCCESS (reflection has precedence)", () => {
+    // Both set MILESTONE_SUCCESS. Reflection's note + setter wins.
+    const r = resolveEffectiveDetermination(
+      makeJudgeSignals({
+        determination: "MILESTONE_SUCCESS",
+        milestone_note: "judge's view",
+      }),
+      {
+        iteration: 1,
+        plan_modified: false,
+        iteration_health: "converging",
+        key_observation: "test",
+        override_determination: "MILESTONE_SUCCESS",
+        milestone_note: "reflection's view",
+      },
+    );
+    expect(r.determination).toBe("MILESTONE_SUCCESS");
+    expect(r.milestoneNote).toBe("reflection's view");
+    expect(r.milestoneSetBy).toBe("reflection");
   });
 });
 

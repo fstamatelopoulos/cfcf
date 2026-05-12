@@ -95,7 +95,9 @@ Exactly this shape:
   "plan_modified": false,
   "iteration_health": "converging",
   "key_observation": "One-line summary for iteration-history + UI",
-  "recommend_stop": false
+  "recommend_stop": false,
+  "override_determination": null,
+  "milestone_note": null
 }
 ```
 
@@ -107,6 +109,23 @@ Exactly this shape:
 - `inconclusive` -- not enough history to classify (typical on iterations 1-2).
 
 **`recommend_stop`:** Set to `true` ONLY when you've concluded the loop is fundamentally stuck -- e.g. three stalled iterations on the same root cause, a constraint the agent can't satisfy, or the problem definition itself seems wrong. Setting this pauses the loop and notifies the user. Never auto-stops -- always user-gated.
+
+**`override_determination` *(F.31, v0.24+)***: cross-iteration safety net for the milestone-success case. Use this **only** when ALL of these hold:
+
+1. The judge for THIS iteration emitted `determination: "SUCCESS"`.
+2. `success.md` is **milestone-phased** (it explicitly describes multiple phases / milestones — "DONE at M0", "Phase 1 criteria", "iter 6 milestone", etc.).
+3. **Cross-iteration evidence** shows more milestones remain — e.g. `plan.md` has pending items beyond what the current milestone covers, prior judge assessments referenced multi-milestone work, or `success.md`'s remaining sections are clearly out of scope for the current iteration.
+
+When you set `override_determination: "MILESTONE_SUCCESS"`:
+
+- **`milestone_note` is REQUIRED**. Free-form markdown explaining which milestone was reached + what comes next. Example: `"Iter 6 closed M0 (criteria 1-7). Plan.md iterations 7-12 cover M1 work (criteria 8-14). Judge graded SUCCESS at the M0 boundary; correcting to MILESTONE_SUCCESS so the loop continues to M1."`
+- **The harness uses YOUR value** instead of the judge's. Loop continues. Documenter is skipped (premature). `iteration-history.md` + the next iteration's CLAUDE.md banner surface your `milestone_note`.
+
+**Why this matters**: judge sees one iteration; you see all of them. If `success.md` describes phased completion, the judge's single-iteration view can hit a milestone boundary and (correctly within scope) grade it as SUCCESS — but that terminates the whole loop. Your cross-iteration view catches the case where more phases remain. This override is your safety net.
+
+**When NOT to use**: don't override SUCCESS to PROGRESS, STALLED to ANOMALY, etc. The override is currently scoped to MILESTONE_SUCCESS only.
+
+If unsure, leave `override_determination: null` — the judge's determination flows through unchanged.
 
 ### 3. Plan edits (`cfcf-docs/plan.md`) -- optional, non-destructive
 

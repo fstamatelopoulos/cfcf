@@ -48,10 +48,17 @@ Write a structured assessment following this format:
 
 ## Success Determination
 <!-- Check exactly ONE: -->
-- [ ] SUCCESS: All success criteria from success.md are met
+- [ ] SUCCESS: All success criteria from success.md are met (final completion)
 - [x] PROGRESS: Meaningful progress toward success criteria
+- [ ] MILESTONE_SUCCESS: This iteration's criteria are met BUT success.md describes additional milestones/phases that remain incomplete (see below)
 - [ ] STALLED: No meaningful progress or regression
 - [ ] ANOMALY: Abnormal situation detected (see details)
+
+## Milestone Note
+<!-- REQUIRED only when MILESTONE_SUCCESS is checked. Free-form
+     markdown: which milestone was reached + what comes next. -->
+- Milestone reached: ...
+- Work remaining: ...
 
 ## Test Results Analysis
 - Tests passing: X/Y
@@ -88,6 +95,7 @@ Write a JSON file with this exact structure:
 {
   "iteration": {{ITERATION}},
   "determination": "PROGRESS",
+  "milestone_note": null,
   "anomaly_type": null,
   "quality_score": 7,
   "tests_verified": true,
@@ -101,6 +109,49 @@ Write a JSON file with this exact structure:
   "reflection_reason": null
 }
 ```
+
+### `MILESTONE_SUCCESS` — when success.md is milestone-phased
+
+Use this verdict **only** when ALL of these hold:
+
+1. `success.md` explicitly describes **phased / milestoned**
+   completion (e.g. sections labelled "DONE at M0", "Phase 1
+   criteria", "iter 6 milestone", "What 'M1 complete' looks like")
+2. **THIS iteration's currently-applicable criteria** (the
+   criteria for the milestone in flight) are fully met
+3. **Additional milestones in success.md are NOT yet complete** —
+   their criteria are explicitly out of scope for the current
+   iteration
+
+When you pick `MILESTONE_SUCCESS`:
+
+- Populate `milestone_note` (required) with a concrete
+  explanation: **which** milestone was reached, **what** comes
+  next. Example: `"M0 milestone reached — all M0 criteria
+  (1-7) met. M1 work remains (criteria 8-14, plan iterations
+  7-12)."`
+- Set `should_continue: true` — the loop is NOT done; more
+  milestones remain.
+- The harness will: continue the loop, NOT run the documenter
+  (premature for partial work), surface your `milestone_note`
+  in iteration history + the next iteration's CLAUDE.md banner.
+
+**`MILESTONE_SUCCESS` vs `SUCCESS`**: pick `SUCCESS` only when
+`success.md`'s criteria are exhaustively met as a whole. If
+the spec has phases and you're at a phase boundary, use
+`MILESTONE_SUCCESS`. Picking `SUCCESS` prematurely at a
+milestone boundary will terminate the loop and run the
+documenter on partial work — usually wrong.
+
+**`MILESTONE_SUCCESS` vs `PROGRESS`**: pick `PROGRESS` for
+"this iteration moved the ball forward but no criterion fully
+flipped from incomplete to complete". Pick `MILESTONE_SUCCESS`
+only when an explicit milestone's criteria flipped from
+incomplete to complete in this iteration.
+
+If unsure, prefer `PROGRESS` — the harness will continue the
+loop either way; using `PROGRESS` just skips the milestone
+narrative, no harm done.
 
 ## Reflection-trigger signals (`reflection_needed`, `reflection_reason`)
 
@@ -151,7 +202,8 @@ else:
 ```
 
 **Determination values:**
-- `SUCCESS`: All success criteria are met. The project is done.
+- `SUCCESS`: All success criteria are met. The project is done. Harness terminates the loop + runs documenter.
+- `MILESTONE_SUCCESS` *(F.31, v0.24+)*: This iteration's milestone criteria are met but `success.md` has more milestones/phases remaining. Harness continues the loop, skips documenter. **Required**: populate `milestone_note` with what was reached + what comes next.
 - `PROGRESS`: Meaningful progress was made. Continue iterating.
 - `STALLED`: No meaningful progress or regression detected.
 - `ANOMALY`: Something abnormal happened (set `anomaly_type`).

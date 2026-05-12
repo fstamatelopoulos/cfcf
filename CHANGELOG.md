@@ -9,6 +9,95 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — F.31: `MILESTONE_SUCCESS` judge determination + reflection override
+
+**Motivation.** Real dogfood (gmbot): user wrote `success.md` with
+phased milestones ("DONE at M0 (iter 6 milestone)", "DONE at M1",
+etc.). At iter 6 the judge correctly graded all currently-applicable
+criteria as met → emitted `determination: "SUCCESS"`. The harness's
+decision engine reads SUCCESS as authoritative → ran the documenter
+→ terminated. The judge's PROSE saying "continue to M1" was ignored
+because the structured `determination` field is the load-bearing
+signal.
+
+**Root cause.** Pre-F.31 the judge had ONE binary success field
+(SUCCESS / PROGRESS / STALLED / ANOMALY). Milestone-phased
+success.md compositions don't cleanly map: every milestone boundary
+is a "SUCCESS for THIS phase" moment that the judge can correctly
+flag, but the harness has no way to distinguish "milestone-scoped
+success" from "final completion".
+
+**Fix.** New explicit determination value `MILESTONE_SUCCESS`. The
+harness treats it as "continue the loop, skip the documenter,
+surface the milestone narrative in history + the next iteration's
+context". Two paths can set it:
+
+1. **Judge directly** — when the judge agent recognises that
+   `success.md` has phased milestones AND the iteration's
+   currently-applicable milestone is complete, it emits
+   `determination: "MILESTONE_SUCCESS"` + populates `milestone_note`
+   with a concrete explanation.
+2. **Reflection override** — when judge missed the milestone
+   nature and emitted SUCCESS prematurely, reflection (which reads
+   cross-iteration context) can set
+   `override_determination: "MILESTONE_SUCCESS"` + `milestone_note`
+   to correct the verdict. This is the gmbot-scenario safety net.
+
+**Decision engine** — new pure helper `resolveEffectiveDetermination(
+judge, reflection)` resolves the effective verdict. Reflection
+override wins when set with a non-empty `milestone_note`; otherwise
+falls through to judge. The "reflection agrees with success" carve-
+out treats SUCCESS and MILESTONE_SUCCESS symmetrically (no spurious
+pause when reflection said `recommend_stop: true` + the verdict was
+a milestone-or-final success with converging/stable health).
+Auto-merge behaves the same for MILESTONE_SUCCESS as for PROGRESS
+/ SUCCESS — the iteration's commits are real work product + merge
+cleanly to main.
+
+**Backward compat.** Pre-F.31 judges / reflections don't emit the
+new fields. Existing workspaces keep the same behaviour. Old
+`history.json` events have no `milestoneNote` / `milestoneSetBy` —
+web UI handles undefined gracefully (no pill, no sub-line).
+
+**Surfaced in:**
+- `IterationHistoryEvent.milestoneNote` + `milestoneSetBy: "judge"
+  | "reflection"` denormalised onto the event for fast UI rendering
+- Web UI History tab renders a 🏁 MILESTONE pill (info colour) +
+  the milestone note as a muted italic sub-line; a "↺ reflection
+  override" annotation when reflection corrected the judge
+- Dev's next iteration's CLAUDE.md banner gets a "Most-Recent
+  Milestone Reached" section threading the most recent
+  `milestone_note` from prior iterations
+
+**Template updates** — every role that touches `success.md` or
+signals knows about MILESTONE_SUCCESS:
+
+- **Judge** (`cfcf-judge-instructions.md` + `cfcf-judge-signals.json`):
+  new MILESTONE_SUCCESS checkbox + "Milestone Note" assessment
+  section + extensive guidance on when to pick it vs SUCCESS vs
+  PROGRESS. JSON template adds `milestone_note: null` field.
+- **Reflection** (`cfcf-reflection-instructions.md` +
+  `cfcf-reflection-signals.json`): new `override_determination` +
+  `milestone_note` fields documented as the cross-iteration safety
+  net.
+- **Architect** (`cfcf-architect-instructions.md`): pre-loop lint —
+  when reviewing `success.md`, if it describes phased / milestoned
+  completion, call out that judge should use MILESTONE_SUCCESS at
+  phase boundaries. Informational, not BLOCKED.
+- **Product Architect** (`prompt-assembler.ts`): when drafting
+  milestone-phased `success.md`, surfaces to the user how cfcf
+  handles milestones. Either shape (phased / single-end-state)
+  supported.
+- **Dev** (`process.md`): one-line note that prior milestone
+  closures appear in the CLAUDE.md banner.
+
+**Tests**: 18 new tests in `iteration-loop.test.ts` covering
+`resolveEffectiveDetermination` (every override permutation,
+empty-note fallthrough, reflection precedence over judge's own
+milestone) + `makeDecision` MILESTONE routing (continue not stop,
+empty-note lenient, reflection-override of judge SUCCESS,
+reflection-recommend-stop agreement). 1006 total tests passing.
+
 ### Added — F.21: History tab splits iteration rows into Dev + Judge
 
 Previously the History tab rendered each iteration as a single

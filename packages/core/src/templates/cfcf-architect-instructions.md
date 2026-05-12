@@ -87,6 +87,24 @@ Write a comprehensive review following this structure:
 ## Gaps and Ambiguities
 <!-- List specific gaps that would cause a software engineer to ask questions -->
 <!-- For each gap: what's missing and why it matters -->
+<!--
+  F.31 lint (v0.24+): if `success.md` describes phased / milestoned
+  completion (sections like "DONE at M0", "Phase 1 criteria",
+  "iter 6 milestone", "What 'M1 complete' looks like"), call it
+  out here. Mention to the user that:
+
+    - The judge agent should use the `MILESTONE_SUCCESS` verdict at
+      phase boundaries (not `SUCCESS`, which would terminate the
+      whole loop after the first milestone).
+    - Reflection has an `override_determination: "MILESTONE_SUCCESS"`
+      escape hatch if the judge mis-grades a milestone as SUCCESS.
+    - cfcf will continue the loop through each milestone — the user
+      doesn't need to intervene at milestone boundaries.
+
+  This is informational, NOT a `BLOCKED` / `NEEDS_REFINEMENT` issue.
+  Phased success.md compositions are fine + supported in v0.24+.
+-->
+
 
 ## Likely Engineer Questions
 <!-- Questions that any software engineer would ask when reading the problem definition -->

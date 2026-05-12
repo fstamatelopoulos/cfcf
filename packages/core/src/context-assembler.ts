@@ -61,6 +61,15 @@ export interface IterationContext {
   userFeedback?: string;
   /** Compressed iteration history */
   iterationHistory?: string;
+  /**
+   * Most-recent MILESTONE_SUCCESS milestone_note from a prior
+   * iteration, if any (F.31, v0.24+). Threaded into the iteration
+   * CLAUDE.md / AGENTS.md banner so the dev agent knows "we're
+   * past <milestone X>; now working on <next>" without having to
+   * re-read iteration-history.md. Empty / absent for runs that
+   * never hit a milestone.
+   */
+  previousMilestoneNote?: string;
 }
 
 /**
@@ -225,6 +234,21 @@ export function generateInstructionContent(ctx: IterationContext): string {
     lines.push(judgeLines.join("\n"));
     lines.push("");
     lines.push("Full assessment: cfcf-docs/judge-assessment.md");
+    lines.push("");
+  }
+
+  // Most-recent milestone (F.31, v0.24+) — surfaces "we're past
+  // milestone X; M1 work remains" so the dev agent knows the
+  // multi-milestone trajectory without re-reading the whole
+  // iteration-history.md. Empty / absent when no milestone yet.
+  if (ctx.previousMilestoneNote && ctx.previousMilestoneNote.trim()) {
+    lines.push("## Most-Recent Milestone Reached");
+    lines.push("");
+    lines.push(ctx.previousMilestoneNote.trim());
+    lines.push("");
+    lines.push(
+      "The harness logged this on a prior iteration via judge or reflection's `MILESTONE_SUCCESS` verdict. Apply the next-milestone work in plan.md; the criteria for the milestone above are already satisfied.",
+    );
     lines.push("");
   }
 

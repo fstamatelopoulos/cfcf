@@ -89,7 +89,8 @@ export interface DevSignals {
 
 export interface JudgeSignals {
   iteration: number;
-  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY";
+  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY" | "MILESTONE_SUCCESS";
+  milestone_note?: string;
   anomaly_type?: string;
   quality_score: number;
   tests_verified: boolean;
@@ -198,6 +199,14 @@ export interface ReflectionSignals {
   iteration_health: IterationHealth;
   key_observation: string;
   recommend_stop?: boolean;
+  /**
+   * Cross-iteration override of the judge's determination (F.31,
+   * v0.24+). Set to "MILESTONE_SUCCESS" when reflection — with
+   * multi-iteration context — recognises judge's SUCCESS verdict
+   * was milestone-scoped. `milestone_note` must accompany.
+   */
+  override_determination?: "MILESTONE_SUCCESS";
+  milestone_note?: string;
 }
 
 export interface DevSignalsWeb {
@@ -216,7 +225,18 @@ export interface DevSignalsWeb {
 
 export interface JudgeSignalsWeb {
   iteration: number;
-  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY";
+  /**
+   * `MILESTONE_SUCCESS` (item F.31, v0.24+) — judge says "applicable
+   * criteria met for THIS milestone, but more milestones remain in
+   * success.md". Harness continues the loop, skips documenter,
+   * surfaces `milestone_note` in history.
+   */
+  determination: "SUCCESS" | "PROGRESS" | "STALLED" | "ANOMALY" | "MILESTONE_SUCCESS";
+  /**
+   * Free-form milestone explanation, required when
+   * `determination === "MILESTONE_SUCCESS"` (item F.31, v0.24+).
+   */
+  milestone_note?: string;
   anomaly_type?:
     | "token_exhaustion"
     | "user_input_needed"
@@ -306,6 +326,18 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
    * back to "—" for the dev row's duration in that case.
    */
   devCompletedAt?: string;
+  /**
+   * Milestone explanation surfaced when `judgeDetermination ===
+   * "MILESTONE_SUCCESS"` (F.31, v0.24+). Free-form markdown.
+   */
+  milestoneNote?: string;
+  /**
+   * Who set the MILESTONE_SUCCESS determination — `"judge"` when
+   * judge emitted it directly, `"reflection"` when reflection
+   * overrode a judge-SUCCESS via `override_determination`.
+   * Undefined for non-milestone determinations.
+   */
+  milestoneSetBy?: "judge" | "reflection";
 }
 
 export interface DocumentHistoryEvent extends BaseHistoryEvent {
