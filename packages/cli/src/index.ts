@@ -49,6 +49,22 @@ import { maybePrintUpdateBanner } from "./update-banner.js";
 // binary with `CFCF_INTERNAL_SERVE=1` so a single artifact hosts both the
 // CLI and the server (item 5.3). We intercept here before commander parses.
 if (process.env.CFCF_INTERNAL_SERVE === "1") {
+  // **Critical**: clear the env var IMMEDIATELY before any child
+  // process is spawned. Without this it cascades: the server inherits
+  // it (set on the server-child spawn), then spawns agent processes
+  // which inherit it via `{ ...process.env }`, then the agent's
+  // shell-out to `cfcf clio search` (or any cfcf invocation) sees
+  // the var and routes to startServer() instead of the CLI client —
+  // failing with EADDRINUSE because the real server is already bound.
+  //
+  // Real dogfood: the SA in gmbot tried `cfcf clio search "..."` to
+  // pull cross-workspace precedents, the nested cfcf binary tried to
+  // start a server on port 7233, EADDRINUSE'd, and the SA recorded
+  // "Clio cross-workspace search could not run because the local
+  // cfcf server failed to bind port 7233" as a non-blocking gap.
+  // Surfaced + fixed 2026-05-12 (F.29 in v0.24.0).
+  delete process.env.CFCF_INTERNAL_SERVE;
+
   const { DEFAULT_PORT } = await import("@cfcf/core");
   const { startServer } = await import("@cfcf/server/start.js");
   const port = parseInt(process.env.CFCF_PORT || "", 10) || DEFAULT_PORT;

@@ -11,9 +11,9 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
-## [0.24.0] -- 2026-05-11
+## [0.24.0] -- 2026-05-12
 
-Eight-phase release packaging up the v0.23.1 dogfood follow-ups: full
+Nine-phase release packaging up the v0.23.1 dogfood follow-ups: full
 status-tracking symmetry across all four agent surfaces (loop /
 review / document / reflect), Clio storage rationalisation that drops
 ~20% of fragmented per-iteration docs to single growing artifacts,
@@ -136,6 +136,50 @@ brings Reflect to parity.
   silently buried — only `loopState.error` rendered, and the next
   standalone run replaced the in-memory state, hiding the prior
   failure.
+
+### Fixed — F.29: agent's `cfcf clio search` cascaded `CFCF_INTERNAL_SERVE=1` → EADDRINUSE
+
+Surfaced when the user ran the Solution Architect on `~/src/gmbot`.
+The SA tried to do `cfcf clio search "..."` to pull
+cross-workspace precedents (as the architect-instructions
+template directs). Instead of acting as an HTTP client to the
+running server, the nested `cfcf` binary attempted to **start a
+new server** on port 7233 and failed with `EADDRINUSE`. The SA
+recorded:
+
+> "Clio cross-workspace search could not run because the local
+> cfcf server failed to bind port 7233."
+
+as a non-blocking gap in `architect-review.md`.
+
+**Root cause — env-var cascade.** `cfcf server start` re-spawns
+the cfcf binary with `CFCF_INTERNAL_SERVE=1` to route the
+process into `startServer()` (single-binary CLI+server pattern,
+item 5.3). The CLI's entry-point consumed that env var but
+never deleted it from `process.env`, so:
+
+1. Server child inherits `CFCF_INTERNAL_SERVE=1` (set on spawn)
+2. Server spawns agent processes with `{ ...process.env }` →
+   agent inherits the var
+3. Agent shells out to `cfcf clio search` → nested cfcf process
+   inherits its parent's env → still has `CFCF_INTERNAL_SERVE=1`
+4. Nested cfcf routes to `startServer()` → `Bun.serve({ port:
+   7233 })` → EADDRINUSE (the real server is already bound)
+
+**Fix.** One line in `packages/cli/src/index.ts`: `delete
+process.env.CFCF_INTERNAL_SERVE` immediately after the routing
+check, BEFORE any child process is spawned. The server still
+boots correctly (the var has already served its purpose);
+descendants now inherit a clean env.
+
+Affects every agent role that follows the architect-instructions
+template's Clio-search guidance: dev, judge, architect,
+reflection, documenter. Pre-fix, ALL of those silently failed
+their Clio precedent lookups; the SA was just the first to
+record it explicitly because the template tells the architect
+to surface non-blocking gaps in `architect-review.md`. The
+other roles' searches failed quietly into stdout/stderr without
+a structured signal back to the harness.
 
 ### Fixed — F.28: PA boot-reconcile false-positive for idle live sessions
 
