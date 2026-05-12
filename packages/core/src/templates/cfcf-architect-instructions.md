@@ -65,6 +65,44 @@ searches for problem-shape precedents (item 6.9):
   ingest it yourself. **Don't** call `cfcf clio docs ingest` for the
   review file; that creates a duplicate.
 
+## Milestone-phased `success.md` lint (F.31, v0.24+)
+
+**Pre-loop check**: when you read `cfcf-docs/success.md`, look for
+**phased / milestoned** completion structure — sections like:
+
+- "DONE at M0 (iter 6 milestone)"
+- "Phase 1 criteria", "Phase 2 criteria"
+- "What 'M1 complete' looks like"
+- Numbered milestone gates ("M0", "M1", "M2", …)
+- Any structure where some criteria are explicitly out-of-scope for
+  the current development phase
+
+**If found**: add a short paragraph to your `architect-review.md`
+under "Gaps and Ambiguities" (or a dedicated "Milestone structure"
+section) that:
+
+1. **Confirms the milestone structure is supported** — phased
+   `success.md` is first-class in cfcf v0.24+; no rewrite needed.
+2. **Explains the harness contract**: the judge will use the
+   `MILESTONE_SUCCESS` verdict at each milestone boundary (not
+   `SUCCESS`, which would terminate the loop after the first
+   milestone). Reflection has an `override_determination:
+   "MILESTONE_SUCCESS"` escape hatch if the judge mis-grades a
+   milestone boundary as final SUCCESS. The documenter runs only
+   at the final `SUCCESS` (last milestone complete) — partial
+   docs aren't useful.
+3. **Calls out any ambiguity** — e.g. milestone boundaries that
+   aren't testable, a phase whose criteria overlap with
+   another's. Those ARE worth flagging as gaps.
+
+**Do NOT use this as grounds for `NEEDS_REFINEMENT` or `BLOCKED`**
+unless the phased structure has actual ambiguity. Phased
+`success.md` is a deliberate spec shape, not a defect.
+
+**If `success.md` is single-phase end-state** (no milestones): no
+mention needed. The judge will emit plain `SUCCESS` when criteria
+are met; the loop terminates normally.
+
 ## What to Produce
 
 You MUST produce the following files:
@@ -87,23 +125,6 @@ Write a comprehensive review following this structure:
 ## Gaps and Ambiguities
 <!-- List specific gaps that would cause a software engineer to ask questions -->
 <!-- For each gap: what's missing and why it matters -->
-<!--
-  F.31 lint (v0.24+): if `success.md` describes phased / milestoned
-  completion (sections like "DONE at M0", "Phase 1 criteria",
-  "iter 6 milestone", "What 'M1 complete' looks like"), call it
-  out here. Mention to the user that:
-
-    - The judge agent should use the `MILESTONE_SUCCESS` verdict at
-      phase boundaries (not `SUCCESS`, which would terminate the
-      whole loop after the first milestone).
-    - Reflection has an `override_determination: "MILESTONE_SUCCESS"`
-      escape hatch if the judge mis-grades a milestone as SUCCESS.
-    - cfcf will continue the loop through each milestone — the user
-      doesn't need to intervene at milestone boundaries.
-
-  This is informational, NOT a `BLOCKED` / `NEEDS_REFINEMENT` issue.
-  Phased success.md compositions are fine + supported in v0.24+.
--->
 
 
 ## Likely Engineer Questions
