@@ -363,4 +363,50 @@ describe("assembleProductArchitectPrompt", () => {
     expect(out).toContain("2+"); // explicit threshold appears literally
     expect(out).toContain("BEFORE generating your reply");
   });
+
+  // --- v0.24.2 PA-prompt refinements (round 2 of dogfood feedback) ---
+
+  it("digest-write trigger is lock-step with the per-turn session-log rule (v0.24.2 refinement)", () => {
+    // PA's refined #2 from the round-2 dogfood feedback: drop the
+    // multi-clause "ANY of these" framing in favour of one lock-step
+    // rule — every substantive Problem Pack edit gets a digest bullet
+    // in the same turn, same hard discipline as the per-turn
+    // session-log rule. Preferences / supersession / rejection remain
+    // as *additional* triggers, not the load-bearing rule.
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    // "same hard discipline as the per-turn session-log rule" — the
+    // sharp, pinnable phrasing from the PA refinement.
+    expect(out).toContain("same hard discipline");
+    // "in the same turn" — the lock-step semantics. Pin both halves
+    // of the lock-step framing so future edits don't drift back to
+    // a weaker "eventually" wording.
+    expect(out).toContain("in the same turn");
+  });
+
+  it("self-check ritual names mtime comparison explicitly (v0.24.2 refinement)", () => {
+    // PA's refined #4 from round-2: the self-check is a file-mtime
+    // comparison on disk, not a vibe count of "entries since last
+    // update." Names the two files + a concrete check tool the
+    // agent has shell access to (stat / ls -lT). This is the same
+    // heuristic we considered building harness-side (F.32) but
+    // correctly placed inside the agent loop where it has the
+    // context to act on it (write barrier vs passive observer).
+    const out = assembleProductArchitectPrompt({
+      state: baseState,
+      memory: emptyMemory,
+      clioActor: "product-architect|claude-code|opus",
+    });
+    expect(out).toContain("mtime");
+    expect(out).toContain("workspace-summary.md");
+    expect(out).toMatch(/session-[^\s]+\.md/);
+    // Names a concrete check tool the agent has shell access to —
+    // not a vibe check.
+    expect(out).toMatch(/\bstat\b|\bls -lT\b/);
+    // "file-mtime comparison, not a vibe check" — pin the framing.
+    expect(out).toContain("not a vibe check");
+  });
 });

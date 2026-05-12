@@ -11,6 +11,115 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 _No changes yet._
 
+## [0.24.2] -- 2026-05-12
+
+PA prompt refinements (round 2 of dogfood feedback) — strictly an
+extension of the PA memory-discipline work shipped in v0.24.1. Two
+surgical edits to the PA system prompt template, no code-surface
+changes.
+
+### Changed — PA prompt: lock-step digest trigger + mtime-based self-check
+
+After v0.24.1 shipped, the gmbot PA delivered a refined version of
+its earlier feedback. Two of the four suggestions matched what we'd
+already shipped (digest-first ordering, supersession pattern); the
+other two had subtle but real refinements that this patch applies.
+
+**Refinement A — digest write trigger becomes lock-step with the
+session-log per-turn rule.**
+
+v0.24.1 shipped a four-clause testable trigger (Problem Pack edit /
+preference / supersession / rejection, BEFORE responding). That
+worked but still required the agent to judge "did any of these
+happen this turn?" — four separate yes/no checks every turn.
+
+PA's refined framing collapses this to **one lock-step rule** with
+the other three as additional triggers, not the load-bearing one:
+
+> **After every substantive edit to a Problem Pack file, append a
+> Decisions bullet to the digest in the same turn — same hard
+> discipline as the per-turn session-log rule.** A Problem Pack
+> edit without a matching digest bullet is incomplete work.
+
+The "same discipline as the session-log per-turn rule" framing is
+the key — the agent already has a strong "every turn → session log
+entry" reflex; bolting the digest write onto the same reflex is a
+much sharper rule than "remember to check these four conditions."
+
+Preferences / supersession / rejection remain as triggers — they're
+listed as "additional triggers (same discipline, even without a
+Problem Pack edit this turn)" below the lock-step rule.
+
+**Refinement B — turn-start self-check names mtime comparison
+explicitly.**
+
+v0.24.1 shipped "scan the session log for entries appended since
+your last digest update; flush if 2+ accumulated." That implicitly
+required parsing the session log for entry boundaries — but the
+session-log header format is agent-controlled, so there's no
+guaranteed `## Turn N` pattern to count against.
+
+PA's refined framing names the **file-mtime comparison** as the
+concrete check method:
+
+>  1. `stat` (or `ls -lT` on macOS) `<repo>/.cfcf-pa/workspace-summary.md`
+>  2. `stat` `<repo>/.cfcf-pa/session-<sessionId>.md`
+>  3. If the session log mtime is newer than the digest mtime AND
+>     the gap represents 2+ turns of content, do a catch-up pass.
+>
+> This is a file-mtime comparison, not a vibe check.
+
+Same write-barrier discipline, but with an unambiguous check method
+the agent can execute via shell.
+
+**Why this is in the prompt, not the harness.**
+
+The same mtime-comparison heuristic was originally considered as a
+**cfcf-side diagnostic** (F.32, "pa-digest-staleness") via
+`cfcf doctor` + a dashboard chip. That scope was killed before
+implementation. Reasoning:
+
+- The harness diagnostic would be a *passive observer* — would warn
+  on workspaces stopped 3 weeks ago (false positive), can't
+  distinguish "mid-decision drift" from "you forgot."
+- The agent self-check is an *active write barrier* — has full
+  context (knows the current turn, the active decision) and the
+  authority to *act* (flush the digest), not just observe.
+
+The agent self-check obviates the need for a harness diagnostic —
+the check method (mtime comparison) belongs inside the agent loop
+where it has the context to act on it.
+
+**Implementation** (`packages/core/src/product-architect/
+prompt-assembler.ts`):
+
+- Rewrote the `### Digest` write-trigger block: lead with the
+  lock-step Problem Pack→digest rule; preferences / supersession /
+  rejection demoted to "additional triggers." Preserves the v0.24.1
+  `substantive edit` + `BEFORE responding` + `contradicts or
+  supersedes` literals so the existing v0.24.1 tests still pass.
+- Rewrote the `### Turn-start self-check` block: replaced the
+  "scan session log for entries" framing with concrete `stat` /
+  `ls -lT` mtime comparison on the two co-located files
+  (`workspace-summary.md` + `session-<id>.md`). Preserves the
+  v0.24.1 `2+` threshold + `BEFORE generating your reply` literals.
+
+**Test coverage** (2 new tests in `prompt-assembler.test.ts`,
+all 28 tests pass):
+
+- `digest-write trigger is lock-step with the per-turn session-log
+  rule` — pins `same hard discipline` + `in the same turn`.
+- `self-check ritual names mtime comparison explicitly` — pins
+  `mtime` + `workspace-summary.md` + a `session-<…>.md` reference
+  + a concrete check tool (`stat` or `ls -lT`) + the `not a vibe
+  check` framing.
+
+**No code-surface changes** outside the prompt template + its
+tests. Same shape as the v0.24.1 PA-discipline commit. The
+companion harness-side `pa-digest-staleness` diagnostic (originally
+F.32) is dropped as a scope item — the agent self-check renders it
+redundant.
+
 ## [0.24.1] -- 2026-05-12
 
 Patch release bundling six items since v0.24.0:
