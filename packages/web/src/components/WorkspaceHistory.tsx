@@ -92,9 +92,23 @@ export function WorkspaceHistory({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((e) => (
-            <HistoryRow key={e.id} event={e} workspaceId={workspaceId} onSelectLog={onSelectLog} />
-          ))}
+          {sorted.map((e) =>
+            e.type === "iteration" ? (
+              <IterationRowPair
+                key={e.id}
+                event={e as IterationHistoryEvent}
+                workspaceId={workspaceId}
+                onSelectLog={onSelectLog}
+              />
+            ) : (
+              <HistoryRow
+                key={e.id}
+                event={e}
+                workspaceId={workspaceId}
+                onSelectLog={onSelectLog}
+              />
+            ),
+          )}
         </tbody>
       </table>
     </div>
@@ -119,7 +133,10 @@ function HistoryRow({
 
   // Type-column labels follow a consistent "<Role> · <task>" shape
   // (state is in its own column). When there's no per-event task
-  // detail, just the role name is shown.
+  // detail, just the role name is shown. Note: `iteration` events
+  // route to `IterationRowPair` higher up — they never hit this
+  // switch (F.21, v0.24+). The case is kept defensively for type
+  // exhaustiveness; rendering it would show the legacy combined label.
   const typeLabel = (() => {
     switch (event.type) {
       case "iteration": {
@@ -419,6 +436,256 @@ function HistoryRow({
             {hasLoopStoppedDetail && loopStoppedEvent && (
               <LoopStoppedDetail event={loopStoppedEvent} />
             )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/**
+ * Render an iteration event as TWO sibling rows (Dev + Judge) instead
+ * of one combined "Dev + Judge · iter N" row (item F.21, v0.24+).
+ *
+ * Rationale: the previous combined row hid the judge adapter (Agent
+ * column only showed `event.devAgent`), conflated dev success / judge
+ * verdict into a single status cell, and made it impossible to tell at
+ * a glance which half failed when the row was red. The data model
+ * already stores everything separately (`devAgent`/`judgeAgent`,
+ * `devLogFile`/`judgeLogFile`, `devExitCode`/`judgeExitCode`,
+ * `devSignals`/`judgeSignals`); this rendering change just surfaces
+ * the existing split. PhaseIndicator's live status bar already
+ * separates them (prepare → dev → judge → reflect → decide), so the
+ * History tab now matches that mental model.
+ *
+ * No data migration: same `IterationHistoryEvent` shape, just rendered
+ * as a pair. Each row has its own `expanded` state + its own targeted
+ * detail panel. Old events without `devCompletedAt` (pre-F.21) render
+ * the dev row's duration as "—" with a tooltip.
+ */
+function IterationRowPair({
+  event,
+  workspaceId,
+  onSelectLog,
+}: {
+  event: IterationHistoryEvent;
+  workspaceId: string;
+  onSelectLog: (target: LogTarget) => void;
+}) {
+  const [devExpanded, setDevExpanded] = useState(false);
+  const [judgeExpanded, setJudgeExpanded] = useState(false);
+
+  // Per-half status derivation. Exit code 0 → completed; anything else
+  // → failed. If the iteration is still running, dev/judge phase
+  // hasn't started yet → render the overall event status (running).
+  // If dev failed, judge never ran → judge row shows "—" (not failed).
+  const devStatus: "running" | "completed" | "failed" =
+    event.devExitCode === undefined
+      ? event.status === "completed" ? "completed" : event.status
+      : event.devExitCode === 0
+        ? "completed"
+        : "failed";
+  const judgeStatus: "running" | "completed" | "failed" | "skipped" =
+    event.judgeExitCode === undefined
+      ? event.devExitCode !== undefined && event.devExitCode !== 0
+        ? "skipped" // dev failed, judge never ran
+        : event.status === "completed" ? "completed" : event.status
+      : event.judgeExitCode === 0
+        ? "completed"
+        : "failed";
+
+  const devStatusColor =
+    devStatus === "running"
+      ? "var(--color-info)"
+      : devStatus === "completed"
+        ? "var(--color-success)"
+        : "var(--color-error)";
+  const judgeStatusColor =
+    judgeStatus === "running"
+      ? "var(--color-info)"
+      : judgeStatus === "completed"
+        ? "var(--color-success)"
+        : judgeStatus === "skipped"
+          ? "var(--color-text-muted)"
+          : "var(--color-error)";
+
+  // Dev duration: prefer the explicit `devCompletedAt` when present
+  // (F.21 servers). Falls back to "—" for old events. NOT the same as
+  // the whole-event duration — that's judge's territory.
+  const devDuration = event.devCompletedAt
+    ? formatDurationOrRunning(event.startedAt, event.devCompletedAt)
+    : event.devExitCode !== undefined
+      ? "—"
+      : "running";
+  // Judge duration: from devCompletedAt (judge's start, when available)
+  // to completedAt (judge's end = iteration end). Falls back to the
+  // whole-event window for old events.
+  const judgeStart = event.devCompletedAt ?? event.startedAt;
+  const judgeDuration =
+    judgeStatus === "skipped"
+      ? "—"
+      : event.completedAt
+        ? formatDurationOrRunning(judgeStart, event.completedAt)
+        : event.devCompletedAt
+          ? "running"
+          : "—";
+
+  const hasDevSignals = !!event.devSignals;
+  const hasJudgeSignals = !!event.judgeSignals;
+
+  // Judge result summary (determination + quality + tests) — same shape
+  // the pre-F.21 combined row showed in the Result column.
+  const judgeResultCell = event.judgeDetermination ? (() => {
+    const j = event.judgeSignals;
+    const d = event.devSignals;
+    const passed = j?.tests_passed ?? d?.tests_passed;
+    const total = j?.tests_total ?? d?.tests_total;
+    const hasQ = event.judgeQuality !== undefined;
+    const hasTests = passed !== undefined && total !== undefined;
+    const summary = (
+      <>
+        {event.judgeDetermination}
+        {(hasQ || hasTests) && (
+          <>
+            {" "}(
+            {hasQ && <>{event.judgeQuality}/10</>}
+            {hasQ && hasTests && " · "}
+            {hasTests && <>{passed}/{total}</>}
+            )
+          </>
+        )}
+      </>
+    );
+    const color = determinationColor[event.judgeDetermination] || "inherit";
+    return hasJudgeSignals ? (
+      <button
+        type="button"
+        className="project-history__readiness-pill"
+        onClick={() => setJudgeExpanded((v) => !v)}
+        title="Click to view judge signals"
+        style={{ color }}
+      >
+        {summary} {judgeExpanded ? "▾" : "▸"}
+      </button>
+    ) : (
+      <span style={{ color }}>{summary}</span>
+    );
+  })() : null;
+
+  // Dev result summary: test counts + (when expandable) a click hint.
+  // Falls back to "—" if dev signals haven't been parsed.
+  const devTests = (() => {
+    const d = event.devSignals;
+    if (!d) return null;
+    const passed = d.tests_passed;
+    const total = d.tests_total;
+    if (passed === undefined || total === undefined) return null;
+    return <>{passed}/{total} tests</>;
+  })();
+  const devResultCell = devTests ? (
+    hasDevSignals ? (
+      <button
+        type="button"
+        className="project-history__readiness-pill"
+        onClick={() => setDevExpanded((v) => !v)}
+        title="Click to view dev signals"
+        style={{ color: "var(--color-text-muted)" }}
+      >
+        {devTests} {devExpanded ? "▾" : "▸"}
+      </button>
+    ) : (
+      <span style={{ color: "var(--color-text-muted)" }}>{devTests}</span>
+    )
+  ) : null;
+
+  return (
+    <>
+      {/* Dev row */}
+      <tr className="project-history__row project-history__row--iteration-dev">
+        <td className="project-history__time">{formatTime(event.startedAt)}</td>
+        <td>Dev · iter {event.iteration}</td>
+        <td className="project-history__agent">
+          {event.devAgent}
+          {event.model && event.devAgent === event.agent && `:${event.model}`}
+        </td>
+        <td>
+          <span style={{ color: devStatusColor }}>{devStatus}</span>
+        </td>
+        <td>{devResultCell}</td>
+        <td title={event.devCompletedAt ? undefined : "Pre-F.21 event — per-half duration not tracked. The whole iteration duration is on the Judge row."}>{devDuration}</td>
+        <td className="project-history__actions">
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() =>
+              onSelectLog({
+                workspaceId,
+                logFile: event.devLogFile,
+                label: `Iteration ${event.iteration} (dev)`,
+              })
+            }
+          >
+            dev
+          </button>
+        </td>
+      </tr>
+      {/* Dev expanded detail */}
+      {devExpanded && hasDevSignals && (
+        <tr className="project-history__detail-row">
+          <td colSpan={7}>
+            <JudgeDetail
+              dev={event.devSignals}
+              judge={undefined}
+              meta={{ branch: event.branch }}
+            />
+          </td>
+        </tr>
+      )}
+      {/* Judge row */}
+      <tr className="project-history__row project-history__row--iteration-judge">
+        <td className="project-history__time">
+          {/* Judge starts when dev completes — use that as its
+              displayed time if we have it. Falls back to event
+              start for old events. */}
+          {event.devCompletedAt
+            ? formatTime(event.devCompletedAt)
+            : formatTime(event.startedAt)}
+        </td>
+        <td>Judge · iter {event.iteration}</td>
+        <td className="project-history__agent">{event.judgeAgent}</td>
+        <td>
+          <span style={{ color: judgeStatusColor }}>{judgeStatus}</span>
+        </td>
+        <td>
+          {judgeResultCell}
+          {event.merged && (
+            <span className="project-history__merged"> ✓ merged</span>
+          )}
+        </td>
+        <td>{judgeDuration}</td>
+        <td className="project-history__actions">
+          <button
+            className="btn btn--small btn--secondary"
+            onClick={() =>
+              onSelectLog({
+                workspaceId,
+                logFile: event.judgeLogFile,
+                label: `Iteration ${event.iteration} (judge)`,
+              })
+            }
+          >
+            judge
+          </button>
+        </td>
+      </tr>
+      {/* Judge expanded detail */}
+      {judgeExpanded && hasJudgeSignals && (
+        <tr className="project-history__detail-row">
+          <td colSpan={7}>
+            <JudgeDetail
+              judge={event.judgeSignals}
+              dev={undefined}
+              meta={{ branch: event.branch }}
+            />
           </td>
         </tr>
       )}

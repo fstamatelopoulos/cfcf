@@ -103,6 +103,16 @@ export interface IterationHistoryEvent extends BaseHistoryEvent {
   judgeDetermination?: string;
   judgeQuality?: number;
   merged?: boolean;
+  /**
+   * Dev-only completion timestamp (item F.21, v0.24+). Recorded by
+   * `iteration-loop.ts` immediately after the dev agent exits, before
+   * the judge starts. Lets the web UI's History tab show per-half
+   * durations now that dev + judge each render as their own row.
+   * `BaseHistoryEvent.completedAt` is the JUDGE'S (= iteration's)
+   * completion time, written when the judge exits + iteration is
+   * marked complete. Optional for backward compat with pre-F.21 events.
+   */
+  devCompletedAt?: string;
   /** Full parsed dev signals, persisted inline so the History tab can expand
    *  even after `cfcf-iteration-signals.json` is overwritten next iteration. */
   devSignals?: DevSignals;
