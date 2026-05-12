@@ -274,7 +274,7 @@ export function DocumentDetail({
                     {versions.map((v) => (
                       <tr key={v.id}>
                         <td>v{v.versionNumber}</td>
-                        <td>{v.createdAt}</td>
+                        <td title={v.createdAt}>{formatLocalTimestamp(v.createdAt)}</td>
                         <td><code>{v.source ?? "(unknown)"}</code></td>
                         <td>{v.chunkCount}</td>
                         <td>{v.totalChars.toLocaleString()}</td>
@@ -393,8 +393,8 @@ function DetailHeader({ doc, totalChars, chunkCount }: { doc: { title: string; p
     <div style={{ marginBottom: "0.85rem", color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
       <span><strong>{doc.projectName ?? "(unknown project)"}</strong></span>
       <span> · author <code>{doc.author}</code></span>
-      <span> · created {doc.createdAt}</span>
-      <span> · updated {doc.updatedAt}</span>
+      <span title={doc.createdAt}> · created {formatLocalTimestamp(doc.createdAt)}</span>
+      <span title={doc.updatedAt}> · updated {formatLocalTimestamp(doc.updatedAt)}</span>
       <span> · {chunkCount} chunk{chunkCount === 1 ? "" : "s"}</span>
       <span> · {totalChars.toLocaleString()} chars</span>
       {(doc.versionCount ?? 0) > 0 && <span> · {doc.versionCount} version{doc.versionCount === 1 ? "" : "s"}</span>}
@@ -521,4 +521,18 @@ function UsageTable({ entries }: { entries: ClioUsageRow[] }) {
       </tbody>
     </table>
   );
+}
+
+/**
+ * Format an ISO timestamp as a local (browser-timezone) date+time
+ * string. v0.24.1 — Memory tab previously showed raw ISO (UTC)
+ * which forced users to mentally convert. The original ISO is
+ * preserved on the parent element's `title` attribute for tooltip
+ * lookup.
+ */
+function formatLocalTimestamp(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
 }

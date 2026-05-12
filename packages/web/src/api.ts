@@ -567,6 +567,13 @@ export function fetchClioDocuments(
     includeDeleted?: boolean;
     /** Trash-bin view: only soft-deleted docs. Wins over `includeDeleted`. */
     deletedOnly?: boolean;
+    /**
+     * Sort key (v0.24.1+). `created_at` = newest-created first
+     * (backend default — back-compat with CLI / agent tools).
+     * `updated_at` = most-recent activity first (Memory tab default).
+     * `title` = alphabetical ASC.
+     */
+    orderBy?: "created_at" | "updated_at" | "title";
   } = {},
 ): Promise<ClioDocument[]> {
   const params = new URLSearchParams();
@@ -575,6 +582,7 @@ export function fetchClioDocuments(
   if (opts.offset) params.set("offset", String(opts.offset));
   if (opts.deletedOnly) params.set("deleted_only", "true");
   else if (opts.includeDeleted) params.set("include_deleted", "true");
+  if (opts.orderBy) params.set("order_by", opts.orderBy);
   const qs = params.toString();
   return request<{ documents: ClioDocument[] }>(
     `/api/clio/documents${qs ? `?${qs}` : ""}`,

@@ -115,6 +115,12 @@ export interface MemoryBackend {
     limit?: number;
     offset?: number;
     deletedFilter?: "exclude" | "include" | "only";
+    /**
+     * v0.24.1+: `created_at` (default — matches pre-v0.24.1
+     * behaviour), `updated_at` (most-recent activity first), or
+     * `title` (alphabetical ASC).
+     */
+    orderBy?: "created_at" | "updated_at" | "title";
   }): Promise<ClioDocument[]>;
   /**
    * Find documents by metadata-only filter (no FTS query). Mirrors

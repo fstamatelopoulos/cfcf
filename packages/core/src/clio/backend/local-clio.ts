@@ -1126,10 +1126,20 @@ export class LocalClio implements MemoryBackend {
     limit?: number;
     offset?: number;
     deletedFilter?: "exclude" | "include" | "only";
+    /**
+     * Sort order for the returned list (v0.24.1+). Default
+     * `created_at` (matches pre-v0.24.1 behaviour — newest-created
+     * first — for CLI + agent-tool back-compat). `updated_at`
+     * surfaces docs by most-recent activity, useful for the web
+     * Memory tab. `title` sorts alphabetically (ascending) for
+     * docs-by-name browse. Timestamps are DESC; title is ASC.
+     */
+    orderBy?: "created_at" | "updated_at" | "title";
   } = {}): Promise<ClioDocument[]> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
     const offset = Math.max(opts.offset ?? 0, 0);
     const deletedFilter = opts.deletedFilter ?? "exclude";
+    const orderBy = opts.orderBy ?? "created_at";
 
     let projectId: string | null = null;
     if (opts.project) {
@@ -1144,6 +1154,14 @@ export class LocalClio implements MemoryBackend {
     // 'include' adds no clause -- both live and tombstoned docs.
     if (projectId) where.push("d.project_id = ?");
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    // Whitelist the column + direction. Never interpolate raw input
+    // into the ORDER BY clause; we map an enum to a literal here.
+    const orderClause =
+      orderBy === "updated_at"
+        ? "d.updated_at DESC"
+        : orderBy === "title"
+          ? "d.title COLLATE NOCASE ASC"
+          : "d.created_at DESC";
     const sql = `
       SELECT d.*,
              p.name AS project_name,
@@ -1151,7 +1169,7 @@ export class LocalClio implements MemoryBackend {
         FROM clio_documents d
         LEFT JOIN clio_projects p ON p.id = d.project_id
         ${whereClause}
-       ORDER BY d.created_at DESC
+       ORDER BY ${orderClause}
        LIMIT ? OFFSET ?
     `;
     const bindings: (string | number)[] = projectId

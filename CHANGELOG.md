@@ -13,8 +13,7 @@ _No changes yet._
 
 ## [0.24.1] -- 2026-05-12
 
-Patch release bundling three items merged in PRs #46 and #47 since
-v0.24.0:
+Patch release bundling five items since v0.24.0:
 
 - **F.31** (new feature) — `MILESTONE_SUCCESS` judge determination +
   reflection override for milestone-phased `success.md` workflows.
@@ -24,8 +23,79 @@ v0.24.0:
   per-half status, and per-half durations.
 - **F.21 follow-up fix** — judge row appears ABOVE dev row within
   each iteration (newest-first ordering, caught during F.31 dogfood).
+- **UI polish — local times everywhere** — CLI `cfcf clio *` verbs
+  now print timestamps in the user's local timezone (was raw ISO /
+  UTC). Web Memory tab too. Original ISO is preserved on hover
+  tooltips for debugging.
+- **UI polish — Memory Browse sort** — sort docs by Last Updated
+  (default) / Created / Title (A→Z) via a dropdown. Surfaces the
+  `updatedAt` time so docs that update in-place (decision-log,
+  architect-review, plan.md) sort by their last activity instead of
+  their original creation slot.
 
-All three sections below.
+All five sections below.
+
+### Added — Memory Browse sort + show updated time
+
+The `Memory → Browse` tab in the web UI sorted documents by
+**creation time DESC** (the backend's default). For workspaces with
+docs that update in-place — `decision-log`, `architect-review`,
+`plan.md` (the v0.24 single-growing-doc pattern from F.31's
+predecessors) — that buried the most-recently-active docs near the
+bottom of the list, because their creation slot stayed early in the
+loop even though they got rewritten every iteration.
+
+**Web changes** (`packages/web/src/pages/memory/BrowseTab.tsx`):
+
+- New "Sort by:" dropdown next to "Show deleted": **Last updated
+  (newest first)** (default), **Created (newest first)**, **Title
+  (A → Z)**.
+- Document meta row now reads `... updated 3h ago` (with the full
+  local-time string on hover via the `title` attribute). The
+  fallback for older items uses `toLocaleDateString()` instead of
+  UTC `YYYY-MM-DD`.
+
+**Backend changes** (`packages/core/src/clio/backend/local-clio.ts`
++ types):
+
+- `listDocuments` gains an optional `orderBy: "created_at" |
+  "updated_at" | "title"` parameter. Backend default stays
+  `created_at` (matches pre-v0.24.1 behaviour — CLI + agent tools
+  keep their current ordering). Whitelisted enum → mapped to literal
+  SQL, no injection surface.
+- `GET /api/clio/documents` accepts `?order_by=…` (rejects unknown
+  values with 400).
+- `fetchClioDocuments` in the web client threads `orderBy` through.
+- 4 new tests in `local-clio.test.ts` cover all three modes +
+  default back-compat.
+
+### Added — Local timestamps in CLI + Memory tab
+
+Both `cfcf clio` CLI verbs and the web Memory tab previously
+rendered timestamps as raw ISO (UTC) — forcing users to mentally
+convert when scanning output. v0.24.1 renders them as local
+time everywhere; the original ISO stays in `title` tooltips
+(web) or unchanged behind the local string (CLI fallback on parse
+error).
+
+**CLI sites** (8 in `packages/cli/src/commands/clio.ts`):
+- `cfcf clio docs show` (created_at + updated_at)
+- `cfcf clio docs list` (updated)
+- `cfcf clio docs versions <id>` (created)
+- `cfcf clio search` results (created)
+- `cfcf clio projects show` (created_at + updated_at)
+- `cfcf clio audit` entries (timestamp)
+- `cfcf clio usage` entries (logged_at)
+- `cfcf clio docs --include-deleted/--deleted-only` (deleted_at)
+
+**Web sites**:
+- `DocumentDetail` header (created + updated)
+- `DocumentDetail` versions table (per-version createdAt)
+- `ProjectsTab` table (createdAt)
+- `BrowseTab` doc meta (updated relative time + full-local tooltip)
+
+Single helper `formatLocalTimestamp(iso)` in each surface; falls
+back to the original string on parse error.
 
 ### Added — F.31: `MILESTONE_SUCCESS` judge determination + reflection override
 

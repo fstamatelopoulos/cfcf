@@ -776,9 +776,20 @@ export function registerClioRoutes(app: Hono): void {
     if (offsetStr && (isNaN(offset as number) || (offset as number) < 0)) {
       return c.json({ error: "offset must be a non-negative integer" }, 400);
     }
+    // v0.24.1+: order_by sort key. Defaults to created_at for
+    // back-compat with pre-v0.24.1 callers (CLI + agent tools).
+    // Web UI sends order_by=updated_at by default for the Browse tab.
+    const orderByRaw = c.req.query("order_by");
+    let orderBy: "created_at" | "updated_at" | "title" | undefined;
+    if (orderByRaw !== undefined) {
+      if (orderByRaw !== "created_at" && orderByRaw !== "updated_at" && orderByRaw !== "title") {
+        return c.json({ error: `order_by must be one of: created_at, updated_at, title (got "${orderByRaw}")` }, 400);
+      }
+      orderBy = orderByRaw;
+    }
     const backend = getClioBackend();
     try {
-      const docs = await backend.listDocuments({ project, limit, offset, deletedFilter });
+      const docs = await backend.listDocuments({ project, limit, offset, deletedFilter, orderBy });
       c.set("clioUsageExtras", { resultCount: docs.length });
       return c.json({ documents: docs });
     } catch (err: unknown) {

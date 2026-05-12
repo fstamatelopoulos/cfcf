@@ -1884,3 +1884,77 @@ describe("LocalClio.editDocument (5.13 follow-up: metadata-only edit)", () => {
     await clio.close();
   });
 });
+
+describe("LocalClio.listDocuments orderBy (v0.24.1+)", () => {
+  // Helper: ingest three docs spaced in time + return their ids.
+  // Uses explicit sleeps to force distinct created_at + updated_at
+  // values (SQLite's CURRENT_TIMESTAMP has 1s resolution).
+  async function seedThreeDocs(clio: LocalClio): Promise<{ aId: string; bId: string; cId: string }> {
+    const a = await clio.ingest({
+      title: "Zebra report",
+      content: "first ingest — a (z-title, created first)",
+      author: "user",
+      project: "p",
+    });
+    await new Promise((r) => setTimeout(r, 1100));
+    const b = await clio.ingest({
+      title: "Apple memo",
+      content: "second ingest — b (a-title, created second)",
+      author: "user",
+      project: "p",
+    });
+    await new Promise((r) => setTimeout(r, 1100));
+    const c = await clio.ingest({
+      title: "Mango note",
+      content: "third ingest — c (m-title, created third)",
+      author: "user",
+      project: "p",
+    });
+    return { aId: a.document!.id, bId: b.document!.id, cId: c.document!.id };
+  }
+
+  it("default (no orderBy) sorts by created_at DESC — newest-created first (back-compat)", async () => {
+    const clio = makeClio();
+    const { aId, bId, cId } = await seedThreeDocs(clio);
+    const docs = await clio.listDocuments({ project: "p" });
+    expect(docs.map((d) => d.id)).toEqual([cId, bId, aId]);
+    await clio.close();
+  });
+
+  it("orderBy='created_at' explicit — same as default", async () => {
+    const clio = makeClio();
+    const { aId, bId, cId } = await seedThreeDocs(clio);
+    const docs = await clio.listDocuments({ project: "p", orderBy: "created_at" });
+    expect(docs.map((d) => d.id)).toEqual([cId, bId, aId]);
+    await clio.close();
+  });
+
+  it("orderBy='updated_at' surfaces most-recent activity first", async () => {
+    const clio = makeClio();
+    const { aId, bId, cId } = await seedThreeDocs(clio);
+    // Update doc-a (the oldest) so its updated_at becomes the newest.
+    await new Promise((r) => setTimeout(r, 1100));
+    await clio.ingest({
+      documentId: aId,
+      title: "Zebra report",
+      content: "updated content for a",
+      author: "user",
+      project: "p",
+      updateIfExists: true,
+    });
+    const docs = await clio.listDocuments({ project: "p", orderBy: "updated_at" });
+    // a was updated last → first; c is the most-recently-created of the
+    // unchanged ones → second; b → third.
+    expect(docs.map((d) => d.id)).toEqual([aId, cId, bId]);
+    await clio.close();
+  });
+
+  it("orderBy='title' sorts alphabetically (ASC, case-insensitive)", async () => {
+    const clio = makeClio();
+    const { aId, bId, cId } = await seedThreeDocs(clio);
+    const docs = await clio.listDocuments({ project: "p", orderBy: "title" });
+    // Apple, Mango, Zebra
+    expect(docs.map((d) => d.id)).toEqual([bId, cId, aId]);
+    await clio.close();
+  });
+});

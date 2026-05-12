@@ -37,6 +37,12 @@ export function BrowseTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
+  // v0.24.1: default to most-recent activity first. Decision-log /
+  // architect-review / plan.md update in-place across iterations, so
+  // updated_at is the more useful "what's been alive lately" axis
+  // than the old created_at default. Toggle exposes the other two
+  // axes ("title" alphabetical) when the user wants them.
+  const [orderBy, setOrderBy] = useState<"updated_at" | "created_at" | "title">("updated_at");
 
   useEffect(() => {
     setLoading(true);
@@ -45,15 +51,16 @@ export function BrowseTab({
       project: project ?? undefined,
       limit: 200,
       includeDeleted: showDeleted,
+      orderBy,
     })
       .then(setDocs)
       .catch((e) => { setDocs([]); setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => setLoading(false));
-  }, [project, showDeleted, refreshTick]);
+  }, [project, showDeleted, orderBy, refreshTick]);
 
   return (
     <section className="memory-docs">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem", gap: "0.8rem", flexWrap: "wrap" }}>
         <h3 className="section-title" style={{ margin: 0, fontSize: "var(--text-md)" }}>
           Documents
           {project && (
@@ -62,24 +69,47 @@ export function BrowseTab({
             </span>
           )}
         </h3>
-        <label
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.4rem",
-            fontSize: "var(--text-sm)",
-            color: "var(--color-text-muted)",
-            cursor: "pointer",
-          }}
-          title="When on, soft-deleted docs are listed alongside live ones with a (deleted) badge. Default off, matching agent / search behaviour."
-        >
-          <input
-            type="checkbox"
-            checked={showDeleted}
-            onChange={(e) => setShowDeleted(e.target.checked)}
-          />
-          Show deleted
-        </label>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "0.8rem", flexWrap: "wrap" }}>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              fontSize: "var(--text-sm)",
+              color: "var(--color-text-muted)",
+            }}
+            title="Sort key (v0.24.1+). Default: most-recent update. The CLI's `cfcf clio docs list` keeps creation-time order for back-compat."
+          >
+            Sort by:
+            <select
+              value={orderBy}
+              onChange={(e) => setOrderBy(e.target.value as "updated_at" | "created_at" | "title")}
+              style={{ padding: "0.2rem 0.4rem", fontSize: "var(--text-sm)" }}
+            >
+              <option value="updated_at">Last updated (newest first)</option>
+              <option value="created_at">Created (newest first)</option>
+              <option value="title">Title (A → Z)</option>
+            </select>
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              fontSize: "var(--text-sm)",
+              color: "var(--color-text-muted)",
+              cursor: "pointer",
+            }}
+            title="When on, soft-deleted docs are listed alongside live ones with a (deleted) badge. Default off, matching agent / search behaviour."
+          >
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => setShowDeleted(e.target.checked)}
+            />
+            Show deleted
+          </label>
+        </div>
       </div>
       {loading && <div className="form-row__hint">loading…</div>}
       {error && <div className="form-row__error">{error}</div>}
@@ -100,7 +130,11 @@ export function BrowseTab({
               </div>
               <div className="memory-docs__meta">
                 {d.projectName ?? "(unknown project)"} · {d.author} · {d.chunkCount} chunk{d.chunkCount === 1 ? "" : "s"} · {d.totalChars.toLocaleString()} chars
-                {d.versionCount && d.versionCount > 0 ? ` · ${d.versionCount} version${d.versionCount === 1 ? "" : "s"}` : ""} · {formatRelativeTime(d.updatedAt)}
+                {d.versionCount && d.versionCount > 0 ? ` · ${d.versionCount} version${d.versionCount === 1 ? "" : "s"}` : ""}
+                {" · "}
+                <span title={`Updated ${formatLocal(d.updatedAt)}\nCreated ${formatLocal(d.createdAt)}`}>
+                  updated {formatRelativeTime(d.updatedAt)}
+                </span>
               </div>
             </li>
           ))}
@@ -124,5 +158,14 @@ function formatRelativeTime(iso?: string): string {
   if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
   if (sec < 86400 * 30) return `${Math.floor(sec / 86400)}d ago`;
-  return new Date(iso).toISOString().slice(0, 10);
+  // For older items: show LOCAL date (was UTC `YYYY-MM-DD` pre-v0.24.1).
+  return new Date(iso).toLocaleDateString();
+}
+
+/** Full local-timestamp string for hover tooltips. */
+function formatLocal(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
 }

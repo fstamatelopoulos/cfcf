@@ -134,7 +134,13 @@ export function ProjectsTab({ onCreated }: { onCreated: () => void }) {
                   </td>
                   <td>{p.documentCount ?? "—"}</td>
                   <td>{p.description ?? <span className="form-row__hint">—</span>}</td>
-                  <td className="project-history__time">{p.createdAt}</td>
+                  <td className="project-history__time" title={p.createdAt}>
+                    {/* v0.24.1: render as local time (was raw ISO). */}
+                    {(() => {
+                      const d = new Date(p.createdAt);
+                      return Number.isNaN(d.getTime()) ? p.createdAt : d.toLocaleString();
+                    })()}
+                  </td>
                   <td>
                     {p.isSystem ? (
                       <span

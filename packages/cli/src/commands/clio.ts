@@ -47,6 +47,22 @@ interface DocumentContentResponse {
   versionId: string | null;
 }
 
+/**
+ * Render an ISO timestamp string in the user's local timezone for
+ * CLI display (v0.24.1+). Pre-v0.24.1 every `cfcf clio …` verb
+ * printed raw ISO (UTC), forcing the user to mentally convert
+ * — confusing especially for `cfcf clio docs list` outputs at a
+ * glance. Falls back to the raw string on parse error so we never
+ * lose information. Format matches `Date.prototype.toLocaleString()`
+ * which respects `LC_TIME` / system locale.
+ */
+function formatLocalTimestamp(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
 interface VersionsResponse {
   versions: ClioDocumentVersion[];
 }
@@ -516,8 +532,8 @@ function registerUnder(root: Command): void {
       console.log(`  review_status: ${doc.reviewStatus}`);
       console.log(`  chunks:        ${data.chunkCount}`);
       console.log(`  total_chars:   ${data.totalChars}`);
-      console.log(`  created_at:    ${doc.createdAt}`);
-      console.log(`  updated_at:    ${doc.updatedAt}`);
+      console.log(`  created_at:    ${formatLocalTimestamp(doc.createdAt)}`);
+      console.log(`  updated_at:    ${formatLocalTimestamp(doc.updatedAt)}`);
       console.log(`  version:       ${data.versionId ? `archived (${data.versionId})` : "live (current)"}`);
       if (doc.metadata && Object.keys(doc.metadata).length > 0) {
         console.log(`  metadata:`);
@@ -557,7 +573,7 @@ function registerUnder(root: Command): void {
       console.log(`${versions.length} version(s) for ${id} (newest first):`);
       console.log();
       for (const v of versions) {
-        console.log(`  v${v.versionNumber}  ${v.createdAt}  ${v.chunkCount} chunks, ${v.totalChars} chars`);
+        console.log(`  v${v.versionNumber}  ${formatLocalTimestamp(v.createdAt)}  ${v.chunkCount} chunks, ${v.totalChars} chars`);
         if (v.source) console.log(`       source: ${v.source}`);
         console.log(`       version_id: ${v.id}`);
         console.log(`       Recall via: cfcf clio docs get ${id} --version-id ${v.id}`);
@@ -604,7 +620,7 @@ function registerUnder(root: Command): void {
       console.log(`${entries.length} audit entry(ies), newest first:`);
       console.log();
       for (const e of entries) {
-        console.log(`  [${e.timestamp}] ${e.eventType}  actor=${e.actor ?? "?"}`);
+        console.log(`  [${formatLocalTimestamp(e.timestamp)}] ${e.eventType}  actor=${e.actor ?? "?"}`);
         if (e.documentId) console.log(`     [id: ${e.documentId}]`);
         if (e.projectId) console.log(`     project: ${e.projectId}`);
         if (e.metadata && Object.keys(e.metadata).length > 0) {
@@ -679,7 +695,7 @@ function registerUnder(root: Command): void {
         const hits = e.resultCount === null || e.resultCount === undefined
           ? ""
           : `  hits=${e.resultCount}`;
-        console.log(`  [${e.loggedAt}] ${tag}${actor}${hits}`);
+        console.log(`  [${formatLocalTimestamp(e.loggedAt)}] ${tag}${actor}${hits}`);
         if (e.queryText) console.log(`     query: ${JSON.stringify(e.queryText)}`);
         if (e.documentId) console.log(`     document: ${e.documentId}`);
         if (e.projectId) console.log(`     project: ${e.projectId}`);
@@ -810,8 +826,8 @@ function registerUnder(root: Command): void {
         console.log(`  ${d.title}`);
         console.log(`     [id: ${d.id}]  author: ${d.author}`);
         console.log(`     project: ${projectLabel}`);
-        console.log(`     updated: ${d.updatedAt}`);
-        if (d.deletedAt) console.log(`     deleted_at: ${d.deletedAt}`);
+        console.log(`     updated: ${formatLocalTimestamp(d.updatedAt)}`);
+        if (d.deletedAt) console.log(`     deleted_at: ${formatLocalTimestamp(d.deletedAt)}`);
         console.log();
       }
     });
@@ -964,9 +980,9 @@ function registerUnder(root: Command): void {
       console.log(`    project: ${projectLabel}  chunks=${d.chunkCount}  chars=${d.totalChars}`);
       console.log(`    role=${role}  type=${type}  workspace=${wsId}`);
       console.log(`    source=${d.source}`);
-      console.log(`    created=${d.createdAt}`);
+      console.log(`    created=${formatLocalTimestamp(d.createdAt)}`);
       if (d.deletedAt) {
-        console.log(`    deleted_at=${d.deletedAt}  (restore with: cfcf clio docs restore ${d.id})`);
+        console.log(`    deleted_at=${formatLocalTimestamp(d.deletedAt)}  (restore with: cfcf clio docs restore ${d.id})`);
       }
       console.log();
     }
@@ -1181,8 +1197,8 @@ function registerUnder(root: Command): void {
       console.log(`Clio Project: ${p.name}`);
       console.log(`  id:           ${p.id}`);
       console.log(`  description:  ${p.description ?? "(none)"}`);
-      console.log(`  created_at:   ${p.createdAt}`);
-      console.log(`  updated_at:   ${p.updatedAt}`);
+      console.log(`  created_at:   ${formatLocalTimestamp(p.createdAt)}`);
+      console.log(`  updated_at:   ${formatLocalTimestamp(p.updatedAt)}`);
       if (p.documentCount != null) console.log(`  documents:    ${p.documentCount}`);
     });
 
