@@ -16,7 +16,7 @@ _No changes yet._
 PA prompt refinements (round 2 of dogfood feedback) — strictly an
 extension of the PA memory-discipline work shipped in v0.24.1. Two
 surgical edits to the PA system prompt template, no code-surface
-changes.
+changes. Shipped via PR #48.
 
 ### Changed — PA prompt: lock-step digest trigger + mtime-based self-check
 
