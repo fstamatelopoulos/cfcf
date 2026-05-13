@@ -12,6 +12,7 @@ import {
   deriveDevRowStatus,
   deriveJudgeRowStatus,
   deriveIterationRowStatuses,
+  deriveJudgeRowTime,
 } from "./iteration-row-status";
 
 function makeEvent(partial: Partial<IterationHistoryEvent>): IterationHistoryEvent {
@@ -119,6 +120,79 @@ describe("deriveJudgeRowStatus", () => {
         }),
       ),
     ).toBe("failed");
+  });
+});
+
+describe("deriveJudgeRowTime", () => {
+  // The follow-up to F.21 (post-v0.24.2 dogfood): the judge row's
+  // time cell was rendering dev's startedAt when judge was still
+  // pending — making it look like "judge starting at 10:32" when
+  // judge hadn't started at all. Mirrors the duration cell's
+  // "no value yet → render —" logic.
+
+  test("dev running, judge pending → null (renders as '—')", () => {
+    expect(deriveJudgeRowTime(makeEvent({ status: "running" }))).toBeNull();
+  });
+
+  test("dev failed, judge skipped → null (renders as '—')", () => {
+    expect(
+      deriveJudgeRowTime(makeEvent({ status: "failed", devExitCode: 1 })),
+    ).toBeNull();
+  });
+
+  test("dev done (exit 0), judge running → returns devCompletedAt (judge's actual start)", () => {
+    expect(
+      deriveJudgeRowTime(
+        makeEvent({
+          status: "running",
+          devExitCode: 0,
+          devCompletedAt: "2026-05-12T10:05:00.000Z",
+        }),
+      ),
+    ).toBe("2026-05-12T10:05:00.000Z");
+  });
+
+  test("both done → returns devCompletedAt", () => {
+    expect(
+      deriveJudgeRowTime(
+        makeEvent({
+          status: "completed",
+          devExitCode: 0,
+          judgeExitCode: 0,
+          devCompletedAt: "2026-05-12T10:05:00.000Z",
+        }),
+      ),
+    ).toBe("2026-05-12T10:05:00.000Z");
+  });
+
+  test("pre-F.21 completed event without devCompletedAt → falls back to startedAt (back-compat)", () => {
+    // Events captured before F.21 instrumented per-half ordering
+    // don't have `devCompletedAt`. We preserve their existing
+    // rendering (use event startedAt) rather than render "—" —
+    // that's a deliberate compromise to keep old history readable.
+    expect(
+      deriveJudgeRowTime(
+        makeEvent({
+          status: "completed",
+          devExitCode: 0,
+          judgeExitCode: 0,
+          devCompletedAt: undefined,
+        }),
+      ),
+    ).toBe("2026-05-12T10:00:00.000Z");
+  });
+
+  test("judge failed → returns devCompletedAt (judge's start, even though it ended badly)", () => {
+    expect(
+      deriveJudgeRowTime(
+        makeEvent({
+          status: "failed",
+          devExitCode: 0,
+          judgeExitCode: 1,
+          devCompletedAt: "2026-05-12T10:05:00.000Z",
+        }),
+      ),
+    ).toBe("2026-05-12T10:05:00.000Z");
   });
 });
 

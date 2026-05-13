@@ -75,3 +75,29 @@ export function deriveIterationRowStatuses(
     judge: deriveJudgeRowStatus(event),
   };
 }
+
+/**
+ * Resolve the ISO timestamp to render in the judge row's time
+ * cell — or `null` when no real time exists yet (renders as "—").
+ *
+ * The original F.21 render fell back to `event.startedAt` (the
+ * DEV's start time) when judge hadn't started yet — which looked
+ * like "judge started at the same moment as dev." Misleading when
+ * dev is still running and judge is genuinely pending. Mirrors the
+ * duration cell's logic (which already returned "—" for pending /
+ * skipped).
+ *
+ * Three-way matrix:
+ *
+ *   - Pending or skipped → `null` (no judge time exists)
+ *   - Running or completed, with `devCompletedAt` → that ISO
+ *     (judge's actual start)
+ *   - Running or completed without `devCompletedAt` → fall back to
+ *     `event.startedAt` (pre-F.21 events that pre-date the per-half
+ *     ordering capture — preserves their existing rendering)
+ */
+export function deriveJudgeRowTime(event: IterationHistoryEvent): string | null {
+  const status = deriveJudgeRowStatus(event);
+  if (status === "pending" || status === "skipped") return null;
+  return event.devCompletedAt ?? event.startedAt;
+}

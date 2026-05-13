@@ -18,6 +18,7 @@ import { formatDurationOrRunning } from "../utils/time";
 import {
   deriveDevRowStatus,
   deriveJudgeRowStatus,
+  deriveJudgeRowTime,
 } from "../utils/iteration-row-status";
 
 const determinationColor: Record<string, string> = {
@@ -664,12 +665,15 @@ function IterationRowPair({
       {/* Judge row (newer — listed first) */}
       <tr className="project-history__row project-history__row--iteration-judge">
         <td className="project-history__time">
-          {/* Judge starts when dev completes — use that as its
-              displayed time if we have it. Falls back to event
-              start for old events. */}
-          {event.devCompletedAt
-            ? formatTime(event.devCompletedAt)
-            : formatTime(event.startedAt)}
+          {/* Judge starts when dev completes — show that timestamp
+              once judge has actually started. When judge is still
+              pending (dev running) or skipped (dev failed), show
+              "—" rather than dev's start time. See
+              `deriveJudgeRowTime` for the full matrix. */}
+          {(() => {
+            const t = deriveJudgeRowTime(event);
+            return t ? formatTime(t) : "—";
+          })()}
         </td>
         <td>Judge · iter {event.iteration}</td>
         <td className="project-history__agent">{event.judgeAgent}</td>

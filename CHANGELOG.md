@@ -9,7 +9,35 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed — History tab: judge row time cell while judge is pending
+
+F.21 follow-up surfaced during v0.24.2 dogfood. The judge row's
+time cell was rendering dev's `startedAt` as a fallback when judge
+hadn't started yet — making it look like "judge starting at 10:32"
+while judge was actually pending and dev was still running. The
+duration cell already handled this correctly (rendered `"—"` for
+pending / skipped); the time cell had the same bug as the
+duration cell's pre-fix state.
+
+**Fix** (`packages/web/src/utils/iteration-row-status.ts` +
+`packages/web/src/components/WorkspaceHistory.tsx`):
+
+- New pure helper `deriveJudgeRowTime(event): string | null` —
+  returns `null` when judge is pending or skipped (renders as
+  `"—"`), `event.devCompletedAt` when judge has actually started
+  (running / completed / failed), or `event.startedAt` as a
+  back-compat fallback for pre-F.21 completed events that don't
+  have `devCompletedAt`.
+- `WorkspaceHistory.tsx` judge row uses the helper instead of the
+  inline two-branch conditional that fell back to dev's
+  `startedAt`.
+
+Pure cosmetic — no behavioural / data change. 6 new tests in
+`iteration-row-status.test.ts` (all 18 pass). Matches the F.21
+pattern: pure helper + unit tests, no React component test
+needed.
+
+## [0.24.2] -- 2026-05-12
 
 ## [0.24.2] -- 2026-05-12
 
