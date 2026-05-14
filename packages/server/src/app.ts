@@ -49,6 +49,13 @@ import {
   startReflection,
   getReflectState,
   stopReflection,
+  getActiveProcessesForWorkspace,
+  getAllActiveProcesses,
+  getActiveProcess,
+  killProcessTree,
+  markReflectStateFailed,
+  markDocumentStateFailed,
+  markReviewStateFailed,
 } from "@cfcf/core";
 
 const startedAt = Date.now();
@@ -133,6 +140,82 @@ export function createApp() {
       }
     }
     return c.json({ active: items });
+  });
+
+  // --- Active loop-spawned agent processes (for `cfcf agents reap`) ---
+  //
+  // List + kill subprocess registry. Distinct from `/api/activity`:
+  // /activity reads state files (loop-state, reflect-state, …) and
+  // is the dashboard's source of truth for "what's running"; this
+  // endpoint exposes the in-memory PID registry (`active-processes.ts`)
+  // so the user can identify and kill a stranded subprocess when
+  // the higher-level stop didn't (or to clean up after a kill that
+  // didn't reach the state-store flip path).
+  //
+  // PA / HA are intentionally absent — they run as `cfcf spec` /
+  // `cfcf help assistant` with `stdio: "inherit"` outside the cfcf
+  // server, are not in the registry, and cannot be killed via these
+  // endpoints. Safe by construction.
+  app.get("/api/active-processes", async (c) => {
+    const workspaceFilter = c.req.query("workspace");
+    const all = workspaceFilter
+      ? getActiveProcessesForWorkspace(workspaceFilter)
+      : getAllActiveProcesses();
+    const workspaces = await listWorkspaces();
+    const wsById = new Map(workspaces.map((w) => [w.id, w]));
+    const now = Date.now();
+    const summary = all.map((e) => ({
+      workspaceId: e.workspaceId,
+      workspaceName: wsById.get(e.workspaceId)?.name ?? e.workspaceId,
+      role: e.role,
+      pid: e.process.proc.pid,
+      startedAt: e.startedAt,
+      runtimeMs: Math.max(0, now - new Date(e.startedAt).getTime()),
+      logFileName: e.logFileName ?? null,
+    }));
+    return c.json({ active: summary });
+  });
+
+  app.post("/api/active-processes/:workspaceId/:role/kill", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const role = c.req.param("role") as
+      | "dev" | "judge" | "architect" | "documenter" | "reflection";
+    const validRoles = new Set([
+      "dev", "judge", "architect", "documenter", "reflection",
+    ]);
+    if (!validRoles.has(role)) {
+      return c.json({ ok: false, error: `Unknown role: ${role}` }, 400);
+    }
+    const entry = getActiveProcess(workspaceId, role);
+    if (!entry) {
+      return c.json(
+        { ok: false, error: `No active ${role} process for workspace ${workspaceId}` },
+        404,
+      );
+    }
+    const pid = entry.process.proc.pid;
+    try {
+      killProcessTree(pid);
+    } catch (err) {
+      return c.json(
+        { ok: false, error: `killProcessTree failed: ${err instanceof Error ? err.message : String(err)}` },
+        500,
+      );
+    }
+    // Flip per-role state-store row so the dashboard clears
+    // immediately. Idempotent; dev/judge have no state-store so
+    // skip them.
+    const reason = "Killed by user via cfcf agents reap";
+    try {
+      if (role === "reflection") await markReflectStateFailed(workspaceId, reason);
+      else if (role === "documenter") await markDocumentStateFailed(workspaceId, reason);
+      else if (role === "architect") await markReviewStateFailed(workspaceId, reason);
+    } catch (err) {
+      console.warn(
+        `[reap] state-store flip failed for ${role}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return c.json({ ok: true, killed: true, pid, role, workspaceId });
   });
 
   app.get("/api/status", async (c) => {

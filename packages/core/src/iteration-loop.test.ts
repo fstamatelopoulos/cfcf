@@ -13,6 +13,7 @@ import {
   stopLoop,
   shouldRunReflection,
   resolveEffectiveDetermination,
+  loopActivePhaseToRole,
   type LoopState,
 } from "./iteration-loop.js";
 import type { WorkspaceConfig, DevSignals, JudgeSignals, ReflectionSignals } from "./types.js";
@@ -1046,5 +1047,43 @@ describe("buildPreLoopBlockReason: SCOPE_COMPLETE message", () => {
     const msg = buildPreLoopBlockReason("network timeout", "SCOPE_COMPLETE", "blocked");
     expect(msg).toContain("network timeout");
     expect(msg).not.toContain("already implemented");
+  });
+});
+
+
+// --- loopActivePhaseToRole (kill-on-stop feature) ---
+//
+// Maps the loop's `state.phase` to the AgentRole currently being
+// awaited, so stopLoop / `cfcf agents reap` know which subprocess
+// to signal. PA / HA are deliberately omitted — they run outside
+// the cfcf server (`stdio: "inherit"`) and are never in the
+// active-processes registry.
+
+describe("loopActivePhaseToRole", () => {
+  test("pre_loop_reviewing → architect", () => {
+    expect(loopActivePhaseToRole("pre_loop_reviewing")).toBe("architect");
+  });
+  test("dev_executing → dev", () => {
+    expect(loopActivePhaseToRole("dev_executing")).toBe("dev");
+  });
+  test("judging → judge", () => {
+    expect(loopActivePhaseToRole("judging")).toBe("judge");
+  });
+  test("reflecting → reflection (the iter-19 gmbot case)", () => {
+    expect(loopActivePhaseToRole("reflecting")).toBe("reflection");
+  });
+  test("documenting → documenter", () => {
+    expect(loopActivePhaseToRole("documenting")).toBe("documenter");
+  });
+  test("non-active phases return null (nothing to kill)", () => {
+    // preparing / deciding / paused / completed / failed / stopped:
+    // no subprocess is in flight, so stopLoop's kill loop should
+    // skip cleanly.
+    expect(loopActivePhaseToRole("preparing")).toBeNull();
+    expect(loopActivePhaseToRole("deciding")).toBeNull();
+    expect(loopActivePhaseToRole("paused")).toBeNull();
+    expect(loopActivePhaseToRole("completed")).toBeNull();
+    expect(loopActivePhaseToRole("failed")).toBeNull();
+    expect(loopActivePhaseToRole("stopped")).toBeNull();
   });
 });

@@ -9,6 +9,159 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — `cfcf stop` now kills the active subprocess + clears the dashboard indicator + new `cfcf agents reap` escape hatch
+
+Real gmbot dogfood: after iter 19 completed and reflection started
+at 3:41 pm, the user observed the dashboard still showing
+"reflection running" at 8 pm — 4.5 hours later. PA's investigation
+found that the loop state was `phase: stopped, outcome: stopped`,
+but the reflection's codex subprocess (PID 99729) was still alive
+with the cfcf server as its parent.
+
+**Root cause** (three layered bugs):
+
+1. **`stopLoop()` only flips the state flag.** It set `state.phase
+   = "stopped"` and saved — but never signaled any subprocess.
+   The main while-loop's `isStopped(state)` check would exit
+   cleanly at the next iteration boundary; a mid-flight subprocess
+   (the reflection codex) kept running because nothing told it to
+   stop. The runner's `await managed.result` promise got stranded.
+2. **The per-role state-store row stayed `executing`.** When the
+   subprocess was orphaned, the reflection-runner's normal
+   completion path didn't fire, so `reflect-state.json`'s status
+   was never flipped. The dashboard's `getActiveAgent()` reads
+   that status; it kept claiming reflection was alive.
+3. **No way to kill the stranded subprocess from cfcf.** The
+   existing `cfcf server reap` filters on `PPID==1` (orphans of a
+   dead server). PID 99729 was still parented by the live cfcf
+   server, so it didn't qualify. User had to find the PID
+   manually and `kill -9` it.
+
+The fix lands all three:
+
+**Fix 1 — `stopLoop()` kills the active subprocess.**
+
+`stopLoop()` now maps the loop's current phase to its in-flight
+`AgentRole` via a new pure helper `loopActivePhaseToRole(phase):
+AgentRole | null`:
+
+  - `pre_loop_reviewing` → `architect`
+  - `dev_executing` → `dev`
+  - `judging` → `judge`
+  - `reflecting` → `reflection`
+  - `documenting` → `documenter`
+  - else → `null` (no subprocess in flight; nothing to kill)
+
+For non-null roles, looks up the registered process in
+`active-processes.ts` and calls the existing `killProcessTree()`
+(SIGTERM → 1.5s grace → SIGKILL on the process group).
+
+**Hard guarantee — PA and HA are untouched.** They run interactively
+as `cfcf spec` / `cfcf help assistant` with `stdio: "inherit"`,
+outside the cfcf server entirely. They are NOT in the
+`active-processes` registry, and the registry's `AgentRole` type
+(`packages/core/src/log-storage.ts:20`) doesn't include them.
+Both layers of defence: type-level (can't be in the registry) +
+phase-mapping (the loop never enters a phase that resolves to
+"pa" or "ha").
+
+**Fix 2 — Per-role state-store flip on kill.**
+
+After killing, `stopLoop()` calls the role-appropriate
+`mark<X>StateFailed(workspaceId, reason)` helper:
+
+  - `markReflectStateFailed` (new, in `reflection-runner.ts`)
+  - `markDocumentStateFailed` (new, in `documenter-runner.ts`)
+  - `markReviewStateFailed` (new, in `architect-runner.ts`)
+
+All three are idempotent: no-op when no state exists, no-op when
+state is already terminal (so they're safe to call
+unconditionally, and won't clobber a real completion if the
+subprocess happened to finish between `stopLoop()` being called
+and the kill landing). On a flip, status → `failed`, error →
+`"Loop stopped by user via cfcf stop"`, `completedAt` is set.
+
+The dashboard's `getActiveAgent()` re-reads these state stores; the
+"X running" chip clears on the next poll (~5s).
+
+Dev / judge don't have separate state stores — they're tracked
+inside the iteration's record in `loop-state.json` itself, which
+the "stopped" flip already handles. So those two roles skip the
+state-flip step.
+
+**Fix 3 — New `cfcf agents reap` command (manual escape hatch).**
+
+For the rare cases where the auto-kill in `stopLoop()` doesn't
+land (subprocess in uninterruptible sleep, user observes a stuck
+process from a pre-fix build, etc.), or for proactive inspection:
+
+```
+$ cfcf agents reap                    # all workspaces
+$ cfcf agents reap --workspace gmbot  # one workspace
+$ cfcf agents reap --yes              # non-interactive
+```
+
+Mirrors `cfcf server reap`'s UX (item 6.31) but scoped to
+LIVE-SERVER children rather than `PPID==1` orphans:
+
+  - Requires the cfcf server to be running (queries the in-memory
+    registry).
+  - Lists each process: workspace, role, PID, runtime, log file.
+  - Per-row y/N confirmation by default; `--yes` for scripted
+    use.
+  - Per-row kill via new HTTP routes:
+    - `GET /api/active-processes?workspace=<id>` (list)
+    - `POST /api/active-processes/:workspaceId/:role/kill` (kill +
+      state-flip)
+  - **Cannot kill PA/HA** — they're not in the registry, so they
+    don't show up in the list. Same hard guarantee as `stopLoop()`.
+
+**Why no wall-clock timeout (rejected design).**
+
+PA's initial proposal included a per-role timeout (e.g., kill
+reflection if it runs > 4 hours). Declined deliberately:
+
+  - The existing codex rolling-window quota recovery can take ~1
+    hour. Any wall-clock heuristic risks killing legitimate recovery.
+  - Timeouts add config knobs that are hard to tune correctly.
+  - Matches cf²'s "human on the loop, not in it" principle —
+    the user is the one who decides when something is stuck. The
+    new `cfcf agents reap` is the user-driven version of the
+    same intent.
+
+**Implementation** (~340 LoC):
+
+- `packages/core/src/process-manager.ts` — export
+  `killProcessTree` (was private).
+- `packages/core/src/reflection-runner.ts` —
+  `markReflectStateFailed(workspaceId, reason)`.
+- `packages/core/src/documenter-runner.ts` —
+  `markDocumentStateFailed(workspaceId, reason)`.
+- `packages/core/src/architect-runner.ts` —
+  `markReviewStateFailed(workspaceId, reason)`.
+- `packages/core/src/iteration-loop.ts`:
+  - `loopActivePhaseToRole(phase): AgentRole | null` (exported,
+    pure, testable).
+  - `stopLoop()` extended: capture active role before phase flip,
+    kill subprocess, flip per-role state store.
+- `packages/server/src/app.ts` — two new endpoints
+  (`/api/active-processes` GET + POST kill).
+- `packages/cli/src/commands/agents.ts` — new file, `cfcf agents
+  reap` command.
+- `packages/cli/src/index.ts` — register the new command.
+
+**Test coverage** (8 new tests, all 1038 tests pass):
+
+- 6 new tests in `iteration-loop.test.ts` covering
+  `loopActivePhaseToRole`: each of the five active phases maps to
+  the correct role; non-active phases (preparing / deciding /
+  paused / completed / failed / stopped) return null.
+- 2 new tests in `reflection-runner.test.ts` covering
+  `markReflectStateFailed`'s idempotent no-state branch (safe to
+  call unconditionally, doesn't throw for unknown workspace IDs).
+  Document + architect runners share the same code shape; the
+  reflection test locks in the pattern.
+
 ### Added — Harness-level missing-signals pause + `retry_iteration` resume action
 
 cfcf has always implicitly assumed that the dev and judge agents

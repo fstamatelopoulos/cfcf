@@ -105,6 +105,34 @@ export function getReflectState(workspaceId: string): ReflectState | undefined {
 }
 
 /**
+ * Force-mark this workspace's reflection state as `failed` with the
+ * given reason. Used by `stopLoop()` (and the manual
+ * `cfcf agents reap` command) to flip the dashboard's "reflection
+ * running" indicator off immediately after killing the subprocess —
+ * without this, the in-memory state would stay "executing" and the
+ * `/api/activity` chip would keep claiming reflection is alive.
+ *
+ * Idempotent: no-op when the workspace has no reflect state, or
+ * when the existing state is already a terminal status (completed /
+ * failed) — won't clobber a real completion.
+ *
+ * Returns true if a flip happened, false otherwise.
+ */
+export async function markReflectStateFailed(
+  workspaceId: string,
+  reason: string,
+): Promise<boolean> {
+  const current = reflectStore.get(workspaceId);
+  if (!current) return false;
+  if (!REFLECT_ACTIVE_STATUSES.has(current.status)) return false;
+  current.status = "failed";
+  current.error = reason;
+  current.completedAt = new Date().toISOString();
+  await setReflectState(current);
+  return true;
+}
+
+/**
  * Server-boot hook (item F.23): hydrate the in-memory cache from disk
  * and clean up any state still claiming to be active.
  */

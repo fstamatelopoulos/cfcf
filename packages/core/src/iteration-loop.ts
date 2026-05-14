@@ -849,6 +849,39 @@ export async function resumeLoop(
 /**
  * Stop a running or paused loop.
  */
+/**
+ * Map the loop's current phase to the AgentRole of the subprocess
+ * the harness is awaiting RIGHT NOW. Returns `null` when no
+ * subprocess is in flight (preparing / deciding / paused / etc.).
+ *
+ * Used by `stopLoop()` (and any future "kill the currently-running
+ * thing" callers) to decide what to signal. The loop awaits exactly
+ * one subprocess at a time, so a single role is unambiguous.
+ *
+ * Deliberately omits PA/HA — those run outside the cfcf server
+ * entirely (interactive `cfcf spec` / `cfcf help assistant` with
+ * `stdio: "inherit"`), are NOT in the `active-processes` registry,
+ * and must NOT be touched by a loop-level stop.
+ */
+export function loopActivePhaseToRole(
+  phase: LoopState["phase"],
+): import("./log-storage.js").AgentRole | null {
+  switch (phase) {
+    case "pre_loop_reviewing":
+      return "architect";
+    case "dev_executing":
+      return "dev";
+    case "judging":
+      return "judge";
+    case "reflecting":
+      return "reflection";
+    case "documenting":
+      return "documenter";
+    default:
+      return null;
+  }
+}
+
 export async function stopLoop(workspaceId: string): Promise<LoopState> {
   const state = await getLoopState(workspaceId);
   if (!state) {
@@ -858,11 +891,68 @@ export async function stopLoop(workspaceId: string): Promise<LoopState> {
     throw new Error(`Loop already ended (phase: ${state.phase})`);
   }
 
+  // Capture the active role BEFORE flipping phase to "stopped" —
+  // the flip would otherwise hide which subprocess we should signal.
+  const activeRole = loopActivePhaseToRole(state.phase);
+
   state.phase = "stopped";
   state.outcome = "stopped";
   state.completedAt = new Date().toISOString();
   await saveLoopState(state);
   await updateWorkspace(workspaceId, { status: "stopped" });
+
+  // Kill the subprocess the loop was awaiting + flip its per-role
+  // state-store row so the dashboard's "X running" indicator clears
+  // immediately rather than staying stuck until next server boot.
+  //
+  // Previously `stopLoop()` only flipped the state flag; mid-flight
+  // subprocesses (notably reflection codex on a multi-hour stall)
+  // kept running indefinitely because nothing signaled them. The
+  // loop's `isStopped(state)` check exits the while-loop at the next
+  // iteration boundary, but a subprocess that started before stop
+  // is still being awaited at that point — the await promise gets
+  // stranded and the subprocess outlives the server's interest in
+  // it. Real dogfood: gmbot iter 19 reflection ran ~5 hours past
+  // a `cfcf stop` because of this.
+  if (activeRole) {
+    const { getActiveProcess } = await import("./active-processes.js");
+    const entry = getActiveProcess(workspaceId, activeRole);
+    if (entry) {
+      try {
+        const { killProcessTree } = await import("./process-manager.js");
+        killProcessTree(entry.process.proc.pid);
+      } catch (err) {
+        console.warn(
+          `[stopLoop] killProcessTree failed for ${activeRole} (pid ${entry.process.proc.pid}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    // Flip the per-role state-store. Each runner exposes a
+    // `mark<X>StateFailed` helper that's idempotent — no-op when
+    // there's no state (dev/judge don't have one) or when the
+    // state is already terminal (e.g., the subprocess died on its
+    // own between stop being called and the kill landing).
+    const reason = "Loop stopped by user via cfcf stop";
+    try {
+      if (activeRole === "reflection") {
+        const { markReflectStateFailed } = await import("./reflection-runner.js");
+        await markReflectStateFailed(workspaceId, reason);
+      } else if (activeRole === "documenter") {
+        const { markDocumentStateFailed } = await import("./documenter-runner.js");
+        await markDocumentStateFailed(workspaceId, reason);
+      } else if (activeRole === "architect") {
+        const { markReviewStateFailed } = await import("./architect-runner.js");
+        await markReviewStateFailed(workspaceId, reason);
+      }
+      // dev / judge: no separate state-store. The loop-state itself
+      // (now "stopped") is the audit trail; their iterRecord stays
+      // in state.iterations as a partial entry.
+    } catch (err) {
+      console.warn(
+        `[stopLoop] state-store flip failed for ${activeRole}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   return state;
 }

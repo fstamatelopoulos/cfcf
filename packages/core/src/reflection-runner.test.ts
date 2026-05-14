@@ -8,6 +8,7 @@ import {
   writeReflectionInstructions,
   validatePlanRewrite,
   resolveReflectionAgent,
+  markReflectStateFailed,
 } from "./reflection-runner.js";
 import type { WorkspaceConfig } from "./types.js";
 
@@ -202,6 +203,27 @@ describe("reflection-runner", () => {
 - [ ] Add API handlers
 `;
       expect(validatePlanRewrite(basePlan, newPlan)).toEqual({ valid: true });
+    });
+  });
+
+  // markReflectStateFailed: used by stopLoop + cfcf agents reap to
+  // flip the dashboard's "reflection running" indicator off after
+  // killing the subprocess. The "with-state" branch is exercised
+  // end-to-end via stopLoop integration tests; here we lock in the
+  // idempotent / safe no-state path so callers can call it
+  // unconditionally without worrying about whether state exists.
+  describe("markReflectStateFailed (no-state branch — idempotency)", () => {
+    it("returns false when the workspace has no reflect state (no-op, safe to call unconditionally)", async () => {
+      const result = await markReflectStateFailed("workspace-id-with-no-state-xyz", "test reason");
+      expect(result).toBe(false);
+    });
+
+    it("does not throw for unknown workspace ids", async () => {
+      // Callers in stopLoop wrap in try/catch but rely on this not
+      // throwing for the common case (no reflection ever spawned).
+      await expect(
+        markReflectStateFailed("totally-fake-id", "test reason"),
+      ).resolves.toBe(false);
     });
   });
 });

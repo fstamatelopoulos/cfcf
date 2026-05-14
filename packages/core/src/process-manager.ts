@@ -159,7 +159,7 @@ export async function spawnProcess(opts: ProcessOptions): Promise<ManagedProcess
  *
  * Item 6.31 (2026-05-08).
  */
-function killProcessTree(pid: number | undefined): void {
+export function killProcessTree(pid: number | undefined): void {
   if (!pid) return;
   try {
     // SIGTERM the whole group. Negative pid = group target on Unix.

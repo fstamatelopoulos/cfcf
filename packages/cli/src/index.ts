@@ -42,6 +42,7 @@ import { registerSelfUpdateCommand } from "./commands/self-update.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerHelpCommand } from "./commands/help.js";
 import { registerSpecCommand } from "./commands/spec.js";
+import { registerAgentsCommands } from "./commands/agents.js";
 import { maybePrintUpdateBanner } from "./update-banner.js";
 
 // --- Internal: run the server in-process ---
@@ -114,6 +115,7 @@ registerRunCommand(program);
 registerResumeCommand(program);
 registerStopCommand(program);
 registerSpecCommand(program);
+registerAgentsCommands(program);
 registerReviewCommand(program);
 registerDocumentCommand(program);
 registerReflectCommand(program);
