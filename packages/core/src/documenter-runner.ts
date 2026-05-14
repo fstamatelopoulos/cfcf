@@ -83,6 +83,31 @@ export function getDocumentState(workspaceId: string): DocumentState | undefined
 }
 
 /**
+ * Force-mark this workspace's documenter state as `failed` with the
+ * given reason. Used by `stopLoop()` + `cfcf agents reap` to flip
+ * the dashboard's "documenting" indicator off immediately after
+ * killing the subprocess. Mirrors `markReflectStateFailed` /
+ * `markReviewStateFailed`.
+ *
+ * Idempotent: no-op when no state exists, or when the state is
+ * already terminal (completed / failed). Returns true if a flip
+ * happened.
+ */
+export async function markDocumentStateFailed(
+  workspaceId: string,
+  reason: string,
+): Promise<boolean> {
+  const current = documentStore.get(workspaceId);
+  if (!current) return false;
+  if (!DOCUMENT_ACTIVE_STATUSES.has(current.status)) return false;
+  current.status = "failed";
+  current.error = reason;
+  current.completedAt = new Date().toISOString();
+  await setDocumentState(current);
+  return true;
+}
+
+/**
  * Server-boot hook (item F.23): hydrate the in-memory cache from disk
  * and clean up any state still claiming to be active. Returns the
  * count cleaned.

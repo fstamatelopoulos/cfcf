@@ -33,7 +33,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
 import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
-import { nextIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
+import { nextIteration, decrementIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync, parseReflectionSignals } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
@@ -88,7 +88,14 @@ export interface LoopState {
     | "anomaly"
     | "user_input_needed"
     | "max_iterations"
-    | "scope_complete";  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    | "scope_complete"  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    // Harness contract violation: dev or judge agent exited without
+    // writing its signals file. Inclusive of all root causes (crash,
+    // quota cap, OOM, etc.) — the harness doesn't classify, just
+    // pauses + surfaces. User checks the log to identify cause and
+    // resumes with `retry_iteration` (redo the iter) or `continue`
+    // (skip + move on) or `stop_loop_now`.
+    | "missing_signals";
   /** Questions from dev/judge that need user answers */
   pendingQuestions?: string[];
   /** User feedback to inject into the next iteration */
@@ -753,6 +760,21 @@ export function pauseReasonAllowedActions(
       //   - refine_plan  → user adds new requirements, re-runs review
       return ["finish_loop", "stop_loop_now", "refine_plan"];
 
+    case "missing_signals":
+      // Dev or judge agent exited without writing signals (crash,
+      // quota cap, OOM, …). The iteration is in an unknown state;
+      // the harness can't safely judge, reflect, refine, or finish
+      // on no data. Allowed:
+      //   - retry_iteration → redo the failed iter (counter rolled
+      //     back; branch re-created). Natural choice after a quota
+      //     cap resets.
+      //   - continue        → skip the failed iter, start iter N+1
+      //     fresh. Use when the failed work isn't worth recovering.
+      //   - stop_loop_now   → abandon, accept partial progress.
+      // No finish_loop / refine_plan / consult_reflection — those
+      // all assume we have a meaningful iteration result to act on.
+      return ["retry_iteration", "continue", "stop_loop_now"];
+
     default:
       // A1 pre-loop review blocked. continue (after user edited the
       // Problem Pack), stop_loop_now, refine_plan (re-run architect
@@ -827,6 +849,39 @@ export async function resumeLoop(
 /**
  * Stop a running or paused loop.
  */
+/**
+ * Map the loop's current phase to the AgentRole of the subprocess
+ * the harness is awaiting RIGHT NOW. Returns `null` when no
+ * subprocess is in flight (preparing / deciding / paused / etc.).
+ *
+ * Used by `stopLoop()` (and any future "kill the currently-running
+ * thing" callers) to decide what to signal. The loop awaits exactly
+ * one subprocess at a time, so a single role is unambiguous.
+ *
+ * Deliberately omits PA/HA — those run outside the cfcf server
+ * entirely (interactive `cfcf spec` / `cfcf help assistant` with
+ * `stdio: "inherit"`), are NOT in the `active-processes` registry,
+ * and must NOT be touched by a loop-level stop.
+ */
+export function loopActivePhaseToRole(
+  phase: LoopState["phase"],
+): import("./log-storage.js").AgentRole | null {
+  switch (phase) {
+    case "pre_loop_reviewing":
+      return "architect";
+    case "dev_executing":
+      return "dev";
+    case "judging":
+      return "judge";
+    case "reflecting":
+      return "reflection";
+    case "documenting":
+      return "documenter";
+    default:
+      return null;
+  }
+}
+
 export async function stopLoop(workspaceId: string): Promise<LoopState> {
   const state = await getLoopState(workspaceId);
   if (!state) {
@@ -836,11 +891,68 @@ export async function stopLoop(workspaceId: string): Promise<LoopState> {
     throw new Error(`Loop already ended (phase: ${state.phase})`);
   }
 
+  // Capture the active role BEFORE flipping phase to "stopped" —
+  // the flip would otherwise hide which subprocess we should signal.
+  const activeRole = loopActivePhaseToRole(state.phase);
+
   state.phase = "stopped";
   state.outcome = "stopped";
   state.completedAt = new Date().toISOString();
   await saveLoopState(state);
   await updateWorkspace(workspaceId, { status: "stopped" });
+
+  // Kill the subprocess the loop was awaiting + flip its per-role
+  // state-store row so the dashboard's "X running" indicator clears
+  // immediately rather than staying stuck until next server boot.
+  //
+  // Previously `stopLoop()` only flipped the state flag; mid-flight
+  // subprocesses (notably reflection codex on a multi-hour stall)
+  // kept running indefinitely because nothing signaled them. The
+  // loop's `isStopped(state)` check exits the while-loop at the next
+  // iteration boundary, but a subprocess that started before stop
+  // is still being awaited at that point — the await promise gets
+  // stranded and the subprocess outlives the server's interest in
+  // it. Real dogfood: gmbot iter 19 reflection ran ~5 hours past
+  // a `cfcf stop` because of this.
+  if (activeRole) {
+    const { getActiveProcess } = await import("./active-processes.js");
+    const entry = getActiveProcess(workspaceId, activeRole);
+    if (entry) {
+      try {
+        const { killProcessTree } = await import("./process-manager.js");
+        killProcessTree(entry.process.proc.pid);
+      } catch (err) {
+        console.warn(
+          `[stopLoop] killProcessTree failed for ${activeRole} (pid ${entry.process.proc.pid}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    // Flip the per-role state-store. Each runner exposes a
+    // `mark<X>StateFailed` helper that's idempotent — no-op when
+    // there's no state (dev/judge don't have one) or when the
+    // state is already terminal (e.g., the subprocess died on its
+    // own between stop being called and the kill landing).
+    const reason = "Loop stopped by user via cfcf stop";
+    try {
+      if (activeRole === "reflection") {
+        const { markReflectStateFailed } = await import("./reflection-runner.js");
+        await markReflectStateFailed(workspaceId, reason);
+      } else if (activeRole === "documenter") {
+        const { markDocumentStateFailed } = await import("./documenter-runner.js");
+        await markDocumentStateFailed(workspaceId, reason);
+      } else if (activeRole === "architect") {
+        const { markReviewStateFailed } = await import("./architect-runner.js");
+        await markReviewStateFailed(workspaceId, reason);
+      }
+      // dev / judge: no separate state-store. The loop-state itself
+      // (now "stopped") is the audit trail; their iterRecord stays
+      // in state.iterations as a partial entry.
+    } catch (err) {
+      console.warn(
+        `[stopLoop] state-store flip failed for ${activeRole}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   return state;
 }
@@ -1053,6 +1165,70 @@ async function handleStopLoopNow(
 }
 
 /**
+ * Pause the loop because the dev or judge agent exited without
+ * writing its signals file. Harness contract: agents must produce
+ * `cfcf-iteration-signals.json` / `cfcf-judge-signals.json`. When
+ * the file is missing, unreadable, or fails schema validation, the
+ * harness can't safely judge / reflect / decide on no data — pause
+ * and surface to the user.
+ *
+ * Inclusive of all root causes (quota cap, agent crash, OOM, killed
+ * process, agent CLI bug). The harness deliberately doesn't try to
+ * classify — the user reads the log file to identify cause, then
+ * resumes with `retry_iteration` (most common after a quota cap
+ * resets) / `continue` (skip the failed iter) / `stop_loop_now`.
+ *
+ * The pause-state writes mirror the existing
+ * `consult_reflection`/`scope_complete` pause paths: set phase +
+ * pauseReason + pendingQuestions, saveLoopState, flip workspace
+ * status to "paused", dispatch a notification. No git surgery —
+ * any dirty working-tree state is preserved for the user to
+ * inspect; on `retry_iteration`, the iteration counter is rolled
+ * back and the existing branch is re-created off HEAD (the normal
+ * iteration body already deletes-and-recreates an existing branch).
+ */
+async function pauseLoopOnMissingSignals(
+  workspace: WorkspaceConfig,
+  state: LoopState,
+  iterationNum: number,
+  phase: "dev" | "judge",
+  exitCode: number | undefined,
+  logFileName: string,
+): Promise<void> {
+  state.phase = "paused";
+  state.pauseReason = "missing_signals";
+  const exitDetail =
+    exitCode === undefined ? "" : ` (exit code ${exitCode})`;
+  const message =
+    `Anomaly detected: ${phase} agent for iteration ${iterationNum} ` +
+    `exited${exitDetail} without writing its signals file (agent crashed ` +
+    `or hit a usage limit). Check the log: ${logFileName}. Resume with ` +
+    `\`retry_iteration\` to redo this iteration, \`continue\` to skip ` +
+    `to iteration ${iterationNum + 1}, or \`stop_loop_now\` to abandon.`;
+  state.pendingQuestions = [message];
+  await saveLoopState(state);
+  await updateWorkspace(workspace.id, { status: "paused" });
+
+  dispatchForWorkspace(
+    makeEvent({
+      type: "loop.paused",
+      title: "Loop paused: agent exited without signals",
+      message: `${workspace.name}: ${message}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      details: {
+        pauseReason: "missing_signals",
+        phase,
+        iteration: iterationNum,
+        exitCode: exitCode ?? null,
+        logFile: logFileName,
+      },
+    }),
+    workspace.notifications,
+  );
+}
+
+/**
  * Handle the `finish_loop` resume action: skip the iteration spawn,
  * jump to the configured end-of-loop sequence (documenter when
  * `autoDocumenter=true`; otherwise just terminate cleanly with success
@@ -1245,6 +1421,22 @@ async function runLoop(
     // "continue" or "pause_for_user" → fall through (pause_for_user
     // is handled inside the consult helper, which sets the pause state
     // and returns "stop" to abort runLoop).
+  }
+  if (resumeAction === "retry_iteration") {
+    // Re-spawn dev on the same iteration after a `missing_signals`
+    // pause (quota cap reset, agent crash recovery, etc.). Roll the
+    // iteration counter back by one so the loop body's next
+    // `nextIteration()` call returns the SAME number that failed —
+    // the branch-creation logic already deletes + re-creates an
+    // existing branch off HEAD, so the failed attempt's branch is
+    // replaced cleanly. Also drop the failed iteration's record
+    // from state.iterations so it isn't double-counted; the retry
+    // produces a fresh record under the same number.
+    await decrementIteration(workspace.id);
+    if (state.iterations.length > 0) {
+      state.iterations.pop();
+    }
+    // Fall through to the regular pre-loop / iteration logic.
   }
 
   // --- PRE-LOOP REVIEW (item 5.1 autoReviewSpecs=true) ---
@@ -1664,6 +1856,29 @@ async function runLoop(
     const devSignals = await parseSignalFile(workspace.repoPath);
     iterRecord.devSignals = devSignals ?? undefined;
 
+    // Harness contract check: dev agent must write
+    // `cfcf-iteration-signals.json`. Absence (file missing, JSON
+    // parse failure, or schema validation failure — all collapsed
+    // to `null` by `parseSignalFile`) means we have no data to
+    // judge / reflect / decide on. Pause + surface to the user;
+    // do NOT silently treat as a failed iteration and move on.
+    // Inclusive of all root causes: agent crashed mid-startup,
+    // quota cap, OOM kill, etc. Working tree (if dirty) is left
+    // as-is for the user to inspect; on `retry_iteration` the
+    // existing branch is deleted + re-created off HEAD by the
+    // normal iteration body.
+    if (!devSignals) {
+      await pauseLoopOnMissingSignals(
+        workspace,
+        state,
+        iterationNum,
+        "dev",
+        devResult.exitCode,
+        iterRecord.devLogFileName,
+      );
+      return;
+    }
+
     // Commit dev work
     if (await gitManager.hasChanges(workspace.repoPath)) {
       await gitManager.commitAll(
@@ -1799,9 +2014,27 @@ async function runJudgeAndDecide(
   const judgeSignals = await parseJudgeSignals(workspace.repoPath);
   iterRecord.judgeSignals = judgeSignals ?? undefined;
 
-  // If judge exited with non-zero and produced no signals, log it
-  if (judgeResult.exitCode !== 0 && !judgeSignals) {
-    iterRecord.judgeError = `Judge agent exited with code ${judgeResult.exitCode}. Check log: ${judgeLogFile}`;
+  // Harness contract check: judge agent must write
+  // `cfcf-judge-signals.json`. Same pattern as the dev check above
+  // — absence of signals means we have no determination to act on,
+  // so we pause and surface to the user rather than archive a
+  // stale judge-assessment.md or fall through to the decide path
+  // with no data. Inclusive of all root causes (crash, quota cap,
+  // OOM). The previous behaviour (record `iterRecord.judgeError`
+  // and continue silently) is replaced by the explicit pause; the
+  // `judgeError` field is still populated for the audit trail.
+  if (!judgeSignals) {
+    iterRecord.judgeError =
+      `Judge agent exited with code ${judgeResult.exitCode} without writing signals. Check log: ${judgeLogFile}`;
+    await pauseLoopOnMissingSignals(
+      workspace,
+      state,
+      iterationNum,
+      "judge",
+      judgeResult.exitCode,
+      iterRecord.judgeLogFileName,
+    );
+    return;
   }
 
   // Commit judge work
@@ -2044,6 +2277,22 @@ async function runJudgeAndDecide(
       }),
       workspace.notifications,
     );
+  }
+
+  // External-stop guard. Mirrors the `isStopped(state)` checks after
+  // dev's await (line ~1852) and judge's await (line ~2011) — the
+  // reflection path was missing it, and any phase mutation here
+  // would clobber a `state.phase = "stopped"` that `stopLoop()` set
+  // while we were mid-reflection. Real dogfood: gmbot iter 19 — user
+  // called `cfcf stop`, then `kill -9`'d the stranded reflection
+  // codex; the await unblocked, post-reflection ingest ran, line
+  // 2283 below overwrote `"stopped"` with `"deciding"`, makeDecision
+  // returned `continue`, and the outer loop's `isLoopDone(state)`
+  // saw `"deciding"` → false → spawned iter N+1. With this guard,
+  // the cascade exits cleanly back to runLoop's `isLoopDone(state)`
+  // check, which sees the unmodified `"stopped"` and returns.
+  if (isStopped(state)) {
+    return;
   }
 
   // --- DECIDE ---

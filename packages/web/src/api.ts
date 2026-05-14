@@ -302,7 +302,8 @@ export type ResumeAction =
   | "finish_loop"
   | "stop_loop_now"
   | "refine_plan"
-  | "consult_reflection";
+  | "consult_reflection"
+  | "retry_iteration";  // harness-missing-signals: redo the failed iter
 
 export function resumeLoop(
   workspaceId: string,

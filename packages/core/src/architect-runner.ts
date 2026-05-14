@@ -84,6 +84,31 @@ export function getReviewState(workspaceId: string): ReviewState | undefined {
 }
 
 /**
+ * Force-mark this workspace's architect/review state as `failed`
+ * with the given reason. Used by `stopLoop()` + `cfcf agents reap`
+ * to flip the dashboard's "review running" indicator off
+ * immediately after killing the subprocess. Mirrors
+ * `markReflectStateFailed` / `markDocumentStateFailed`.
+ *
+ * Idempotent: no-op when no state exists, or when the state is
+ * already terminal (completed / failed). Returns true if a flip
+ * happened.
+ */
+export async function markReviewStateFailed(
+  workspaceId: string,
+  reason: string,
+): Promise<boolean> {
+  const current = reviewStore.get(workspaceId);
+  if (!current) return false;
+  if (!REVIEW_ACTIVE_STATUSES.has(current.status)) return false;
+  current.status = "failed";
+  current.error = reason;
+  current.completedAt = new Date().toISOString();
+  await setReviewState(current);
+  return true;
+}
+
+/**
  * Server-boot hook (item F.23): load every workspace's persisted
  * review state into the in-memory cache. Any state still in an active
  * phase from the prior server is flipped to `failed` (with the supplied

@@ -244,6 +244,25 @@ export async function nextIteration(workspaceId: string): Promise<number | null>
 }
 
 /**
+ * Roll the iteration counter back by one. Used by `retry_iteration`
+ * (the resume action that re-spawns dev on the same iteration after a
+ * `missing_signals` pause): the failed attempt was already counted via
+ * `nextIteration()`, so we roll back to let the loop body's next
+ * `nextIteration()` call return the same number. Idempotent at the
+ * floor — if the counter is already 0 (no iterations yet), this is a
+ * no-op.
+ */
+export async function decrementIteration(workspaceId: string): Promise<number | null> {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace) return null;
+  const current = workspace.currentIteration || 0;
+  if (current <= 0) return 0;
+  const prev = current - 1;
+  await updateWorkspace(workspaceId, { currentIteration: prev });
+  return prev;
+}
+
+/**
  * Verify a workspace's repo path exists and is a git repo.
  */
 export async function validateWorkspaceRepo(repoPath: string): Promise<{ valid: boolean; error?: string }> {

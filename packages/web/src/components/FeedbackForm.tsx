@@ -32,6 +32,17 @@ function pauseReasonAllowedActions(pauseReason: LoopState["pauseReason"]): Resum
       // configured; stop_loop_now accepts "project done"; refine_plan
       // re-runs the architect after the user adds new requirements.
       return ["finish_loop", "stop_loop_now", "refine_plan"];
+    case "missing_signals":
+      // Harness-missing-signals: dev/judge exited without writing
+      // its signals file (crash, quota cap, OOM, …). No determination
+      // to act on. Allowed:
+      //   - retry_iteration → redo the iter (after a quota window
+      //     resets, typically)
+      //   - continue        → skip the failed iter
+      //   - stop_loop_now   → abandon
+      // No finish/refine/consult — they all need a meaningful iter
+      // result.
+      return ["retry_iteration", "continue", "stop_loop_now"];
     default:
       // Pre-loop review block (A1)
       return ["continue", "stop_loop_now", "refine_plan"];
@@ -44,6 +55,7 @@ const ACTION_LABEL: Record<ResumeAction, string> = {
   stop_loop_now: "Stop loop now",
   refine_plan: "Refine plan",
   consult_reflection: "Ask Reflection to decide",
+  retry_iteration: "Retry iteration",
 };
 
 const ACTION_HELP: Record<ResumeAction, string> = {
@@ -57,6 +69,8 @@ const ACTION_HELP: Record<ResumeAction, string> = {
     "Run the architect (synchronously) with your feedback to update the plan, then continue with the next iteration.",
   consult_reflection:
     "Spawn reflection with your feedback as input. Reflection decides what the harness does next (continue / finish / stop / re-pause).",
+  retry_iteration:
+    "Re-spawn dev on the same iteration that just failed (the iteration counter is rolled back, the branch is re-created). Typical use: a quota cap reset, or after fixing whatever caused the agent to crash.",
 };
 
 export function FeedbackForm({

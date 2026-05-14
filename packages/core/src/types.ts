@@ -585,7 +585,14 @@ export type ResumeAction =
   | "finish_loop"
   | "stop_loop_now"
   | "refine_plan"
-  | "consult_reflection";
+  | "consult_reflection"
+  // Re-spawn dev on the same iteration after a pause (typically
+  // following a `missing_signals` pause from a quota cap or agent
+  // crash). The iteration counter is rolled back so the retry runs
+  // as iteration N rather than N+1; the existing branch is
+  // discarded + re-created off HEAD. See harness-missing-signals
+  // feature for the full flow.
+  | "retry_iteration";
 
 /**
  * Architect's verdict on the Problem Pack's readiness for an iteration loop.

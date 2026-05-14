@@ -9,6 +9,339 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Fixed — `cfcf stop` now kills the active subprocess + clears the dashboard indicator + new `cfcf agents reap` escape hatch
+
+Real gmbot dogfood: after iter 19 completed and reflection started
+at 3:41 pm, the user observed the dashboard still showing
+"reflection running" at 8 pm — 4.5 hours later. PA's investigation
+found that the loop state was `phase: stopped, outcome: stopped`,
+but the reflection's codex subprocess (PID 99729) was still alive
+with the cfcf server as its parent.
+
+**Root cause** (four layered bugs — the fourth surfaced after the
+others were fixed and the user reported the loop continuing
+post-kill-9):
+
+1. **`stopLoop()` only flips the state flag.** It set `state.phase
+   = "stopped"` and saved — but never signaled any subprocess.
+   The main while-loop's `isStopped(state)` check would exit
+   cleanly at the next iteration boundary; a mid-flight subprocess
+   (the reflection codex) kept running because nothing told it to
+   stop. The runner's `await managed.result` promise got stranded.
+2. **The per-role state-store row stayed `executing`.** When the
+   subprocess was orphaned, the reflection-runner's normal
+   completion path didn't fire, so `reflect-state.json`'s status
+   was never flipped. The dashboard's `getActiveAgent()` reads
+   that status; it kept claiming reflection was alive.
+3. **No way to kill the stranded subprocess from cfcf.** The
+   existing `cfcf server reap` filters on `PPID==1` (orphans of a
+   dead server). PID 99729 was still parented by the live cfcf
+   server, so it didn't qualify. User had to find the PID
+   manually and `kill -9` it.
+4. **External `cfcf stop` flag was overwritten by post-reflection
+   phase transitions.** The reflection block had no `isStopped`
+   guard between its `await` and the next `state.phase = "deciding"`
+   mutation. When the user `kill -9`'d the stranded subprocess,
+   the await unblocked → post-processing ran → the DECIDE block's
+   phase assignment clobbered `"stopped"` → loop continued. User
+   reported this as "the loop continued after I killed the
+   process" — confirming PA's hypothesis that it was a downstream
+   consequence of Bug A.
+
+The fix lands all four:
+
+**Fix 1 — `stopLoop()` kills the active subprocess.**
+
+`stopLoop()` now maps the loop's current phase to its in-flight
+`AgentRole` via a new pure helper `loopActivePhaseToRole(phase):
+AgentRole | null`:
+
+  - `pre_loop_reviewing` → `architect`
+  - `dev_executing` → `dev`
+  - `judging` → `judge`
+  - `reflecting` → `reflection`
+  - `documenting` → `documenter`
+  - else → `null` (no subprocess in flight; nothing to kill)
+
+For non-null roles, looks up the registered process in
+`active-processes.ts` and calls the existing `killProcessTree()`
+(SIGTERM → 1.5s grace → SIGKILL on the process group).
+
+**Hard guarantee — PA and HA are untouched.** They run interactively
+as `cfcf spec` / `cfcf help assistant` with `stdio: "inherit"`,
+outside the cfcf server entirely. They are NOT in the
+`active-processes` registry, and the registry's `AgentRole` type
+(`packages/core/src/log-storage.ts:20`) doesn't include them.
+Both layers of defence: type-level (can't be in the registry) +
+phase-mapping (the loop never enters a phase that resolves to
+"pa" or "ha").
+
+**Fix 2 — Per-role state-store flip on kill.**
+
+After killing, `stopLoop()` calls the role-appropriate
+`mark<X>StateFailed(workspaceId, reason)` helper:
+
+  - `markReflectStateFailed` (new, in `reflection-runner.ts`)
+  - `markDocumentStateFailed` (new, in `documenter-runner.ts`)
+  - `markReviewStateFailed` (new, in `architect-runner.ts`)
+
+All three are idempotent: no-op when no state exists, no-op when
+state is already terminal (so they're safe to call
+unconditionally, and won't clobber a real completion if the
+subprocess happened to finish between `stopLoop()` being called
+and the kill landing). On a flip, status → `failed`, error →
+`"Loop stopped by user via cfcf stop"`, `completedAt` is set.
+
+The dashboard's `getActiveAgent()` re-reads these state stores; the
+"X running" chip clears on the next poll (~5s).
+
+Dev / judge don't have separate state stores — they're tracked
+inside the iteration's record in `loop-state.json` itself, which
+the "stopped" flip already handles. So those two roles skip the
+state-flip step.
+
+**Fix 3 — Stop signal survives the reflection post-processing cascade.**
+
+A subtler second-order bug surfaced in the same gmbot iter-19 trace.
+After PA helped the user discover the stranded codex, they ran
+`kill -9 99729` — and observed the loop *continuing* afterwards.
+PA's hypothesis was right: it was Bug A's downstream consequence,
+but the chain is specifically:
+
+1. `cfcf stop` set `state.phase = "stopped"` (correct — Fix 1
+   would have killed the subprocess too, but the user was on a
+   pre-fix build).
+2. Reflection's `await runReflectionSync(...)` was still
+   in flight; the codex subprocess was alive.
+3. The user's external `kill -9` killed codex.
+4. The await unblocked. Post-reflection processing ran (archive
+   the analysis, commit, ingest into Clio).
+5. **`state.phase = "deciding"` (line 2283) overwrote the
+   externally-set `"stopped"` flag.**
+6. `makeDecision()` returned its normal verdict (likely
+   "continue").
+7. `case "continue":` returned.
+8. Back in the outer loop, `isLoopDone(state)` checked
+   `state.phase` — now `"deciding"`, not `"stopped"` — and
+   returned false.
+9. **The next iteration of the while-loop started.**
+
+This was a genuine missing guard. The `isStopped(state)` check
+exists after dev's await (iteration-loop.ts:1852) and after judge's
+await (line 2011), but was missing between the reflection block
+and the DECIDE block. Any phase mutation in that window clobbers
+an external stop.
+
+**Fix**: one `if (isStopped(state)) return;` guard right before the
+DECIDE block. The cascade exits cleanly back to the outer loop's
+`isLoopDone(state)` check, which sees the unmodified `"stopped"`
+and returns. Matches the pattern of the dev / judge guards.
+
+This guard also closes the cascade for users with Fix 1 enabled.
+Fix 1 makes `cfcf stop` actively kill the subprocess (which then
+unblocks the await), but the same overwrite-on-post-processing
+cascade still ran without the guard. With Fix 3, the user's
+`cfcf stop` is honoured end-to-end whether the subprocess was
+killed by our `killProcessTree()` (Fix 1) or by an external
+`kill -9` (user escape hatch).
+
+**Fix 4 — New `cfcf agents reap` command (manual escape hatch).**
+
+For the rare cases where the auto-kill in `stopLoop()` doesn't
+land (subprocess in uninterruptible sleep, user observes a stuck
+process from a pre-fix build, etc.), or for proactive inspection:
+
+```
+$ cfcf agents reap                    # all workspaces
+$ cfcf agents reap --workspace gmbot  # one workspace
+$ cfcf agents reap --yes              # non-interactive
+```
+
+Mirrors `cfcf server reap`'s UX (item 6.31) but scoped to
+LIVE-SERVER children rather than `PPID==1` orphans:
+
+  - Requires the cfcf server to be running (queries the in-memory
+    registry).
+  - Lists each process: workspace, role, PID, runtime, log file.
+  - Per-row y/N confirmation by default; `--yes` for scripted
+    use.
+  - Per-row kill via new HTTP routes:
+    - `GET /api/active-processes?workspace=<id>` (list)
+    - `POST /api/active-processes/:workspaceId/:role/kill` (kill +
+      state-flip)
+  - **Cannot kill PA/HA** — they're not in the registry, so they
+    don't show up in the list. Same hard guarantee as `stopLoop()`.
+
+**Why no wall-clock timeout (rejected design).**
+
+PA's initial proposal included a per-role timeout (e.g., kill
+reflection if it runs > 4 hours). Declined deliberately:
+
+  - The existing codex rolling-window quota recovery can take ~1
+    hour. Any wall-clock heuristic risks killing legitimate recovery.
+  - Timeouts add config knobs that are hard to tune correctly.
+  - Matches cf²'s "human on the loop, not in it" principle —
+    the user is the one who decides when something is stuck. The
+    new `cfcf agents reap` is the user-driven version of the
+    same intent.
+
+**Implementation** (~360 LoC):
+
+- `packages/core/src/process-manager.ts` — export
+  `killProcessTree` (was private).
+- `packages/core/src/reflection-runner.ts` —
+  `markReflectStateFailed(workspaceId, reason)`.
+- `packages/core/src/documenter-runner.ts` —
+  `markDocumentStateFailed(workspaceId, reason)`.
+- `packages/core/src/architect-runner.ts` —
+  `markReviewStateFailed(workspaceId, reason)`.
+- `packages/core/src/iteration-loop.ts`:
+  - `loopActivePhaseToRole(phase): AgentRole | null` (exported,
+    pure, testable).
+  - `stopLoop()` extended: capture active role before phase flip,
+    kill subprocess, flip per-role state store.
+  - **New `isStopped(state)` guard** before the DECIDE block
+    (line ~2283) — closes the Bug-D cascade that otherwise
+    clobbered the stop flag on post-reflection phase transitions.
+- `packages/server/src/app.ts` — two new endpoints
+  (`/api/active-processes` GET + POST kill).
+- `packages/cli/src/commands/agents.ts` — new file, `cfcf agents
+  reap` command.
+- `packages/cli/src/index.ts` — register the new command.
+
+**Test coverage** (8 new tests, all 1038 tests pass):
+
+- 6 new tests in `iteration-loop.test.ts` covering
+  `loopActivePhaseToRole`: each of the five active phases maps to
+  the correct role; non-active phases (preparing / deciding /
+  paused / completed / failed / stopped) return null.
+- 2 new tests in `reflection-runner.test.ts` covering
+  `markReflectStateFailed`'s idempotent no-state branch (safe to
+  call unconditionally, doesn't throw for unknown workspace IDs).
+  Document + architect runners share the same code shape; the
+  reflection test locks in the pattern.
+
+### Added — Harness-level missing-signals pause + `retry_iteration` resume action
+
+cfcf has always implicitly assumed that the dev and judge agents
+will run far enough to write their signals files
+(`cfcf-iteration-signals.json` / `cfcf-judge-signals.json`).
+Everything downstream — determination parsing, archive logic,
+decision engine — branches off those files. When an agent exits
+before writing them (hard quota cap, crash, OOM kill, killed
+process, …), cfcf silently marked the iteration "failed" and
+continued to the next one. That cost a real gmbot dogfood run: iter
+10 hit a codex usage limit, dev + judge both exited without signals,
+cfcf moved on to iter 11 which then had to re-discover the missing
+work from scratch.
+
+**Architectural framing**: this is a harness-contract violation, not
+an agent-reasoning failure. The agent never ran far enough to
+classify anything. So the fix lives at the harness layer, not in
+the agent prompts — and deliberately doesn't try to identify the
+root cause. Quota / crash / OOM / killed all collapse to "agent
+exited without signals → can't safely continue → pause." The user
+reads the log file to identify the cause and chooses how to
+recover.
+
+**Behaviour**:
+
+- After `parseSignalFile` / `parseJudgeSignals` returns `null`
+  (missing file, JSON parse failure, schema validation failure —
+  all collapsed to one signal), the loop pauses with
+  `pauseReason: "missing_signals"` rather than continuing silently.
+- The pause sets `pendingQuestions[0]` to a generic anomaly message
+  pointing at the log file: *"Anomaly detected: dev agent for
+  iteration 10 exited (exit code 1) without writing its signals
+  file (agent crashed or hit a usage limit). Check the log: …
+  Resume with `retry_iteration` to redo this iteration, `continue`
+  to skip to iteration 11, or `stop_loop_now` to abandon."*
+- Notification fires (`type: "loop.paused"`) so any notification
+  channel sees the pause immediately, not just the dashboard.
+- Working tree is left as-is — no `git reset`, no commit attempt.
+  Any dirty changes are preserved for the user to inspect.
+
+**New resume action: `retry_iteration`** (extends the structured
+pause-actions vocabulary from item 6.25):
+
+- Rolls the workspace's iteration counter back by one (new
+  `decrementIteration(workspaceId)` helper in `workspaces.ts`).
+- Pops the failed iteration's record from `state.iterations` so
+  it isn't double-counted.
+- Falls through to the regular iteration body, which calls
+  `nextIteration()` (now returns the same number that failed) and
+  proceeds to delete + re-create the existing branch off HEAD
+  (logic the loop already had for retry scenarios). Dev respawns
+  on a clean branch under the same iteration number.
+- Applicable ONLY to `missing_signals` pauses — surfaced in the
+  web UI's pause-action button row + accepted on
+  `cfcf resume <ws> --action retry_iteration`. Rejected for other
+  pause classes via the existing `pauseReasonAllowedActions`
+  validation.
+- `missing_signals` pause-action allowlist: `["retry_iteration",
+  "continue", "stop_loop_now"]`. No finish/refine/consult — those
+  all assume a meaningful iteration result to act on.
+
+**What this doesn't do** (intentional non-scope):
+
+- No root-cause classification (quota vs. crash vs. OOM). The
+  harness doesn't try — that requires reading the log file,
+  which is the user's job. Future enhancement: per-adapter
+  pattern matching that adds a *label* to the pause without
+  changing behaviour.
+- No automatic retry after a parsed reset time. v1 is pause +
+  user resumes when ready. Matches "human on the loop, not in
+  it." Revisit if dogfood demands it.
+- No partial-work recovery beyond "leave the working tree alone."
+  If the agent made dirty changes before crashing, they survive in
+  the working tree; the user can `git status` / `git diff` /
+  `git stash` as needed. On `retry_iteration` the branch is
+  re-created off HEAD; any branch-only commits from the failed
+  attempt are lost. (Working-tree changes are NOT lost.)
+
+**Implementation** (~140 LoC):
+
+- `packages/core/src/types.ts` — extend `ResumeAction` with
+  `"retry_iteration"`.
+- `packages/core/src/iteration-loop.ts`:
+  - Extend `LoopState.pauseReason` with `"missing_signals"`.
+  - New `pauseLoopOnMissingSignals(workspace, state, iter, phase,
+    exitCode, logFile)` helper. Sets phase + pauseReason +
+    pendingQuestions, saves state, flips workspace status,
+    dispatches a `loop.paused` notification.
+  - Two new call sites: after the dev signal-parse (post-exit,
+    pre-commit) and after the judge signal-parse (same shape).
+    Both return immediately — the outer loop's `isLoopDone(state)`
+    check exits the loop cleanly.
+  - New `retry_iteration` branch in the resume-action dispatch
+    chain — decrements the counter, pops the failed iter record,
+    falls through.
+  - Extend `pauseReasonAllowedActions` with the
+    `case "missing_signals"` branch.
+- `packages/core/src/workspaces.ts` — new
+  `decrementIteration(workspaceId)` helper (idempotent at floor 0).
+- `packages/cli/src/commands/resume.ts` — add `retry_iteration`
+  to `RESUME_ACTIONS` + the `--action` help text.
+- `packages/web/src/types.ts` + `packages/web/src/api.ts` — mirror
+  the new pauseReason + ResumeAction variants.
+- `packages/web/src/components/FeedbackForm.tsx` — add the
+  `missing_signals` case to the per-pauseReason action matrix,
+  add `retry_iteration` to `ACTION_LABEL` + `ACTION_HELP`. The
+  existing `pendingQuestions[0]` rendering surfaces the
+  generic-anomaly message we set in the pause helper, so no
+  additional copy was needed.
+
+**Test coverage** (8 new tests, all 1030 tests pass):
+
+- 4 new tests in `iteration-loop.test.ts` covering the
+  `missing_signals` action matrix (retry/continue/stop allowed;
+  finish/refine/consult excluded) and the inverse — `retry_iteration`
+  is rejected for every other pauseReason.
+- 4 new tests in `workspaces.test.ts` for `decrementIteration`:
+  rolls back by 1, decrement+nextIteration round-trips to the
+  failed number (load-bearing invariant for retry), floors at 0,
+  null for non-existent workspace.
+
 ### Fixed — History tab: judge row time cell while judge is pending
 
 F.21 follow-up surfaced during v0.24.2 dogfood. The judge row's
