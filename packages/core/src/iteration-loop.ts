@@ -50,6 +50,7 @@ import {
   ingestDevIterationArtifacts,
   ingestJudgeArtifact,
   ingestDecisionLogEntries,
+  ingestDocumenterOutput,
   ingestIterationSummary,
   ingestRawIterationArtifacts,
   writeClioRelevant,
@@ -2386,6 +2387,29 @@ async function runJudgeAndDecide(
           await updateHistoryEvent(workspace.id, docResult.historyEventId, {
             committed,
           } as Partial<import("./workspace-history.js").DocumentHistoryEvent>);
+
+          // Auto-ingest the documenter's docs/ output into Clio.
+          // Mirrors the per-iteration ingest pattern (decision-log,
+          // plan.md, architect-review): every file in docs/ gets a
+          // stable title + updateIfExists. Best-effort; never breaks
+          // the loop. Same call lives in documenter-runner.ts for
+          // the standalone `cfcf document` invocation.
+          try {
+            const res = await ingestDocumenterOutput(
+              getClioBackend(),
+              workspace,
+              "loop-auto",
+            );
+            if (res.ingested > 0 || res.errors > 0) {
+              console.log(
+                `[clio] documenter-output ingest: ${res.ingested} ingested, ${res.errors} errors`,
+              );
+            }
+          } catch (err) {
+            console.warn(
+              `[clio] documenter-output ingest failed (loop-auto): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         } catch {
           // Documenter failure is not fatal -- the code is done
         }

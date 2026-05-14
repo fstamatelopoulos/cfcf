@@ -9,7 +9,88 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Documenter output auto-ingested into Clio
+
+Closes a long-standing inconsistency the user spotted post-v0.24.3:
+cfcf auto-ingests almost every workspace artifact into Clio
+(iteration logs, judge assessments, reflection analyses, plan.md,
+decision-log, architect-review, problem-pack, context-pack…) —
+but explicitly **excluded** the documenter's `docs/*.md` output.
+
+The documenter agent template even called this out: *"cf² doesn't
+auto-ingest the documenter output (the `docs/` tree is the
+canonical surface)."* The carve-out's stated rationale was that
+`docs/` is canonical, so Clio is redundant. But that same argument
+applies to `plan.md` — which IS auto-ingested. The carve-out was
+inconsistent and cost cross-workspace discoverability of the
+*most polished, integrative* artifact a workspace produces.
+
+**Behaviour**:
+
+- After the documenter completes (both auto-document path inside
+  the iteration loop AND standalone `cfcf document`), walk
+  `<repo>/docs/` recursively and ingest every `*.md` file as a
+  separate Clio document.
+- Stable per-file title: `<workspace>: docs/<relative-path>`
+  (e.g. `gmbot: docs/architecture.md`, `gmbot: docs/api/auth.md`).
+- `updateIfExists: true` — re-running the documenter overwrites
+  in place, never produces duplicates. sha256 dedup means
+  unchanged content is a no-op.
+- Author stamp: `documenter|<adapter>|<model>` (matches the
+  existing actor convention).
+- Metadata: `{role: "documenter", artifact_type:
+  "documenter-output", file_path: "<rel>", tier: "semantic",
+  ingest_trigger: "loop-auto" | "manual", …}`. The
+  `documenter-output` artifact_type makes the new docs filterable
+  in `cfcf clio search --metadata`.
+- Non-`.md` files (images, JSON config, etc.) are skipped. Dot-
+  directories (`.git`, `.vscode`, …) under `docs/` are skipped.
+- Empty / whitespace-only files are skipped.
+- Per-file errors are logged + counted but never fail the rest
+  of the batch (same best-effort policy as the other auto-ingest
+  hooks).
+- Respects `clio.ingestPolicy` (per-workspace or global): `"off"`
+  → no-op; `"summaries-only"` and `"all"` → runs. Documenter
+  output is treated as a summary — it's the cleanest
+  cross-workspace artifact a workspace produces.
+- Pre-existing user-authored files in `docs/` are also ingested.
+  Intentional: they're authoritative workspace content; surfacing
+  them in cross-workspace Clio search is a feature, not a leak.
+  (Different directory than `cfcf-docs/`, so no overlap with
+  existing ingests.)
+
+**Implementation** (~165 LoC + tests):
+
+- `packages/core/src/clio/loop-ingest.ts` — new
+  `ingestDocumenterOutput(backend, workspace, trigger)` helper +
+  `walkMarkdownFiles(dir)` internal helper (recursive walk, skips
+  dot-dirs).
+- `packages/core/src/iteration-loop.ts` — call site inside the
+  auto-document branch, after the commit + history-event update.
+- `packages/core/src/documenter-runner.ts` — call site after the
+  standalone `cfcf document` run completes successfully. (Failed
+  runs don't ingest — partial / broken output shouldn't pollute
+  cross-workspace search.)
+- `packages/core/src/templates/cfcf-documenter-instructions.md` —
+  prose updated to match reality. Agent no longer needs to be
+  asked to push to Clio; the harness handles it.
+
+**Test coverage** (11 new tests in `loop-ingest.test.ts`, all 1049
+total pass):
+
+- Multi-file ingest with per-file titles
+- Recursive walk through nested `docs/` subdirectories
+- `updateIfExists` round-trip (one doc per file, content updates
+  in place across re-runs)
+- Non-`.md` files ignored
+- Dot-directories skipped
+- Empty `docs/` returns `{ingested: 0, errors: 0}` (no-op safe)
+- Whitespace-only files skipped
+- Author stamp = `documenter|<adapter>|<model>`
+- Trigger captured in metadata (`loop-auto` vs `manual`)
+- `clio.ingestPolicy: "off"` → no-op
+- `clio.ingestPolicy: "summaries-only"` → runs (documenter output
+  IS a summary)
 
 ## [0.24.3] -- 2026-05-13
 

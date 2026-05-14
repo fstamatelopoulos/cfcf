@@ -12,8 +12,8 @@
  * adjunct service.
  */
 
-import { readFile, access } from "fs/promises";
-import { join } from "path";
+import { readFile, access, readdir } from "fs/promises";
+import { join, relative } from "path";
 import type { WorkspaceConfig, JudgeSignals, ReflectionSignals } from "../types.js";
 import type { MemoryBackend } from "./backend/types.js";
 import type { IngestResult } from "./types.js";
@@ -347,6 +347,140 @@ export async function ingestPlanMd(
     );
     return null;
   }
+}
+
+// ── Hook: documenter output (docs/**/*.md) ────────────────────────────────
+
+/**
+ * Walk a directory recursively and return paths of every `.md` file.
+ * Skips dot-directories (`.git`, `.vscode`, etc.). Returns absolute
+ * paths. Returns an empty array (not throwing) when the directory
+ * doesn't exist.
+ */
+async function walkMarkdownFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(current: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return; // dir doesn't exist or unreadable — caller treats as empty
+    }
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(".")) continue; // skip dot-dirs
+        await walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        out.push(full);
+      }
+    }
+  }
+  await walk(dir);
+  return out;
+}
+
+/**
+ * Mirror the documenter's `docs/**\/*.md` output into Clio.
+ *
+ * Called after the documenter completes — both from the
+ * iteration-loop's auto-document path AND from the standalone
+ * `cfcf document` runner. Walks `<repo>/docs/` recursively; for
+ * each `.md` file, ingests it as a separate Clio document with a
+ * stable title `<workspace>: <relative-path>` and
+ * `updateIfExists: true` so re-running the documenter overwrites
+ * in place rather than producing duplicates. sha256 dedup makes
+ * unchanged content a no-op on the backend.
+ *
+ * Pre-existing user-authored files in `docs/` are ALSO ingested.
+ * Intentional: they're authoritative workspace content; including
+ * them in cross-workspace Clio search is a feature, not a leak.
+ * (`cfcf-docs/` artifacts are separate and tracked by their own
+ * hooks — different directory, no overlap.)
+ *
+ * Respects `clio.ingestPolicy`: skipped on `"off"`, runs on
+ * `"summaries-only"` and `"all"` (documenter output is the most
+ * polished cross-workspace summary a workspace produces — it
+ * belongs in summaries-only).
+ *
+ * Best-effort: per-file errors are logged + counted; one bad file
+ * doesn't fail the rest of the batch. The function never throws.
+ */
+export async function ingestDocumenterOutput(
+  backend: MemoryBackend,
+  workspace: WorkspaceConfig,
+  trigger: "loop-auto" | "manual",
+): Promise<{ ingested: number; errors: number }> {
+  const policy = await resolveIngestPolicy(workspace);
+  if (policy === "off") return { ingested: 0, errors: 0 };
+
+  const docsDir = join(workspace.repoPath, "docs");
+  const files = await walkMarkdownFiles(docsDir);
+  if (files.length === 0) return { ingested: 0, errors: 0 };
+
+  const project = resolveClioProject(workspace);
+  const author = actorForRole(workspace, "documenter");
+
+  let ingested = 0;
+  let errors = 0;
+
+  for (const filePath of files) {
+    let content: string;
+    try {
+      content = await readFile(filePath, "utf-8");
+    } catch (err) {
+      errors++;
+      console.warn(
+        `[clio] documenter output read failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+    if (!content.trim()) continue; // skip empty files
+
+    const rel = relative(workspace.repoPath, filePath); // e.g. "docs/architecture.md"
+
+    try {
+      const result = await backend.ingest({
+        project,
+        title: `${workspace.name}: ${rel}`,
+        content,
+        author,
+        source: `cfcf-auto:documenter-output:${trigger}`,
+        // Singleton-per-(workspace, file) — `--update-if-exists` looks
+        // up by title within the project. Re-running the documenter
+        // overwrites in place; unchanged content is a sha256-dedup
+        // no-op (same pattern as plan.md, decision-log, architect-review).
+        updateIfExists: true,
+        metadata: baseMetadata(workspace, {
+          role: "documenter",
+          artifact_type: "documenter-output",
+          tier: "semantic",
+          file_path: rel,
+          ingest_trigger: trigger,
+        }),
+      });
+      recordInternalUsage(backend, {
+        operation: "ingest",
+        requestor: author,
+        documentId: result.document?.id,
+        projectId: result.document?.projectId,
+        extra: {
+          artifact_type: "documenter-output",
+          file_path: rel,
+          ingest_trigger: trigger,
+          action: result.action,
+        },
+      });
+      ingested++;
+    } catch (err) {
+      errors++;
+      console.warn(
+        `[clio] documenter output ingest failed for ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { ingested, errors };
 }
 
 // ── Hook: decision-log.md (tagged semantic entries) ───────────────────────
