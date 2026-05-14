@@ -131,7 +131,8 @@ export interface LoopState {
     | "anomaly"
     | "user_input_needed"
     | "max_iterations"
-    | "scope_complete";  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    | "scope_complete"  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    | "missing_signals";  // harness-missing-signals: dev/judge exited without writing signals file
   pendingQuestions?: string[];
   userFeedback?: string;
   iterations: LoopIterationRecord[];

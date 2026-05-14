@@ -9,6 +9,127 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Added — Harness-level missing-signals pause + `retry_iteration` resume action
+
+cfcf has always implicitly assumed that the dev and judge agents
+will run far enough to write their signals files
+(`cfcf-iteration-signals.json` / `cfcf-judge-signals.json`).
+Everything downstream — determination parsing, archive logic,
+decision engine — branches off those files. When an agent exits
+before writing them (hard quota cap, crash, OOM kill, killed
+process, …), cfcf silently marked the iteration "failed" and
+continued to the next one. That cost a real gmbot dogfood run: iter
+10 hit a codex usage limit, dev + judge both exited without signals,
+cfcf moved on to iter 11 which then had to re-discover the missing
+work from scratch.
+
+**Architectural framing**: this is a harness-contract violation, not
+an agent-reasoning failure. The agent never ran far enough to
+classify anything. So the fix lives at the harness layer, not in
+the agent prompts — and deliberately doesn't try to identify the
+root cause. Quota / crash / OOM / killed all collapse to "agent
+exited without signals → can't safely continue → pause." The user
+reads the log file to identify the cause and chooses how to
+recover.
+
+**Behaviour**:
+
+- After `parseSignalFile` / `parseJudgeSignals` returns `null`
+  (missing file, JSON parse failure, schema validation failure —
+  all collapsed to one signal), the loop pauses with
+  `pauseReason: "missing_signals"` rather than continuing silently.
+- The pause sets `pendingQuestions[0]` to a generic anomaly message
+  pointing at the log file: *"Anomaly detected: dev agent for
+  iteration 10 exited (exit code 1) without writing its signals
+  file (agent crashed or hit a usage limit). Check the log: …
+  Resume with `retry_iteration` to redo this iteration, `continue`
+  to skip to iteration 11, or `stop_loop_now` to abandon."*
+- Notification fires (`type: "loop.paused"`) so any notification
+  channel sees the pause immediately, not just the dashboard.
+- Working tree is left as-is — no `git reset`, no commit attempt.
+  Any dirty changes are preserved for the user to inspect.
+
+**New resume action: `retry_iteration`** (extends the structured
+pause-actions vocabulary from item 6.25):
+
+- Rolls the workspace's iteration counter back by one (new
+  `decrementIteration(workspaceId)` helper in `workspaces.ts`).
+- Pops the failed iteration's record from `state.iterations` so
+  it isn't double-counted.
+- Falls through to the regular iteration body, which calls
+  `nextIteration()` (now returns the same number that failed) and
+  proceeds to delete + re-create the existing branch off HEAD
+  (logic the loop already had for retry scenarios). Dev respawns
+  on a clean branch under the same iteration number.
+- Applicable ONLY to `missing_signals` pauses — surfaced in the
+  web UI's pause-action button row + accepted on
+  `cfcf resume <ws> --action retry_iteration`. Rejected for other
+  pause classes via the existing `pauseReasonAllowedActions`
+  validation.
+- `missing_signals` pause-action allowlist: `["retry_iteration",
+  "continue", "stop_loop_now"]`. No finish/refine/consult — those
+  all assume a meaningful iteration result to act on.
+
+**What this doesn't do** (intentional non-scope):
+
+- No root-cause classification (quota vs. crash vs. OOM). The
+  harness doesn't try — that requires reading the log file,
+  which is the user's job. Future enhancement: per-adapter
+  pattern matching that adds a *label* to the pause without
+  changing behaviour.
+- No automatic retry after a parsed reset time. v1 is pause +
+  user resumes when ready. Matches "human on the loop, not in
+  it." Revisit if dogfood demands it.
+- No partial-work recovery beyond "leave the working tree alone."
+  If the agent made dirty changes before crashing, they survive in
+  the working tree; the user can `git status` / `git diff` /
+  `git stash` as needed. On `retry_iteration` the branch is
+  re-created off HEAD; any branch-only commits from the failed
+  attempt are lost. (Working-tree changes are NOT lost.)
+
+**Implementation** (~140 LoC):
+
+- `packages/core/src/types.ts` — extend `ResumeAction` with
+  `"retry_iteration"`.
+- `packages/core/src/iteration-loop.ts`:
+  - Extend `LoopState.pauseReason` with `"missing_signals"`.
+  - New `pauseLoopOnMissingSignals(workspace, state, iter, phase,
+    exitCode, logFile)` helper. Sets phase + pauseReason +
+    pendingQuestions, saves state, flips workspace status,
+    dispatches a `loop.paused` notification.
+  - Two new call sites: after the dev signal-parse (post-exit,
+    pre-commit) and after the judge signal-parse (same shape).
+    Both return immediately — the outer loop's `isLoopDone(state)`
+    check exits the loop cleanly.
+  - New `retry_iteration` branch in the resume-action dispatch
+    chain — decrements the counter, pops the failed iter record,
+    falls through.
+  - Extend `pauseReasonAllowedActions` with the
+    `case "missing_signals"` branch.
+- `packages/core/src/workspaces.ts` — new
+  `decrementIteration(workspaceId)` helper (idempotent at floor 0).
+- `packages/cli/src/commands/resume.ts` — add `retry_iteration`
+  to `RESUME_ACTIONS` + the `--action` help text.
+- `packages/web/src/types.ts` + `packages/web/src/api.ts` — mirror
+  the new pauseReason + ResumeAction variants.
+- `packages/web/src/components/FeedbackForm.tsx` — add the
+  `missing_signals` case to the per-pauseReason action matrix,
+  add `retry_iteration` to `ACTION_LABEL` + `ACTION_HELP`. The
+  existing `pendingQuestions[0]` rendering surfaces the
+  generic-anomaly message we set in the pause helper, so no
+  additional copy was needed.
+
+**Test coverage** (8 new tests, all 1030 tests pass):
+
+- 4 new tests in `iteration-loop.test.ts` covering the
+  `missing_signals` action matrix (retry/continue/stop allowed;
+  finish/refine/consult excluded) and the inverse — `retry_iteration`
+  is rejected for every other pauseReason.
+- 4 new tests in `workspaces.test.ts` for `decrementIteration`:
+  rolls back by 1, decrement+nextIteration round-trips to the
+  failed number (load-bearing invariant for retry), floors at 0,
+  null for non-existent workspace.
+
 ### Fixed — History tab: judge row time cell while judge is pending
 
 F.21 follow-up surfaced during v0.24.2 dogfood. The judge row's

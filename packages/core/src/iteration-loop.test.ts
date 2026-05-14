@@ -947,6 +947,47 @@ describe("pauseReasonAllowedActions (item 6.25)", () => {
   test("scope_complete excludes consult_reflection (no iterations to reflect on)", () => {
     expect(pauseReasonAllowedActions("scope_complete")).not.toContain("consult_reflection");
   });
+
+  // harness-missing-signals: when dev or judge exit without writing
+  // their signals file, the iteration is in an unknown state. The
+  // user's three meaningful options are: redo the iter (retry),
+  // skip it (continue), or abandon (stop). finish_loop /
+  // refine_plan / consult_reflection all assume we have a
+  // meaningful iter result to act on; we don't.
+  test("missing_signals: retry_iteration + continue + stop_loop_now", () => {
+    expectActions(pauseReasonAllowedActions("missing_signals"), [
+      "retry_iteration",
+      "continue",
+      "stop_loop_now",
+    ]);
+  });
+
+  test("missing_signals excludes finish_loop (no iter result to finish on)", () => {
+    expect(pauseReasonAllowedActions("missing_signals")).not.toContain("finish_loop");
+  });
+
+  test("missing_signals excludes refine_plan + consult_reflection (no iter data to refine/reflect on)", () => {
+    expect(pauseReasonAllowedActions("missing_signals")).not.toContain("refine_plan");
+    expect(pauseReasonAllowedActions("missing_signals")).not.toContain("consult_reflection");
+  });
+
+  test("retry_iteration is ONLY applicable to missing_signals (not offered for other pauseReasons)", () => {
+    // The retry action is specifically the "agent exited without
+    // signals, redo the iter" path. It doesn't make sense for the
+    // other pause classes (cadence, anomaly with signals, etc.
+    // — those have a known iter result and use other actions).
+    const otherReasons = [
+      undefined,
+      "cadence",
+      "anomaly",
+      "user_input_needed",
+      "max_iterations",
+      "scope_complete",
+    ] as const;
+    for (const reason of otherReasons) {
+      expect(pauseReasonAllowedActions(reason)).not.toContain("retry_iteration");
+    }
+  });
 });
 
 // 2026-05-02: Architect SCOPE_COMPLETE readiness verdict (item 6.25 follow-up).

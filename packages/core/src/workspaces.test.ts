@@ -11,6 +11,7 @@ import {
   deleteWorkspace,
   validateWorkspaceRepo,
   nextIteration,
+  decrementIteration,
 } from "./workspaces.js";
 
 describe("projects", () => {
@@ -163,6 +164,49 @@ describe("projects", () => {
 
     it("returns null for non-existent project", async () => {
       expect(await nextIteration("nonexistent")).toBeNull();
+    });
+  });
+
+  // Roll-back helper for `retry_iteration` (harness-missing-signals
+  // feature): when a failed iteration N is being retried, the
+  // counter is rolled back so the next `nextIteration()` call
+  // returns N again instead of N+1.
+  describe("decrementIteration", () => {
+    it("rolls back from 3 to 2", async () => {
+      const project = await createWorkspace({ name: "dec-test", repoPath: repoDir });
+      await nextIteration(project.id);
+      await nextIteration(project.id);
+      await nextIteration(project.id);
+      const prev = await decrementIteration(project.id);
+      expect(prev).toBe(2);
+
+      const updated = await getWorkspace(project.id);
+      expect(updated!.currentIteration).toBe(2);
+    });
+
+    it("decrement then nextIteration returns the same number that was rolled back", async () => {
+      // The retry_iteration flow's load-bearing invariant: the
+      // counter ends up back at the failed iter's number so the
+      // loop body's next `nextIteration()` call reproduces it.
+      const project = await createWorkspace({ name: "retry-test", repoPath: repoDir });
+      await nextIteration(project.id); // -> 1
+      await nextIteration(project.id); // -> 2 (this is the "failed" iter)
+
+      await decrementIteration(project.id);
+      const retried = await nextIteration(project.id);
+      expect(retried).toBe(2); // same number as the failed attempt
+    });
+
+    it("floors at 0 (calling on a 0-counter is a no-op)", async () => {
+      const project = await createWorkspace({ name: "floor-test", repoPath: repoDir });
+      const result = await decrementIteration(project.id);
+      expect(result).toBe(0);
+      const updated = await getWorkspace(project.id);
+      expect(updated!.currentIteration).toBe(0);
+    });
+
+    it("returns null for non-existent project (matches nextIteration's nullable shape)", async () => {
+      expect(await decrementIteration("nonexistent")).toBeNull();
     });
   });
 

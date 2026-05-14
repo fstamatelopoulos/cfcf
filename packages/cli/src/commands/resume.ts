@@ -26,6 +26,11 @@ const RESUME_ACTIONS = [
   "stop_loop_now",
   "refine_plan",
   "consult_reflection",
+  // Re-spawn dev on the same iteration. Typical use: a
+  // `missing_signals` pause (quota cap, crash) is being unblocked
+  // after the underlying cause cleared. The harness rolls back the
+  // iteration counter and re-creates the branch.
+  "retry_iteration",
 ] as const;
 
 type ResumeAction = (typeof RESUME_ACTIONS)[number];
@@ -81,7 +86,7 @@ function buildActionOption(program: Command): Option {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const opt = (program as any).createOption(
     "--action <name>",
-    "Resume action: continue | finish_loop | stop_loop_now | refine_plan | consult_reflection",
+    "Resume action: continue | finish_loop | stop_loop_now | refine_plan | consult_reflection | retry_iteration",
   );
   opt.choices(RESUME_ACTIONS as readonly string[]);
   opt.default("continue");

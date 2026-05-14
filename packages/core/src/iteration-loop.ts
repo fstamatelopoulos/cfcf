@@ -33,7 +33,7 @@ import { getAdapter } from "./adapters/index.js";
 import { spawnProcess } from "./process-manager.js";
 import { getIterationLogPath, ensureWorkspaceLogDir } from "./log-storage.js";
 import * as gitManager from "./git-manager.js";
-import { nextIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
+import { nextIteration, decrementIteration, updateWorkspace, getWorkspace } from "./workspaces.js";
 import { runDocumentSync } from "./documenter-runner.js";
 import { runReflectionSync, parseReflectionSignals } from "./reflection-runner.js";
 import { runReviewSync, readinessGateBlocks } from "./architect-runner.js";
@@ -88,7 +88,14 @@ export interface LoopState {
     | "anomaly"
     | "user_input_needed"
     | "max_iterations"
-    | "scope_complete";  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    | "scope_complete"  // item 6.25 follow-up: architect SCOPE_COMPLETE
+    // Harness contract violation: dev or judge agent exited without
+    // writing its signals file. Inclusive of all root causes (crash,
+    // quota cap, OOM, etc.) — the harness doesn't classify, just
+    // pauses + surfaces. User checks the log to identify cause and
+    // resumes with `retry_iteration` (redo the iter) or `continue`
+    // (skip + move on) or `stop_loop_now`.
+    | "missing_signals";
   /** Questions from dev/judge that need user answers */
   pendingQuestions?: string[];
   /** User feedback to inject into the next iteration */
@@ -753,6 +760,21 @@ export function pauseReasonAllowedActions(
       //   - refine_plan  → user adds new requirements, re-runs review
       return ["finish_loop", "stop_loop_now", "refine_plan"];
 
+    case "missing_signals":
+      // Dev or judge agent exited without writing signals (crash,
+      // quota cap, OOM, …). The iteration is in an unknown state;
+      // the harness can't safely judge, reflect, refine, or finish
+      // on no data. Allowed:
+      //   - retry_iteration → redo the failed iter (counter rolled
+      //     back; branch re-created). Natural choice after a quota
+      //     cap resets.
+      //   - continue        → skip the failed iter, start iter N+1
+      //     fresh. Use when the failed work isn't worth recovering.
+      //   - stop_loop_now   → abandon, accept partial progress.
+      // No finish_loop / refine_plan / consult_reflection — those
+      // all assume we have a meaningful iteration result to act on.
+      return ["retry_iteration", "continue", "stop_loop_now"];
+
     default:
       // A1 pre-loop review blocked. continue (after user edited the
       // Problem Pack), stop_loop_now, refine_plan (re-run architect
@@ -1053,6 +1075,70 @@ async function handleStopLoopNow(
 }
 
 /**
+ * Pause the loop because the dev or judge agent exited without
+ * writing its signals file. Harness contract: agents must produce
+ * `cfcf-iteration-signals.json` / `cfcf-judge-signals.json`. When
+ * the file is missing, unreadable, or fails schema validation, the
+ * harness can't safely judge / reflect / decide on no data — pause
+ * and surface to the user.
+ *
+ * Inclusive of all root causes (quota cap, agent crash, OOM, killed
+ * process, agent CLI bug). The harness deliberately doesn't try to
+ * classify — the user reads the log file to identify cause, then
+ * resumes with `retry_iteration` (most common after a quota cap
+ * resets) / `continue` (skip the failed iter) / `stop_loop_now`.
+ *
+ * The pause-state writes mirror the existing
+ * `consult_reflection`/`scope_complete` pause paths: set phase +
+ * pauseReason + pendingQuestions, saveLoopState, flip workspace
+ * status to "paused", dispatch a notification. No git surgery —
+ * any dirty working-tree state is preserved for the user to
+ * inspect; on `retry_iteration`, the iteration counter is rolled
+ * back and the existing branch is re-created off HEAD (the normal
+ * iteration body already deletes-and-recreates an existing branch).
+ */
+async function pauseLoopOnMissingSignals(
+  workspace: WorkspaceConfig,
+  state: LoopState,
+  iterationNum: number,
+  phase: "dev" | "judge",
+  exitCode: number | undefined,
+  logFileName: string,
+): Promise<void> {
+  state.phase = "paused";
+  state.pauseReason = "missing_signals";
+  const exitDetail =
+    exitCode === undefined ? "" : ` (exit code ${exitCode})`;
+  const message =
+    `Anomaly detected: ${phase} agent for iteration ${iterationNum} ` +
+    `exited${exitDetail} without writing its signals file (agent crashed ` +
+    `or hit a usage limit). Check the log: ${logFileName}. Resume with ` +
+    `\`retry_iteration\` to redo this iteration, \`continue\` to skip ` +
+    `to iteration ${iterationNum + 1}, or \`stop_loop_now\` to abandon.`;
+  state.pendingQuestions = [message];
+  await saveLoopState(state);
+  await updateWorkspace(workspace.id, { status: "paused" });
+
+  dispatchForWorkspace(
+    makeEvent({
+      type: "loop.paused",
+      title: "Loop paused: agent exited without signals",
+      message: `${workspace.name}: ${message}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      details: {
+        pauseReason: "missing_signals",
+        phase,
+        iteration: iterationNum,
+        exitCode: exitCode ?? null,
+        logFile: logFileName,
+      },
+    }),
+    workspace.notifications,
+  );
+}
+
+/**
  * Handle the `finish_loop` resume action: skip the iteration spawn,
  * jump to the configured end-of-loop sequence (documenter when
  * `autoDocumenter=true`; otherwise just terminate cleanly with success
@@ -1245,6 +1331,22 @@ async function runLoop(
     // "continue" or "pause_for_user" → fall through (pause_for_user
     // is handled inside the consult helper, which sets the pause state
     // and returns "stop" to abort runLoop).
+  }
+  if (resumeAction === "retry_iteration") {
+    // Re-spawn dev on the same iteration after a `missing_signals`
+    // pause (quota cap reset, agent crash recovery, etc.). Roll the
+    // iteration counter back by one so the loop body's next
+    // `nextIteration()` call returns the SAME number that failed —
+    // the branch-creation logic already deletes + re-creates an
+    // existing branch off HEAD, so the failed attempt's branch is
+    // replaced cleanly. Also drop the failed iteration's record
+    // from state.iterations so it isn't double-counted; the retry
+    // produces a fresh record under the same number.
+    await decrementIteration(workspace.id);
+    if (state.iterations.length > 0) {
+      state.iterations.pop();
+    }
+    // Fall through to the regular pre-loop / iteration logic.
   }
 
   // --- PRE-LOOP REVIEW (item 5.1 autoReviewSpecs=true) ---
@@ -1664,6 +1766,29 @@ async function runLoop(
     const devSignals = await parseSignalFile(workspace.repoPath);
     iterRecord.devSignals = devSignals ?? undefined;
 
+    // Harness contract check: dev agent must write
+    // `cfcf-iteration-signals.json`. Absence (file missing, JSON
+    // parse failure, or schema validation failure — all collapsed
+    // to `null` by `parseSignalFile`) means we have no data to
+    // judge / reflect / decide on. Pause + surface to the user;
+    // do NOT silently treat as a failed iteration and move on.
+    // Inclusive of all root causes: agent crashed mid-startup,
+    // quota cap, OOM kill, etc. Working tree (if dirty) is left
+    // as-is for the user to inspect; on `retry_iteration` the
+    // existing branch is deleted + re-created off HEAD by the
+    // normal iteration body.
+    if (!devSignals) {
+      await pauseLoopOnMissingSignals(
+        workspace,
+        state,
+        iterationNum,
+        "dev",
+        devResult.exitCode,
+        iterRecord.devLogFileName,
+      );
+      return;
+    }
+
     // Commit dev work
     if (await gitManager.hasChanges(workspace.repoPath)) {
       await gitManager.commitAll(
@@ -1799,9 +1924,27 @@ async function runJudgeAndDecide(
   const judgeSignals = await parseJudgeSignals(workspace.repoPath);
   iterRecord.judgeSignals = judgeSignals ?? undefined;
 
-  // If judge exited with non-zero and produced no signals, log it
-  if (judgeResult.exitCode !== 0 && !judgeSignals) {
-    iterRecord.judgeError = `Judge agent exited with code ${judgeResult.exitCode}. Check log: ${judgeLogFile}`;
+  // Harness contract check: judge agent must write
+  // `cfcf-judge-signals.json`. Same pattern as the dev check above
+  // — absence of signals means we have no determination to act on,
+  // so we pause and surface to the user rather than archive a
+  // stale judge-assessment.md or fall through to the decide path
+  // with no data. Inclusive of all root causes (crash, quota cap,
+  // OOM). The previous behaviour (record `iterRecord.judgeError`
+  // and continue silently) is replaced by the explicit pause; the
+  // `judgeError` field is still populated for the audit trail.
+  if (!judgeSignals) {
+    iterRecord.judgeError =
+      `Judge agent exited with code ${judgeResult.exitCode} without writing signals. Check log: ${judgeLogFile}`;
+    await pauseLoopOnMissingSignals(
+      workspace,
+      state,
+      iterationNum,
+      "judge",
+      judgeResult.exitCode,
+      iterRecord.judgeLogFileName,
+    );
+    return;
   }
 
   // Commit judge work
