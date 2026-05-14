@@ -9,6 +9,45 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.24.3] -- 2026-05-13
+
+Anomaly-handling patch, all surfaced by a single multi-day gmbot
+dogfood run. Five distinct items across three PRs (#48 PA prompt
+refinements were already in v0.24.2; the items below are net-new
+since v0.24.2):
+
+- **F.21 follow-up fix** — judge row's time cell renders `"—"`
+  while judge is pending, instead of misleadingly inheriting dev's
+  start time. Pure cosmetic.
+- **Harness-level missing-signals pause + `retry_iteration`
+  resume action** — when dev or judge exits without writing its
+  signal file (quota cap, agent crash, OOM kill), the loop pauses
+  with `pauseReason: "missing_signals"` instead of silently
+  treating it as a failed iteration. Inclusive of all root causes
+  — the harness deliberately doesn't classify. New
+  `retry_iteration` resume action re-spawns dev on the same
+  iteration after the user unblocks the cause.
+- **`cfcf stop` now kills the active subprocess** (Bug A) — the
+  command previously only flipped the loop-state flag, leaving
+  mid-flight reflection / dev / judge subprocesses running
+  indefinitely (real iter-19 gmbot case: a reflection codex ran
+  4.5 hours past a `cfcf stop`).
+- **Per-role state-store flips on kill** (Bug B) — dashboard chip
+  clears immediately instead of staying stuck at "reflection
+  running" until next server restart.
+- **New `cfcf agents reap` command** (Bug C) — manual escape
+  hatch for live-server stranded subprocesses (the case
+  `cfcf server reap` doesn't catch, because its PPID==1 filter
+  only finds orphans of a *dead* server).
+- **Post-reflection stop-signal guard** (Bug D) — closes the
+  cascade where an external `state.phase = "stopped"` flag was
+  overwritten by the DECIDE block, causing the loop to continue
+  to the next iteration even after `cfcf stop` + `kill -9`.
+
+All six items below.
+
 ### Fixed — `cfcf stop` now kills the active subprocess + clears the dashboard indicator + new `cfcf agents reap` escape hatch
 
 Real gmbot dogfood: after iter 19 completed and reflection started
