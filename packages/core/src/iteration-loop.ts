@@ -2279,6 +2279,22 @@ async function runJudgeAndDecide(
     );
   }
 
+  // External-stop guard. Mirrors the `isStopped(state)` checks after
+  // dev's await (line ~1852) and judge's await (line ~2011) — the
+  // reflection path was missing it, and any phase mutation here
+  // would clobber a `state.phase = "stopped"` that `stopLoop()` set
+  // while we were mid-reflection. Real dogfood: gmbot iter 19 — user
+  // called `cfcf stop`, then `kill -9`'d the stranded reflection
+  // codex; the await unblocked, post-reflection ingest ran, line
+  // 2283 below overwrote `"stopped"` with `"deciding"`, makeDecision
+  // returned `continue`, and the outer loop's `isLoopDone(state)`
+  // saw `"deciding"` → false → spawned iter N+1. With this guard,
+  // the cascade exits cleanly back to runLoop's `isLoopDone(state)`
+  // check, which sees the unmodified `"stopped"` and returns.
+  if (isStopped(state)) {
+    return;
+  }
+
   // --- DECIDE ---
   state.phase = "deciding";
   await saveLoopState(state);

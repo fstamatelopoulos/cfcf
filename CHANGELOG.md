@@ -18,7 +18,9 @@ found that the loop state was `phase: stopped, outcome: stopped`,
 but the reflection's codex subprocess (PID 99729) was still alive
 with the cfcf server as its parent.
 
-**Root cause** (three layered bugs):
+**Root cause** (four layered bugs — the fourth surfaced after the
+others were fixed and the user reported the loop continuing
+post-kill-9):
 
 1. **`stopLoop()` only flips the state flag.** It set `state.phase
    = "stopped"` and saved — but never signaled any subprocess.
@@ -36,8 +38,17 @@ with the cfcf server as its parent.
    dead server). PID 99729 was still parented by the live cfcf
    server, so it didn't qualify. User had to find the PID
    manually and `kill -9` it.
+4. **External `cfcf stop` flag was overwritten by post-reflection
+   phase transitions.** The reflection block had no `isStopped`
+   guard between its `await` and the next `state.phase = "deciding"`
+   mutation. When the user `kill -9`'d the stranded subprocess,
+   the await unblocked → post-processing ran → the DECIDE block's
+   phase assignment clobbered `"stopped"` → loop continued. User
+   reported this as "the loop continued after I killed the
+   process" — confirming PA's hypothesis that it was a downstream
+   consequence of Bug A.
 
-The fix lands all three:
+The fix lands all four:
 
 **Fix 1 — `stopLoop()` kills the active subprocess.**
 
@@ -89,7 +100,52 @@ inside the iteration's record in `loop-state.json` itself, which
 the "stopped" flip already handles. So those two roles skip the
 state-flip step.
 
-**Fix 3 — New `cfcf agents reap` command (manual escape hatch).**
+**Fix 3 — Stop signal survives the reflection post-processing cascade.**
+
+A subtler second-order bug surfaced in the same gmbot iter-19 trace.
+After PA helped the user discover the stranded codex, they ran
+`kill -9 99729` — and observed the loop *continuing* afterwards.
+PA's hypothesis was right: it was Bug A's downstream consequence,
+but the chain is specifically:
+
+1. `cfcf stop` set `state.phase = "stopped"` (correct — Fix 1
+   would have killed the subprocess too, but the user was on a
+   pre-fix build).
+2. Reflection's `await runReflectionSync(...)` was still
+   in flight; the codex subprocess was alive.
+3. The user's external `kill -9` killed codex.
+4. The await unblocked. Post-reflection processing ran (archive
+   the analysis, commit, ingest into Clio).
+5. **`state.phase = "deciding"` (line 2283) overwrote the
+   externally-set `"stopped"` flag.**
+6. `makeDecision()` returned its normal verdict (likely
+   "continue").
+7. `case "continue":` returned.
+8. Back in the outer loop, `isLoopDone(state)` checked
+   `state.phase` — now `"deciding"`, not `"stopped"` — and
+   returned false.
+9. **The next iteration of the while-loop started.**
+
+This was a genuine missing guard. The `isStopped(state)` check
+exists after dev's await (iteration-loop.ts:1852) and after judge's
+await (line 2011), but was missing between the reflection block
+and the DECIDE block. Any phase mutation in that window clobbers
+an external stop.
+
+**Fix**: one `if (isStopped(state)) return;` guard right before the
+DECIDE block. The cascade exits cleanly back to the outer loop's
+`isLoopDone(state)` check, which sees the unmodified `"stopped"`
+and returns. Matches the pattern of the dev / judge guards.
+
+This guard also closes the cascade for users with Fix 1 enabled.
+Fix 1 makes `cfcf stop` actively kill the subprocess (which then
+unblocks the await), but the same overwrite-on-post-processing
+cascade still ran without the guard. With Fix 3, the user's
+`cfcf stop` is honoured end-to-end whether the subprocess was
+killed by our `killProcessTree()` (Fix 1) or by an external
+`kill -9` (user escape hatch).
+
+**Fix 4 — New `cfcf agents reap` command (manual escape hatch).**
 
 For the rare cases where the auto-kill in `stopLoop()` doesn't
 land (subprocess in uninterruptible sleep, user observes a stuck
@@ -129,7 +185,7 @@ reflection if it runs > 4 hours). Declined deliberately:
     new `cfcf agents reap` is the user-driven version of the
     same intent.
 
-**Implementation** (~340 LoC):
+**Implementation** (~360 LoC):
 
 - `packages/core/src/process-manager.ts` — export
   `killProcessTree` (was private).
@@ -144,6 +200,9 @@ reflection if it runs > 4 hours). Declined deliberately:
     pure, testable).
   - `stopLoop()` extended: capture active role before phase flip,
     kill subprocess, flip per-role state store.
+  - **New `isStopped(state)` guard** before the DECIDE block
+    (line ~2283) — closes the Bug-D cascade that otherwise
+    clobbered the stop flag on post-reflection phase transitions.
 - `packages/server/src/app.ts` — two new endpoints
   (`/api/active-processes` GET + POST kill).
 - `packages/cli/src/commands/agents.ts` — new file, `cfcf agents
