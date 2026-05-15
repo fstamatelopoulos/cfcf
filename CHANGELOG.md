@@ -9,6 +9,13 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.24.4] -- 2026-05-14
+
+Single-feature patch closing a long-standing Clio auto-ingest
+inconsistency surfaced post-v0.24.3. Shipped via PR #50.
+
 ### Added — Documenter output auto-ingested into Clio
 
 Closes a long-standing inconsistency the user spotted post-v0.24.3:
