@@ -38,10 +38,15 @@ that didn't make it into the source-tree comments (item 6.9):
       cfcf clio search "<topic>" --project {{WORKSPACE_CLIO_PROJECT}} \
           --metadata '{"artifact_type":"decision-log-entry"}'
 
-- The final docs you produce go into `docs/` on disk, NOT into Clio.
-  cf² doesn't auto-ingest the documenter output (the `docs/` tree is
-  the canonical surface). If the user explicitly asks you to push a
-  copy to Clio, use `--author "documenter|<adapter>|<model>"`.
+- The final docs you produce go into `docs/` on disk. cf² **also
+  auto-ingests** every `*.md` file under `docs/` into Clio after
+  you finish (since v0.24.4), with `--update-if-exists` + stable
+  per-file titles (`<workspace>: docs/<relative-path>`). You don't
+  need to call `cfcf clio docs ingest` yourself — the harness
+  handles it. Author is stamped as `documenter|<adapter>|<model>`
+  automatically. If you want to push something to Clio that ISN'T
+  in `docs/` (an ad-hoc cross-workspace note, say), use
+  `--author "documenter|<adapter>|<model>"` explicitly.
 
 ## What to Produce
 

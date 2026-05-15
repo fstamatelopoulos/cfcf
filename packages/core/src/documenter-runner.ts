@@ -20,6 +20,8 @@ import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getTemplate } from "./templates.js";
 import { effectiveClioProject } from "./clio/system-projects.js";
 import { formatClioActor } from "./clio/actor.js";
+import { getClioBackend } from "./clio/singleton.js";
+import { ingestDocumenterOutput } from "./clio/loop-ingest.js";
 
 /**
  * Count markdown files in the workspace's docs/ directory.
@@ -432,6 +434,31 @@ async function runDocument(
       docsFileCount,
       committed,
     } as Partial<import("./workspace-history.js").DocumentHistoryEvent>);
+
+    // Auto-ingest the documenter's docs/ output into Clio. Mirrors
+    // the call site in iteration-loop.ts's auto-document path (the
+    // post-SUCCESS branch). Only runs when the documenter actually
+    // succeeded — failed runs may have partial / broken output we
+    // don't want to surface in cross-workspace search. Best-effort:
+    // ingest failures never fail the run.
+    if (result.exitCode === 0) {
+      try {
+        const res = await ingestDocumenterOutput(
+          getClioBackend(),
+          workspace,
+          "manual",
+        );
+        if (res.ingested > 0 || res.errors > 0) {
+          console.log(
+            `[clio] documenter-output ingest: ${res.ingested} ingested, ${res.errors} errors`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[clio] documenter-output ingest failed (manual): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   } finally {
     documentProcessStore.delete(workspace.id);
     unregister();

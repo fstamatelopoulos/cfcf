@@ -22,6 +22,7 @@ import {
   ingestPlanMd,
   ingestDevIterationArtifacts,
   ingestJudgeArtifact,
+  ingestDocumenterOutput,
   PROBLEM_PACK_FILES,
 } from "./loop-ingest.js";
 import type { WorkspaceConfig } from "../types.js";
@@ -1027,5 +1028,190 @@ describe("ingestContextPack", () => {
     const r = await ingestContextPack(clio, ws, "iteration-start");
     expect(r.ingested).toBe(0);
     expect(r.perFile).toEqual([]);
+  });
+});
+
+// ── ingestDocumenterOutput (v0.24.4) ──────────────────────────────────────
+
+describe("ingestDocumenterOutput", () => {
+  async function seedDocs(files: Record<string, string>): Promise<void> {
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(repoDir, rel);
+      const dir = full.substring(0, full.lastIndexOf("/"));
+      await mkdir(dir, { recursive: true });
+      await writeFile(full, content, "utf-8");
+    }
+  }
+
+  it("ingests every *.md under docs/ as a separate Clio doc with stable per-file titles", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({
+      "docs/architecture.md": "# Architecture\n\nSystem overview.\n",
+      "docs/api.md": "# API\n\nEndpoints.\n",
+      "docs/deployment.md": "# Deployment\n\nDeploy guide.\n",
+    });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(3);
+    expect(result.errors).toBe(0);
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const docOutputs = docs.filter(
+      (d) => (d.metadata as { artifact_type?: string })?.artifact_type === "documenter-output",
+    );
+    expect(docOutputs).toHaveLength(3);
+
+    // Each file gets `<workspace>: <relative-path>` as title.
+    const titles = docOutputs.map((d) => d.title).sort();
+    expect(titles).toEqual([
+      `${ws.name}: docs/api.md`,
+      `${ws.name}: docs/architecture.md`,
+      `${ws.name}: docs/deployment.md`,
+    ]);
+  });
+
+  it("walks nested docs/ subdirectories", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({
+      "docs/architecture.md": "# Top-level\n",
+      "docs/api/auth.md": "# Auth API\n",
+      "docs/api/users.md": "# Users API\n",
+      "docs/guides/quickstart.md": "# Quickstart\n",
+    });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(4);
+
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const titles = docs
+      .filter((d) => (d.metadata as { artifact_type?: string })?.artifact_type === "documenter-output")
+      .map((d) => d.title)
+      .sort();
+    expect(titles).toEqual([
+      `${ws.name}: docs/api/auth.md`,
+      `${ws.name}: docs/api/users.md`,
+      `${ws.name}: docs/architecture.md`,
+      `${ws.name}: docs/guides/quickstart.md`,
+    ]);
+  });
+
+  it("updates docs in place across re-runs (updateIfExists — one doc per file, NOT one per call)", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({ "docs/architecture.md": "# Architecture v1\n\nInitial.\n" });
+
+    const r1 = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(r1.ingested).toBe(1);
+    const docsAfterRun1 = await clio.listDocuments({ project: "test-project" });
+    expect(docsAfterRun1).toHaveLength(1);
+    const docId1 = docsAfterRun1[0].id;
+
+    // Second documenter run with revised content. The previously
+    // ingested doc should be UPDATED, not duplicated.
+    await seedDocs({ "docs/architecture.md": "# Architecture v2\n\nUpdated after a loop.\n" });
+    const r2 = await ingestDocumenterOutput(clio, ws, "manual");
+    expect(r2.ingested).toBe(1);
+
+    const docsAfterRun2 = await clio.listDocuments({ project: "test-project" });
+    expect(docsAfterRun2).toHaveLength(1);
+    expect(docsAfterRun2[0].id).toBe(docId1); // same doc id, updated in place
+
+    // Content reflects the second pass.
+    const fetched = await clio.getDocumentContent(docId1);
+    expect(fetched?.content).toContain("v2");
+    expect(fetched?.content).toContain("Updated after a loop");
+  });
+
+  it("ignores non-.md files in docs/", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({
+      "docs/architecture.md": "# Architecture\n",
+      "docs/diagram.png": "fake binary",  // .png — should NOT be ingested
+      "docs/config.json": "{}",  // .json — should NOT be ingested
+    });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(1);
+    const docs = await clio.listDocuments({ project: "test-project" });
+    expect(docs.filter((d) => (d.metadata as { artifact_type?: string })?.artifact_type === "documenter-output")).toHaveLength(1);
+  });
+
+  it("skips dot-directories (.git, .vscode, etc.)", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({
+      "docs/architecture.md": "# Real doc\n",
+      "docs/.git/HEAD": "ref: refs/heads/main\n",  // unlikely but defensive
+      "docs/.cache/build.md": "should be skipped\n",
+    });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(1);
+  });
+
+  it("returns {ingested: 0, errors: 0} when docs/ doesn't exist (no-op, safe)", async () => {
+    const ws = makeWorkspace();
+    // No docs/ created — this can happen if the documenter agent
+    // failed early or the workspace has no docs phase yet.
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(0);
+    expect(result.errors).toBe(0);
+  });
+
+  it("skips empty files (no ingest for whitespace-only content)", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({
+      "docs/empty.md": "   \n\n  \n",
+      "docs/real.md": "# Real content\n",
+    });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(1); // only real.md
+  });
+
+  it("stamps author as documenter|<adapter>|<model> for audit-log attribution", async () => {
+    const ws = makeWorkspace({
+      documenterAgent: { adapter: "codex", model: "gpt-5" },
+    });
+    await seedDocs({ "docs/architecture.md": "# Architecture\n" });
+
+    await ingestDocumenterOutput(clio, ws, "manual");
+    const docs = await clio.listDocuments({ project: "test-project" });
+    const doc = docs.find((d) => d.title === `${ws.name}: docs/architecture.md`);
+    expect(doc?.author).toBe("documenter|codex|gpt-5");
+  });
+
+  it("captures the trigger (loop-auto vs manual) in metadata for audit", async () => {
+    const ws = makeWorkspace();
+    await seedDocs({ "docs/architecture.md": "# Architecture\n" });
+
+    await ingestDocumenterOutput(clio, ws, "loop-auto");
+    const docs1 = await clio.listDocuments({ project: "test-project" });
+    const doc1 = docs1.find((d) => d.title === `${ws.name}: docs/architecture.md`);
+    expect((doc1?.metadata as { ingest_trigger?: string })?.ingest_trigger).toBe("loop-auto");
+
+    // Re-run via standalone documenter (manual trigger) — overrides
+    // the previous trigger stamp.
+    await ingestDocumenterOutput(clio, ws, "manual");
+    const docs2 = await clio.listDocuments({ project: "test-project" });
+    const doc2 = docs2.find((d) => d.title === `${ws.name}: docs/architecture.md`);
+    expect((doc2?.metadata as { ingest_trigger?: string })?.ingest_trigger).toBe("manual");
+  });
+
+  it("respects clio.ingestPolicy = 'off' (no-op)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "off" } });
+    await seedDocs({ "docs/architecture.md": "# Architecture\n" });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(0);
+    expect(result.errors).toBe(0);
+    const docs = await clio.listDocuments({ project: "test-project" });
+    expect(docs).toHaveLength(0);
+  });
+
+  it("runs on policy 'summaries-only' (documenter output IS a summary)", async () => {
+    const ws = makeWorkspace({ clio: { ingestPolicy: "summaries-only" } });
+    await seedDocs({ "docs/architecture.md": "# Architecture\n" });
+
+    const result = await ingestDocumenterOutput(clio, ws, "loop-auto");
+    expect(result.ingested).toBe(1);
   });
 });
