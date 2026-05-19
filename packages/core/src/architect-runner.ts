@@ -18,6 +18,7 @@ import { registerProcess } from "./active-processes.js";
 import { dispatchForWorkspace, makeEvent } from "./notifications/index.js";
 import { getAgentRunLogPath, nextAgentRunSequence, ensureWorkspaceLogDir } from "./log-storage.js";
 import { appendHistoryEvent, updateHistoryEvent } from "./workspace-history.js";
+import { updateWorkspace } from "./workspaces.js";
 import { persistAgentState, loadAgentState } from "./agent-state-store.js";
 import { randomBytes } from "crypto";
 import { readProblemPack, validateProblemPack } from "./problem-pack.js";
@@ -358,6 +359,68 @@ export async function parseArchitectSignals(
 }
 
 /**
+ * Status values that indicate the loop has terminated — running a
+ * standalone SA from any of these signals "the user is preparing
+ * new scope" and the workspace re-enters the iterating state. See
+ * `flipTerminalStatusToIdle` below.
+ *
+ * Exported for `flipTerminalStatusToIdle` test exhaustiveness.
+ */
+export const TERMINAL_LOOP_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * When a standalone `cfcf review` is invoked on a workspace whose
+ * loop has already terminated, flip `workspace.status` back to
+ * `"idle"` so the dashboard badge ("ready/iterating") reflects the
+ * user's resumed work on the spec. v0.24.5.
+ *
+ * Trigger is deliberately narrow: only the standalone SA path. The
+ * in-loop architect spawn (`runReviewSync` from `iteration-loop.ts`
+ * for `pre_loop_reviewing` / `refine_plan`) doesn't call this —
+ * those paths transition through `workspace.status = "running"`
+ * via the loop engine and don't need the flip.
+ *
+ * Why SA specifically (not reflect / document / spec):
+ *   - SA is **scope work** — running it after a completed loop
+ *     signals "we're preparing for the next loop." Matches the
+ *     user's "iterating" framing exactly.
+ *   - reflect = retrospection (no scope change).
+ *   - document = finalizing (not iterating forward).
+ *   - spec/PA = independent surface; already shown via the PA
+ *     chip on the workspace card.
+ *
+ * Why `paused` is NOT in the set: a paused loop can still be
+ * resumed (via `cfcf resume` or its `refine_plan` action which
+ * already runs SA in-loop). Flipping paused → idle would lose the
+ * pause state and break the resume mechanics.
+ *
+ * Best-effort: a workspace-update failure is logged but doesn't
+ * fail the review run. The flip is a UX nicety, not a correctness
+ * requirement.
+ *
+ * Returns `true` if a flip happened, `false` otherwise. Surfaces
+ * the outcome for testability + callers that want to observe.
+ */
+export async function flipTerminalStatusToIdle(
+  workspace: WorkspaceConfig,
+): Promise<boolean> {
+  if (!TERMINAL_LOOP_STATUSES.has(workspace.status ?? "")) return false;
+  try {
+    await updateWorkspace(workspace.id, { status: "idle" });
+    return true;
+  } catch (err) {
+    console.warn(
+      `[architect-runner] flipTerminalStatusToIdle failed for ${workspace.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
+/**
  * Start an architect review for a workspace.
  * Runs asynchronously -- returns the initial state immediately.
  */
@@ -365,6 +428,10 @@ export async function startReview(
   workspace: WorkspaceConfig,
   opts?: { problemPackPath?: string },
 ): Promise<ReviewState> {
+  // v0.24.5: terminal-status reset. Runs BEFORE log-dir setup so
+  // the workspace state is consistent with "we're about to iterate"
+  // before any review side effects. See helper for the full rationale.
+  await flipTerminalStatusToIdle(workspace);
   await ensureWorkspaceLogDir(workspace.id);
   const sequence = await nextAgentRunSequence(workspace.id, "architect");
   const logFile = getAgentRunLogPath(workspace.id, "architect", sequence);
