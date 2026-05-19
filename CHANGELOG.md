@@ -105,6 +105,73 @@ from stopped; does NOT flip paused (preserves resume mechanics);
 does NOT flip running; does NOT flip idle (no-op); handles
 undefined status defensively (older workspaces without the field).
 
+### Changed — UX polish: history counts, top-bar iteration, card timer + layout
+
+Four small dogfood-driven refinements bundled together — none big
+enough for their own entry, all in the same surface.
+
+**1. History tab section headers**: counts split into
+`(active: N | total: M)` instead of just `(N)`. Surfaces "is
+something running RIGHT NOW in this section" without scanning
+the rows. For the interactive section, `active` = PA sessions
+with `status === "running"`; for the loop section, same applies
+to iteration / review / document / reflection events.
+
+**2. Status tab top-bar**: PhaseIndicator's iteration subtitle
+now shows `"Iteration 24 (max: 28)"` instead of just
+`"Iteration 24"`. The `(max: N)` lives next to the live elapsed
+timer in one place (between buttons and tabs), making the
+ceiling visible without a click into the Config tab.
+
+**3. Status tab Loop State block removed**: the standalone "Loop
+State" block in the Status panel had three pieces — iteration
+count / max (now in PhaseIndicator above), pause every (already
+in Config tab), consecutive stalled (real warning signal). The
+block is replaced with a compact "Stall warning" section that
+only renders when `consecutiveStalled > 0` — common case
+renders nothing, abnormal case stays prominent.
+
+**4. Workspace card**: three changes.
+   - **Live elapsed timer** when loop is running. Pulled from
+     new `workspace.loopStartedAt` field (server-enriched via
+     `getLoopState` when `activeAgent === "loop"`). Renders as
+     `"● loop running · 47m 12s"` inside the chip. Mirrors the
+     workspace-detail PhaseIndicator's timer so the dashboard
+     answers "how long has this loop been alive?" without
+     click-through. Updates every 1s via the existing
+     `useElapsed` hook.
+   - **Chip layout**: chips moved BELOW the title+badge row
+     instead of crowding the same line. With loop + PA chips
+     both possible, the original single-row header was tight;
+     two-row layout gives each chip room. The chip row is
+     conditionally rendered — when there are no chips, the card
+     looks exactly like before.
+   - **Agents row**: added Reflect alongside Dev + Judge.
+     Reflect is per-workspace and was previously only visible in
+     the Config tab. PA is intentionally NOT added — it's a
+     global config, would be identical on every card. Architect
+     and Documenter omitted to keep the row scannable; can be
+     added later if dogfood demands.
+
+**Server enrichment** for the card timer:
+`/api/workspaces` response gets `loopStartedAt?: string | null`
+populated from `loopState.startedAt` when `activeAgent === "loop"`.
+One `getLoopState()` call per running workspace; cached
+in-memory after first read.
+
+**Implementation** (~95 LoC):
+- `packages/web/src/components/WorkspaceHistory.tsx` — active
+  count derivation + header format
+- `packages/web/src/pages/WorkspaceDetail.tsx` — PhaseIndicator
+  title format + Loop State block trim
+- `packages/server/src/app.ts` — `loopStartedAt` enrichment
+- `packages/web/src/types.ts` — mirror the field
+- `packages/web/src/components/WorkspaceCard.tsx` — timer, chip
+  row, agents row
+
+No new tests — pure presentation tweaks. Existing 1079 tests
+still pass; typecheck clean.
+
 ### Changed — History tab: separate section for interactive agents (PA + HA)
 
 Dogfood feedback from the gmbot run: PA sessions can stay alive

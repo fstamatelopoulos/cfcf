@@ -69,6 +69,14 @@ export interface WorkspaceConfig {
     launcherPid: number;
     eventId: string;
   } | null;
+  /**
+   * Loop's overall `startedAt` (loopState.startedAt) when the
+   * loop is actively running, otherwise null. Lets the workspace
+   * card render a live elapsed-time counter for the running loop
+   * (v0.24.5). Server populates this only when `activeAgent ===
+   * "loop"`; absent / null for any other state.
+   */
+  loopStartedAt?: string | null;
 }
 
 // Keep in sync with packages/core/src/iteration-loop.ts

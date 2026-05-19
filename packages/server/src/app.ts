@@ -378,16 +378,31 @@ export function createApp() {
     // "PA active" chip. PA can run concurrently with the loop /
     // standalone runs, so it's a parallel field — not a new
     // `activeAgent` enum value. Two chips can coexist on the card.
+    // v0.24.5 follow-up: also include `loopStartedAt` so the card
+    // can render a live elapsed-time counter when the loop is
+    // running. Pulled from loopState.startedAt; null when no
+    // active loop. Single getLoopState read per loop-running
+    // workspace (cheap — cached in-memory after first access).
     const ids = workspaces.map((w) => w.id);
     const [activeAgents, paSessions] = await Promise.all([
       getActiveAgentsForWorkspaces(ids),
       getPaSessionsForWorkspaces(ids),
     ]);
-    const enriched = workspaces.map((w) => ({
-      ...w,
-      activeAgent: activeAgents[w.id] ?? null,
-      paSession: paSessions[w.id] ?? null,
-    }));
+    const enriched = await Promise.all(
+      workspaces.map(async (w) => {
+        let loopStartedAt: string | null = null;
+        if (activeAgents[w.id] === "loop") {
+          const ls = await getLoopState(w.id);
+          loopStartedAt = ls?.startedAt ?? null;
+        }
+        return {
+          ...w,
+          activeAgent: activeAgents[w.id] ?? null,
+          paSession: paSessions[w.id] ?? null,
+          loopStartedAt,
+        };
+      }),
+    );
     return c.json(enriched);
   });
 
