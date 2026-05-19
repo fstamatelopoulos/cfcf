@@ -69,12 +69,80 @@ dashboard / Status tab; this PR = interactive on the History tab.
   when they don't.
 
 **Test coverage** (10 new tests in `history-partition.test.ts`,
-all 1059 total pass): partition splits correctly; both arrays
+all 1071 total pass): partition splits correctly; both arrays
 sorted newest-first; active PA stays at top of interactive section
 regardless of startedAt; terminated events stay in their section
 (status does NOT change partition); handles all loop event types;
 empty input; partition is total (no events lost); does not mutate
 input array.
+
+### Added — Workspace card + Status tab: "PA active" chip
+
+Natural extension of the History tab partition (same PR): the
+F.22 active-agent chip on the workspace card shows loop / review
+/ document / reflect activity, but does NOT surface PA. PA runs
+outside the cfcf server (interactive `cfcf spec`), so it's
+tracked separately. This adds a parallel chip — *"● PA active"* —
+that appears alongside the F.22 chip when a PA session is alive
+for the workspace.
+
+**Why a separate chip, not a new `activeAgent` enum value**: F.22's
+`activeAgent` is mutually exclusive (the loop runs one phase at a
+time). PA can run **concurrently** with loop / standalone runs.
+Two chips can coexist on the card. The PA chip uses a different
+accent color so they're visually separable at a glance.
+
+**Liveness check**: per-call `process.kill(launcherPid, 0)`
+against the recorded PID in the most-recent `pa-session` history
+event with `status === "running"`. This is the same primitive
+F.28's boot-reconcile uses, but called on every `/api/workspaces`
+poll instead of only at server boot. **Side benefit**: if a PA
+session terminates uncleanly (shell killed, terminal closed),
+`status: "running"` lingers in `history.json` until the next boot.
+The new check correctly reports "not active" for that case in real
+time — no boot required.
+
+**Status tab chip**: matching `PA active` tag in the workspace
+detail header (next to the existing `review running` /
+`document running` / `reflect running` tags). Derived from
+`history.some(e => e.type === "pa-session" && e.status ===
+"running")` — same trust level as the History tab itself.
+PID-verified liveness is a card-surface concern (dashboard
+overview); the detail-page chip trusts the on-disk status because
+the user is already deep in this workspace.
+
+**Pre-v0.24 PA events**: events without `launcherPid` are skipped
+by the liveness check rather than shown. No precise way to verify
+them, and a stale chip is worse than no chip — boot-reconcile's
+mtime fallback handles them at next server boot.
+
+**Implementation** (~120 LoC + tests):
+
+- New `packages/core/src/product-architect/pa-liveness.ts`:
+  - `getPaSessionLiveness(workspaceId)` — finds most-recent
+    running pa-session event with a live PID, returns details.
+  - `getPaSessionsForWorkspaces(ids)` — batch resolver matching
+    `getActiveAgentsForWorkspaces` shape.
+  - `isPidAlive(pid)` — extracted primitive (boot-reconcile has
+    its own inline version; future cleanup could migrate).
+- `packages/server/src/app.ts` — `/api/workspaces` enriched with
+  `paSession: PaSessionLiveness | null` in parallel with the
+  existing `activeAgent` enrichment (both via `Promise.all`).
+- `packages/web/src/types.ts` — mirror the new field.
+- `packages/web/src/components/WorkspaceCard.tsx` — render
+  `● PA active` chip alongside F.22's chip when
+  `workspace.paSession?.active`; tooltip shows session id + start
+  time + PID.
+- `packages/web/src/pages/WorkspaceDetail.tsx` — `PA active` tag
+  in the header alongside the other in-page chips.
+
+**Test coverage** (12 new tests in `pa-liveness.test.ts`, all
+1071 total pass): null on missing history; null on no pa-session;
+null on no `running` event; null on missing launcherPid (pre-v0.24
+event); positive case with live PID; null on dead PID;
+newest-running wins when multiple alive; falls through stale newer
+to surface older live; batch shape; empty input; isPidAlive
+primitive correctness.
 
 ## [0.24.4] -- 2026-05-14
 

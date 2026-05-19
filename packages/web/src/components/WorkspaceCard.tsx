@@ -25,6 +25,14 @@ function activeAgentLabel(activeAgent: WorkspaceConfig["activeAgent"]): string |
 
 export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
   const activeLabel = activeAgentLabel(workspace.activeAgent);
+  // v0.24.5: independent chip for PA-session liveness. PA runs
+  // outside the cfcf server (interactive `cfcf spec`), so it's
+  // tracked separately from F.22's activeAgent and can coexist
+  // with it on the card.
+  const pa = workspace.paSession;
+  const paTooltip = pa
+    ? `PA session ${pa.sessionId} alive since ${new Date(pa.startedAt).toLocaleString()} (launcher PID ${pa.launcherPid})`
+    : "";
   return (
     <div
       className="project-card"
@@ -40,6 +48,21 @@ export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
               title="An agent is actively running on this workspace right now (F.22)"
             >
               ● {activeLabel}
+            </span>
+          )}
+          {pa && (
+            <span
+              className="project-card__active-chip"
+              title={paTooltip}
+              style={{
+                // Distinct from the loop chip — interactive agents
+                // get a different accent so two coexisting chips
+                // are visually separable at a glance.
+                color: "var(--color-accent, var(--color-info))",
+                borderColor: "color-mix(in srgb, var(--color-accent, var(--color-info)) 40%, transparent)",
+              }}
+            >
+              ● PA active
             </span>
           )}
         </div>
