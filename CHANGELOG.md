@@ -9,7 +9,72 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Changed — History tab: separate section for interactive agents (PA + HA)
+
+Dogfood feedback from the gmbot run: PA sessions can stay alive
+for hours or days. In the History tab's single chronological list,
+an active long-running PA's row gets pushed deep into the stack as
+iteration events accumulate above it. Scanning for "is PA still
+running?" forced scrolling.
+
+**Fix**: partition the events into two sections in the History tab:
+
+- **Interactive agents (top section)** — every PA + HA event for
+  this workspace (active and terminated), newest-first within the
+  section. Active sessions naturally appear at the top because
+  they're the newest by `startedAt`. The section header shows the
+  count: `Interactive agents (2)`.
+- **Loop history (bottom section)** — iteration / review /
+  document / reflection / loop-stopped events, newest-first.
+  Unchanged from today, just gets a header (`Loop history (47)`)
+  when the interactive section is present.
+
+When there are no interactive events (most workspaces, most of the
+time), there's no top section and no header on the bottom — the
+table looks exactly like it does today. The new structure only
+appears when it's needed.
+
+**Critical UX rule**: every event has exactly ONE permanent home.
+A PA's row stays in the Interactive section regardless of status —
+no disappearing-on-completion, no relocating to its chronological
+slot in section B when it terminates. Status badge differentiates
+running/completed/failed within the section. This was the
+load-bearing correction in the design discussion: the initial
+"active-only" framing would have moved terminated PAs out of
+the top section, hiding history. The corrected framing partitions
+by event-type only.
+
+**Multiple active PAs** (user-error case): all appear in section A
+with their `running` status badges. No warning today — defer until
+real users hit it.
+
+**Where F.22's active-agent chip fits**: this is the History tab
+counterpart of F.22 (which solved the same "what's running RIGHT
+NOW" problem on the workspace card / Status tab, but only for
+loop-spawned roles — F.22 doesn't track PA / HA because they're
+not in `active-processes` registry). Together: F.22 = loop on the
+dashboard / Status tab; this PR = interactive on the History tab.
+
+**Implementation** (~125 LoC + tests):
+
+- New `packages/web/src/utils/history-partition.ts` — pure helper
+  `partitionInteractiveEvents(events)` returns
+  `{interactive, loop}`, both newest-first. Extensible: today
+  `INTERACTIVE_EVENT_TYPES = new Set(["pa-session"])`; when HA
+  grows a history-event type, add it to the set — no other code
+  changes needed.
+- `packages/web/src/components/WorkspaceHistory.tsx` — render two
+  `<section>` blocks (with headers + count) when interactive
+  events exist, or fall back to the original single-table render
+  when they don't.
+
+**Test coverage** (10 new tests in `history-partition.test.ts`,
+all 1059 total pass): partition splits correctly; both arrays
+sorted newest-first; active PA stays at top of interactive section
+regardless of startedAt; terminated events stay in their section
+(status does NOT change partition); handles all loop event types;
+empty input; partition is total (no events lost); does not mutate
+input array.
 
 ## [0.24.4] -- 2026-05-14
 

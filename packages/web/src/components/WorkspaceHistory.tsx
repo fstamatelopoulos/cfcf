@@ -20,6 +20,7 @@ import {
   deriveJudgeRowStatus,
   deriveJudgeRowTime,
 } from "../utils/iteration-row-status";
+import { partitionInteractiveEvents } from "../utils/history-partition";
 
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
@@ -82,45 +83,107 @@ export function WorkspaceHistory({
     );
   }
 
-  // Sort newest first
-  const sorted = [...events].sort(
-    (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-  );
+  // Split into interactive (PA/HA) + loop (everything else). Both
+  // arrays come back newest-first. Rationale: PA sessions can run
+  // for hours/days, and in a single chronological list an active
+  // long-running PA gets pushed deep by accumulating iteration
+  // events. Giving interactive agents their own stable section
+  // keeps "PA is alive" findable. Every event still has exactly
+  // one home — terminated PAs stay in the Interactive section
+  // (status badge tells running-vs-completed). See
+  // `utils/history-partition.ts` for the full rationale.
+  const { interactive, loop } = partitionInteractiveEvents(events);
 
   return (
     <div className="project-history">
-      <table className="project-history__table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Type</th>
-            <th>Agent</th>
-            <th>Status</th>
-            <th>Result</th>
-            <th>Duration</th>
-            <th>Log</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((e) =>
-            e.type === "iteration" ? (
-              <IterationRowPair
-                key={e.id}
-                event={e as IterationHistoryEvent}
-                workspaceId={workspaceId}
-                onSelectLog={onSelectLog}
-              />
-            ) : (
-              <HistoryRow
-                key={e.id}
-                event={e}
-                workspaceId={workspaceId}
-                onSelectLog={onSelectLog}
-              />
-            ),
-          )}
-        </tbody>
-      </table>
+      {interactive.length > 0 && (
+        <section className="project-history__section">
+          <h3
+            className="project-history__section-header"
+            style={{
+              margin: "0 0 0.4rem 0",
+              fontSize: "var(--text-md)",
+              fontWeight: 600,
+              color: "var(--color-text-muted)",
+            }}
+          >
+            Interactive agents ({interactive.length})
+          </h3>
+          <table className="project-history__table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Result</th>
+                <th>Duration</th>
+                <th>Log</th>
+              </tr>
+            </thead>
+            <tbody>
+              {interactive.map((e) => (
+                <HistoryRow
+                  key={e.id}
+                  event={e}
+                  workspaceId={workspaceId}
+                  onSelectLog={onSelectLog}
+                />
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+      <section
+        className="project-history__section"
+        style={{ marginTop: interactive.length > 0 ? "1rem" : 0 }}
+      >
+        {interactive.length > 0 && (
+          <h3
+            className="project-history__section-header"
+            style={{
+              margin: "0 0 0.4rem 0",
+              fontSize: "var(--text-md)",
+              fontWeight: 600,
+              color: "var(--color-text-muted)",
+            }}
+          >
+            Loop history ({loop.length})
+          </h3>
+        )}
+        <table className="project-history__table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>Agent</th>
+              <th>Status</th>
+              <th>Result</th>
+              <th>Duration</th>
+              <th>Log</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loop.map((e) =>
+              e.type === "iteration" ? (
+                <IterationRowPair
+                  key={e.id}
+                  event={e as IterationHistoryEvent}
+                  workspaceId={workspaceId}
+                  onSelectLog={onSelectLog}
+                />
+              ) : (
+                <HistoryRow
+                  key={e.id}
+                  event={e}
+                  workspaceId={workspaceId}
+                  onSelectLog={onSelectLog}
+                />
+              ),
+            )}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }
