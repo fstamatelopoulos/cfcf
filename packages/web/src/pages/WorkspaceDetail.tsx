@@ -16,6 +16,8 @@ import { FeedbackForm } from "../components/FeedbackForm";
 import { LogViewer, type LogTarget } from "../components/LogViewer";
 import { ConfigDisplay } from "../components/ConfigDisplay";
 import { JudgeAssessment } from "../components/JudgeAssessment";
+import { ReflectionDetail } from "../components/ReflectionDetail";
+import type { ReflectionHistoryEvent } from "../types";
 import { ArchitectReview } from "../components/ArchitectReview";
 import { WorkspaceHistory } from "../components/WorkspaceHistory";
 import { TabBar } from "../components/TabBar";
@@ -427,6 +429,41 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                 <JudgeAssessment signals={lastIteration.judgeSignals} />
               </div>
             )}
+            {/* v0.24.5 (post-tag): symmetric counterpart to "Latest
+                Judge Assessment". Loop-internal reflection events are
+                recorded in history with type === "reflection"; render
+                the most recent one via the existing ReflectionDetail
+                component. Renders nothing when no reflection has run
+                yet for this workspace. */}
+            {(() => {
+              const latestReflection = history
+                .filter((e) => e.type === "reflection")
+                .sort(
+                  (a, b) =>
+                    new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+                )[0] as ReflectionHistoryEvent | undefined;
+              if (!latestReflection) return null;
+              return (
+                <div className="status-panel__section">
+                  <h3>
+                    Latest Reflection Assessment
+                    {latestReflection.completedAt && (
+                      <span
+                        className="status-panel__timestamp"
+                        style={{
+                          fontWeight: 400,
+                          fontSize: "var(--text-sm)",
+                          marginLeft: "0.5rem",
+                        }}
+                      >
+                        ({new Date(latestReflection.completedAt).toLocaleString()})
+                      </span>
+                    )}
+                  </h3>
+                  <ReflectionDetail event={latestReflection} />
+                </div>
+              );
+            })()}
             {reviewState?.signals && !isReviewActive && (
               <div className="status-panel__section">
                 <h3>

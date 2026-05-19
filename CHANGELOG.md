@@ -28,8 +28,16 @@ Dashboard UX patch. Two themes, two PRs, shipped together:
   `idle`, displayed as `"ready/iterating"` in both web + CLI.
   Plus 4 dashboard polish items (active-count headers, in-page
   iteration max, card timer, card layout).
+- **"Latest Reflection Assessment" block on the Status tab**
+  (post-tag fix): symmetric counterpart to the existing "Latest
+  Judge Assessment" block — finds the most recent
+  `reflection` history event and renders it via the existing
+  `ReflectionDetail` component. Renders nothing when reflection
+  hasn't run yet for the workspace. Tag `v0.24.5` was moved
+  forward to include this commit (safe: GitHub release wasn't
+  yet published).
 
-All seven items below.
+All eight items below.
 
 ### Changed — Workspace status: `idle` → `"ready/iterating"`; new transition on standalone SA
 
