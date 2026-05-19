@@ -9,6 +9,28 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.24.5] -- 2026-05-19
+
+Dashboard UX patch. Two themes, two PRs, shipped together:
+
+- **Interactive-agent surfacing** (PR #51): PA sessions are now
+  first-class on the History tab + the workspace card. New
+  "Interactive sessions" section above the loop history; new
+  `● PA active` chip on the workspace card next to F.22's
+  active-agent chip; new server-side PA liveness check
+  (`process.kill(pid, 0)` against `launcherPid`).
+- **`ready/iterating` status + UX polish** (PR #52): the
+  misleading `"COMPLETED"` badge between loops in multi-loop
+  projects (PA + SA + sequential milestone loops) is replaced.
+  A `cfcf review` on a terminated workspace flips status back to
+  `idle`, displayed as `"ready/iterating"` in both web + CLI.
+  Plus 4 dashboard polish items (active-count headers, in-page
+  iteration max, card timer, card layout).
+
+All seven items below.
+
 ### Changed — Workspace status: `idle` → `"ready/iterating"`; new transition on standalone SA
 
 Multi-loop projects (PA + SA drive the workspace through several
