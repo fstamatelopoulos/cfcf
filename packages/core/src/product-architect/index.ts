@@ -66,3 +66,11 @@ export {
   reconcileStalePaSessions,
   type PaReconcileResult,
 } from "./boot-reconcile.js";
+
+// On-demand liveness check (v0.24.5 — workspace card "PA active" chip)
+export {
+  getPaSessionLiveness,
+  getPaSessionsForWorkspaces,
+  isPidAlive,
+  type PaSessionLiveness,
+} from "./pa-liveness.js";

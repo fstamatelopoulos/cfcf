@@ -9,7 +9,140 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Changed — History tab: separate section for interactive agents (PA + HA)
+
+Dogfood feedback from the gmbot run: PA sessions can stay alive
+for hours or days. In the History tab's single chronological list,
+an active long-running PA's row gets pushed deep into the stack as
+iteration events accumulate above it. Scanning for "is PA still
+running?" forced scrolling.
+
+**Fix**: partition the events into two sections in the History tab:
+
+- **Interactive agents (top section)** — every PA + HA event for
+  this workspace (active and terminated), newest-first within the
+  section. Active sessions naturally appear at the top because
+  they're the newest by `startedAt`. The section header shows the
+  count: `Interactive agents (2)`.
+- **Loop history (bottom section)** — iteration / review /
+  document / reflection / loop-stopped events, newest-first.
+  Unchanged from today, just gets a header (`Loop history (47)`)
+  when the interactive section is present.
+
+When there are no interactive events (most workspaces, most of the
+time), there's no top section and no header on the bottom — the
+table looks exactly like it does today. The new structure only
+appears when it's needed.
+
+**Critical UX rule**: every event has exactly ONE permanent home.
+A PA's row stays in the Interactive section regardless of status —
+no disappearing-on-completion, no relocating to its chronological
+slot in section B when it terminates. Status badge differentiates
+running/completed/failed within the section. This was the
+load-bearing correction in the design discussion: the initial
+"active-only" framing would have moved terminated PAs out of
+the top section, hiding history. The corrected framing partitions
+by event-type only.
+
+**Multiple active PAs** (user-error case): all appear in section A
+with their `running` status badges. No warning today — defer until
+real users hit it.
+
+**Where F.22's active-agent chip fits**: this is the History tab
+counterpart of F.22 (which solved the same "what's running RIGHT
+NOW" problem on the workspace card / Status tab, but only for
+loop-spawned roles — F.22 doesn't track PA / HA because they're
+not in `active-processes` registry). Together: F.22 = loop on the
+dashboard / Status tab; this PR = interactive on the History tab.
+
+**Implementation** (~125 LoC + tests):
+
+- New `packages/web/src/utils/history-partition.ts` — pure helper
+  `partitionInteractiveEvents(events)` returns
+  `{interactive, loop}`, both newest-first. Extensible: today
+  `INTERACTIVE_EVENT_TYPES = new Set(["pa-session"])`; when HA
+  grows a history-event type, add it to the set — no other code
+  changes needed.
+- `packages/web/src/components/WorkspaceHistory.tsx` — render two
+  `<section>` blocks (with headers + count) when interactive
+  events exist, or fall back to the original single-table render
+  when they don't.
+
+**Test coverage** (10 new tests in `history-partition.test.ts`,
+all 1071 total pass): partition splits correctly; both arrays
+sorted newest-first; active PA stays at top of interactive section
+regardless of startedAt; terminated events stay in their section
+(status does NOT change partition); handles all loop event types;
+empty input; partition is total (no events lost); does not mutate
+input array.
+
+### Added — Workspace card + Status tab: "PA active" chip
+
+Natural extension of the History tab partition (same PR): the
+F.22 active-agent chip on the workspace card shows loop / review
+/ document / reflect activity, but does NOT surface PA. PA runs
+outside the cfcf server (interactive `cfcf spec`), so it's
+tracked separately. This adds a parallel chip — *"● PA active"* —
+that appears alongside the F.22 chip when a PA session is alive
+for the workspace.
+
+**Why a separate chip, not a new `activeAgent` enum value**: F.22's
+`activeAgent` is mutually exclusive (the loop runs one phase at a
+time). PA can run **concurrently** with loop / standalone runs.
+Two chips can coexist on the card. The PA chip uses a different
+accent color so they're visually separable at a glance.
+
+**Liveness check**: per-call `process.kill(launcherPid, 0)`
+against the recorded PID in the most-recent `pa-session` history
+event with `status === "running"`. This is the same primitive
+F.28's boot-reconcile uses, but called on every `/api/workspaces`
+poll instead of only at server boot. **Side benefit**: if a PA
+session terminates uncleanly (shell killed, terminal closed),
+`status: "running"` lingers in `history.json` until the next boot.
+The new check correctly reports "not active" for that case in real
+time — no boot required.
+
+**Status tab chip**: matching `PA active` tag in the workspace
+detail header (next to the existing `review running` /
+`document running` / `reflect running` tags). Derived from
+`history.some(e => e.type === "pa-session" && e.status ===
+"running")` — same trust level as the History tab itself.
+PID-verified liveness is a card-surface concern (dashboard
+overview); the detail-page chip trusts the on-disk status because
+the user is already deep in this workspace.
+
+**Pre-v0.24 PA events**: events without `launcherPid` are skipped
+by the liveness check rather than shown. No precise way to verify
+them, and a stale chip is worse than no chip — boot-reconcile's
+mtime fallback handles them at next server boot.
+
+**Implementation** (~120 LoC + tests):
+
+- New `packages/core/src/product-architect/pa-liveness.ts`:
+  - `getPaSessionLiveness(workspaceId)` — finds most-recent
+    running pa-session event with a live PID, returns details.
+  - `getPaSessionsForWorkspaces(ids)` — batch resolver matching
+    `getActiveAgentsForWorkspaces` shape.
+  - `isPidAlive(pid)` — extracted primitive (boot-reconcile has
+    its own inline version; future cleanup could migrate).
+- `packages/server/src/app.ts` — `/api/workspaces` enriched with
+  `paSession: PaSessionLiveness | null` in parallel with the
+  existing `activeAgent` enrichment (both via `Promise.all`).
+- `packages/web/src/types.ts` — mirror the new field.
+- `packages/web/src/components/WorkspaceCard.tsx` — render
+  `● PA active` chip alongside F.22's chip when
+  `workspace.paSession?.active`; tooltip shows session id + start
+  time + PID.
+- `packages/web/src/pages/WorkspaceDetail.tsx` — `PA active` tag
+  in the header alongside the other in-page chips.
+
+**Test coverage** (12 new tests in `pa-liveness.test.ts`, all
+1071 total pass): null on missing history; null on no pa-session;
+null on no `running` event; null on missing launcherPid (pre-v0.24
+event); positive case with live PID; null on dead PID;
+newest-running wins when multiple alive; falls through stale newer
+to surface older live; batch shape; empty input; isPidAlive
+primitive correctness.
 
 ## [0.24.4] -- 2026-05-14
 

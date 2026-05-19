@@ -248,6 +248,21 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         {isReviewActive && <span className="project-detail__active-tag">review running</span>}
         {isDocumentActive && <span className="project-detail__active-tag">document running</span>}
         {isReflectActive && <span className="project-detail__active-tag">reflect running</span>}
+        {/* v0.24.5: in-page chip for PA session liveness. Derived
+            from `history` (status === "running" on a pa-session
+            event) — matches the same pattern as the chips above
+            that read from in-memory state. PID-verified liveness
+            via the server-enriched `workspace.paSession` is on the
+            workspace card (dashboard surface); the in-page chip
+            trusts the same on-disk status the History tab does. */}
+        {history.some((e) => e.type === "pa-session" && e.status === "running") && (
+          <span
+            className="project-detail__active-tag"
+            title="A PA session (cfcf spec) is alive for this workspace"
+          >
+            PA active
+          </span>
+        )}
       </div>
 
       <LoopControls

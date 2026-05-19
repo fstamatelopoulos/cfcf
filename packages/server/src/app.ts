@@ -53,6 +53,7 @@ import {
   getAllActiveProcesses,
   getActiveProcess,
   killProcessTree,
+  getPaSessionsForWorkspaces,
   markReflectStateFailed,
   markDocumentStateFailed,
   markReviewStateFailed,
@@ -372,11 +373,20 @@ export function createApp() {
     // Review/Document/Reflect runs (which don't touch workspace.status
     // by design — that field tracks the loop only). null when nothing
     // is running.
+    //
+    // v0.24.5: also enrich with `paSession` for an INDEPENDENT
+    // "PA active" chip. PA can run concurrently with the loop /
+    // standalone runs, so it's a parallel field — not a new
+    // `activeAgent` enum value. Two chips can coexist on the card.
     const ids = workspaces.map((w) => w.id);
-    const activeAgents = await getActiveAgentsForWorkspaces(ids);
+    const [activeAgents, paSessions] = await Promise.all([
+      getActiveAgentsForWorkspaces(ids),
+      getPaSessionsForWorkspaces(ids),
+    ]);
     const enriched = workspaces.map((w) => ({
       ...w,
       activeAgent: activeAgents[w.id] ?? null,
+      paSession: paSessions[w.id] ?? null,
     }));
     return c.json(enriched);
   });

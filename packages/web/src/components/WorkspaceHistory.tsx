@@ -20,6 +20,7 @@ import {
   deriveJudgeRowStatus,
   deriveJudgeRowTime,
 } from "../utils/iteration-row-status";
+import { partitionInteractiveEvents } from "../utils/history-partition";
 
 const determinationColor: Record<string, string> = {
   SUCCESS: "var(--color-success)",
@@ -82,46 +83,158 @@ export function WorkspaceHistory({
     );
   }
 
-  // Sort newest first
-  const sorted = [...events].sort(
-    (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-  );
+  // Split into interactive (PA/HA) + loop (everything else). Both
+  // arrays come back newest-first. Rationale: PA sessions can run
+  // for hours/days, and in a single chronological list an active
+  // long-running PA gets pushed deep by accumulating iteration
+  // events. Giving interactive agents their own stable section
+  // keeps "PA is alive" findable. Every event still has exactly
+  // one home — terminated PAs stay in the Interactive section
+  // (status badge tells running-vs-completed). See
+  // `utils/history-partition.ts` for the full rationale.
+  const { interactive, loop } = partitionInteractiveEvents(events);
+
+  // Shared summary style: visual hierarchy + disclosure-triangle
+  // affordance via the native <details>/<summary> element (no
+  // React state needed — browser handles open/close + persisted
+  // state across rerenders). Each section gets a left-border
+  // accent so the two sections feel optically distinct.
+  const summaryBase: React.CSSProperties = {
+    cursor: "pointer",
+    padding: "0.4rem 0.6rem 0.4rem 0.8rem",
+    margin: "0 0 0.4rem 0",
+    fontSize: "var(--text-md)",
+    fontWeight: 600,
+    color: "var(--color-text)",
+    background: "color-mix(in srgb, var(--color-text-muted) 6%, transparent)",
+    borderRadius: "4px",
+    userSelect: "none",
+  };
 
   return (
     <div className="project-history">
-      <table className="project-history__table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Type</th>
-            <th>Agent</th>
-            <th>Status</th>
-            <th>Result</th>
-            <th>Duration</th>
-            <th>Log</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((e) =>
-            e.type === "iteration" ? (
-              <IterationRowPair
-                key={e.id}
-                event={e as IterationHistoryEvent}
-                workspaceId={workspaceId}
-                onSelectLog={onSelectLog}
-              />
-            ) : (
-              <HistoryRow
-                key={e.id}
-                event={e}
-                workspaceId={workspaceId}
-                onSelectLog={onSelectLog}
-              />
-            ),
-          )}
-        </tbody>
-      </table>
+      {interactive.length > 0 && (
+        <details
+          open
+          className="project-history__section project-history__section--interactive"
+          style={{
+            borderLeft: "3px solid var(--color-accent, var(--color-info))",
+            paddingLeft: "0.6rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <summary style={summaryBase}>
+            Interactive sessions ({interactive.length})
+          </summary>
+          <table className="project-history__table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Result</th>
+                <th>Duration</th>
+                <th>Log</th>
+              </tr>
+            </thead>
+            <tbody>
+              {interactive.map((e) => (
+                <HistoryRow
+                  key={e.id}
+                  event={e}
+                  workspaceId={workspaceId}
+                  onSelectLog={onSelectLog}
+                />
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      {/* The loop section uses <details>+<summary> only when the
+          interactive section is also rendered (so the two are
+          visually paired as collapsible sections). When there's
+          no interactive section, the loop renders as a plain
+          table — matches today's layout exactly, no disclosure
+          affordance for a single-section view. */}
+      {interactive.length > 0 ? (
+        <details
+          open
+          className="project-history__section project-history__section--loop"
+          style={{
+            borderLeft: "3px solid var(--color-border, var(--color-text-muted))",
+            paddingLeft: "0.6rem",
+          }}
+        >
+          <summary style={summaryBase}>
+            Loop history ({loop.length})
+          </summary>
+          <LoopHistoryTable
+            loop={loop}
+            workspaceId={workspaceId}
+            onSelectLog={onSelectLog}
+          />
+        </details>
+      ) : (
+        <LoopHistoryTable
+          loop={loop}
+          workspaceId={workspaceId}
+          onSelectLog={onSelectLog}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The loop-events table extracted as a small subcomponent so it
+ * can be rendered either inside a <details> (when the Interactive
+ * section is present and both should be collapsible) or as a
+ * plain bare table (when there are no interactive events — keeps
+ * today's flat layout for the common case).
+ */
+function LoopHistoryTable({
+  loop,
+  workspaceId,
+  onSelectLog,
+}: {
+  loop: HistoryEvent[];
+  workspaceId: string;
+  onSelectLog: (target: LogTarget) => void;
+}) {
+  return (
+    <table className="project-history__table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Agent</th>
+          <th>Status</th>
+          <th>Result</th>
+          <th>Duration</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {loop.map((e) =>
+          e.type === "iteration" ? (
+            <IterationRowPair
+              key={e.id}
+              event={e as IterationHistoryEvent}
+              workspaceId={workspaceId}
+              onSelectLog={onSelectLog}
+            />
+          ) : (
+            <HistoryRow
+              key={e.id}
+              event={e}
+              workspaceId={workspaceId}
+              onSelectLog={onSelectLog}
+            />
+          ),
+        )}
+      </tbody>
+    </table>
   );
 }
 

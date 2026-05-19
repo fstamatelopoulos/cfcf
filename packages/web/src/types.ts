@@ -56,6 +56,19 @@ export interface WorkspaceConfig {
    * separately.
    */
   activeAgent?: "loop" | "review" | "document" | "reflect" | null;
+  /**
+   * Server-computed liveness of any active PA session for this
+   * workspace (v0.24.5). Independent of `activeAgent` — PA can run
+   * concurrently with the loop / standalone runs. Null when no PA
+   * is alive. See `packages/core/src/product-architect/pa-liveness.ts`.
+   */
+  paSession?: {
+    active: true;
+    sessionId: string;
+    startedAt: string;
+    launcherPid: number;
+    eventId: string;
+  } | null;
 }
 
 // Keep in sync with packages/core/src/iteration-loop.ts
