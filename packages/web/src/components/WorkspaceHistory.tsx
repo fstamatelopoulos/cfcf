@@ -94,21 +94,38 @@ export function WorkspaceHistory({
   // `utils/history-partition.ts` for the full rationale.
   const { interactive, loop } = partitionInteractiveEvents(events);
 
+  // Shared summary style: visual hierarchy + disclosure-triangle
+  // affordance via the native <details>/<summary> element (no
+  // React state needed — browser handles open/close + persisted
+  // state across rerenders). Each section gets a left-border
+  // accent so the two sections feel optically distinct.
+  const summaryBase: React.CSSProperties = {
+    cursor: "pointer",
+    padding: "0.4rem 0.6rem 0.4rem 0.8rem",
+    margin: "0 0 0.4rem 0",
+    fontSize: "var(--text-md)",
+    fontWeight: 600,
+    color: "var(--color-text)",
+    background: "color-mix(in srgb, var(--color-text-muted) 6%, transparent)",
+    borderRadius: "4px",
+    userSelect: "none",
+  };
+
   return (
     <div className="project-history">
       {interactive.length > 0 && (
-        <section className="project-history__section">
-          <h3
-            className="project-history__section-header"
-            style={{
-              margin: "0 0 0.4rem 0",
-              fontSize: "var(--text-md)",
-              fontWeight: 600,
-              color: "var(--color-text-muted)",
-            }}
-          >
-            Interactive agents ({interactive.length})
-          </h3>
+        <details
+          open
+          className="project-history__section project-history__section--interactive"
+          style={{
+            borderLeft: "3px solid var(--color-accent, var(--color-info))",
+            paddingLeft: "0.6rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <summary style={summaryBase}>
+            Interactive sessions ({interactive.length})
+          </summary>
           <table className="project-history__table">
             <thead>
               <tr>
@@ -132,59 +149,92 @@ export function WorkspaceHistory({
               ))}
             </tbody>
           </table>
-        </section>
+        </details>
       )}
-      <section
-        className="project-history__section"
-        style={{ marginTop: interactive.length > 0 ? "1rem" : 0 }}
-      >
-        {interactive.length > 0 && (
-          <h3
-            className="project-history__section-header"
-            style={{
-              margin: "0 0 0.4rem 0",
-              fontSize: "var(--text-md)",
-              fontWeight: 600,
-              color: "var(--color-text-muted)",
-            }}
-          >
+      {/* The loop section uses <details>+<summary> only when the
+          interactive section is also rendered (so the two are
+          visually paired as collapsible sections). When there's
+          no interactive section, the loop renders as a plain
+          table — matches today's layout exactly, no disclosure
+          affordance for a single-section view. */}
+      {interactive.length > 0 ? (
+        <details
+          open
+          className="project-history__section project-history__section--loop"
+          style={{
+            borderLeft: "3px solid var(--color-border, var(--color-text-muted))",
+            paddingLeft: "0.6rem",
+          }}
+        >
+          <summary style={summaryBase}>
             Loop history ({loop.length})
-          </h3>
-        )}
-        <table className="project-history__table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>Agent</th>
-              <th>Status</th>
-              <th>Result</th>
-              <th>Duration</th>
-              <th>Log</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loop.map((e) =>
-              e.type === "iteration" ? (
-                <IterationRowPair
-                  key={e.id}
-                  event={e as IterationHistoryEvent}
-                  workspaceId={workspaceId}
-                  onSelectLog={onSelectLog}
-                />
-              ) : (
-                <HistoryRow
-                  key={e.id}
-                  event={e}
-                  workspaceId={workspaceId}
-                  onSelectLog={onSelectLog}
-                />
-              ),
-            )}
-          </tbody>
-        </table>
-      </section>
+          </summary>
+          <LoopHistoryTable
+            loop={loop}
+            workspaceId={workspaceId}
+            onSelectLog={onSelectLog}
+          />
+        </details>
+      ) : (
+        <LoopHistoryTable
+          loop={loop}
+          workspaceId={workspaceId}
+          onSelectLog={onSelectLog}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The loop-events table extracted as a small subcomponent so it
+ * can be rendered either inside a <details> (when the Interactive
+ * section is present and both should be collapsible) or as a
+ * plain bare table (when there are no interactive events — keeps
+ * today's flat layout for the common case).
+ */
+function LoopHistoryTable({
+  loop,
+  workspaceId,
+  onSelectLog,
+}: {
+  loop: HistoryEvent[];
+  workspaceId: string;
+  onSelectLog: (target: LogTarget) => void;
+}) {
+  return (
+    <table className="project-history__table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Agent</th>
+          <th>Status</th>
+          <th>Result</th>
+          <th>Duration</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {loop.map((e) =>
+          e.type === "iteration" ? (
+            <IterationRowPair
+              key={e.id}
+              event={e as IterationHistoryEvent}
+              workspaceId={workspaceId}
+              onSelectLog={onSelectLog}
+            />
+          ) : (
+            <HistoryRow
+              key={e.id}
+              event={e}
+              workspaceId={workspaceId}
+              onSelectLog={onSelectLog}
+            />
+          ),
+        )}
+      </tbody>
+    </table>
   );
 }
 
