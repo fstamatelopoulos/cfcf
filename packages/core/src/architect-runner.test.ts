@@ -5,14 +5,19 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { mkdir, writeFile, rm } from "fs/promises";
+import { mkdtemp, rm as rmTmp, mkdir as mkdirTmp } from "fs/promises";
+import { tmpdir } from "os";
 import {
   writeArchitectInstructions,
   resetArchitectSignals,
   parseArchitectSignals,
   countPlanItems,
   diagnoseFailedArchitectSignals,
+  flipTerminalStatusToIdle,
+  TERMINAL_LOOP_STATUSES,
 } from "./architect-runner.js";
-import type { WorkspaceConfig, ArchitectSignals } from "./types.js";
+import { createWorkspace, getWorkspace, updateWorkspace } from "./workspaces.js";
+import type { WorkspaceConfig, ArchitectSignals, WorkspaceStatus } from "./types.js";
 
 const TEST_DIR = join(import.meta.dir, "..", ".test-architect-runner");
 
@@ -454,5 +459,120 @@ And [bracketed text] without checkboxes isn't either.
   test("returns zeros for an empty plan", () => {
     expect(countPlanItems("")).toEqual({ pending: 0, completed: 0 });
     expect(countPlanItems("# Plan\n\nNo checkboxes here.\n")).toEqual({ pending: 0, completed: 0 });
+  });
+});
+
+// ── flipTerminalStatusToIdle (v0.24.5) ───────────────────────────────────
+//
+// Tests the explicit-trigger transition for the
+// "ready/iterating" status. When a user runs `cfcf review` on a
+// workspace whose loop has already terminated (completed / failed
+// / stopped), the workspace.status flips back to `idle` so the
+// dashboard badge accurately reflects "we're preparing new scope."
+//
+// Tests use a real tmpdir-backed CFCF_CONFIG_DIR + createWorkspace
+// because the flip uses the real updateWorkspace path. Cheap
+// enough (~ms per test) for the fidelity gained.
+
+describe("flipTerminalStatusToIdle (v0.24.5 status-iterating transition)", () => {
+  let configDir: string;
+  let repoDir: string;
+  const originalConfigDir = process.env.CFCF_CONFIG_DIR;
+
+  beforeEach(async () => {
+    configDir = await mkdtemp(join(tmpdir(), "cfcf-flip-test-"));
+    process.env.CFCF_CONFIG_DIR = configDir;
+    repoDir = join(configDir, "fake-repo");
+    await mkdirTmp(join(repoDir, ".git"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    process.env.CFCF_CONFIG_DIR = originalConfigDir;
+    await rmTmp(configDir, { recursive: true, force: true });
+  });
+
+  test("TERMINAL_LOOP_STATUSES contains exactly completed, failed, stopped", () => {
+    // Lock the set so future edits can't silently expand it. Each
+    // entry is a deliberate inclusion — see the helper's docstring.
+    expect([...TERMINAL_LOOP_STATUSES].sort()).toEqual(["completed", "failed", "stopped"]);
+  });
+
+  test("flips from 'completed' to 'idle' (the user-reported gmbot case)", async () => {
+    const ws = await createWorkspace({ name: "gmbot-test", repoPath: repoDir });
+    await updateWorkspace(ws.id, { status: "completed" });
+    const refreshed = await getWorkspace(ws.id);
+    expect(refreshed?.status).toBe("completed");
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(true);
+
+    const after = await getWorkspace(ws.id);
+    expect(after?.status).toBe("idle");
+  });
+
+  test("flips from 'failed' to 'idle'", async () => {
+    const ws = await createWorkspace({ name: "failed-test", repoPath: repoDir });
+    await updateWorkspace(ws.id, { status: "failed" });
+    const refreshed = await getWorkspace(ws.id);
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(true);
+    expect((await getWorkspace(ws.id))?.status).toBe("idle");
+  });
+
+  test("flips from 'stopped' to 'idle'", async () => {
+    const ws = await createWorkspace({ name: "stopped-test", repoPath: repoDir });
+    await updateWorkspace(ws.id, { status: "stopped" });
+    const refreshed = await getWorkspace(ws.id);
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(true);
+    expect((await getWorkspace(ws.id))?.status).toBe("idle");
+  });
+
+  test("does NOT flip 'paused' (paused stays paused — preserves resume mechanics)", async () => {
+    // The load-bearing non-flip case: a paused loop awaiting user
+    // input must NOT be reset by a standalone `cfcf review` —
+    // otherwise the resume mechanics + `refine_plan` action break.
+    // The user wants SA output WHILE the loop stays pause-resumable.
+    const ws = await createWorkspace({ name: "paused-test", repoPath: repoDir });
+    await updateWorkspace(ws.id, { status: "paused" });
+    const refreshed = await getWorkspace(ws.id);
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(false);
+    expect((await getWorkspace(ws.id))?.status).toBe("paused");
+  });
+
+  test("does NOT flip 'running' (no-op on already-running loop)", async () => {
+    const ws = await createWorkspace({ name: "running-test", repoPath: repoDir });
+    await updateWorkspace(ws.id, { status: "running" });
+    const refreshed = await getWorkspace(ws.id);
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(false);
+    expect((await getWorkspace(ws.id))?.status).toBe("running");
+  });
+
+  test("does NOT flip 'idle' (already idle — no-op, safe to call unconditionally)", async () => {
+    const ws = await createWorkspace({ name: "idle-test", repoPath: repoDir });
+    // workspaces default to idle on creation — no explicit update needed.
+    const refreshed = await getWorkspace(ws.id);
+    expect(refreshed?.status).toBe("idle");
+
+    const flipped = await flipTerminalStatusToIdle(refreshed!);
+    expect(flipped).toBe(false);
+    expect((await getWorkspace(ws.id))?.status).toBe("idle");
+  });
+
+  test("handles workspace with undefined status (defensive — older workspaces)", async () => {
+    // Defensive: a workspace persisted without `status` (very old
+    // workspaces, or a corrupted config). Should not flip — undefined
+    // isn't a terminal status. No throw.
+    const ws = await createWorkspace({ name: "undef-test", repoPath: repoDir });
+    const wsWithoutStatus = { ...ws, status: undefined } as WorkspaceConfig & { status?: WorkspaceStatus };
+
+    const flipped = await flipTerminalStatusToIdle(wsWithoutStatus);
+    expect(flipped).toBe(false);
   });
 });

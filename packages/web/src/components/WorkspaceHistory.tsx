@@ -94,6 +94,15 @@ export function WorkspaceHistory({
   // `utils/history-partition.ts` for the full rationale.
   const { interactive, loop } = partitionInteractiveEvents(events);
 
+  // Per-section active count for the header (e.g.
+  // "Interactive sessions (active: 1 | total: 3)"). "Active" =
+  // events still claiming `running` status. For the interactive
+  // section this surfaces "PA still alive right now" at a
+  // glance — paired with the total so the user knows how much
+  // history is below.
+  const interactiveActive = interactive.filter((e) => e.status === "running").length;
+  const loopActive = loop.filter((e) => e.status === "running").length;
+
   // Shared summary style: visual hierarchy + disclosure-triangle
   // affordance via the native <details>/<summary> element (no
   // React state needed — browser handles open/close + persisted
@@ -124,7 +133,7 @@ export function WorkspaceHistory({
           }}
         >
           <summary style={summaryBase}>
-            Interactive sessions ({interactive.length})
+            Interactive sessions (active: {interactiveActive} | total: {interactive.length})
           </summary>
           <table className="project-history__table">
             <thead>
@@ -167,7 +176,7 @@ export function WorkspaceHistory({
           }}
         >
           <summary style={summaryBase}>
-            Loop history ({loop.length})
+            Loop history (active: {loopActive} | total: {loop.length})
           </summary>
           <LoopHistoryTable
             loop={loop}

@@ -283,7 +283,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
           phase={loopState.phase}
           title={
             loopState.currentIteration > 0
-              ? `Iteration ${loopState.currentIteration}`
+              ? `Iteration ${loopState.currentIteration} (max: ${loopState.maxIterations})`
               : loopState.phase === "pre_loop_reviewing"
                 ? "Pre-loop review"
                 : undefined
@@ -443,19 +443,21 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                 <ArchitectReview signals={reviewState.signals} />
               </div>
             )}
-            {loopState && (
+            {/* The full "Loop State" block was removed in v0.24.5
+                (UX dogfood): iteration count + max moved into the
+                PhaseIndicator subtitle above, where it lives next
+                to the live elapsed timer. "Pause every" is already
+                in the Config tab. The block here remains ONLY for
+                the consecutive-stalled warning — that's an active
+                signal the user should see prominently when it
+                triggers. Renders nothing in the common case. */}
+            {loopState && loopState.consecutiveStalled > 0 && (
               <div className="status-panel__section">
-                <h3>Loop State</h3>
+                <h3>Stall warning</h3>
                 <div className="status-panel__info">
-                  <span>Iterations: {loopState.currentIteration} / {loopState.maxIterations}</span>
-                  {loopState.pauseEvery > 0 && (
-                    <span>Pause every: {loopState.pauseEvery}</span>
-                  )}
-                  {loopState.consecutiveStalled > 0 && (
-                    <span className="text-warning">
-                      Consecutive stalled: {loopState.consecutiveStalled}
-                    </span>
-                  )}
+                  <span className="text-warning">
+                    Consecutive stalled iterations: {loopState.consecutiveStalled}
+                  </span>
                 </div>
               </div>
             )}

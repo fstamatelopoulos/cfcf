@@ -86,10 +86,23 @@ async function showWorkspaceOverview(): Promise<void> {
 
   console.log("Workspaces:");
   for (const w of res.data) {
-    const status = w.status ?? "idle";
+    const status = formatStatus(w.status);
     const iter = w.currentIteration > 0 ? ` (iteration ${w.currentIteration})` : "";
     console.log(`  ${w.name}: ${status}${iter}`);
   }
+}
+
+/**
+ * Display label for a workspace status. v0.24.5: `"idle"` is
+ * rendered as `"ready/iterating"` to capture both the fresh-
+ * workspace case ("ready") and the post-terminal case ("iterating"
+ * between loops, after running standalone SA). Mirrors the
+ * web's StatusBadge label map. Keep these in sync.
+ */
+function formatStatus(status?: string): string {
+  const s = status ?? "idle";
+  if (s === "idle") return "ready/iterating";
+  return s;
 }
 
 async function showWorkspaceStatus(workspace: string): Promise<void> {
@@ -108,7 +121,7 @@ async function showWorkspaceStatus(workspace: string): Promise<void> {
     }
     const w = wsRes.data!;
     console.log(`Workspace:  ${w.name}`);
-    console.log(`Status:     ${w.status ?? "idle"}`);
+    console.log(`Status:     ${formatStatus(w.status)}`);
     console.log(`Iterations: ${w.currentIteration}`);
     console.log();
     console.log("No active loop. Start with: cfcf run --workspace " + w.name);

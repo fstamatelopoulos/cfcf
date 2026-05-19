@@ -1,6 +1,7 @@
 import type { WorkspaceConfig } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { navigateTo } from "../hooks/useRoute";
+import { useElapsed } from "../hooks/useElapsed";
 
 function formatAgent(agent?: { adapter: string; model?: string }): string {
   if (!agent?.adapter) return "n/a";
@@ -33,21 +34,57 @@ export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
   const paTooltip = pa
     ? `PA session ${pa.sessionId} alive since ${new Date(pa.startedAt).toLocaleString()} (launcher PID ${pa.launcherPid})`
     : "";
+
+  // v0.24.5 follow-up: live elapsed timer for the running loop.
+  // Mirrors the workspace-detail PhaseIndicator's timer so the
+  // dashboard answers "how long has this loop been alive?" without
+  // a click-through. Returns null when not running — the timer span
+  // is conditionally rendered.
+  const loopElapsed = useElapsed(
+    workspace.loopStartedAt ?? undefined,
+    workspace.activeAgent === "loop",
+  );
+
   return (
     <div
       className="project-card"
       onClick={() => navigateTo(`/workspaces/${workspace.id}`)}
     >
+      {/* v0.24.5 layout change: chips moved BELOW the title+badge
+          row. With two possible chips (loop + PA) coexisting, the
+          original single-row header got crowded. Two-row layout
+          gives each chip room to breathe. */}
       <div className="project-card__header">
         <h3 className="project-card__name">{workspace.name}</h3>
         <div className="project-card__status-group">
           <StatusBadge status={workspace.status} />
+        </div>
+      </div>
+      {(activeLabel || pa) && (
+        <div
+          className="project-card__chips"
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            flexWrap: "wrap",
+            margin: "0.25rem 0 0.5rem 0",
+          }}
+        >
           {activeLabel && (
             <span
               className="project-card__active-chip"
-              title="An agent is actively running on this workspace right now (F.22)"
+              title={
+                workspace.activeAgent === "loop" && loopElapsed
+                  ? `Loop has been running for ${loopElapsed}`
+                  : "An agent is actively running on this workspace right now (F.22)"
+              }
             >
               ● {activeLabel}
+              {workspace.activeAgent === "loop" && loopElapsed && (
+                <span style={{ marginLeft: "0.4rem", opacity: 0.75 }}>
+                  · {loopElapsed}
+                </span>
+              )}
             </span>
           )}
           {pa && (
@@ -66,7 +103,7 @@ export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
             </span>
           )}
         </div>
-      </div>
+      )}
       <div className="project-card__details">
         <span className="project-card__repo" title={workspace.repoPath}>
           {workspace.repoPath}
@@ -75,9 +112,18 @@ export function WorkspaceCard({ workspace }: { workspace: WorkspaceConfig }) {
           Iteration {workspace.currentIteration || 0} / {workspace.maxIterations}
         </span>
       </div>
+      {/* v0.24.5: agents row extended with Reflect (per-workspace,
+          previously only visible deep in Config tab). PA is NOT
+          shown here because it's a global config — would be
+          identical on every card. Architect + Documenter omitted
+          for now to keep the row scannable; can be added if
+          dogfood shows they're useful at a glance. */}
       <div className="project-card__agents">
         <span>Dev: {formatAgent(workspace.devAgent)}</span>
         <span>Judge: {formatAgent(workspace.judgeAgent)}</span>
+        {workspace.reflectionAgent && (
+          <span>Reflect: {formatAgent(workspace.reflectionAgent)}</span>
+        )}
       </div>
     </div>
   );

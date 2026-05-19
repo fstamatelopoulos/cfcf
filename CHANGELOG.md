@@ -9,6 +9,169 @@ Changes are tracked via git tags. Each release tag corresponds to an entry here.
 
 ## [Unreleased]
 
+### Changed — Workspace status: `idle` → `"ready/iterating"`; new transition on standalone SA
+
+Multi-loop projects (PA + SA drive the workspace through several
+sequential loops, each completing a milestone) hit a labelling
+problem: the dashboard badge read `"completed"` after every loop
+ended, even though the project was still actively being iterated.
+*"COMPLETED"* carries finality that's misleading when the user is
+about to start the next loop.
+
+**Fix**: one new explicit transition + one label rename.
+
+**1. New transition** — `{completed, failed, stopped} +
+cfcf review (standalone)` → `idle`.
+
+When the user invokes `cfcf review` (standalone SA) on a workspace
+whose loop has terminated, `workspace.status` flips back to `idle`
+before SA spawns. The trigger is deliberately narrow:
+
+  - **SA is scope work** — running it after a completed loop
+    signals "we're preparing for the next loop." Matches the
+    iterating semantics exactly.
+  - `cfcf reflect` doesn't flip (retrospection — no scope change).
+  - `cfcf document` doesn't flip (finalizing — not iterating
+    forward).
+  - `cfcf spec` (PA) doesn't flip (independent surface; already
+    has its own chip on the workspace card from v0.24.5's PR #51).
+  - `cfcf run` continues to flip directly to `running` (the loop
+    engine's existing transition, unchanged).
+
+**Paused is deliberately excluded** from the terminal-status set:
+a paused loop can still be resumed (via `cfcf resume` or its
+`refine_plan` action which runs SA in-loop). Flipping
+paused → idle would lose the pause state and break the resume
+mechanics. Standalone SA from a paused workspace leaves the pause
+intact — the user can finish SA, then resume the loop with the
+updated plan.
+
+**The in-loop architect path doesn't flip either**: pre-loop
+review (`autoReviewSpecs=true`) and the `refine_plan` resume
+action both call `runReviewSync` from inside the loop engine —
+those paths transition through `workspace.status = "running"`
+already and don't need (or want) the flip.
+
+**Failed and stopped stay distinct internally**: the audit trail
+benefits from separating harness crash (`failed`) from user
+intervention (`stopped`). The StatusBadge can render them with
+shared muted color if desired in a future pass; the internal
+value preservation enables downstream queries to distinguish the
+two outcomes.
+
+**2. Label rename** — `idle` → `"ready/iterating"`.
+
+The internal value stays `idle` (zero state-machine churn). The
+display label is renamed:
+
+  - Web dashboard (`StatusBadge.tsx`): adds an entry to the
+    label map mapping `idle` → `"ready/iterating"`.
+  - CLI status command (`cfcf status` + `cfcf status --workspace
+    <name>`): same rename via a small `formatStatus()` helper.
+
+The slashed label captures both intents in one string:
+  - **"ready"** — fresh workspace, hasn't run yet (the original
+    `idle` meaning).
+  - **"iterating"** — post-terminal, user has resumed work by
+    running standalone SA. Loop isn't running RIGHT NOW, but the
+    workspace is alive again.
+
+No derivation from history is needed — the label is the same
+regardless of prior loop count. If dogfood shows the slashed
+label feels ambiguous, future work can derive `"ready"` vs
+`"iterating"` from `workspace.currentIteration > 0`. The simple
+form is shipping first.
+
+**Implementation** (~80 LoC + tests):
+
+- `packages/core/src/architect-runner.ts`:
+  - New `TERMINAL_LOOP_STATUSES = Set(["completed", "failed",
+    "stopped"])` constant (exported for test exhaustiveness).
+  - New `flipTerminalStatusToIdle(workspace)` helper — returns
+    `true` if flipped, `false` if not. Best-effort: update
+    failures are logged but never fail the SA run.
+  - `startReview()` calls the helper at the top of the standalone
+    review path (before any review side effects).
+- `packages/web/src/components/StatusBadge.tsx`: adds `idle:
+  "ready/iterating"` to the label map.
+- `packages/cli/src/commands/status.ts`: adds `formatStatus()`
+  helper for the same translation; called in the list view +
+  detailed-workspace-status view.
+
+**Test coverage** (8 new tests in `architect-runner.test.ts`,
+all 1079 total pass): `TERMINAL_LOOP_STATUSES` contains exactly
+the three values; flips from completed; flips from failed; flips
+from stopped; does NOT flip paused (preserves resume mechanics);
+does NOT flip running; does NOT flip idle (no-op); handles
+undefined status defensively (older workspaces without the field).
+
+### Changed — UX polish: history counts, top-bar iteration, card timer + layout
+
+Four small dogfood-driven refinements bundled together — none big
+enough for their own entry, all in the same surface.
+
+**1. History tab section headers**: counts split into
+`(active: N | total: M)` instead of just `(N)`. Surfaces "is
+something running RIGHT NOW in this section" without scanning
+the rows. For the interactive section, `active` = PA sessions
+with `status === "running"`; for the loop section, same applies
+to iteration / review / document / reflection events.
+
+**2. Status tab top-bar**: PhaseIndicator's iteration subtitle
+now shows `"Iteration 24 (max: 28)"` instead of just
+`"Iteration 24"`. The `(max: N)` lives next to the live elapsed
+timer in one place (between buttons and tabs), making the
+ceiling visible without a click into the Config tab.
+
+**3. Status tab Loop State block removed**: the standalone "Loop
+State" block in the Status panel had three pieces — iteration
+count / max (now in PhaseIndicator above), pause every (already
+in Config tab), consecutive stalled (real warning signal). The
+block is replaced with a compact "Stall warning" section that
+only renders when `consecutiveStalled > 0` — common case
+renders nothing, abnormal case stays prominent.
+
+**4. Workspace card**: three changes.
+   - **Live elapsed timer** when loop is running. Pulled from
+     new `workspace.loopStartedAt` field (server-enriched via
+     `getLoopState` when `activeAgent === "loop"`). Renders as
+     `"● loop running · 47m 12s"` inside the chip. Mirrors the
+     workspace-detail PhaseIndicator's timer so the dashboard
+     answers "how long has this loop been alive?" without
+     click-through. Updates every 1s via the existing
+     `useElapsed` hook.
+   - **Chip layout**: chips moved BELOW the title+badge row
+     instead of crowding the same line. With loop + PA chips
+     both possible, the original single-row header was tight;
+     two-row layout gives each chip room. The chip row is
+     conditionally rendered — when there are no chips, the card
+     looks exactly like before.
+   - **Agents row**: added Reflect alongside Dev + Judge.
+     Reflect is per-workspace and was previously only visible in
+     the Config tab. PA is intentionally NOT added — it's a
+     global config, would be identical on every card. Architect
+     and Documenter omitted to keep the row scannable; can be
+     added later if dogfood demands.
+
+**Server enrichment** for the card timer:
+`/api/workspaces` response gets `loopStartedAt?: string | null`
+populated from `loopState.startedAt` when `activeAgent === "loop"`.
+One `getLoopState()` call per running workspace; cached
+in-memory after first read.
+
+**Implementation** (~95 LoC):
+- `packages/web/src/components/WorkspaceHistory.tsx` — active
+  count derivation + header format
+- `packages/web/src/pages/WorkspaceDetail.tsx` — PhaseIndicator
+  title format + Loop State block trim
+- `packages/server/src/app.ts` — `loopStartedAt` enrichment
+- `packages/web/src/types.ts` — mirror the field
+- `packages/web/src/components/WorkspaceCard.tsx` — timer, chip
+  row, agents row
+
+No new tests — pure presentation tweaks. Existing 1079 tests
+still pass; typecheck clean.
+
 ### Changed — History tab: separate section for interactive agents (PA + HA)
 
 Dogfood feedback from the gmbot run: PA sessions can stay alive
